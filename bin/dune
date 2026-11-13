@@ -1,0 +1,7 @@
+(executable
+ (name main)
+ (libraries ocamlcc))
+
+(rule
+ (alias default)
+ (action (copy main.exe ocamlcc)))

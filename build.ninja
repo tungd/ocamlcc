@@ -1,0 +1,121 @@
+# ocamlcc top-level build pipeline (ninja).
+#
+#   1. vendor/qbe  -> build/qbe/qbe
+#   2. runtime/    -> build/rt/libocamlrt.a
+#   3. dune        -> build/bin/ocamlcc
+#   4. examples/*.ml -> .ssa (ocamlcc) -> .s (qbe) -> native executable (cc)
+
+builddir = build
+cc = cc
+qbe_dir = vendor/qbe
+
+qbe_cflags = -std=c99 -O2 -g -Wall -Wextra -Wpedantic
+rt_cflags = -std=c11 -O2 -g -Wall -Wextra
+
+rule cc_qbe
+  command = $cc $qbe_cflags -c $in -o $out -I$builddir/qbe
+  description = CC $out
+
+rule gen_config
+  command = sh tools/gen-config.sh > $out
+  description = GEN $out
+
+rule link_qbe
+  command = $cc $in -o $out
+  description = LINK $out
+
+rule cc_rt
+  command = $cc $rt_cflags -Iruntime -c $in -o $out
+  description = CC $out
+
+rule ar
+  command = ar rcs $out $in
+  description = AR $out
+
+rule dune_ocamlcc
+  command = dune build bin/ocamlcc && mkdir -p $builddir/bin && rm -f $out && cp _build/default/bin/ocamlcc $out
+  description = DUNE ocamlcc
+  pool = console
+
+rule ocamlcc_ssa
+  command = $builddir/bin/ocamlcc compile $in -o $out
+  description = OCAMLCC $out
+
+rule qbe_ssa
+  command = $builddir/qbe/qbe $in > $out
+  description = QBE $out
+
+rule cc_link
+  command = $cc $in -o $out
+  description = LINK $out
+
+rule run
+  command = $in && echo "--- smoke: $in OK"
+  pool = console
+  description = RUN $in
+
+# ---------------------------------------------------------------- QBE ----
+
+qbe_common = main util parse abi cfg mem ssa alias load copy fold gvn gcm simpl ifopt live spill rega emit
+
+build $builddir/qbe/config.h: gen_config
+
+build $builddir/qbe/main.o:    cc_qbe $qbe_dir/main.c    | $qbe_dir/all.h $qbe_dir/ops.h $builddir/qbe/config.h
+build $builddir/qbe/util.o:    cc_qbe $qbe_dir/util.c    | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/parse.o:   cc_qbe $qbe_dir/parse.c   | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/abi.o:     cc_qbe $qbe_dir/abi.c     | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/cfg.o:     cc_qbe $qbe_dir/cfg.c     | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/mem.o:     cc_qbe $qbe_dir/mem.c     | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/ssa.o:     cc_qbe $qbe_dir/ssa.c     | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/alias.o:   cc_qbe $qbe_dir/alias.c   | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/load.o:    cc_qbe $qbe_dir/load.c    | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/copy.o:    cc_qbe $qbe_dir/copy.c    | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/fold.o:    cc_qbe $qbe_dir/fold.c    | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/gvn.o:     cc_qbe $qbe_dir/gvn.c     | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/gcm.o:     cc_qbe $qbe_dir/gcm.c     | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/simpl.o:   cc_qbe $qbe_dir/simpl.c   | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/ifopt.o:   cc_qbe $qbe_dir/ifopt.c   | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/live.o:    cc_qbe $qbe_dir/live.c    | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/spill.o:   cc_qbe $qbe_dir/spill.c   | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/rega.o:    cc_qbe $qbe_dir/rega.c    | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/emit.o:    cc_qbe $qbe_dir/emit.c    | $qbe_dir/all.h $qbe_dir/ops.h
+
+build $builddir/qbe/amd64/targ.o: cc_qbe $qbe_dir/amd64/targ.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
+build $builddir/qbe/amd64/sysv.o: cc_qbe $qbe_dir/amd64/sysv.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
+build $builddir/qbe/amd64/isel.o: cc_qbe $qbe_dir/amd64/isel.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
+build $builddir/qbe/amd64/emit.o: cc_qbe $qbe_dir/amd64/emit.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
+
+build $builddir/qbe/arm64/targ.o: cc_qbe $qbe_dir/arm64/targ.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/arm64/all.h
+build $builddir/qbe/arm64/abi.o:  cc_qbe $qbe_dir/arm64/abi.c  | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/arm64/all.h
+build $builddir/qbe/arm64/isel.o: cc_qbe $qbe_dir/arm64/isel.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/arm64/all.h
+build $builddir/qbe/arm64/emit.o: cc_qbe $qbe_dir/arm64/emit.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/arm64/all.h
+
+build $builddir/qbe/rv64/targ.o: cc_qbe $qbe_dir/rv64/targ.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/rv64/all.h
+build $builddir/qbe/rv64/abi.o:  cc_qbe $qbe_dir/rv64/abi.c  | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/rv64/all.h
+build $builddir/qbe/rv64/isel.o: cc_qbe $qbe_dir/rv64/isel.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/rv64/all.h
+build $builddir/qbe/rv64/emit.o: cc_qbe $qbe_dir/rv64/emit.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/rv64/all.h
+
+build $builddir/qbe/qbe: link_qbe $builddir/qbe/main.o $builddir/qbe/util.o $builddir/qbe/parse.o $builddir/qbe/abi.o $builddir/qbe/cfg.o $builddir/qbe/mem.o $builddir/qbe/ssa.o $builddir/qbe/alias.o $builddir/qbe/load.o $builddir/qbe/copy.o $builddir/qbe/fold.o $builddir/qbe/gvn.o $builddir/qbe/gcm.o $builddir/qbe/simpl.o $builddir/qbe/ifopt.o $builddir/qbe/live.o $builddir/qbe/spill.o $builddir/qbe/rega.o $builddir/qbe/emit.o $builddir/qbe/amd64/targ.o $builddir/qbe/amd64/sysv.o $builddir/qbe/amd64/isel.o $builddir/qbe/amd64/emit.o $builddir/qbe/arm64/targ.o $builddir/qbe/arm64/abi.o $builddir/qbe/arm64/isel.o $builddir/qbe/arm64/emit.o $builddir/qbe/rv64/targ.o $builddir/qbe/rv64/abi.o $builddir/qbe/rv64/isel.o $builddir/qbe/rv64/emit.o
+
+# ------------------------------------------------------------ runtime ----
+
+build $builddir/rt/pal.o:      cc_rt runtime/pal.c      | runtime/pal.h
+build $builddir/rt/arc.o:      cc_rt runtime/arc.c      | runtime/arc.h runtime/pal.h
+build $builddir/rt/fiber.o:    cc_rt runtime/fiber.c    | runtime/fiber.h runtime/arc.h
+build $builddir/rt/builtins.o: cc_rt runtime/builtins.c
+
+build $builddir/rt/libocamlrt.a: ar $builddir/rt/pal.o $builddir/rt/arc.o $builddir/rt/fiber.o $builddir/rt/builtins.o
+
+# ------------------------------------------------------------- ocamlcc ----
+
+build $builddir/bin/ocamlcc: dune_ocamlcc bin/main.ml lib/qbe_il.ml lib/qbe_il.mli lib/frontend.ml lib/frontend.mli lib/codegen.ml lib/codegen.mli lib/pipeline.ml lib/pipeline.mli lib/dune bin/dune dune-project
+
+# ------------------------------------------------------------ examples ----
+
+build $builddir/hello.ssa: ocamlcc_ssa examples/hello.ml | $builddir/bin/ocamlcc
+build $builddir/hello.s: qbe_ssa $builddir/hello.ssa | $builddir/qbe/qbe
+build $builddir/hello: cc_link $builddir/hello.s $builddir/rt/libocamlrt.a
+
+build smoke: run $builddir/hello
+
+default $builddir/qbe/qbe $builddir/rt/libocamlrt.a $builddir/bin/ocamlcc $builddir/hello

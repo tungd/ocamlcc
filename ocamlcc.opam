@@ -1,0 +1,21 @@
+opam-version: "2.0"
+name: "ocamlcc"
+version: "0.0.1"
+synopsis: "AOT compiler backend for OCaml targeting QBE, with an ARC runtime"
+description: """
+ocamlcc reuses the official OCaml frontend (compiler-libs) and lowers the
+Lambda IR to QBE IL, pairing the generated code with a freestanding
+Perceus-style reference-counted runtime and Wren-style stackful fibers.
+"""
+maintainer: "tungd"
+authors: ["tungd"]
+license: "MIT"
+homepage: "https://github.com/tungd/ocamlcc"
+bug-reports: "https://github.com/tungd/ocamlcc/issues"
+depends: [
+  "ocaml" {>= "5.1"}
+  "dune" {>= "3.0"}
+]
+build: [
+  ["dune" "build" "-p" name "-j" jobs]
+]

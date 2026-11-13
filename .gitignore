@@ -1,0 +1,12 @@
+# dune / OCaml
+_build/
+*.install
+.merlin
+.dune/
+
+# out-of-tree artifacts produced by the ninja pipeline
+build/
+
+# editor / OS
+*.swp
+.DS_Store

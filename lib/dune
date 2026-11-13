@@ -1,0 +1,4 @@
+(library
+ (name ocamlcc)
+ (wrapped false)
+ (libraries compiler-libs.common))
