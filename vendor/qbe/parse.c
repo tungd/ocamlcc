@@ -15,17 +15,8 @@ enum {
 };
 
 Op optab[NOp] = {
-#undef F
-#define F(cf, hi, id, co, as, im, ic, lg, cv, pn) \
-	.canfold = cf, \
-	.hasid = hi, .idval = id, \
-	.commutes = co, .assoc = as, \
-	.idemp = im, \
-	.cmpeqwl = ic, .cmplgtewl = lg, .eqval = cv, \
-	.pinned = pn
-#define O(op, k, flags) [O##op]={.name = #op, .argcls = k, flags},
+#define O(op, t, cf) [O##op]={#op, t, cf},
 	#include "ops.h"
-#undef F
 };
 
 typedef enum {
@@ -57,7 +48,6 @@ enum Token {
 	Thlt,
 	Texport,
 	Tthread,
-	Tcommon,
 	Tfunc,
 	Ttype,
 	Tdata,
@@ -116,7 +106,6 @@ static char *kwmap[Ntok] = {
 	[Thlt] = "hlt",
 	[Texport] = "export",
 	[Tthread] = "thread",
-	[Tcommon] = "common",
 	[Tfunc] = "function",
 	[Ttype] = "type",
 	[Tdata] = "data",
@@ -143,7 +132,7 @@ enum {
 	TMask = 16383, /* for temps hash */
 	BMask = 8191, /* for blocks hash */
 
-	K = 11183273, /* found using tools/lexh.c */
+	K = 9583425, /* found using tools/lexh.c */
 	M = 23,
 };
 
@@ -161,8 +150,7 @@ static struct {
 static int lnum;
 
 static Fn *curf;
-static int *tmph;
-static int tmphcap;
+static int tmph[TMask+1];
 static Phi **plink;
 static Blk *curb;
 static Blk **blink;
@@ -215,7 +203,7 @@ getint()
 	n = 0;
 	c = fgetc(inf);
 	m = (c == '-');
-	if (m)
+	if (m || c == '+')
 		c = fgetc(inf);
 	do {
 		n = 10*n + (c - '0');
@@ -289,7 +277,7 @@ lex()
 		lnum++;
 		return Tnl;
 	}
-	if (isdigit(c) || c == '-') {
+	if (isdigit(c) || c == '-' || c == '+') {
 		ungetc(c, inf);
 		tokval.num = getint();
 		return Tint;
@@ -394,27 +382,19 @@ expect(int t)
 static Ref
 tmpref(char *v)
 {
-	int t, i;
+	int t, *h;
 
-	if (tmphcap/2 <= curf->ntmp-Tmp0) {
-		free(tmph);
-		tmphcap = tmphcap ? tmphcap*2 : TMask+1;
-		tmph = emalloc(tmphcap * sizeof tmph[0]);
-		for (t=Tmp0; t<curf->ntmp; t++) {
-			i = hash(curf->tmp[t].name) & (tmphcap-1);
-			for (; tmph[i]; i=(i+1) & (tmphcap-1))
-				;
-			tmph[i] = t;
-		}
-	}
-	i = hash(v) & (tmphcap-1);
-	for (; tmph[i]; i=(i+1) & (tmphcap-1)) {
-		t = tmph[i];
+	h = &tmph[hash(v) & TMask];
+	t = *h;
+	if (t) {
 		if (strcmp(curf->tmp[t].name, v) == 0)
 			return TMP(t);
+		for (t=curf->ntmp-1; t>=Tmp0; t--)
+			if (strcmp(curf->tmp[t].name, v) == 0)
+				return TMP(t);
 	}
 	t = curf->ntmp;
-	tmph[i] = t;
+	*h = t;
 	newtmp(0, Kx, curf);
 	strcpy(curf->tmp[t].name, v);
 	return TMP(t);
@@ -588,7 +568,8 @@ findblk(char *name)
 static void
 closeblk()
 {
-	idup(curb, insb, curi-insb);
+	curb->nins = curi - insb;
+	idup(&curb->ins, insb, curb->nins);
 	blink = &curb->link;
 	curi = insb;
 }
@@ -699,7 +680,6 @@ parseline(PState ps)
 		goto Ins;
 	}
 	if (op == Tcall) {
-		curf->leaf = 0;
 		arg[0] = parseref();
 		parserefl(1);
 		op = Ocall;
@@ -916,7 +896,6 @@ parsefn(Lnk *lnk)
 	curf->con[0].bits.i = 0xdeaddead;  /* UNDEF */
 	curf->con[1].type = CBits;
 	curf->lnk = *lnk;
-	curf->leaf = 1;
 	blink = &curf->start;
 	curf->retty = Kx;
 	if (peek() != Tglo)
@@ -940,12 +919,12 @@ parsefn(Lnk *lnk)
 	curf->mem = vnew(0, sizeof curf->mem[0], PFn);
 	curf->nmem = 0;
 	curf->nblk = nblk;
-	curf->rpo = vnew(nblk, sizeof curf->rpo[0], PFn);
-	for (b=curf->start; b; b=b->link)
+	curf->rpo = 0;
+	for (b=0; b; b=b->link)
 		b->dlink = 0; /* was trashed by findblk() */
 	for (i=0; i<BMask+1; ++i)
 		blkh[i] = 0;
-	memset(tmph, 0, tmphcap * sizeof tmph[0]);
+	memset(tmph, 0, sizeof tmph);
 	typecheck(curf);
 	return curf;
 }
@@ -1112,9 +1091,6 @@ parsedat(void cb(Dat *), Lnk *lnk)
 	if (t == Talign) {
 		if (nextnl() != Tint)
 			err("alignment expected");
-		if (tokval.num <= 0 || tokval.num > CHAR_MAX
-		|| (tokval.num & (tokval.num-1)) != 0)
-			err("invalid alignment");
 		lnk->align = tokval.num;
 		t = nextnl();
 	}
@@ -1180,9 +1156,6 @@ parselnk(Lnk *lnk)
 		case Tthread:
 			lnk->thread = 1;
 			break;
-		case Tcommon:
-			lnk->common = 1;
-			break;
 		case Tsection:
 			if (lnk->sec)
 				err("only one section allowed");
@@ -1226,7 +1199,6 @@ parse(FILE *f, char *path, void dbgfile(char *), void data(Dat *), void func(Fn 
 			dbgfile(tokval.str);
 			break;
 		case Tfunc:
-			lnk.align = 16;
 			func(parsefn(&lnk));
 			break;
 		case Tdata:
@@ -1321,9 +1293,6 @@ printref(Ref r, Fn *fn, FILE *f)
 		break;
 	case RInt:
 		fprintf(f, "%d", rsval(r));
-		break;
-	case -1:
-		fprintf(f, "R");
 		break;
 	}
 }

@@ -7,6 +7,12 @@
    hardcoding them we probe that very compiler with tiny reference programs
    and learn the rendered form of each builtin. *)
 
+type arg_kind =
+  | Int_arg    (* tagged 63-bit integer; codegen untags before the call *)
+  | String_arg (* raw pointer to a NUL-terminated byte sequence *)
+
+type builtin = { symbol : string; arg_kind : arg_kind }
+
 let render (lam : Lambda.lambda) : string =
   let buf = Buffer.create 64 in
   let ppf = Format.formatter_of_buffer buf in
@@ -37,15 +43,17 @@ let rec find_apply (lam : Lambda.lambda) : Lambda.lambda option =
   | Lprim (_, args, _) -> List.find_map find_apply args
   | _ -> None
 
-(* (builtin name, probe argument, runtime symbol) *)
+(* (builtin name, probe argument, runtime symbol, argument kind) *)
 let probes =
-  [ ("print_int", "1", "ocamlcc_print_int");
-    ("exit", "0", "ocamlcc_exit") ]
+  [ ("print_int", "1", "ocamlcc_print_int", Int_arg);
+    ("print_string", "\"x\"", "ocamlcc_print_string", String_arg);
+    ("print_endline", "\"x\"", "ocamlcc_print_endline", String_arg);
+    ("exit", "0", "ocamlcc_exit", Int_arg) ]
 
-let table : (string * string) list Lazy.t =
+let table : (string * builtin) list Lazy.t =
   lazy
     (List.filter_map
-       (fun (name, arg, symbol) ->
+       (fun (name, arg, symbol, arg_kind) ->
          let src = Printf.sprintf "let () = %s %s" name arg in
          match
            Frontend.compile_implementation ~filename:"builtins-probe.ml"
@@ -53,10 +61,11 @@ let table : (string * string) list Lazy.t =
          with
          | Ok program -> (
              match find_apply program.code with
-             | Some func -> Some (render func, symbol)
+             | Some func ->
+                 Some (render func, { symbol; arg_kind })
              | None -> None)
          | Error _ -> None)
        probes)
 
-let resolve (func : Lambda.lambda) : string option =
+let resolve (func : Lambda.lambda) : builtin option =
   List.assoc_opt (render func) (Lazy.force table)

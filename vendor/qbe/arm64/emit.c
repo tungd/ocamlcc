@@ -37,7 +37,7 @@ enum {
 static struct {
 	short op;
 	short cls;
-	char *fmt;
+	char *asm;
 } omap[] = {
 	{ Oadd,    Ki, "add %=, %0, %1" },
 	{ Oadd,    Ka, "fadd %=, %0, %1" },
@@ -109,10 +109,6 @@ static struct {
 	{ NOp, 0, 0 }
 };
 
-enum {
-	V31 = 0x1fffffff,  /* local name for V31 */
-};
-
 static char *
 rname(int r, int k)
 {
@@ -135,12 +131,6 @@ rname(int r, int k)
 		case Ks: sprintf(buf, "s%d", r-V0); break;
 		case Kx:
 		case Kd: sprintf(buf, "d%d", r-V0); break;
-		}
-	else if (r == V31)
-		switch (k) {
-		default: die("invalid class");
-		case Ks: sprintf(buf, "s31"); break;
-		case Kd: sprintf(buf, "d31"); break;
 		}
 	else
 		die("invalid register");
@@ -170,8 +160,7 @@ emitf(char *s, Ins *i, E *e)
 	Ref r;
 	int k, c;
 	Con *pc;
-	uint64_t n;
-	uint sp;
+	uint n, sp;
 
 	fputc('\t', e->f);
 
@@ -182,7 +171,7 @@ emitf(char *s, Ins *i, E *e)
 			if (c == ' ' && !sp) {
 				fputc('\t', e->f);
 				sp = 1;
-			} else if (!c) {
+			} else if ( !c) {
 				fputc('\n', e->f);
 				return;
 			} else
@@ -205,14 +194,14 @@ emitf(char *s, Ins *i, E *e)
 			goto Switch;
 		case '?':
 			if (KBASE(k) == 0)
-				fputs(rname(IP1, k), e->f);
+				fputs(rname(R18, k), e->f);
 			else
-				fputs(rname(V31, k), e->f);
+				fputs(k==Ks ? "s31" : "d31", e->f);
 			break;
 		case '=':
 		case '0':
 			r = c == '=' ? i->to : i->arg[0];
-			assert(isreg(r) || req(r, TMP(V31)));
+			assert(isreg(r));
 			fputs(rname(r.val, k), e->f);
 			break;
 		case '1':
@@ -228,17 +217,10 @@ emitf(char *s, Ins *i, E *e)
 				pc = &e->fn->con[r.val];
 				n = pc->bits.i;
 				assert(pc->type == CBits);
-				if (n >> 24) {
-					assert(arm64_logimm(n, k));
-					fprintf(e->f, "#%"PRIu64, n);
-				} else if (n & 0xfff000) {
-					assert(!(n & ~0xfff000ull));
-					fprintf(e->f, "#%"PRIu64", lsl #12",
-						n>>12);
-				} else {
-					assert(!(n & ~0xfffull));
-					fprintf(e->f, "#%"PRIu64, n);
-				}
+				if (n & 0xfff000)
+					fprintf(e->f, "#%u, lsl #12", n>>12);
+				else
+					fprintf(e->f, "#%u", n);
 				break;
 			}
 			break;
@@ -322,7 +304,6 @@ loadcon(Con *c, int r, int k, E *e)
 	rn = rname(r, k);
 	n = c->bits.i;
 	if (c->type == CAddr) {
-		rn = rname(r, Kl);
 		loadaddr(c, rn, e);
 		return;
 	}
@@ -345,8 +326,8 @@ loadcon(Con *c, int r, int k, E *e)
 
 static void emitins(Ins *, E *);
 
-static int
-fixarg(Ref *pr, int sz, int t, E *e)
+static void
+fixarg(Ref *pr, int sz, E *e)
 {
 	Ins *i;
 	Ref r;
@@ -356,14 +337,11 @@ fixarg(Ref *pr, int sz, int t, E *e)
 	if (rtype(r) == RSlot) {
 		s = slot(r, e);
 		if (s > sz * 4095u) {
-			if (t < 0)
-				return 1;
-			i = &(Ins){Oaddr, Kl, TMP(t), {r}};
+			i = &(Ins){Oaddr, Kl, TMP(IP0), {r}};
 			emitins(i, e);
-			*pr = TMP(t);
+			*pr = TMP(IP0);
 		}
 	}
-	return 0;
 }
 
 static void
@@ -371,28 +349,16 @@ emitins(Ins *i, E *e)
 {
 	char *l, *p, *rn;
 	uint64_t s;
-	int o, t;
+	int o;
 	Ref r;
 	Con *c;
 
 	switch (i->op) {
 	default:
 		if (isload(i->op))
-			fixarg(&i->arg[0], loadsz(i), IP1, e);
-		if (isstore(i->op)) {
-			t = T.apple ? -1 : R18;
-			if (fixarg(&i->arg[1], storesz(i), t, e)) {
-				if (req(i->arg[0], TMP(IP1))) {
-					fprintf(e->f,
-						"\tfmov\t%c31, %c17\n",
-						"ds"[i->cls == Kw],
-						"xw"[i->cls == Kw]);
-					i->arg[0] = TMP(V31);
-					i->op = Ostores + (i->cls-Kw);
-				}
-				fixarg(&i->arg[1], storesz(i), IP1, e);
-			}
-		}
+			fixarg(&i->arg[0], loadsz(i), e);
+		if (isstore(i->op))
+			fixarg(&i->arg[1], storesz(i), e);
 	Table:
 		/* most instructions are just pulled out of
 		 * the table omap[], some special cases are
@@ -408,7 +374,7 @@ emitins(Ins *i, E *e)
 			|| (omap[o].cls == Ki && KBASE(i->cls) == 0))
 				break;
 		}
-		emitf(omap[o].fmt, i, e);
+		emitf(omap[o].asm, i, e);
 		break;
 	case Onop:
 		break;
@@ -418,7 +384,7 @@ emitins(Ins *i, E *e)
 		if (rtype(i->to) == RSlot) {
 			r = i->to;
 			if (!isreg(i->arg[0])) {
-				i->to = TMP(IP1);
+				i->to = TMP(R18);
 				emitins(i, e);
 				i->arg[0] = i->to;
 			}
@@ -439,7 +405,7 @@ emitins(Ins *i, E *e)
 			emitins(i, e);
 			break;
 		default:
-			assert(i->to.val != IP1);
+			assert(i->to.val != R18);
 			goto Table;
 		}
 		break;
@@ -548,7 +514,6 @@ arm64_emitfn(Fn *fn, FILE *out)
 	if (T.apple)
 		e->fn->lnk.align = 4;
 	emitfnlnk(e->fn->name, &e->fn->lnk, e->f);
-	fputs("\thint\t#34\n", e->f);
 	framelayout(e);
 
 	if (e->fn->vararg && !T.apple) {

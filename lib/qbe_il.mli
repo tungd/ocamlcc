@@ -1,9 +1,10 @@
 (* QBE IL: data model and pretty-printer.
 
-   Covers the subset of QBE IL that [Codegen] emits today: functions over
-   word/long integers, straight-line blocks with arithmetic, comparisons,
-   calls, and the three-way branch terminator. Data definitions, floating
-   point, and aggregate types are added as the compiler grows into them. *)
+   Covers the subset of QBE IL that [Codegen] emits: functions over
+   word/long integers (with an optional return class), straight-line blocks
+   with arithmetic, comparisons, calls, phi nodes for loop headers and tail
+   merges, and byte data definitions for string literals. Floating point and
+   aggregate types are added as the compiler grows into them. *)
 
 type ty =
   | Word  (* w: 32-bit *)
@@ -31,6 +32,7 @@ type call = { fn : t; args : (ty * t) list }
 type inst =
   | Binop of Binop.t * ty * t * t * t  (* %dst =ty %a op %b *)
   | Cmp of Cmp.t * ty * t * t * t      (* %dst =ty ceq %a, %b *)
+  | Phi of ty * t * (string * t) list  (* %dst =ty phi @l1 %v1, @l2 %v2 *)
   | Copy of ty * t * t                 (* %dst =ty copy %src *)
   | Call of ty * t * call              (* %dst =ty call $f(...) *)
   | Call_void of call                  (* call $f(...) *)
@@ -45,10 +47,21 @@ type block = { label : string; insts : inst list; term : term }
 type func = {
   name : string;      (* global symbol, printed with a $ prefix *)
   export : bool;
+  retty : ty option;  (* return class; [None] means a void function *)
   params : (ty * string) list;
   blocks : block list;
 }
 
-type module_ = { funcs : func list }
+(* Data definition items; string bytes that need no escaping are grouped. *)
+type data_item =
+  | D_str of string
+  | D_byte of int
+
+type data = {
+  name : string;      (* global symbol, printed with a $ prefix *)
+  items : data_item list;
+}
+
+type module_ = { funcs : func list; datas : data list }
 
 val to_string : module_ -> string

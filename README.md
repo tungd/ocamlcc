@@ -18,12 +18,16 @@ full design and roadmap.
 
 ## Status
 
-Phase 1 — Lambda → QBE MVP (thin vertical slice).
+Phase 1 — Lambda → QBE MVP (in progress).
 
-`ocamlcc` currently compiles a tiny integer-only subset of OCaml: integer
-literals, `let`, arithmetic/comparison, `if/then/else`, and the builtins
-`print_int` / `exit`. Unsupported Lambda constructs are rejected with a
-descriptive error. Memory is not yet reclaimed (Phase 2 adds Perceus ARC).
+`ocamlcc` currently compiles a growing integer/string subset of OCaml:
+integer literals, `let` (including toplevel and recursive function
+definitions), arithmetic/comparison, booleans as values, `if/then/else`,
+string literals, the builtins `print_int` / `print_string` /
+`print_endline` / `exit`, and self tail-recursion (lowered to constant-stack
+phi loops). Unsupported Lambda constructs (closures, `try`, pattern
+matching, floats, …) are rejected with a descriptive error. Memory is not
+yet reclaimed (Phase 2 adds Perceus ARC).
 
 ## Build
 
@@ -32,8 +36,14 @@ The whole project is driven by [ninja](https://ninja-build.org):
 ```sh
 ninja            # vendored QBE + ARC/fiber runtime + ocamlcc compiler + examples
 ninja smoke      # compile examples/hello.ml end-to-end and run it
+ninja test       # compile every example and diff against tests/*.expected
 ninja -t clean   # remove build/
 ```
+
+Currently passing: `hello` (arithmetic + branch), `fib` (non-tail
+self-recursion), `tail` (self tail-calls lowered to a phi loop — constant
+stack), `bools` (booleans as values), `strings` (string literals +
+`print_string`/`print_endline`).
 
 The pipeline:
 
@@ -50,8 +60,9 @@ The pipeline:
 bin/          ocamlcc CLI (compile, dump-lambda)
 lib/          QBE IL model + printer, Lambda frontend, code generator
 runtime/      freestanding C runtime: pal.h, arc.h/c, fiber.h/c, builtins
-vendor/qbe/   vendored QBE (source drop, built out-of-tree by ninja)
+vendor/qbe/   vendored QBE 1.2 (source drop, built out-of-tree by ninja)
 examples/     example programs
+tests/        expected outputs for the examples (ninja test)
 .okf/         OKF knowledge bundle: design, decisions, roadmap
 tools/        build helpers
 ```

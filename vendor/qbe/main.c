@@ -11,7 +11,6 @@ char debug['Z'+1] = {
 	['N'] = 0, /* ssa construction */
 	['C'] = 0, /* copy elimination */
 	['F'] = 0, /* constant folding */
-	['K'] = 0, /* if-conversion */
 	['A'] = 0, /* abi lowering */
 	['I'] = 0, /* instruction selection */
 	['L'] = 0, /* liveness */
@@ -60,7 +59,8 @@ func(Fn *fn)
 		printfn(fn, stderr);
 	}
 	T.abi0(fn);
-	fillcfg(fn);
+	fillrpo(fn);
+	fillpreds(fn);
 	filluse(fn);
 	promote(fn);
 	filluse(fn);
@@ -73,37 +73,25 @@ func(Fn *fn)
 	fillalias(fn);
 	coalesce(fn);
 	filluse(fn);
-	filldom(fn);
 	ssacheck(fn);
-	gvn(fn);
-	fillcfg(fn);
-	simplcfg(fn);
+	copy(fn);
 	filluse(fn);
-	filldom(fn);
-	gcm(fn);
-	filluse(fn);
-	ssacheck(fn);
-	if (T.cansel) {
-		ifconvert(fn);
-		fillcfg(fn);
-		filluse(fn);
-		filldom(fn);
-		ssacheck(fn);
-	}
+	fold(fn);
 	T.abi1(fn);
 	simpl(fn);
-	fillcfg(fn);
+	fillpreds(fn);
 	filluse(fn);
 	T.isel(fn);
-	fillcfg(fn);
+	fillrpo(fn);
 	filllive(fn);
 	fillloop(fn);
 	fillcost(fn);
 	spill(fn);
 	rega(fn);
-	fillcfg(fn);
+	fillrpo(fn);
 	simpljmp(fn);
-	fillcfg(fn);
+	fillpreds(fn);
+	fillrpo(fn);
 	assert(fn->rpo[0] == fn->start);
 	for (n=0;; n++)
 		if (n == fn->nblk-1) {

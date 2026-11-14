@@ -90,7 +90,7 @@ isfloatv(Typ *t, char *cls)
 static void
 typclass(Class *c, Typ *t, int *gp, int *fp)
 {
-	uint64_t sz, hfasz;
+	uint64_t sz;
 	uint n;
 
 	sz = (t->size + 7) & -8;
@@ -103,21 +103,7 @@ typclass(Class *c, Typ *t, int *gp, int *fp)
 	if (t->align > 3)
 		err("alignments larger than 8 are not supported");
 
-	c->size = sz;
-	c->hfa.base = Kx;
-	c->ishfa = isfloatv(t, &c->hfa.base);
-	hfasz = t->size/(KWIDE(c->hfa.base) ? 8 : 4);
-	c->ishfa &= !t->isdark && hfasz <= 4;
-	c->hfa.size = hfasz;
-
-	if (c->ishfa) {
-		for (n=0; n<hfasz; n++, c->nfp++) {
-			c->reg[n] = *fp++;
-			c->cls[n] = c->hfa.base;
-		}
-		c->nreg = n;
-	}
-	else if (t->isdark || sz > 16 || sz == 0) {
+	if (t->isdark || sz > 16 || sz == 0) {
 		/* large structs are replaced by a
 		 * pointer to some caller-allocated
 		 * memory */
@@ -126,14 +112,26 @@ typclass(Class *c, Typ *t, int *gp, int *fp)
 		c->ngp = 1;
 		*c->reg = *gp;
 		*c->cls = Kl;
+		return;
 	}
-	else {
+
+	c->size = sz;
+	c->hfa.base = Kx;
+	c->ishfa = isfloatv(t, &c->hfa.base);
+	c->hfa.size = t->size/(KWIDE(c->hfa.base) ? 8 : 4);
+
+	if (c->ishfa)
+		for (n=0; n<c->hfa.size; n++, c->nfp++) {
+			c->reg[n] = *fp++;
+			c->cls[n] = c->hfa.base;
+		}
+	else
 		for (n=0; n<sz/8; n++, c->ngp++) {
 			c->reg[n] = *gp++;
 			c->cls[n] = Kl;
 		}
-		c->nreg = n;
-	}
+
+	c->nreg = n;
 }
 
 static void
@@ -429,7 +427,7 @@ selcall(Fn *fn, Ins *i0, Ins *i1, Insl **ilp)
 	for (i=i0, c=ca; i<i1; i++, c++) {
 		if ((c->class & Cstk) != 0)
 			continue;
-		if (i->op == Oarg || i->op == Oarge || isargbh(i->op))
+		if (i->op == Oarg || i->op == Oarge)
 			emit(Ocopy, *c->cls, TMP(*c->reg), i->arg[0], R);
 		if (i->op == Oargc)
 			ldregs(c->reg, c->cls, c->nreg, i->arg[1], fn);
@@ -545,7 +543,8 @@ split(Fn *fn, Blk *b)
 
 	++fn->nblk;
 	bn = newblk();
-	idup(bn, curi, &insb[NIns]-curi);
+	bn->nins = &insb[NIns] - curi;
+	idup(&bn->ins, curi, bn->nins);
 	curi = &insb[NIns];
 	bn->visit = ++b->visit;
 	strf(bn->name, "%s.%d", b->name, b->visit);
@@ -729,9 +728,9 @@ void
 arm64_abi(Fn *fn)
 {
 	Blk *b;
-	Ins *i, *i0;
+	Ins *i, *i0, *ip;
 	Insl *il;
-	int n0, n1, ioff;
+	int n;
 	Params p;
 
 	for (b=fn->start; b; b=b->link)
@@ -742,13 +741,12 @@ arm64_abi(Fn *fn)
 		if (!ispar(i->op))
 			break;
 	p = selpar(fn, b->ins, i);
-	n0 = &insb[NIns] - curi;
-	ioff = i - b->ins;
-	n1 = b->nins - ioff;
-	vgrow(&b->ins, n0+n1);
-	icpy(b->ins+n0, b->ins+ioff, n1);
-	icpy(b->ins, curi, n0);
-	b->nins = n0+n1;
+	n = b->nins - (i - b->ins) + (&insb[NIns] - curi);
+	i0 = alloc(n * sizeof(Ins));
+	ip = icpy(ip = i0, curi, &insb[NIns] - curi);
+	ip = icpy(ip, i, &b->ins[b->nins] - i);
+	b->nins = n;
+	b->ins = i0;
 
 	/* lower calls, returns, and vararg instructions */
 	il = 0;
@@ -791,7 +789,8 @@ arm64_abi(Fn *fn)
 		if (b == fn->start)
 			for (; il; il=il->link)
 				emiti(il->i);
-		idup(b, curi, &insb[NIns]-curi);
+		b->nins = &insb[NIns] - curi;
+		idup(&b->ins, curi, b->nins);
 	} while (b != fn->start);
 
 	if (debug['A']) {
@@ -842,7 +841,8 @@ apple_extsb(Fn *fn)
 					emit(op, Kw, i->to, i->arg[0], R);
 				}
 		}
-		idup(b, curi, &insb[NIns]-curi);
+		b->nins = &insb[NIns] - curi;
+		idup(&b->ins, curi, b->nins);
 	}
 
 	if (debug['A']) {

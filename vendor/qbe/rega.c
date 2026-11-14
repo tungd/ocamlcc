@@ -439,7 +439,8 @@ doblk(Blk *b, RMap *cur)
 			 * the above loop must be changed */
 		}
 	}
-	idup(b, curi, &insb[NIns]-curi);
+	b->nins = &insb[NIns] - curi;
+	idup(&b->ins, curi, b->nins);
 }
 
 /* qsort() comparison function to peel
@@ -670,9 +671,10 @@ rega(Fn *fn)
 			blist = b1;
 			fn->nblk++;
 			strf(b1->name, "%s_%s", b->name, s->name);
-			stmov += &insb[NIns]-curi;
+			b1->nins = &insb[NIns] - curi;
+			stmov += b1->nins;
 			stblk += 1;
-			idup(b1, curi, &insb[NIns]-curi);
+			idup(&b1->ins, curi, b1->nins);
 			b1->jmp.type = Jjmp;
 			b1->s1 = s;
 			**ps = b1;

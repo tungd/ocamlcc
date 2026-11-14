@@ -54,6 +54,7 @@ type call = { fn : t; args : (ty * t) list }
 type inst =
   | Binop of Binop.t * ty * t * t * t
   | Cmp of Cmp.t * ty * t * t * t
+  | Phi of ty * t * (string * t) list
   | Copy of ty * t * t
   | Call of ty * t * call
   | Call_void of call
@@ -65,11 +66,22 @@ type term =
 
 type block = { label : string; insts : inst list; term : term }
 
-type func = { name : string; export : bool; params : (ty * string) list; blocks : block list }
+type func = {
+  name : string;
+  export : bool;
+  retty : ty option;
+  params : (ty * string) list;
+  blocks : block list;
+}
 
-type module_ = { funcs : func list }
+type data_item =
+  | D_str of string
+  | D_byte of int
 
-(* One line per instruction; nothing needs layout beyond that. *)
+type data = { name : string; items : data_item list }
+
+type module_ = { funcs : func list; datas : data list }
+
 let string_of_t = function
   | Temp s -> "%" ^ s
   | Global s -> "$" ^ s
@@ -79,6 +91,17 @@ let string_of_ty = function
   | Word -> "w"
   | Long -> "l"
 
+let string_of_args args =
+  args
+  |> List.map (fun (ty, v) -> string_of_ty ty ^ " " ^ string_of_t v)
+  |> String.concat ", "
+
+(* Binders (block/function parameters) are named, unlike call arguments. *)
+let string_of_binders binders =
+  binders
+  |> List.map (fun (ty, n) -> string_of_ty ty ^ " %" ^ n)
+  |> String.concat ", "
+
 let string_of_inst inst =
   match inst with
   | Binop (op, ty, dst, a, b) ->
@@ -87,20 +110,19 @@ let string_of_inst inst =
   | Cmp (c, ty, dst, a, b) ->
       Printf.sprintf "%s =%s %s%s %s, %s" (string_of_t dst) (ty_char ty)
         (Cmp.prefix c) (ty_char ty) (string_of_t a) (string_of_t b)
+  | Phi (ty, dst, args) ->
+      Printf.sprintf "%s =%s phi %s" (string_of_t dst) (ty_char ty)
+        (args
+        |> List.map (fun (lbl, v) -> "@" ^ lbl ^ " " ^ string_of_t v)
+        |> String.concat ", ")
   | Copy (ty, dst, src) ->
       Printf.sprintf "%s =%s copy %s" (string_of_t dst) (ty_char ty)
         (string_of_t src)
   | Call (ty, dst, { fn; args }) ->
       Printf.sprintf "%s =%s call %s(%s)" (string_of_t dst) (ty_char ty)
-        (string_of_t fn)
-        (args
-        |> List.map (fun (ty, v) -> string_of_ty ty ^ " " ^ string_of_t v)
-        |> String.concat ", ")
+        (string_of_t fn) (string_of_args args)
   | Call_void { fn; args } ->
-      Printf.sprintf "call %s(%s)" (string_of_t fn)
-        (args
-        |> List.map (fun (ty, v) -> string_of_ty ty ^ " " ^ string_of_t v)
-        |> String.concat ", ")
+      Printf.sprintf "call %s(%s)" (string_of_t fn) (string_of_args args)
 
 let string_of_term term =
   match term with
@@ -110,24 +132,40 @@ let string_of_term term =
   | Br (c, t, f) ->
       Printf.sprintf "jnz %s, @%s, @%s" (string_of_t c) t f
 
-let string_of_block b =
+let string_of_block (b : block) =
   let buf = Buffer.create 256 in
   Buffer.add_string buf (Printf.sprintf "@%s\n" b.label);
-  List.iter (fun inst -> Buffer.add_string buf (string_of_inst inst ^ "\n")) b.insts;
+  List.iter
+    (fun inst -> Buffer.add_string buf (string_of_inst inst ^ "\n"))
+    b.insts;
   Buffer.add_string buf (string_of_term b.term ^ "\n");
   Buffer.contents buf
 
 let string_of_func f =
-  let params =
-    f.params
-    |> List.map (fun (ty, name) -> string_of_ty ty ^ " %" ^ name)
-    |> String.concat ", "
-  in
+  let params = string_of_binders f.params in
   let export = if f.export then "export " else "" in
+  let retty =
+    match f.retty with Some ty -> string_of_ty ty ^ " " | None -> ""
+  in
   let buf = Buffer.create 1024 in
-  Buffer.add_string buf (Printf.sprintf "%sfunction $%s(%s) {\n" export f.name params);
+  Buffer.add_string buf
+    (Printf.sprintf "%sfunction %s$%s(%s) {\n" export retty f.name params);
   List.iter (fun b -> Buffer.add_string buf (string_of_block b)) f.blocks;
   Buffer.add_string buf "}\n\n";
   Buffer.contents buf
 
-let to_string m = List.map string_of_func m.funcs |> String.concat ""
+let string_of_data d =
+  let buf = Buffer.create 128 in
+  Buffer.add_string buf (Printf.sprintf "data $%s = { " d.name);
+  let emit_item item =
+    match item with
+    | D_str s -> Buffer.add_string buf (Printf.sprintf "b \"%s\", " s)
+    | D_byte n -> Buffer.add_string buf (Printf.sprintf "b %d, " n)
+  in
+  List.iter emit_item d.items;
+  Buffer.add_string buf "b 0 }\n\n";
+  Buffer.contents buf
+
+let to_string m =
+  String.concat ""
+    (List.map string_of_data m.datas @ List.map string_of_func m.funcs)

@@ -34,15 +34,23 @@ nothing is ever written into `vendor/qbe` or `_build` by ninja itself.
 
 # Decisions and gotchas
 
+- **QBE jumps never carry arguments** — loop-carried values flow through
+  **phi instructions** in a dedicated `@loop` header block, and QBE forbids
+  jumping to a function's start block outright. The compiler therefore
+  emits `@start → @loop` with per-parameter phis (see
+  [compiler-pipeline](/concepts/compiler-pipeline.md)).
 - **QBE writes assembly to stdout** — upstream `qbe` has no `-o` flag; the
   pipeline redirects (`qbe x.ssa > x.s`).
 - **`ret <val>` requires a return class** — QBE rejects `ret %x` inside
   functions declared without one (`function $f()` implies `rcls == K0`).
-  The module initializer is therefore a void function ending in bare `ret`.
+  Value-returning functions are declared `function l $f(...)`; the module
+  initializer is void.
 - **Ninja does not re-tokenize expanded variables** — a variable used in a
   path list must itself be a single path; lists are spelled out inline.
 - **dune wraps libraries by default** — `lib/dune` sets `wrapped false` so
   the CLI can reference `Pipeline`, `Codegen`, etc. directly.
+- **Vendored tarballs restore old mtimes** — after re-vendoring QBE, run
+  `ninja -t clean` or ninja will happily link stale objects.
 
 When the compiler grows (see [roadmap](/concepts/roadmap.md)), embedding QBE
 into the `ocamlcc` executable (design goal "single binary") will replace the

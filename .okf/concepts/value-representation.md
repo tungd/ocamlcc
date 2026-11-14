@@ -42,6 +42,12 @@ header generation clean.
 | `x = y` … comparisons | compare tagged values directly — `2x+1` is monotone, so signed order is preserved |
 | `not x` (negation) | `2 - a` |
 
+**Booleans as values**: a comparison produces the raw QBE `0/1`. In
+condition position (`jnz`) that raw result is used directly; in value
+position it is retagged (`2r + 1`), so tagged `false = 1`, `true = 3`. A
+`let`-bound boolean used later as a condition is untagged with `sar 1`
+before the branch.
+
 Untag is an arithmetic shift right (`sar`), correct for negatives: for
 tagged `-1` (bit pattern `-1`), `sar 1` still yields `-1`.
 
