@@ -1,5 +1,12 @@
 # Change Log
 
+- 2026-11-13 (autoagent/1): Match lowering — `Lswitch` desugared to
+  comparison chains; `Lstaticraise`/`Lstaticcatch` lowered with per-binder
+  phis and two-way joins (integers and constant constructors). Mutual tail
+  recursion: tail-call graph + SCC analysis groups mutually tail-recursive
+  functions into single trampoline functions with a selector argument and
+  uniform phi slots; `even`/`odd` ping-pong 100k in constant stack. Two new
+  checked tests (`match`, `mutual`).
 - 2026-11-13 (autoagent/1): Phase 1 increment — top-level/recursive function
   definitions with direct calls, self-tail-call loop lowering via QBE phi
   nodes (constant stack space), booleans as values, string literals via QBE

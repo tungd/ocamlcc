@@ -134,6 +134,14 @@ build $builddir/strings.ssa: ocamlcc_ssa examples/strings.ml | $builddir/bin/oca
 build $builddir/strings.s: qbe_ssa $builddir/strings.ssa | $builddir/qbe/qbe
 build $builddir/strings: cc_link $builddir/strings.s $builddir/rt/libocamlrt.a
 
+build $builddir/match.ssa: ocamlcc_ssa examples/match.ml | $builddir/bin/ocamlcc
+build $builddir/match.s: qbe_ssa $builddir/match.ssa | $builddir/qbe/qbe
+build $builddir/match: cc_link $builddir/match.s $builddir/rt/libocamlrt.a
+
+build $builddir/mutual.ssa: ocamlcc_ssa examples/mutual.ml | $builddir/bin/ocamlcc
+build $builddir/mutual.s: qbe_ssa $builddir/mutual.ssa | $builddir/qbe/qbe
+build $builddir/mutual: cc_link $builddir/mutual.s $builddir/rt/libocamlrt.a
+
 build smoke: run $builddir/hello
 
 build test_hello: run_test | $builddir/hello
@@ -146,7 +154,11 @@ build test_bools: run_test | $builddir/bools
   name = bools
 build test_strings: run_test | $builddir/strings
   name = strings
+build test_match: run_test | $builddir/match
+  name = match
+build test_mutual: run_test | $builddir/mutual
+  name = mutual
 
-build test: phony test_hello test_fib test_tail test_bools test_strings
+build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual
 
 default $builddir/qbe/qbe $builddir/rt/libocamlrt.a $builddir/bin/ocamlcc $builddir/hello

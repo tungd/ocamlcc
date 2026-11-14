@@ -20,14 +20,15 @@ full design and roadmap.
 
 Phase 1 — Lambda → QBE MVP (in progress).
 
-`ocamlcc` currently compiles a growing integer/string subset of OCaml:
-integer literals, `let` (including toplevel and recursive function
+`ocamlcc` currently compiles a growing subset of OCaml: integer literals,
+`let` (including toplevel, recursive, and mutually recursive function
 definitions), arithmetic/comparison, booleans as values, `if/then/else`,
-string literals, the builtins `print_int` / `print_string` /
-`print_endline` / `exit`, and self tail-recursion (lowered to constant-stack
-phi loops). Unsupported Lambda constructs (closures, `try`, pattern
-matching, floats, …) are rejected with a descriptive error. Memory is not
-yet reclaimed (Phase 2 adds Perceus ARC).
+`match` on integers and constant constructors, string literals, the
+builtins `print_int` / `print_string` / `print_endline` / `exit`, and
+self + mutual tail recursion (lowered to constant-stack phi loops /
+selector-dispatch trampolines). Unsupported Lambda constructs (closures,
+`try`, floats, block constructors, …) are rejected with a descriptive
+error. Memory is not yet reclaimed (Phase 2 adds Perceus ARC).
 
 ## Build
 
@@ -40,10 +41,12 @@ ninja test       # compile every example and diff against tests/*.expected
 ninja -t clean   # remove build/
 ```
 
-Currently passing: `hello` (arithmetic + branch), `fib` (non-tail
-self-recursion), `tail` (self tail-calls lowered to a phi loop — constant
-stack), `bools` (booleans as values), `strings` (string literals +
-`print_string`/`print_endline`).
+Currently passing (7 checked examples): `hello` (arithmetic + branch),
+`fib` (non-tail self-recursion), `tail` (self tail-calls lowered to a phi
+loop — constant stack), `bools` (booleans as values), `strings` (string
+literals + `print_string`/`print_endline`), `match` (int/constructor match
+via switch + static handlers), `mutual` (mutual tail recursion through a
+selector-dispatch trampoline — constant stack).
 
 The pipeline:
 

@@ -41,6 +41,7 @@ type term =
   | Ret of t option
   | Jmp of string                      (* jmp @label *)
   | Br of t * string * string          (* jnz %c, @tlabel, @flabel *)
+  | Hlt                                (* hlt: unreachable / abort *)
 
 type block = { label : string; insts : inst list; term : term }
 

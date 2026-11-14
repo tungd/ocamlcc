@@ -63,6 +63,7 @@ type term =
   | Ret of t option
   | Jmp of string
   | Br of t * string * string
+  | Hlt
 
 type block = { label : string; insts : inst list; term : term }
 
@@ -131,6 +132,7 @@ let string_of_term term =
   | Jmp l -> Printf.sprintf "jmp @%s" l
   | Br (c, t, f) ->
       Printf.sprintf "jnz %s, @%s, @%s" (string_of_t c) t f
+  | Hlt -> "hlt"
 
 let string_of_block (b : block) =
   let buf = Buffer.create 256 in

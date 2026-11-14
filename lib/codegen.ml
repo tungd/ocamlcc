@@ -22,6 +22,25 @@ open Qbe_il
 
 exception Unsupported of string
 
+(* Module-level function registry entry. Members of a mutually
+   tail-recursive group share one QBE function (the trampoline) selected by
+   [tag]; [group_arity] is the group's uniform arity. *)
+type fn_info = {
+  global : string;
+  arity : int;
+  tag : int64 option;
+  group_arity : int;
+  group_name : string option;
+}
+
+(* A static catch handler (pattern-match lowering): raise sites record their
+   predecessor block and argument values for the handler's phis. *)
+type handler = {
+  hlabel : string;
+  hbinders : Ident.t list;
+  mutable hpreds : (string * t list) list; (* reversed *)
+}
+
 (* ------------------------------------------------------------------ *)
 (* Builder                                                             *)
 (* ------------------------------------------------------------------ *)
@@ -39,12 +58,20 @@ type builder = {
   (* One variable table for the whole module: Ident stamps are globally
      unique, and bindings are removed when their scope exits. *)
   vars : (Ident.t, t) Hashtbl.t;
-  (* Known module-level functions: ident -> (global name, arity). *)
-  funs : (Ident.t, string * int) Hashtbl.t;
+  (* Known module-level functions. *)
+  funs : (Ident.t, fn_info) Hashtbl.t;
+  (* Mutually tail-recursive groups waiting to be compiled, keyed by group
+     name; [compiled_groups] tracks what has been emitted. *)
+  groups : (string, (Ident.t * Lambda.lfunction) list) Hashtbl.t;
+  compiled_groups : (string, unit) Hashtbl.t;
+  mutable group_counter : int;
+  (* Static catch handlers in scope, keyed by raise id. *)
+  handlers : (int, handler) Hashtbl.t;
   mutable funcs : func list; (* reversed *)
   mutable datas : data list; (* reversed *)
   mutable entry_label : string;
   mutable self : Ident.t option; (* enclosing function, for tail calls *)
+  mutable cur_group : string option; (* group being compiled, if any *)
   (* Self tail-call sites of the enclosing function, in reverse order of
      emission: (predecessor block label, argument values). *)
   mutable tail_sites : (string * t list) list;
@@ -62,10 +89,15 @@ type builder = {
     fn_params = [];
     vars = Hashtbl.create 16;
     funs = Hashtbl.create 16;
+    groups = Hashtbl.create 8;
+    compiled_groups = Hashtbl.create 8;
+    group_counter = 0;
+    handlers = Hashtbl.create 8;
     funcs = [];
     datas = [];
     entry_label = "start";
     self = None;
+    cur_group = None;
     tail_sites = [] }
 
 (* QBE identifiers allow alphanumerics, '.', '_' and '$'. *)
@@ -222,6 +254,10 @@ let rec describe (lam : Lambda.lambda) : string =
 (* Expression compilation                                              *)
 (* ------------------------------------------------------------------ *)
 
+(* Pads argument vectors to a group's uniform arity with unit values. *)
+let pad_to n (vs : t list) : t list =
+  vs @ List.init (max 0 (n - List.length vs)) (fun _ -> unit_const)
+
 let cmp_of_ocaml : Lambda.integer_comparison -> Cmp.t = function
   | Ceq -> Eq
   | Cne -> Ne
@@ -236,9 +272,11 @@ let rec expr b (tail : bool) (lam : Lambda.lambda) : t =
   | Lconst (Const_immstring s) -> string_data b s
   | Lvar id -> Hashtbl.find b.vars id
   | Llet (_, _, id, Lfunction lf, body) ->
-      (* A toplevel (non-recursive) function definition. *)
-      let g = compile_function b id lf in
-      Hashtbl.replace b.vars id (Global g);
+      (* A function definition: compile its group (trampoline) or standalone
+         form, then bind the name to its global. *)
+      define_function b id lf;
+      Hashtbl.replace b.vars id
+        (Global (Hashtbl.find b.funs id).global);
       expr b tail body
   | Llet (_, _, id, arg, body) | Lmutlet (_, id, arg, body) ->
       let v = expr b false arg in
@@ -247,18 +285,14 @@ let rec expr b (tail : bool) (lam : Lambda.lambda) : t =
       Hashtbl.remove b.vars id;
       result
   | Lletrec (bindings, body) ->
-      (* Register every name first so bodies can call each other, then
-         compile the function definitions, then the continuation. *)
+      (* Names are pre-registered during analysis; bind them all before
+         compiling so bodies can call each other. *)
       List.iter
         (fun (rb : Lambda.rec_binding) ->
-          let g =
-            Printf.sprintf "ocamlcc_%s_%s" b.prefix
-              (sanitize (Ident.name rb.id))
-          in
-          Hashtbl.replace b.funs rb.id (g, List.length rb.def.params);
-          Hashtbl.replace b.vars rb.id (Global g))
+          define_function b rb.id rb.def;
+          Hashtbl.replace b.vars rb.id
+            (Global (Hashtbl.find b.funs rb.id).global))
         bindings;
-      List.iter (fun (rb : Lambda.rec_binding) -> ignore (compile_function b rb.id rb.def)) bindings;
       expr b tail body
   | Lsequence (a, b') ->
       ignore (expr b false a);
@@ -291,7 +325,100 @@ let rec expr b (tail : bool) (lam : Lambda.lambda) : t =
       retag b raw
   | Lapply { ap_func; ap_args; _ } -> apply b tail lam ap_func ap_args
   | Lifthenelse (cond, th, el) -> ifthenelse b tail cond th el
+  | Lswitch (scrut, sw, _) -> (
+      if sw.Lambda.sw_blocks <> [] then
+        raise (Unsupported "match on structured values (block constructors)")
+      else expr b tail (desugar_switch scrut sw))
+  | Lstaticraise (id, args) -> (
+      match Hashtbl.find_opt b.handlers id with
+      | Some h ->
+          let vs = List.map (fun a -> expr b false a) args in
+          h.hpreds <- (b.open_label, vs) :: h.hpreds;
+          close_block b (Jmp h.hlabel);
+          unit_const
+      | None -> raise (Unsupported "uncaught static raise (internal)"))
+  | Lstaticcatch (body, (id, binders), handler) ->
+      staticcatch b tail id (List.map fst binders) body handler
   | _ -> raise (Unsupported (describe lam))
+
+(* Rewrites an integer switch into a comparison chain reusing the if/else
+   machinery. Pattern compilation binds complex scrutinees to variables, but
+   we bind defensively anyway so each case compares one evaluation. *)
+and desugar_switch (scrut : Lambda.lambda) (sw : Lambda.lambda_switch) :
+    Lambda.lambda =
+  let scrut :
+    Lambda.lambda =
+    match scrut with
+    | Lconst _ | Lvar _ -> scrut
+    | _ ->
+        let id = Ident.create_local "switch_scrut" in
+        Llet (Strict, Lambda.Pgenval, id, scrut, Lvar id)
+  in
+  let cmp k : Lambda.lambda =
+    Lprim
+      ( Pintcomp Ceq,
+        [ scrut; Lconst (Const_int k) ],
+        Debuginfo.Scoped_location.Loc_unknown )
+  in
+  let rec build :
+    (int * Lambda.lambda) list -> Lambda.lambda option -> Lambda.lambda =
+    fun cases default ->
+    match (cases, default) with
+    | [], Some d -> d
+    | [ (_, last_arm) ], None -> last_arm
+    | (k, arm) :: rest, d -> Lifthenelse (cmp k, arm, build rest d)
+    | [], None -> assert false
+  in
+  build sw.Lambda.sw_consts sw.Lambda.sw_failaction
+
+and staticcatch b tail id binder_idents body handler =
+  let h =
+    { hlabel = fresh_label b "catch";
+      hbinders = binder_idents;
+      hpreds = [] }
+  in
+  Hashtbl.replace b.handlers id h;
+  let v = expr b tail body in
+  Hashtbl.remove b.handlers id;
+  let ljoin = fresh_label b "catchjoin" in
+  let res = fresh_temp b "catch" in
+  let preds = ref [] in
+  let merge value =
+    preds := (b.open_label, value) :: !preds;
+    if tail then close_block b (Jmp ljoin)
+    else begin
+      emit b (Copy (Long, res, value));
+      close_block b (Jmp ljoin)
+    end
+  in
+  if b.term = None then merge v;
+  if h.hpreds <> [] then begin
+    let sites = List.rev h.hpreds in
+    start_block b h.hlabel;
+    List.iteri
+      (fun idx bid ->
+        let bt = fresh_temp b "henv" in
+        let args =
+          List.map
+            (fun (lbl, vs) ->
+              match List.nth_opt vs idx with
+              | Some v -> (lbl, v)
+              | None -> (lbl, unit_const))
+            sites
+        in
+        emit b (Phi (Long, bt, args));
+        Hashtbl.replace b.vars bid bt)
+      h.hbinders;
+    let hv = expr b tail handler in
+    List.iter (fun bid -> Hashtbl.remove b.vars bid) h.hbinders;
+    if b.term = None then merge hv
+  end;
+  match !preds with
+  | [] -> unit_const (* both paths dead; only possible in tail position *)
+  | _ ->
+      start_block b ljoin;
+      if tail then emit b (Phi (Long, res, List.rev !preds));
+      res
 
 (* [f dst a c] where [f] composes two tagged longs into [dst]. *)
 and arith_binop f a c b =
@@ -347,49 +474,69 @@ and expr_builtin b arg_kind symbol arg =
   unit_const
 
 and apply b tail (lam : Lambda.lambda) (ap_func : Lambda.lambda) ap_args =
+  let builtin_or_unsupported () =
+    match Builtins.resolve ap_func with
+    | Some { symbol; arg_kind } -> (
+        match ap_args with
+        | [ arg ] -> expr_builtin b arg_kind symbol arg
+        | _ -> raise (Unsupported (describe lam)))
+    | None -> raise (Unsupported (describe lam))
+  in
   let is_self id =
     match b.self with
     | Some s -> Ident.same s id
     | None -> false
   in
   match ap_func with
-  | Lvar id when tail && is_self id -> (
-      (* Self tail-call -> explicit loop: jump back to the loop header; the
-         phi nodes there pick up these arguments on the backedge. *)
-      match Hashtbl.find_opt b.funs id with
-      | Some (_, arity) when List.length ap_args = arity ->
-          let args =
-            List.map (fun a -> expr b false a) ap_args
-          in
-          b.tail_sites <- (b.open_label, args) :: b.tail_sites;
-          close_block b (Jmp b.entry_label);
-          unit_const
-      | _ -> raise (Unsupported (describe lam)))
   | Lvar id -> (
       match Hashtbl.find_opt b.funs id with
-      | Some (g, arity) when List.length ap_args = arity ->
-          let args =
-            List.map (fun a -> (Long, expr b false a)) ap_args
-          in
-          let dst = fresh_temp b "call" in
-          emit b (Call (Long, dst, { fn = Global g; args }));
-          dst
-      | Some (_, _) ->
-          raise (Unsupported (Printf.sprintf "partial application of %s" (describe lam)))
-      | None -> (
-          match Builtins.resolve ap_func with
-          | Some { symbol; arg_kind } -> (
-              match ap_args with
-              | [ arg ] -> expr_builtin b arg_kind symbol arg
-              | _ -> raise (Unsupported (describe lam)))
-          | None -> raise (Unsupported (describe lam))))
-  | _ -> (
-      match Builtins.resolve ap_func with
-      | Some { symbol; arg_kind } -> (
-          match ap_args with
-          | [ arg ] -> expr_builtin b arg_kind symbol arg
-          | _ -> raise (Unsupported (describe lam)))
-      | None -> raise (Unsupported (describe lam)))
+      | Some info when List.length ap_args = info.arity -> (
+          match (info.tag, tail) with
+          | Some tag, true when b.cur_group = info.group_name ->
+              (* Tail call within the trampoline group being compiled (self
+                 or mutual): jump to its dispatch header; the phi nodes there
+                 pick up the backedge values. *)
+              let vs =
+                pad_to info.group_arity
+                  (List.map (fun a -> expr b false a) ap_args)
+              in
+              b.tail_sites <- (b.open_label, Int tag :: vs) :: b.tail_sites;
+              close_block b (Jmp b.entry_label);
+              unit_const
+          | Some tag, _ ->
+              (* Call into a trampoline group: select the member, pad to the
+                 group's uniform arity. *)
+              let vs =
+                pad_to info.group_arity
+                  (List.map (fun a -> expr b false a) ap_args)
+              in
+              let dst = fresh_temp b "call" in
+              emit b
+                (Call
+                   ( Long,
+                     dst,
+                     { fn = Global info.global;
+                       args = (Long, Int tag) :: List.map (fun v -> (Long, v)) vs } ));
+              dst
+          | None, true when is_self id ->
+              (* Standalone self tail-call -> explicit loop: jump back to
+                 the loop header; its phis pick up these arguments. *)
+              let vs = List.map (fun a -> expr b false a) ap_args in
+              b.tail_sites <- (b.open_label, vs) :: b.tail_sites;
+              close_block b (Jmp b.entry_label);
+              unit_const
+          | None, _ ->
+              let args =
+                List.map (fun a -> (Long, expr b false a)) ap_args
+              in
+              let dst = fresh_temp b "call" in
+              emit b (Call (Long, dst, { fn = Global info.global; args }));
+              dst)
+      | Some _ ->
+          raise
+            (Unsupported (Printf.sprintf "partial application: %s" (describe lam)))
+      | None -> builtin_or_unsupported ())
+  | _ -> builtin_or_unsupported ()
 
 and ifthenelse b tail cond th el =
   let cv = expr_cond b cond in
@@ -444,10 +591,59 @@ and ifthenelse b tail cond th el =
 and function_global_name b id =
   Printf.sprintf "ocamlcc_%s_%s" b.prefix (sanitize (Ident.name id))
 
+(* Inserts phi nodes at the head of [header_label], one per loop-carried
+   binder, merging [start_values] (from @start) with every recorded tail
+   site's positional argument. *)
+and insert_header_phis b header_label binder_names start_values =
+  if binder_names <> [] then begin
+    let sites = List.rev b.tail_sites in
+    let phis =
+      List.mapi
+        (fun i name ->
+          let args =
+            ("start", List.nth start_values i)
+            :: List.filter_map
+                 (fun (lbl, vs) ->
+                   match List.nth_opt vs i with
+                   | Some v -> Some (lbl, v)
+                   | None -> None)
+                 sites
+          in
+          Phi (Long, Temp name, args))
+        binder_names
+    in
+    b.blocks <-
+      List.map
+        (fun blk ->
+          if blk.label = header_label then { blk with insts = phis @ blk.insts }
+          else blk)
+        b.blocks
+  end
+
+(* Emits the QBE code for a function definition encountered during the walk:
+   pre-registered toplevel definitions keep their analysis-time entry (and
+   their trampoline group, if any); nested definitions are registered as
+   standalone here. *)
+and define_function b id (lf : Lambda.lfunction) : unit =
+  if not (Hashtbl.mem b.funs id) then
+    Hashtbl.replace b.funs id
+      { global = function_global_name b id;
+        arity = List.length lf.params;
+        tag = None;
+        group_arity = List.length lf.params;
+        group_name = None };
+  let info = Hashtbl.find b.funs id in
+  match info.group_name with
+  | Some gname ->
+      (* Compile the whole trampoline group on first encounter. *)
+      if not (Hashtbl.mem b.compiled_groups gname) then begin
+        Hashtbl.replace b.compiled_groups gname ();
+        compile_group b gname (Hashtbl.find b.groups gname)
+      end
+  | None -> ignore (compile_function b id lf)
+
 and compile_function b id (lf : Lambda.lfunction) : string =
-  let g = function_global_name b id in
-  let arity = List.length lf.params in
-  Hashtbl.replace b.funs id (g, arity);
+  let g = (Hashtbl.find b.funs id).global in
   (* Closures are not supported: the body may only reference its own
      parameters and known module-level functions. *)
   let free =
@@ -493,31 +689,8 @@ and compile_function b id (lf : Lambda.lfunction) : string =
     param_binders loop_binders;
   let result = expr b true lf.body in
   close_ret b (Some result);
-  (* Bind the loop header's phis: each loop-carried parameter merges its
-     @start value (the formal parameter) with every backedge argument. *)
-  if param_binders <> [] then begin
-    let phis =
-      List.mapi
-        (fun i (_, formal) ->
-          let args =
-            ("start", Temp formal)
-            :: List.filter_map
-                 (fun (lbl, vs) ->
-                   match List.nth_opt vs i with
-                   | Some v -> Some (lbl, v)
-                   | None -> None)
-                 (List.rev b.tail_sites)
-          in
-          Phi (Long, Temp (List.nth loop_binders i), args))
-        param_binders
-    in
-    b.blocks <-
-      List.map
-        (fun blk ->
-          if blk.label = "loop" then { blk with insts = phis @ blk.insts }
-          else blk)
-        b.blocks
-  end;
+  insert_header_phis b "loop" loop_binders
+    (List.map (fun (_, formal) -> Temp formal) param_binders);
   let func =
     { name = g;
       export = true;
@@ -537,12 +710,271 @@ and compile_function b id (lf : Lambda.lfunction) : string =
   List.iter (fun (pid, _) -> Hashtbl.remove b.vars pid) param_binders;
   g
 
+(* Compiles a mutually tail-recursive group as one trampoline: a single QBE
+   function whose @dispatch header selects a member by tag and loops on tail
+   calls. Design doc §7: mutual tail calls never grow the stack. *)
+and compile_group b gname (members : (Ident.t * Lambda.lfunction) list) : unit =
+  let max_arity =
+    List.fold_left
+      (fun acc ((_, lf) : Ident.t * Lambda.lfunction) ->
+        max acc (List.length lf.params))
+      0 members
+  in
+  let formal_sel = fresh_name b "grpfn" in
+  let formal_slots = List.init max_arity (fun _ -> fresh_name b "grpslot") in
+  let phi_sel = fresh_name b "dspsel" in
+  let phi_slots = List.init max_arity (fun _ -> fresh_name b "dspslot") in
+  (* Snapshot the enclosing state. *)
+  let saved_self = b.self in
+  let saved_group = b.cur_group in
+  let saved_entry = b.entry_label in
+  let saved_insts = b.insts in
+  let saved_term = b.term in
+  let saved_blocks = b.blocks in
+  let saved_open_label = b.open_label in
+  let saved_tail_sites = b.tail_sites in
+  b.self <- None;
+  b.cur_group <- Some gname;
+  b.entry_label <- "dispatch";
+  b.open_label <- "start";
+  b.insts <- [];
+  b.term <- None;
+  b.blocks <- [];
+  b.tail_sites <- [];
+  b.fn_params <-
+    (Long, formal_sel) :: List.map (fun n -> (Long, n)) formal_slots;
+  close_block b (Jmp "dispatch");
+  start_block b "dispatch";
+  (* Dispatch chain: one comparison per member; the last falls through. *)
+  let member_entries =
+    List.mapi
+      (fun i (id, _) ->
+        (Int64.of_int (i + 1),
+         Printf.sprintf "%s_entry" (sanitize (Ident.name id))))
+      members
+  in
+  let rec dispatch_chain = function
+    | [] -> close_block b Hlt (* unreachable: selector is always valid *)
+    | [ (_, entry) ] -> close_block b (Jmp entry)
+    | (tag, entry) :: rest ->
+        let c = fresh_temp b "dspsel" in
+        emit b (Cmp (Eq, Long, c, Temp phi_sel, Int tag));
+        let lnext = fresh_label b "dspnext" in
+        close_block b (Br (c, entry, lnext));
+        start_block b lnext;
+        dispatch_chain rest
+  in
+  dispatch_chain member_entries;
+  (* Member bodies, each entered through its own block. *)
+  let ret_preds = ref [] in
+  List.iter2
+    (fun (_, entry) ((_, lf) : Ident.t * Lambda.lfunction) ->
+      start_block b entry;
+      List.iteri
+        (fun j (pid, _) ->
+          Hashtbl.replace b.vars pid (Temp (List.nth phi_slots j)))
+        lf.params;
+      let result = expr b true lf.body in
+      if b.term = None then begin
+        ret_preds := (b.open_label, result) :: !ret_preds;
+        close_block b (Jmp "ret")
+      end;
+      List.iter (fun (pid, _) -> Hashtbl.remove b.vars pid) lf.params)
+    member_entries members;
+  (* Shared return epilogue. *)
+  (match !ret_preds with
+  | [] -> start_block b "ret"; close_block b Hlt
+  | _ ->
+      start_block b "ret";
+      let res = fresh_temp b "grpres" in
+      emit b (Phi (Long, res, List.rev !ret_preds));
+      close_block b (Ret (Some res)));
+  (* Dispatch header phis: selector + uniform slots, merging @start with
+     every group tail-call site. *)
+  insert_header_phis b "dispatch" (phi_sel :: phi_slots)
+    (Temp formal_sel :: List.map (fun n -> Temp n) formal_slots);
+  let func =
+    { name = gname;
+      export = true;
+      retty = Some Long;
+      params = b.fn_params;
+      blocks = List.rev b.blocks }
+  in
+  b.funcs <- func :: b.funcs;
+  b.self <- saved_self;
+  b.cur_group <- saved_group;
+  b.entry_label <- saved_entry;
+  b.insts <- saved_insts;
+  b.term <- saved_term;
+  b.blocks <- saved_blocks;
+  b.open_label <- saved_open_label;
+  b.tail_sites <- saved_tail_sites
+
+(* ------------------------------------------------------------------ *)
+(* Analysis: definitions, tail-call graph, strongly connected components *)
+(* ------------------------------------------------------------------ *)
+
+(* Toplevel function definitions, in source order. *)
+let collect_defs (lam : Lambda.lambda) : (Ident.t * Lambda.lfunction) list =
+  let rec go
+    (acc : (Ident.t * Lambda.lfunction) list)
+    (lam : Lambda.lambda) : (Ident.t * Lambda.lfunction) list =
+    match lam with
+    | Llet (_, _, id, Lfunction lf, body) | Lmutlet (_, id, Lfunction lf, body)
+      -> go ((id, lf) :: acc) body
+    | Lletrec (bindings, body) ->
+        go
+          (List.fold_left
+             (fun acc (rb : Lambda.rec_binding) -> (rb.id, rb.def) :: acc)
+             acc bindings)
+          body
+    | Lsequence (_, b') -> go acc b'
+    | Levent (l, _) | Lifused (_, l) -> go acc l
+    | Lprim (Psetglobal _, [ body ], _) -> go acc body
+    | _ -> acc
+  in
+  List.rev (go [] lam)
+
+(* Idents applied in tail position within a Lambda tree (self and nested
+   function subtrees excluded — the latter compile separately). *)
+let tail_callees (body : Lambda.lambda) : Ident.Set.t =
+  let rec go (acc : Ident.Set.t) (tail : bool) (lam : Lambda.lambda) : Ident.Set.t =
+    match lam with
+    | Lapply { ap_func = Lvar id; _ } when tail -> Ident.Set.add id acc
+    | Lapply _ -> acc
+    | Lifthenelse (_, th, el) ->
+        go (go acc tail th) tail el
+    | Llet (_, _, _, arg, body) | Lmutlet (_, _, arg, body) ->
+        go (go acc false arg) tail body
+    | Lsequence (a, b') -> go (go acc false a) tail b'
+    | Levent (l, _) | Lifused (_, l) -> go acc tail l
+    | Lstaticcatch (body, (_, _), handler) ->
+        go (go acc tail body) tail handler
+    | Lswitch (_, sw, _) ->
+        let acc =
+          List.fold_left (fun acc (_, arm) -> go acc tail arm) acc
+            sw.Lambda.sw_consts
+        in
+        (match sw.Lambda.sw_failaction with
+        | Some fail -> go acc tail fail
+        | None -> acc)
+    | Lfunction _ -> acc (* nested definitions compile separately *)
+    | Lprim (Psetglobal _, [ body ], _) -> go acc tail body
+    | Lprim (_, args, _) when not tail ->
+        List.fold_left (fun acc a -> go acc false a) acc args
+    | _ -> acc
+  in
+  go Ident.Set.empty true body
+
+(* Tarjan's strongly connected components over a small graph. *)
+let strongly_connected_components nodes edges =
+  let index = Hashtbl.create 16 in
+  let low = Hashtbl.create 16 in
+  let on_stack = Hashtbl.create 16 in
+  let stack = ref [] in
+  let counter = ref 0 in
+  let comps = ref [] in
+  let rec strongconnect v =
+    Hashtbl.replace index v !counter;
+    Hashtbl.replace low v !counter;
+    Hashtbl.replace on_stack v true;
+    incr counter;
+    stack := v :: !stack;
+    Ident.Set.iter
+      (fun w ->
+        if not (Hashtbl.mem index w) then begin
+          strongconnect w;
+          Hashtbl.replace low v
+            (min (Hashtbl.find low v) (Hashtbl.find low w))
+        end
+        else if Hashtbl.find on_stack w then
+          Hashtbl.replace low v
+            (min (Hashtbl.find low v) (Hashtbl.find index w)))
+      (edges v);
+    if Hashtbl.find low v = Hashtbl.find index v then begin
+      let rec pop comp =
+        match !stack with
+        | w :: rest ->
+            stack := rest;
+            Hashtbl.replace on_stack w false;
+            let comp = w :: comp in
+            if Ident.same w v then comps := comp :: !comps
+            else pop comp
+        | [] -> assert false
+      in
+      pop []
+    end
+  in
+  List.iter
+    (fun v -> if not (Hashtbl.mem index v) then strongconnect v)
+    nodes;
+  List.rev !comps
+
 (* ------------------------------------------------------------------ *)
 (* Program compilation                                                 *)
 (* ------------------------------------------------------------------ *)
 
 let compile_program (program : Lambda.program) : Qbe_il.module_ =
   let b = builder (sanitize (Ident.name program.Lambda.module_ident)) in
+  (* Analysis pass: register every toplevel definition, then find cycles in
+     the mutual tail-call graph and trampoline-group them. *)
+  let defs = collect_defs program.code in
+  List.iter
+    (fun ((id, lf) : Ident.t * Lambda.lfunction) ->
+      Hashtbl.replace b.funs id
+        { global = function_global_name b id;
+          arity = List.length lf.params;
+          tag = None;
+          group_arity = List.length lf.params;
+          group_name = None })
+    defs;
+  let def_idents = List.map fst defs in
+  let callee_edges (id : Ident.t) : Ident.Set.t =
+    match List.assoc_opt id defs with
+    | None -> Ident.Set.empty
+    | Some lf -> tail_callees lf.body
+    |> Ident.Set.filter (fun callee ->
+           not (Ident.same callee id)
+           && List.exists (fun (id', _) -> Ident.same id' callee) defs)
+  in
+  let sccs =
+    strongly_connected_components def_idents callee_edges
+  in
+  List.iter
+    (fun comp ->
+      if List.length comp >= 2 then begin
+        let gname =
+          Printf.sprintf "ocamlcc_%s_group%d" b.prefix b.group_counter
+        in
+        b.group_counter <- b.group_counter + 1;
+        let members =
+          List.map
+            (fun id ->
+              match List.assoc_opt id defs with
+              | Some lf -> (id, lf)
+              | None -> assert false)
+            comp
+        in
+        Hashtbl.replace b.groups gname members;
+        let group_arity =
+          List.fold_left
+            (fun acc ((_, lf) : Ident.t * Lambda.lfunction) ->
+              max acc (List.length lf.params))
+            0 members
+        in
+        List.iteri
+          (fun i (id, _) ->
+            let info = Hashtbl.find b.funs id in
+            Hashtbl.replace b.funs id
+              { info with
+                global = gname;
+                tag = Some (Int64.of_int (i + 1));
+                group_arity;
+                group_name = Some gname })
+          members
+      end)
+    sccs;
+  (* Code generation pass. *)
   start_block b "start";
   ignore (expr b false program.code);
   close_ret b None;
