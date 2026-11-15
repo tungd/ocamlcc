@@ -1,4 +1,4 @@
-val compile_program : Lambda.program -> (Qbe_il.module_, string) result
-(** Lower a Lambda program to a QBE module. The module body is emitted as the
-    exported function [$ocamlcc_module_init]; unsupported Lambda constructs
-    return a descriptive error. *)
+val compile_program : ?emit_entry:bool -> Anf.program -> Qbe_il.module_
+(** Lower an ANF program to a QBE module. Emits [$ocamlcc_global_<Mod>]
+    and [$ocamlcc_init_<Mod>()]; when [~emit_entry] is true (default),
+    also exports [$ocamlcc_module_init] for the C [main] shim. *)
