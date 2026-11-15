@@ -72,12 +72,28 @@ let run () =
   helper ();
   Printf.printf "weak_cleared=%b\n" (Weak.check w 0);
 
-  (* Structural compare & refs *)
+  (* Structural compare, division/modulo by zero & refs *)
   let r = ref 10 in
   incr r;
   r := !r + int_of_string (string_of_int 31);
   let cmp = compare ("ab", [ 1; 2 ]) ("ab", [ 1; 3 ]) in
-  Printf.printf "misc=%d,%d,%b\n" !r cmp (("x" ^ "y") = "xy")
+  let d1 = try 1 / 0 with Division_by_zero -> -11 in
+  let m1 = try 1 mod 0 with Division_by_zero -> -22 in
+  let div_pair a b = a / b in
+  let mod_pair a b = a mod b in
+  let d2 = div_pair 21 3 in
+  let d3 = try div_pair 21 0 with Division_by_zero -> -33 in
+  let m2 = mod_pair 23 5 in
+  let m3 = try mod_pair 23 0 with Division_by_zero -> -44 in
+  let keep = ref 50 in
+  let un =
+    try
+      let tmp = ref 99 in
+      !keep / (!tmp - 99)
+    with Division_by_zero -> !keep + 5
+  in
+  Printf.printf "misc=%d,%d,%b\n" !r cmp (("x" ^ "y") = "xy");
+  Printf.printf "div0=%d,%d,%d,%d,%d,%d,%d\n" d1 m1 d2 d3 m2 m3 un
 
 let () =
   (* Warm up printf once outside the measurement window. *)

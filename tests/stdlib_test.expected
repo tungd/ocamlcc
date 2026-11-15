@@ -8,4 +8,5 @@ hashtbl=39,49,-1,20440
 weak_live=true,123,123
 weak_cleared=false
 misc=42,-1,true
+div0=-11,-22,7,-33,3,-44,55
 arc_delta=0
