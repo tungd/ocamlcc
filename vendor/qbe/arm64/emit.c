@@ -194,7 +194,7 @@ emitf(char *s, Ins *i, E *e)
 			goto Switch;
 		case '?':
 			if (KBASE(k) == 0)
-				fputs(rname(R18, k), e->f);
+				fputs(rname(IP1, k), e->f);
 			else
 				fputs(k==Ks ? "s31" : "d31", e->f);
 			break;
@@ -384,7 +384,7 @@ emitins(Ins *i, E *e)
 		if (rtype(i->to) == RSlot) {
 			r = i->to;
 			if (!isreg(i->arg[0])) {
-				i->to = TMP(R18);
+				i->to = TMP(IP1);
 				emitins(i, e);
 				i->arg[0] = i->to;
 			}
@@ -405,7 +405,7 @@ emitins(Ins *i, E *e)
 			emitins(i, e);
 			break;
 		default:
-			assert(i->to.val != R18);
+			assert(i->to.val != IP1);
 			goto Table;
 		}
 		break;
