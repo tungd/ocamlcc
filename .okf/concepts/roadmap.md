@@ -19,11 +19,11 @@ Estimates assume solo development (~5–6 months total)[^design-doc].
 
 | Phase | Duration | Deliverables | Status |
 |-------|----------|--------------|--------|
-| 1. Lambda → QBE MVP | 4–6 weeks | Lambda IR via compiler-libs; ANF & closure conversion; QBE SSA with self-tail-call loops; native desktop binaries (leaking). | **in progress** — `ninja test` (7 examples): functions, self + mutual tail-call loops (phi trampolines), booleans, strings, `match` on ints/constant constructors; ANF/closure conversion pending. |
-| 2. Perceus ARC & allocator | 5–7 weeks | Freestanding slab allocator; dup/drop/reuse pass; zero-leak error-return exceptions; Weak.t support. | bootstrap in `runtime/arc.c` |
-| 3. Wren fibers & I/O poller | 3–4 weeks | Fiber struct, shadow-stack lowering, deterministic fiber-drop cleanup, kqueue/epoll driver. | bootstrap in `runtime/fiber.c` |
+| 1. Lambda → QBE MVP | 4–6 weeks | Lambda IR via compiler-libs; ANF & closure conversion; QBE SSA with self-tail-call loops; native desktop binaries. | **done** |
+| 2. Perceus ARC & allocator | 5–7 weeks | Freestanding slab allocator; dup/drop/reuse pass; zero-leak error-return exceptions; Weak.t support. | **done** (`arc_test`, `exn`, `weak_cycle`) |
+| 3. Wren fibers & I/O poller | 3–4 weeks | Fiber struct, shadow-stack lowering, deterministic fiber-drop cleanup, kqueue/epoll driver. | **done** (`fiber_test`, `fiber_io`) |
 | 4. Mobile & cross-build CLI | 3–4 weeks | Embedded QBE multi-target driver; `.mli → .h` generator; xcframework / Android .so packager. | not started |
-| 5. Core stdlib port | 3–4 weeks | ARC-native Option, Result, List, Array, Bytes, String, Buffer, Hashtbl, Printf. | not started |
+| 5. Core stdlib port | 3–4 weeks | Multi-module linking + ARC-native Option, Result, List, Array, Bytes, String, Buffer, Hashtbl, Printf, Weak, Fiber, Stdlib. | **done** (`mod_main`, `stdlib_test`) |
 
 # Key risks
 

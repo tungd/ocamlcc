@@ -20,8 +20,8 @@ links into the concepts below.
 | [/concepts/build-pipeline.md](/concepts/build-pipeline.md) | stable | How ninja orchestrates vendored QBE, the C runtime, and dune. |
 | [/concepts/value-representation.md](/concepts/value-representation.md) | stable | Tagged 63-bit immediates vs. heap ARC objects. |
 | [/concepts/vendored-qbe.md](/concepts/vendored-qbe.md) | stable | QBE as an out-of-tree vendored dependency. |
-| [/concepts/perceus-arc.md](/concepts/perceus-arc.md) | draft | Planned reference-counting design (Phase 2). |
-| [/concepts/wren-fibers.md](/concepts/wren-fibers.md) | draft | Planned stackful fiber design (Phase 3). |
+| [/concepts/perceus-arc.md](/concepts/perceus-arc.md) | stable | Freestanding slab allocator, Perceus ARC, and weak refs (Phase 2). |
+| [/concepts/wren-fibers.md](/concepts/wren-fibers.md) | stable | Stackful fibers, shadow stack, and async poller (Phase 3). |
 | [/concepts/platform-abstraction-layer.md](/concepts/platform-abstraction-layer.md) | stable | The 6-hook freestanding PAL. |
 | [/concepts/roadmap.md](/concepts/roadmap.md) | stable | Phases, deliverables, and key risks. |
 

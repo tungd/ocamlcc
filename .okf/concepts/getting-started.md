@@ -21,7 +21,7 @@ sources:
 
 # Getting started
 
-Requirements: OCaml 5.1+ (opam switch), dune >= 3.0, a C compiler, and
+Requirements: OCaml 5.3+ (opam switch), dune >= 3.0, a C compiler, and
 [ninja](https://ninja-build.org).
 
 ## Build

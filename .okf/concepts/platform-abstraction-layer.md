@@ -6,7 +6,7 @@ tags: [runtime, c, freestanding, pal]
 status: stable
 generated:
   by: autoagent/1
-  at: 2026-11-13
+  at: 2026-11-15
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -14,6 +14,12 @@ sources:
   - id: rt-pal
     resource: ../runtime/pal.h
     title: pal.h — platform abstraction layer
+  - id: rt-pal-c
+    resource: ../runtime/pal.c
+    title: pal.c — POSIX/kqueue/epoll PAL implementation
+  - id: rt-pal-ctx
+    resource: ../runtime/pal_ctx.S
+    title: pal_ctx.S — arm64 and x86_64 context switching
 ---
 
 # Schema
@@ -32,7 +38,8 @@ sources:
 
 # Status
 
-`runtime/pal.c` is a bootstrap POSIX implementation (mmap, clock_gettime,
-abort, memcpy/memset). `pal_poll_wait` is a stub until the Phase 3 event
-loop. Freestanding syscall implementations on Linux land with the Phase 2
-slab allocator work.
+`runtime/pal.c` implements POSIX `mmap`/`munmap` (`pal_page_alloc`/`pal_page_free`),
+`clock_gettime` (`pal_monotonic_ns`), `abort` (`pal_abort`), `memcpy`/`memset`,
+non-blocking pipe/fd helpers, and real `kqueue` (Darwin/BSD) / `epoll` (Linux)
+event polling behind `pal_poll_wait`. `runtime/pal_ctx.S` implements callee-saved
+register switching (`pal_ctx_init` / `pal_ctx_swap`) for `arm64` and `x86_64`.

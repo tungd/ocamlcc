@@ -1,5 +1,81 @@
 # Change Log
 
+- 2026-11-15 (autoagent/1): Review hardening & packaging fixes (with TDD
+  regressions) — fixed `TryWith` in `lib/arc_pass.ml` to keep `frame_borrowed`
+  vars in `body_env.try_owned`; changed `GetGlobal` `arc_retain_val` call to
+  `Call_void` in `lib/codegen.ml`; fixed direct over-application in
+  `lib/codegen.ml` to check `ocamlcc_exn_slot`, release unconsumed
+  `rest_vals` on first-stage exception, and release intermediate `clos_res`;
+  fixed `drop_child_val` in `runtime/arc.c` to register surviving decremented
+  children in `g_cc_roots`; fixed `release_subtree` in `runtime/arc.c` to run
+  `weak_clear_target` on dying `ARC_TAG_WEAK` arrays after `weak_unlink`;
+  fixed `rule run_test` exit-status masking in `build.ninja`, tightened
+  `ocamlcc.opam` OCaml lower bound to `>= "5.3" & < "5.6"`, added
+  `(public_name ocamlcc)` in `bin/dune`, added OKF frontmatter to
+  `perceus-arc.md`, and promoted `wren-fibers.md` + `platform-abstraction-layer.md`
+  docs. Extended `examples/exn.ml`, `examples/cycle_collect.ml`, and
+  `examples/weak_cycle.ml` (19/19 passing).
+- 2026-11-15 (autoagent/1): Phase 3 Wren-style stackful fibers & async I/O
+  poller — added assembly context switch (`runtime/pal_ctx.S` for arm64 and
+  x86_64), real `kqueue`/`epoll` OS poller + non-blocking fd/pipe helpers in
+  `runtime/pal.c`, ARC-managed `ARC_TAG_FIBER` (`250`) objects in
+  `runtime/arc.c` with `fiber_destroy` cleanup on abandoned fibers, full Wren
+  coroutine (`create`/`resume`/`suspend`/`is_done`) + cooperative scheduler
+  (`spawn`/`yield`/`sleep_ms`/`fd_wait_read`/`fd_wait_write`/`await`/`run_all`)
+  with per-fiber `ocamlcc_exn_slot` preservation in `runtime/fiber.c`. Added
+  static fixed-point yield-effect inference (`compute_yield_info`) and
+  `ShadowPush`/`ShadowPop` lowering (covering values, `muts`, and open Perceus
+  reuse tokens) across `lib/anf.ml`, `lib/arc_pass.ml`, and `lib/codegen.ml`,
+  plus `stdlib/stdlib__fiber.ml` (`Stdlib.Fiber`) and checked tests
+  `fiber_test` & `fiber_io` (19/19 passing, zero ARC leaks).
+- 2026-11-15 (autoagent/1): Pre-Phase-3 ARC cycle hardening — added compiler
+  warning in `lib/codegen.ml` (`compile_letrec`) when non-pure mutual
+  `let rec` closures capture sibling closures in a cycle; implemented opt-in
+  Bacon-Rajan trial-deletion cycle collector (`ocamlcc_arc_collect`) in
+  `runtime/arc.h`/`runtime/arc.c` using 16-byte `ArcHeader.reserved` color and
+  buffered root tracking with zero changes to `runtime/builtins.c`. Added
+  `examples/cycle_collect.ml` + `tests/cycle_collect.expected` covering both
+  cyclic mutual closures and mutable record cycles (17/17 passing,
+  `arc_live () = 0`).
+- 2026-11-15 (autoagent/1): Phase 5 multi-module linking and ARC-native core
+  stdlib — added multi-module compilation (`.mli` → `.cmi` via
+  `compile-mli`, `--mod` / `-I` / `--nostdlib` / `--nopervasives` /
+  `--emit-cmi` / `--cmi-prefix`), `GetGlobal` lowering with idempotent
+  dependency-driven `$ocamlcc_init_<Mod>()` and `$ocamlcc_global_<Mod>` slots,
+  `Pisout` and `Pduparray` lowering, and Darwin arm64 `R18` avoidance in
+  vendored QBE (`IP1` scratch in `vendor/qbe/arm64/`). Added structural
+  comparison/hashing (`caml_equal`, `caml_compare`, `caml_hash`, etc.),
+  bytes/string primitives (`caml_blit_*`, `caml_fill_bytes`, `caml_*_equal/compare`),
+  tagged I/O wrappers, and 12 singleton predef exception constructors in
+  `runtime/arc.c` while keeping `runtime/builtins.c` minimal. Implemented
+  ARC-native `stdlib/` (`CamlinternalFormatBasics`, `Option`, `Result`,
+  `List`, `Array`, `Bytes`, `String`, `Buffer`, `Hashtbl`, `Printf`, `Weak`,
+  `Stdlib`) built into `build/stdlib/libocamlstdlib.a`. Added `mod_main`
+  and `stdlib_test` (16/16 passing, zero ARC leaks).
+- 2026-11-15 (autoagent/1): Phase 2 Perceus ARC, freestanding slab
+  allocator, zero-leak exceptions, and Weak references — replaced
+  `malloc`/`free` in `runtime/arc.c` with a 12-class freestanding slab
+  allocator (`64 KB` slabs + `16 KB`-aligned large blocks) over
+  `pal_page_alloc`/`pal_page_free`; implemented O(1)-stack tail-drop
+  `arc_release`, Perceus `arc_drop_reuse`/`arc_alloc_reuse`/`arc_free_reuse`,
+  balanced ARC refcounting in `runtime/closure.c`, `ARC_TAG_WEAK` weak arrays
+  with automatic dead-target clearing, and `caml_fresh_oo_id` /
+  `ocamlcc_exn_slot` while keeping `runtime/builtins.c` minimal. Added
+  `lib/arc_pass.ml` for static dup/drop/reuse/borrow/exception-unwind
+  insertion over ANF, zero-leak error-return exceptions (`Ltrywith`/`Praise`),
+  and `Pccall` lowering in `Anf`/`Codegen`. Three new checked tests
+  (`arc_test`, `exn`, `weak_cycle`; 14/14 passing).
+- 2026-11-15 (autoagent/1): Heap blocks, full ADT pattern matching, closures,
+  and control/bitwise primitives — added QBE memory load/store/alloc8 and
+  structured data items; `arc_alloc` block allocation, field load/store,
+  immortal `Const_block` data with `ArcHeader`, `Lswitch` with `sw_blocks` +
+  `ArcHeader.tag` dispatch, `Pisint`, `while`/`for`/`Lmutlet`/`Lassign`,
+  bitwise/short-circuit/comparison primitives; closure conversion with
+  free-variable capture (`ArcClosure`), lazy immortal wrappers for pure
+  functions, partial & over-application (`ArcPap` + `runtime/closure.c`),
+  local recursive & mutually recursive closures, and SSA phi joins across
+  all branches. Three new checked tests (`adt`, `closures`, `loops`; 10/10
+  passing).
 - 2026-11-13 (autoagent/1): Match lowering — `Lswitch` desugared to
   comparison chains; `Lstaticraise`/`Lstaticcatch` lowered with per-binder
   phis and two-way joins (integers and constant constructors). Mutual tail

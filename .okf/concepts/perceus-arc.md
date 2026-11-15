@@ -1,41 +1,39 @@
 ---
 type: Concept
-title: Perceus ARC
-description: Planned compile-time automatic reference counting with in-place constructor reuse — Phase 2.
-tags: [arc, memory, planned, phase-2]
-status: draft
+title: Perceus ARC and freestanding slab allocator
+description: Static Perceus reference counting with reuse analysis, zero-leak error-return exceptions, weak references, and freestanding slab allocation.
+tags: [arc, memory, allocator, perceus, phase-2]
+status: stable
 generated:
   by: autoagent/1
-  at: 2026-11-13
+  at: 2026-11-15
 sources:
   - id: design-doc
     resource: ../docs/design.md
     title: OCaml-QBE design document
+  - id: arc-pass
+    resource: ../lib/arc_pass.ml
+    title: Static Perceus ARC and reuse pass
+  - id: arc-runtime
+    resource: ../runtime/arc.c
+    title: Freestanding ARC runtime and slab allocator
 ---
 
-# Design
+# Perceus ARC & Freestanding Slab Allocator
 
-Phase 2 replaces the tracing GC with Perceus-style reference counting
-(§4.2 of the design doc)[^design-doc]. Objects carry a 16-byte header
-(`runtime/arc.h`): non-atomic refcount (`0xFFFFFFFF` = immortal/static),
-constructor tag, `scan_fields` count, and `byte_size` for slab reuse.
+Phase 2 replaces libc `malloc`/`free` with a freestanding slab allocator and static Perceus reference counting with zero-leak error-return exceptions and weak references.
 
-Key pieces:
+## Freestanding Slab Allocator (`runtime/arc.c`)
+- **Size classes**: 12 classes from `16` to `2048` bytes (`16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 1024, 2048`) backed by `64 KB` slabs obtained from `pal_page_alloc`, with per-class LIFO free lists. All slots are 16-byte aligned (even user pointers, preserving the bit-0 immediate tag invariant).
+- **Large blocks**: allocations `> 2048` bytes round up to `16 KB` page alignment and release directly via `pal_page_free`.
+- **O(1)-stack tail drop**: `release_subtree` tail-iterates on the last dying child (`tail`) and uses a `256`-entry stack buffer plus lazy `pal_page_alloc` overflow pages (`DropPage`) for deep non-tail trees.
 
-- **Static dup/drop insertion** — during ANF lowering, liveness analysis
-  inserts `arc_dup` on shared variables and `arc_drop` after last use.
-- **In-place reuse** — when a dropped constructor's size matches the next
-  allocation, the compiler emits a reuse token that mutates the dead block
-  instead of allocating.
-- **Slab allocator** — freestanding C allocator over
-  [PAL](/concepts/platform-abstraction-layer.md) page hooks.
-- **Cycle safety** — mutable structures are statically flagged; cycles break
-  via `Weak.t` or an opt-in trial-deletion collector (design doc §7).
-- **Zero-leak exceptions** — `raise`/`try...with` lower to an error-return
-  channel, so exceptional paths still run the normal epilogue drops (§4.3).
+## Middle-End ARC Pass (`lib/arc_pass.ml`)
+- **Ownership**: `Let`-bindings and function parameters start owned (`+1` rc); `Pure` global functions and static literals/immediates omit refcount traffic; closure captures (`env`), self-refs, and `LetJoin`/`While`/`For` outer references are **borrowed** (with `frame_borrowed` distinguished so exceptional unwinding cleans them up cleanly).
+- **Field & mutation balance**: `Field`/`ArrayGet` retain loaded values; `SetField`/`ArraySet`/`Assign` release overwritten values; `MutLet` slots release via `ReleaseMut` on all exits.
+- **In-place reuse**: `DropReuse` pairs dead unique heap blocks with downstream `AllocReuse` (even across `If` and `CheckExn` via `FreeReuse`).
 
-# Status
-
-Bootstrap only: `runtime/arc.c` implements `arc_alloc` / `arc_retain` /
-`arc_release` over the header with `malloc`. No compiler-side ARC pass
-exists yet; generated code leaks by design in Phase 1.
+## Zero-Leak Exceptions, Cycle Collection & Weak Clearing
+- **Error-return channel**: `ocamlcc_exn_slot` carries raised exception blocks; `CheckExn`/`Unwind` execute local frame cleanup before branching to enclosing `TryWith` handlers or returning `1` to callers. `TryWith` preserves `env.frame_borrowed` alongside `catch_owned` in `try_owned` so raising inside joined expressions keeps borrowed references alive across handler and continuation execution.
+- **Cycle collector (`ocamlcc_arc_collect`)**: opt-in Bacon-Rajan trial-deletion collector over candidate roots in `g_cc_roots` using `ArcHeader.reserved` color/buffer metadata; `drop_child_val` inside `release_subtree` registers surviving decremented children so cycles exposed when freeing acyclic parents are collected.
+- **Weak arrays (`ARC_TAG_WEAK = 249`)**: unscanned weak slot arrays automatically cleared to `0` (`None`) inside `release_subtree` whenever any pointed-to heap object dies (including on `arc_drop_reuse` and when a dying weak array is itself tracked by another weak array after `weak_unlink`).

@@ -24,11 +24,14 @@ One checked-in `build.ninja` drives everything[^build-ninja]:
 | Artifact | Rule chain |
 |----------|------------|
 | `build/qbe/qbe` | `cc -c` each `vendor/qbe/*.c` (all three targets: amd64, arm64, rv64) → link. `config.h` is generated out-of-tree by `tools/gen-config.sh` (host default target). |
-| `build/rt/libocamlrt.a` | `cc -c` `runtime/*.c` → `ar rcs`. |
-| `build/bin/ocamlcc` | `dune build bin/ocamlcc` → copy out of `_build/`. |
-| `build/<name>` | `ocamlcc compile x.ml -o x.ssa` → `qbe x.ssa > x.s` → `cc x.s libocamlrt.a`. |
+| `build/rt/libocamlrt.a` | `cc -c` `runtime/*.c` + `runtime/pal_ctx.S` → `ar rcs`. |
+| `build/bin/ocamlcc` | `dune build bin/ocamlcc` (with `(public_name ocamlcc)` for `dune build -p ocamlcc`) → copy out of `_build/`. |
+| `build/stdlib/libocamlstdlib.a` | `ocamlcc compile-mli` / `compile --mod` over `stdlib/*.ml` → `qbe` → `cc -c` → `ar rcs`. |
+| `build/<name>` | `ocamlcc compile x.ml -o x.ssa` → `qbe x.ssa > x.s` → `cc x.s libocamlstdlib.a libocamlrt.a`. |
 
-`ninja smoke` builds and runs `build/hello`; the default target builds all
+`ninja smoke` builds and runs `build/hello`; `ninja test` runs all checked
+tests by redirecting `$builddir/$name > $builddir/$name.out` before `diff` so
+non-zero exit codes never fail silently; the default target builds all
 artifacts. All outputs stay under the gitignored `build/` directory —
 nothing is ever written into `vendor/qbe` or `_build` by ninja itself.
 

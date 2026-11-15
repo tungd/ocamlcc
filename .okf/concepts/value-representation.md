@@ -40,7 +40,8 @@ header generation clean.
 | `x * y` | untag both (`sar 1`), multiply, retag (`shl 1`, `+ 1`) |
 | `x / y` | untag both, signed `div` (QBE truncates toward zero like OCaml), retag |
 | `x = y` … comparisons | compare tagged values directly — `2x+1` is monotone, so signed order is preserved |
-| `not x` (negation) | `2 - a` |
+| `not x` (boolean negation) | `4 - a` (`false = 1`, `true = 3`) |
+| `-x` (`Pnegint`) | `2 - a` |
 
 **Booleans as values**: a comparison produces the raw QBE `0/1`. In
 condition position (`jnz`) that raw result is used directly; in value
