@@ -10,7 +10,7 @@ type t =
   | Int of int64
 
 module Binop = struct
-  type t = Add | Sub | Mul | Div | Rem | And | Or | Xor | Shl | Sar
+  type t = Add | Sub | Mul | Div | Rem | And | Or | Xor | Shl | Shr | Sar
 
   let to_string = function
     | Add -> "add"
@@ -22,11 +22,12 @@ module Binop = struct
     | Or -> "or"
     | Xor -> "xor"
     | Shl -> "shl"
+    | Shr -> "shr"
     | Sar -> "sar"
 end
 
 module Cmp = struct
-  type t = Eq | Ne | Slt | Sle | Sgt | Sge
+  type t = Eq | Ne | Slt | Sle | Sgt | Sge | Ult
 
   (* QBE comparison opcodes are spelled with a two-letter prefix (ceq, cne,
      cslt, ...) followed by the type letter. *)
@@ -37,6 +38,7 @@ module Cmp = struct
     | Sle -> "csle"
     | Sgt -> "csgt"
     | Sge -> "csge"
+    | Ult -> "cult"
 
   let to_string = function
     | Eq -> "eq"
@@ -45,9 +47,26 @@ module Cmp = struct
     | Sle -> "sle"
     | Sgt -> "sgt"
     | Sge -> "sge"
+    | Ult -> "ult"
 end
 
 let ty_char = function Word -> "w" | Long -> "l"
+
+type load_op = Loadl | Loaduh | Loadub | Loadsw | Loaduw
+type store_op = Storel | Storew | Storeh | Storeb
+
+let string_of_load_op = function
+  | Loadl -> "loadl"
+  | Loaduh -> "loaduh"
+  | Loadub -> "loadub"
+  | Loadsw -> "loadsw"
+  | Loaduw -> "loaduw"
+
+let string_of_store_op = function
+  | Storel -> "storel"
+  | Storew -> "storew"
+  | Storeh -> "storeh"
+  | Storeb -> "storeb"
 
 type call = { fn : t; args : (ty * t) list }
 
@@ -56,6 +75,9 @@ type inst =
   | Cmp of Cmp.t * ty * t * t * t
   | Phi of ty * t * (string * t) list
   | Copy of ty * t * t
+  | Load of load_op * ty * t * t
+  | Store of store_op * t * t
+  | Alloc8 of t * t
   | Call of ty * t * call
   | Call_void of call
 
@@ -78,8 +100,17 @@ type func = {
 type data_item =
   | D_str of string
   | D_byte of int
+  | D_half of int
+  | D_word of int32
+  | D_long of int64
+  | D_ref of string * int64
 
-type data = { name : string; items : data_item list }
+type data = {
+  name : string;
+  export : bool;
+  align : int option;
+  items : data_item list;
+}
 
 type module_ = { funcs : func list; datas : data list }
 
@@ -119,6 +150,14 @@ let string_of_inst inst =
   | Copy (ty, dst, src) ->
       Printf.sprintf "%s =%s copy %s" (string_of_t dst) (ty_char ty)
         (string_of_t src)
+  | Load (op, ty, dst, addr) ->
+      Printf.sprintf "%s =%s %s %s" (string_of_t dst) (ty_char ty)
+        (string_of_load_op op) (string_of_t addr)
+  | Store (op, v, addr) ->
+      Printf.sprintf "%s %s, %s" (string_of_store_op op) (string_of_t v)
+        (string_of_t addr)
+  | Alloc8 (dst, sz) ->
+      Printf.sprintf "%s =l alloc8 %s" (string_of_t dst) (string_of_t sz)
   | Call (ty, dst, { fn; args }) ->
       Printf.sprintf "%s =%s call %s(%s)" (string_of_t dst) (ty_char ty)
         (string_of_t fn) (string_of_args args)
@@ -158,14 +197,26 @@ let string_of_func f =
 
 let string_of_data d =
   let buf = Buffer.create 128 in
-  Buffer.add_string buf (Printf.sprintf "data $%s = { " d.name);
+  let export = if d.export then "export " else "" in
+  let align =
+    match d.align with
+    | Some a -> Printf.sprintf "align %d " a
+    | None -> ""
+  in
+  Buffer.add_string buf (Printf.sprintf "%sdata $%s = %s{ " export d.name align);
   let emit_item item =
     match item with
-    | D_str s -> Buffer.add_string buf (Printf.sprintf "b \"%s\", " s)
-    | D_byte n -> Buffer.add_string buf (Printf.sprintf "b %d, " n)
+    | D_str s -> Printf.sprintf "b \"%s\"" s
+    | D_byte n -> Printf.sprintf "b %d" n
+    | D_half n -> Printf.sprintf "h %d" n
+    | D_word n -> Printf.sprintf "w %ld" n
+    | D_long n -> Printf.sprintf "l %Ld" n
+    | D_ref (sym, off) ->
+        if off = 0L then Printf.sprintf "l $%s" sym
+        else Printf.sprintf "l $%s + %Ld" sym off
   in
-  List.iter emit_item d.items;
-  Buffer.add_string buf "b 0 }\n\n";
+  Buffer.add_string buf (String.concat ", " (List.map emit_item d.items));
+  Buffer.add_string buf " }\n\n";
   Buffer.contents buf
 
 let to_string m =

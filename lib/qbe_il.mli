@@ -16,16 +16,19 @@ type t =
   | Int of int64        (* immediate *)
 
 module Binop : sig
-  type t = Add | Sub | Mul | Div | Rem | And | Or | Xor | Shl | Sar
+  type t = Add | Sub | Mul | Div | Rem | And | Or | Xor | Shl | Shr | Sar
 
   val to_string : t -> string
 end
 
 module Cmp : sig
-  type t = Eq | Ne | Slt | Sle | Sgt | Sge
+  type t = Eq | Ne | Slt | Sle | Sgt | Sge | Ult
 
   val to_string : t -> string
 end
+
+type load_op = Loadl | Loaduh | Loadub | Loadsw | Loaduw
+type store_op = Storel | Storew | Storeh | Storeb
 
 type call = { fn : t; args : (ty * t) list }
 
@@ -34,6 +37,9 @@ type inst =
   | Cmp of Cmp.t * ty * t * t * t      (* %dst =ty ceq %a, %b *)
   | Phi of ty * t * (string * t) list  (* %dst =ty phi @l1 %v1, @l2 %v2 *)
   | Copy of ty * t * t                 (* %dst =ty copy %src *)
+  | Load of load_op * ty * t * t       (* %dst =ty loadop %addr *)
+  | Store of store_op * t * t          (* storeop %val, %addr *)
+  | Alloc8 of t * t                    (* %dst =l alloc8 size *)
   | Call of ty * t * call              (* %dst =ty call $f(...) *)
   | Call_void of call                  (* call $f(...) *)
 
@@ -57,9 +63,15 @@ type func = {
 type data_item =
   | D_str of string
   | D_byte of int
+  | D_half of int
+  | D_word of int32
+  | D_long of int64
+  | D_ref of string * int64
 
 type data = {
   name : string;      (* global symbol, printed with a $ prefix *)
+  export : bool;
+  align : int option;
   items : data_item list;
 }
 
