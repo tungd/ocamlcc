@@ -1,5 +1,14 @@
 # Change Log
 
+- 2026-11-15 (autoagent/1): Division/modulo by zero exception check (TDD) —
+  marked `Binop ((Div | Mod), _, _)` as potentially raising in
+  `ce_may_raise_fn` (`lib/arc_pass.ml`) so `TryWith` retains live bindings and
+  `CheckExn` unwinds frame values on failure; added `compile_div_mod` in
+  `lib/codegen.ml` to branch on zero divisor (`jnz uc`) before emitting
+  machine `div`/`rem` and store `ocamlcc_global_Division_by_zero` into
+  `ocamlcc_exn_slot`; extended `examples/stdlib_test.ml` and
+  `tests/stdlib_test.expected` covering `1 / 0`, `1 mod 0`, direct &
+  indirect divisor checks, and ARC unwind (`19/19` passing, `arc_delta=0`).
 - 2026-11-15 (autoagent/1): Review hardening & packaging fixes (with TDD
   regressions) — fixed `TryWith` in `lib/arc_pass.ml` to keep `frame_borrowed`
   vars in `body_env.try_owned`; changed `GetGlobal` `arc_retain_val` call to

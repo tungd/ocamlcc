@@ -41,8 +41,9 @@ The pipeline has four stages[^design-doc]:
    shadow-stack fiber + error-return exception pass (`lib/arc_pass.ml`).
 3. **Code generation** — `Codegen` lowers ANF to the
    [QBE IL](/concepts/vendored-qbe.md) model in `Qbe_il`; QBE turns SSA into
-   target assembly (including void `arc_retain_val` calls on `GetGlobal` and
-   exception/intermediate-closure cleanup on direct over-application).
+   target assembly (including void `arc_retain_val` calls on `GetGlobal`,
+   exception/intermediate-closure cleanup on direct over-application, and
+   explicit zero-divisor guards raising `Division_by_zero` on `Div`/`Mod`).
 4. **Linking & packaging** — `dune` exposes the `ocamlcc` public executable,
    `build.ninja` archives `build/rt/libocamlrt.a` and
    `build/stdlib/libocamlstdlib.a`, and Phase 4 adds `.mli → .h` C ABI header
