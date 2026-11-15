@@ -1,4 +1,5 @@
 (executable
+ (public_name ocamlcc)
  (name main)
  (libraries ocamlcc))
 
