@@ -366,6 +366,30 @@ let rec compile_atom b (a : Anf.atom) : t =
                 (Printf.sprintf "codegen: unbound mutable variable %s"
                    (sanitize (Ident.name id)))))
 
+and compile_div_mod b qop (av : t) (cv : t) : t =
+  let ua = untag b av in
+  let uc = untag b cv in
+  let lok = fresh_label b "div_ok" in
+  let lzero = fresh_label b "div_zero" in
+  let ldone = fresh_label b "div_done" in
+  close_block b (Br (uc, lok, lzero));
+  start_block b lok;
+  let raw = fresh_temp b "divr" in
+  emit b (Binop (qop, Long, raw, ua, uc));
+  let res = retag b raw in
+  let lok_end = b.open_label in
+  close_block b (Jmp ldone);
+  start_block b lzero;
+  let ex = fresh_temp b "divex" in
+  emit b (Load (Loadl, Long, ex, Global "ocamlcc_global_Division_by_zero"));
+  emit b (Store (Storel, ex, Global "ocamlcc_exn_slot"));
+  let lzero_end = b.open_label in
+  close_block b (Jmp ldone);
+  start_block b ldone;
+  let dst = fresh_temp b "divv" in
+  emit b (Phi (Long, dst, [ (lok_end, res); (lzero_end, unit_const) ]));
+  dst
+
 and compile_binop b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
   let av = compile_atom b a in
   let cv = compile_atom b c in
@@ -388,18 +412,8 @@ and compile_binop b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
       let prod = fresh_temp b "mul" in
       emit b (Binop (Mul, Long, prod, ua, uc));
       retag b prod
-  | Div ->
-      let ua = untag b av in
-      let uc = untag b cv in
-      let quot = fresh_temp b "div" in
-      emit b (Binop (Div, Long, quot, ua, uc));
-      retag b quot
-  | Mod ->
-      let ua = untag b av in
-      let uc = untag b cv in
-      let rem = fresh_temp b "rem" in
-      emit b (Binop (Rem, Long, rem, ua, uc));
-      retag b rem
+  | Div -> compile_div_mod b Div av cv
+  | Mod -> compile_div_mod b Rem av cv
   | And ->
       let dst = fresh_temp b "land" in
       emit b (Binop (And, Long, dst, av, cv));

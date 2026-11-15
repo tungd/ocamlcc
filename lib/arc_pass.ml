@@ -123,6 +123,7 @@ let is_yielding_ccall = function
 
 let ce_may_raise_fn = function
   | Anf.App _ -> true
+  | Binop ((Div | Mod), _, _) -> true
   | Ccall (name, _) ->
       name = "ocamlcc_fiber_resume" || name = "ocamlcc_fiber_await"
   | _ -> false
