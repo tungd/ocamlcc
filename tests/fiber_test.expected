@@ -1,0 +1,4 @@
+coro=10,21,0,7,99,0,150,10,1 delta=0
+abandon=20 susp=1 open=1 after=0 delta=0
+exns=100,4,3 delta=0
+sched=[A1 B1 A2 C1 C2 B2 A3 ] sum=40 delta=0

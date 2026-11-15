@@ -37,8 +37,12 @@ rule dune_ocamlcc
   description = DUNE ocamlcc
   pool = console
 
+rule ocamlcc_cmi
+  command = $builddir/bin/ocamlcc compile-mli $flags $in -o $out
+  description = CMIC $out
+
 rule ocamlcc_ssa
-  command = $builddir/bin/ocamlcc compile $in -o $out
+  command = $builddir/bin/ocamlcc compile $flags $in -o $out
   description = OCAMLCC $out
 
 rule qbe_ssa
@@ -48,6 +52,10 @@ rule qbe_ssa
 rule cc_link
   command = $cc $in -o $out
   description = LINK $out
+
+rule as_obj
+  command = $cc -c $in -o $out
+  description = AS $out
 
 rule run
   command = $in && echo "--- smoke: $in OK"
@@ -97,20 +105,94 @@ build $builddir/qbe/qbe: link_qbe $builddir/qbe/main.o $builddir/qbe/util.o $bui
 # ------------------------------------------------------------ runtime ----
 
 build $builddir/rt/pal.o:      cc_rt runtime/pal.c      | runtime/pal.h
-build $builddir/rt/arc.o:      cc_rt runtime/arc.c      | runtime/arc.h runtime/pal.h
-build $builddir/rt/fiber.o:    cc_rt runtime/fiber.c    | runtime/fiber.h runtime/arc.h
+build $builddir/rt/pal_ctx.o:  as_obj runtime/pal_ctx.S
+build $builddir/rt/arc.o:      cc_rt runtime/arc.c      | runtime/arc.h runtime/pal.h runtime/fiber.h
+build $builddir/rt/closure.o:  cc_rt runtime/closure.c  | runtime/arc.h runtime/pal.h
+build $builddir/rt/fiber.o:    cc_rt runtime/fiber.c    | runtime/fiber.h runtime/arc.h runtime/pal.h
 build $builddir/rt/builtins.o: cc_rt runtime/builtins.c
 
-build $builddir/rt/libocamlrt.a: ar $builddir/rt/pal.o $builddir/rt/arc.o $builddir/rt/fiber.o $builddir/rt/builtins.o
+build $builddir/rt/libocamlrt.a: ar $builddir/rt/pal.o $builddir/rt/pal_ctx.o $builddir/rt/arc.o $builddir/rt/closure.o $builddir/rt/fiber.o $builddir/rt/builtins.o
 
 # ------------------------------------------------------------- ocamlcc ----
 
-build $builddir/bin/ocamlcc: dune_ocamlcc bin/main.ml lib/qbe_il.ml lib/qbe_il.mli lib/frontend.ml lib/frontend.mli lib/codegen.ml lib/codegen.mli lib/pipeline.ml lib/pipeline.mli lib/dune bin/dune dune-project
+build $builddir/bin/ocamlcc: dune_ocamlcc bin/main.ml lib/qbe_il.ml lib/qbe_il.mli lib/frontend.ml lib/frontend.mli lib/builtins.ml lib/builtins.mli lib/anf.ml lib/anf.mli lib/arc_pass.ml lib/arc_pass.mli lib/codegen.ml lib/codegen.mli lib/pipeline.ml lib/pipeline.mli lib/dune bin/dune dune-project
+
+# ------------------------------------------------------------- stdlib -----
+
+stdlibdir = $builddir/stdlib
+stdlib_flags = --nostdlib --nopervasives --mod -I $stdlibdir
+
+build $stdlibdir/camlinternalFormatBasics.ssa | $stdlibdir/camlinternalFormatBasics.cmi: ocamlcc_ssa stdlib/camlinternalFormatBasics.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/camlinternalFormatBasics
+build $stdlibdir/camlinternalFormatBasics.s: qbe_ssa $stdlibdir/camlinternalFormatBasics.ssa | $builddir/qbe/qbe
+build $stdlibdir/camlinternalFormatBasics.o: as_obj $stdlibdir/camlinternalFormatBasics.s
+
+build $stdlibdir/stdlib__option.ssa | $stdlibdir/stdlib__option.cmi: ocamlcc_ssa stdlib/stdlib__option.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__option
+build $stdlibdir/stdlib__option.s: qbe_ssa $stdlibdir/stdlib__option.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__option.o: as_obj $stdlibdir/stdlib__option.s
+
+build $stdlibdir/stdlib__result.ssa | $stdlibdir/stdlib__result.cmi: ocamlcc_ssa stdlib/stdlib__result.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__result
+build $stdlibdir/stdlib__result.s: qbe_ssa $stdlibdir/stdlib__result.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__result.o: as_obj $stdlibdir/stdlib__result.s
+
+build $stdlibdir/stdlib__bytes.ssa | $stdlibdir/stdlib__bytes.cmi: ocamlcc_ssa stdlib/stdlib__bytes.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__bytes
+build $stdlibdir/stdlib__bytes.s: qbe_ssa $stdlibdir/stdlib__bytes.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__bytes.o: as_obj $stdlibdir/stdlib__bytes.s
+
+build $stdlibdir/stdlib__string.ssa | $stdlibdir/stdlib__string.cmi: ocamlcc_ssa stdlib/stdlib__string.ml | $builddir/bin/ocamlcc $stdlibdir/stdlib__bytes.cmi
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__string
+build $stdlibdir/stdlib__string.s: qbe_ssa $stdlibdir/stdlib__string.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__string.o: as_obj $stdlibdir/stdlib__string.s
+
+build $stdlibdir/stdlib__list.ssa | $stdlibdir/stdlib__list.cmi: ocamlcc_ssa stdlib/stdlib__list.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__list
+build $stdlibdir/stdlib__list.s: qbe_ssa $stdlibdir/stdlib__list.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__list.o: as_obj $stdlibdir/stdlib__list.s
+
+build $stdlibdir/stdlib__array.ssa | $stdlibdir/stdlib__array.cmi: ocamlcc_ssa stdlib/stdlib__array.ml | $builddir/bin/ocamlcc $stdlibdir/stdlib__list.cmi
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__array
+build $stdlibdir/stdlib__array.s: qbe_ssa $stdlibdir/stdlib__array.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__array.o: as_obj $stdlibdir/stdlib__array.s
+
+build $stdlibdir/stdlib__buffer.ssa | $stdlibdir/stdlib__buffer.cmi: ocamlcc_ssa stdlib/stdlib__buffer.ml | $builddir/bin/ocamlcc $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__buffer
+build $stdlibdir/stdlib__buffer.s: qbe_ssa $stdlibdir/stdlib__buffer.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__buffer.o: as_obj $stdlibdir/stdlib__buffer.s
+
+build $stdlibdir/stdlib__hashtbl.ssa | $stdlibdir/stdlib__hashtbl.cmi: ocamlcc_ssa stdlib/stdlib__hashtbl.ml | $builddir/bin/ocamlcc $stdlibdir/stdlib__array.cmi
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__hashtbl
+build $stdlibdir/stdlib__hashtbl.s: qbe_ssa $stdlibdir/stdlib__hashtbl.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__hashtbl.o: as_obj $stdlibdir/stdlib__hashtbl.s
+
+build $stdlibdir/stdlib__printf.ssa | $stdlibdir/stdlib__printf.cmi: ocamlcc_ssa stdlib/stdlib__printf.ml | $builddir/bin/ocamlcc $stdlibdir/camlinternalFormatBasics.cmi $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi $stdlibdir/stdlib__list.cmi $stdlibdir/stdlib__buffer.cmi
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__printf
+build $stdlibdir/stdlib__printf.s: qbe_ssa $stdlibdir/stdlib__printf.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__printf.o: as_obj $stdlibdir/stdlib__printf.s
+
+build $stdlibdir/stdlib__weak.ssa | $stdlibdir/stdlib__weak.cmi: ocamlcc_ssa stdlib/stdlib__weak.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__weak
+build $stdlibdir/stdlib__weak.s: qbe_ssa $stdlibdir/stdlib__weak.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__weak.o: as_obj $stdlibdir/stdlib__weak.s
+
+build $stdlibdir/stdlib__fiber.ssa | $stdlibdir/stdlib__fiber.cmi: ocamlcc_ssa stdlib/stdlib__fiber.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__fiber
+build $stdlibdir/stdlib__fiber.s: qbe_ssa $stdlibdir/stdlib__fiber.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__fiber.o: as_obj $stdlibdir/stdlib__fiber.s
+
+build $stdlibdir/stdlib.ssa | $stdlibdir/stdlib.cmi: ocamlcc_ssa stdlib/stdlib.ml | $builddir/bin/ocamlcc $stdlibdir/camlinternalFormatBasics.cmi $stdlibdir/stdlib__option.cmi $stdlibdir/stdlib__result.cmi $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi $stdlibdir/stdlib__list.cmi $stdlibdir/stdlib__array.cmi $stdlibdir/stdlib__buffer.cmi $stdlibdir/stdlib__hashtbl.cmi $stdlibdir/stdlib__printf.cmi $stdlibdir/stdlib__weak.cmi $stdlibdir/stdlib__fiber.cmi
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib
+build $stdlibdir/stdlib.s: qbe_ssa $stdlibdir/stdlib.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib.o: as_obj $stdlibdir/stdlib.s
+
+build $stdlibdir/libocamlstdlib.a: ar $stdlibdir/camlinternalFormatBasics.o $stdlibdir/stdlib__option.o $stdlibdir/stdlib__result.o $stdlibdir/stdlib__bytes.o $stdlibdir/stdlib__string.o $stdlibdir/stdlib__list.o $stdlibdir/stdlib__array.o $stdlibdir/stdlib__buffer.o $stdlibdir/stdlib__hashtbl.o $stdlibdir/stdlib__printf.o $stdlibdir/stdlib__weak.o $stdlibdir/stdlib__fiber.o $stdlibdir/stdlib.o
 
 # ------------------------------------------------------------ examples ----
 
 rule run_test
-  command = $builddir/$name | diff - tests/$name.expected && echo "PASS $name"
+  command = $builddir/$name > $builddir/$name.out && diff - tests/$name.expected < $builddir/$name.out && echo "PASS $name"
   pool = console
   description = TEST $name
 
@@ -142,6 +224,63 @@ build $builddir/mutual.ssa: ocamlcc_ssa examples/mutual.ml | $builddir/bin/ocaml
 build $builddir/mutual.s: qbe_ssa $builddir/mutual.ssa | $builddir/qbe/qbe
 build $builddir/mutual: cc_link $builddir/mutual.s $builddir/rt/libocamlrt.a
 
+build $builddir/adt.ssa: ocamlcc_ssa examples/adt.ml | $builddir/bin/ocamlcc
+build $builddir/adt.s: qbe_ssa $builddir/adt.ssa | $builddir/qbe/qbe
+build $builddir/adt: cc_link $builddir/adt.s $builddir/rt/libocamlrt.a
+
+build $builddir/closures.ssa: ocamlcc_ssa examples/closures.ml | $builddir/bin/ocamlcc
+build $builddir/closures.s: qbe_ssa $builddir/closures.ssa | $builddir/qbe/qbe
+build $builddir/closures: cc_link $builddir/closures.s $builddir/rt/libocamlrt.a
+
+build $builddir/loops.ssa: ocamlcc_ssa examples/loops.ml | $builddir/bin/ocamlcc
+build $builddir/loops.s: qbe_ssa $builddir/loops.ssa | $builddir/qbe/qbe
+build $builddir/loops: cc_link $builddir/loops.s $builddir/rt/libocamlrt.a
+
+build $builddir/arrays_bytes.ssa: ocamlcc_ssa examples/arrays_bytes.ml | $builddir/bin/ocamlcc
+build $builddir/arrays_bytes.s: qbe_ssa $builddir/arrays_bytes.ssa | $builddir/qbe/qbe
+build $builddir/arrays_bytes: cc_link $builddir/arrays_bytes.s $builddir/rt/libocamlrt.a
+
+build $builddir/arc_test.ssa: ocamlcc_ssa examples/arc_test.ml | $builddir/bin/ocamlcc
+build $builddir/arc_test.s: qbe_ssa $builddir/arc_test.ssa | $builddir/qbe/qbe
+build $builddir/arc_test: cc_link $builddir/arc_test.s $builddir/rt/libocamlrt.a
+
+build $builddir/exn.ssa: ocamlcc_ssa examples/exn.ml | $builddir/bin/ocamlcc
+build $builddir/exn.s: qbe_ssa $builddir/exn.ssa | $builddir/qbe/qbe
+build $builddir/exn: cc_link $builddir/exn.s $builddir/rt/libocamlrt.a
+
+build $builddir/weak_cycle.ssa: ocamlcc_ssa examples/weak_cycle.ml | $builddir/bin/ocamlcc
+build $builddir/weak_cycle.s: qbe_ssa $builddir/weak_cycle.ssa | $builddir/qbe/qbe
+build $builddir/weak_cycle: cc_link $builddir/weak_cycle.s $builddir/rt/libocamlrt.a
+
+build $builddir/cycle_collect.ssa: ocamlcc_ssa examples/cycle_collect.ml | $builddir/bin/ocamlcc
+build $builddir/cycle_collect.s: qbe_ssa $builddir/cycle_collect.ssa | $builddir/qbe/qbe
+build $builddir/cycle_collect: cc_link $builddir/cycle_collect.s $builddir/rt/libocamlrt.a
+
+build $builddir/mod_lib.cmi: ocamlcc_cmi examples/mod_lib.mli | $builddir/bin/ocamlcc
+build $builddir/mod_lib.ssa: ocamlcc_ssa examples/mod_lib.ml | $builddir/bin/ocamlcc $builddir/mod_lib.cmi
+  flags = -I $builddir --cmi-prefix $builddir/mod_lib --mod
+build $builddir/mod_lib.s: qbe_ssa $builddir/mod_lib.ssa | $builddir/qbe/qbe
+
+build $builddir/mod_main.ssa: ocamlcc_ssa examples/mod_main.ml | $builddir/bin/ocamlcc $builddir/mod_lib.cmi
+  flags = -I $builddir
+build $builddir/mod_main.s: qbe_ssa $builddir/mod_main.ssa | $builddir/qbe/qbe
+build $builddir/mod_main: cc_link $builddir/mod_main.s $builddir/mod_lib.s $builddir/rt/libocamlrt.a
+
+build $builddir/stdlib_test.ssa: ocamlcc_ssa examples/stdlib_test.ml | $builddir/bin/ocamlcc $stdlibdir/stdlib.cmi
+  flags = --nostdlib -I $stdlibdir
+build $builddir/stdlib_test.s: qbe_ssa $builddir/stdlib_test.ssa | $builddir/qbe/qbe
+build $builddir/stdlib_test: cc_link $builddir/stdlib_test.s $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
+
+build $builddir/fiber_test.ssa: ocamlcc_ssa examples/fiber_test.ml | $builddir/bin/ocamlcc $stdlibdir/stdlib.cmi
+  flags = --nostdlib -I $stdlibdir
+build $builddir/fiber_test.s: qbe_ssa $builddir/fiber_test.ssa | $builddir/qbe/qbe
+build $builddir/fiber_test: cc_link $builddir/fiber_test.s $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
+
+build $builddir/fiber_io.ssa: ocamlcc_ssa examples/fiber_io.ml | $builddir/bin/ocamlcc $stdlibdir/stdlib.cmi
+  flags = --nostdlib -I $stdlibdir
+build $builddir/fiber_io.s: qbe_ssa $builddir/fiber_io.ssa | $builddir/qbe/qbe
+build $builddir/fiber_io: cc_link $builddir/fiber_io.s $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
+
 build smoke: run $builddir/hello
 
 build test_hello: run_test | $builddir/hello
@@ -158,7 +297,31 @@ build test_match: run_test | $builddir/match
   name = match
 build test_mutual: run_test | $builddir/mutual
   name = mutual
+build test_adt: run_test | $builddir/adt
+  name = adt
+build test_closures: run_test | $builddir/closures
+  name = closures
+build test_loops: run_test | $builddir/loops
+  name = loops
+build test_arrays_bytes: run_test | $builddir/arrays_bytes
+  name = arrays_bytes
+build test_arc_test: run_test | $builddir/arc_test
+  name = arc_test
+build test_exn: run_test | $builddir/exn
+  name = exn
+build test_weak_cycle: run_test | $builddir/weak_cycle
+  name = weak_cycle
+build test_cycle_collect: run_test | $builddir/cycle_collect
+  name = cycle_collect
+build test_mod_main: run_test | $builddir/mod_main
+  name = mod_main
+build test_stdlib_test: run_test | $builddir/stdlib_test
+  name = stdlib_test
+build test_fiber_test: run_test | $builddir/fiber_test
+  name = fiber_test
+build test_fiber_io: run_test | $builddir/fiber_io
+  name = fiber_io
 
-build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual
+build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io
 
-default $builddir/qbe/qbe $builddir/rt/libocamlrt.a $builddir/bin/ocamlcc $builddir/hello
+default $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a $builddir/bin/ocamlcc $builddir/hello

@@ -1,0 +1,88 @@
+external arc_live : unit -> int = "ocamlcc_arc_live"
+
+let run () =
+  (* Option *)
+  let o1 = Option.bind (Option.map (fun x -> x * 3) (Some 7)) (fun x -> Some (x + 1)) in
+  let o2 = Option.value (Option.join (Some None)) ~default:99 in
+  let o_eq = Option.equal (fun a b -> a = b) (Some 22) o1 in
+  Printf.printf "option=%d,%d,%b\n" (Option.value o1 ~default:0) o2 o_eq;
+
+  (* Result *)
+  let r1 = Result.bind (Ok 10) (fun x -> if x > 5 then Ok (x + 5) else Error "low") in
+  let r2 = Result.map_error String.length (Error "oops") in
+  let r_v = Result.value r1 ~default:0 in
+  let r_e = Result.get_error r2 in
+  Printf.printf "result=%d,%d,%b\n" r_v r_e (Result.is_ok r1 && Result.is_error r2);
+
+  (* List *)
+  let xs = [ 5; 1; 4; 2; 3; 2 ] in
+  let sorted = List.sort compare xs in
+  let uniq = List.sort_uniq compare xs in
+  let mapped = List.filter_map (fun x -> if x mod 2 = 0 then Some (x * 10) else None) uniq in
+  let folded = List.fold_left ( + ) 0 mapped in
+  let found = Option.value (List.assoc_opt "b" [ ("a", 11); ("b", 22) ]) ~default:(-1) in
+  Printf.printf "list=%d,%d,%d,%b\n"
+    (List.length sorted) folded found (xs @ [] = [ 5; 1; 4; 2; 3; 2 ]);
+
+  (* Array *)
+  let arr = Array.init 5 (fun i -> 5 - i) in
+  Array.sort compare arr;
+  let arr_sum = Array.fold_left ( + ) 0 arr in
+  Printf.printf "array=%d,%d,%d,%b\n" arr.(0) arr.(4) arr_sum (arr = [| 1; 2; 3; 4; 5 |]);
+
+  (* Bytes & String *)
+  let b = Bytes.of_string "  hello-ocamlcc  " in
+  let trimmed = Bytes.to_string (Bytes.trim b) in
+  let parts = String.split_on_char '-' (String.uppercase_ascii trimmed) in
+  let joined = String.concat "/" parts in
+  Printf.printf "string=%s,%b,%b\n"
+    joined
+    (String.starts_with ~prefix:"HELLO" joined)
+    (String.ends_with ~suffix:"OCAMLCC" joined);
+
+  (* Buffer *)
+  let buf = Buffer.create 4 in
+  Buffer.add_string buf "alpha";
+  Buffer.add_char buf ':';
+  Printf.bprintf buf "%d:%x:%s" 42 255 "done";
+  Printf.printf "buffer=%s,%d\n" (Buffer.contents buf) (Buffer.length buf);
+
+  (* Hashtbl *)
+  let tbl = Hashtbl.create 4 in
+  for i = 0 to 39 do
+    let k = Printf.sprintf "k%02d" i in
+    Hashtbl.replace tbl k (i * i)
+  done;
+  Hashtbl.remove tbl "k10";
+  let v7 = Option.value (Hashtbl.find_opt tbl "k07") ~default:(-1) in
+  let v10 = Option.value (Hashtbl.find_opt tbl "k10") ~default:(-1) in
+  let tbl_sum = Hashtbl.fold (fun _ v acc -> acc + v) tbl 0 in
+  Printf.printf "hashtbl=%d,%d,%d,%d\n" (Hashtbl.length tbl) v7 v10 tbl_sum;
+
+  (* Weak *)
+  let w = Weak.create 2 in
+  let helper () =
+    let target = ref 123 in
+    Weak.set w 0 (Some target);
+    let alive_before = Weak.check w 0 in
+    let got = match Weak.get w 0 with Some r -> !r | None -> -1 in
+    let still = !target in
+    Printf.printf "weak_live=%b,%d,%d\n" alive_before got still
+  in
+  helper ();
+  Printf.printf "weak_cleared=%b\n" (Weak.check w 0);
+
+  (* Structural compare & refs *)
+  let r = ref 10 in
+  incr r;
+  r := !r + int_of_string (string_of_int 31);
+  let cmp = compare ("ab", [ 1; 2 ]) ("ab", [ 1; 3 ]) in
+  Printf.printf "misc=%d,%d,%b\n" !r cmp (("x" ^ "y") = "xy")
+
+let () =
+  (* Warm up printf once outside the measurement window. *)
+  let _ = Printf.sprintf "warm=%d" 1 in
+  let before = arc_live () in
+  run ();
+  let after = arc_live () in
+  Printf.printf "arc_delta=%d\n" (after - before)

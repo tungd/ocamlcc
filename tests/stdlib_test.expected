@@ -1,0 +1,11 @@
+option=22,99,true
+result=15,4,true
+list=6,60,22,true
+array=1,5,15,true
+string=HELLO/OCAMLCC,true,true
+buffer=alpha:42:ff:done,16
+hashtbl=39,49,-1,20440
+weak_live=true,123,123
+weak_cleared=false
+misc=42,-1,true
+arc_delta=0
