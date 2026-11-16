@@ -1,5 +1,21 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): `Lstaticraise` in let-RHS fix (TDD) —
+  `Anf.conv_bind` (`lib/anf.ml`) raised `Unsupported "static raise"` for an
+  `Lstaticraise` used as a let binding RHS, while `conv_expr` lowers the same
+  node fine in tail position. The pattern matcher's tuple-let optimization
+  (`Matching.assign_pat` / `simple_for_let`) emits `Llet` chains whose tail is
+  a guard-failure `Lstaticraise` (e.g. `(let (y = 4 x = 3) (exit 1 x y))`), and
+  `conv_bind` recurses through the bodies of RHS-lets (`Llet`/`Lmutlet`/
+  `Lletrec`/`Lsequence`), so such a chain bound by an outer `let` failed to
+  compile. Fixed by lowering `Lstaticraise (i, args)` in `conv_bind` as a
+  terminator via `conv_atoms args (fun vs -> StaticRaise (i, vs))` — the bound
+  continuation is unreachable and dropped, matching `conv_expr`. Added
+  middle-end regression test `test/anf_staticraise_test.ml` (`dune runtest`;
+  red: `conv error: static raise` for let-RHS and atom-arg cases; green:
+  `StaticRaise` lifted with the staticcatch handler preserved). `19/19`
+  examples pass. Documented in
+  [compiler pipeline](/concepts/compiler-pipeline.md).
 - 2026-11-16 (autoagent/1): MutLet double-release fix (TDD) — a mutable slot
   in scope across a `LetJoin` rhs, `While`/`For` condition/body, or loop exit
   was released multiple times: `Halt` unconditionally emitted

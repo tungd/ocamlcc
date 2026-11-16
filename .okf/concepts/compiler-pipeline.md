@@ -6,7 +6,7 @@ tags: [compiler, architecture, lambda, qbe]
 status: stable
 generated:
   by: autoagent/1
-  at: 2026-11-15
+  at: 2026-11-16
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -88,7 +88,12 @@ Pattern compilation in translmod produces two shapes:
   wildcards. Raise sites record their predecessor block and argument
   values; the handler block emits one phi per binder merging all sites, and
   both the normal path and the handler merge into a join block (phi in
-  tail position, copies otherwise).
+  tail position, copies otherwise). The matcher's tuple-let optimization
+  (`assign_pat`) can also leave an `Lstaticraise` at the tail of a `Llet`
+  chain used as a binding RHS; `Anf.conv_bind` lowers it as a terminator
+  (bare `StaticRaise`, unreachable continuation dropped) exactly like
+  `conv_expr` does in tail position — regression-tested in
+  `test/anf_staticraise_test.ml`.
 
 # Self tail-calls
 

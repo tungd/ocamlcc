@@ -222,8 +222,13 @@ and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
       LetJoin (id, conv_tail rhs, k ())
   | Lwhile _ | Lfor _ ->
       conv_expr rhs (fun a -> Let (id, Atom a, k ()))
-  | Lstaticraise _ | Lsend _ ->
-      raise (Unsupported (describe rhs))
+  | Lstaticraise (i, args) ->
+      (* A static raise is a terminator: the binding's continuation is
+         unreachable and is dropped, exactly as [conv_expr] does. The
+         matcher's tuple-let optimization ([assign_pat]) can leave an
+         [Lstaticraise] at the tail of a let chain used as a binding RHS. *)
+      conv_atoms args (fun vs -> StaticRaise (i, vs))
+  | Lsend _ -> raise (Unsupported (describe rhs))
 
 and conv_mut_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) :
     aexpr =

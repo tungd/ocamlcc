@@ -14,3 +14,20 @@
  (deps arc_mutlet_test.actual arc_mutlet_test.expected)
  (action
   (diff arc_mutlet_test.expected arc_mutlet_test.actual)))
+
+(executable
+ (name anf_staticraise_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps anf_staticraise_test.exe anf_staticraise_test.expected)
+ (action
+  (with-stdout-to anf_staticraise_test.actual
+   (run ./anf_staticraise_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps anf_staticraise_test.actual anf_staticraise_test.expected)
+ (action
+  (diff anf_staticraise_test.expected anf_staticraise_test.actual)))

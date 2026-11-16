@@ -1,0 +1,3 @@
+staticraise in let rhs: PASS
+staticraise in tail position: PASS
+staticraise with atom args: PASS
