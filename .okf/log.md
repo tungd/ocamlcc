@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): Raising `while` condition terminator fix (TDD) —
+  guarded `While` loop condition emission in `lib/codegen.ml` on
+  `if b.term = None` so conditions that unconditionally raise/terminate do not
+  emit `Cmp`/`Br` after a closed block terminator. Extended `examples/exn.ml`
+  and `tests/exn.expected` (`19/19` passing, `arc_live = 0`).
 - 2026-11-16 (autoagent/1): `for` loop integer-limit wrap fix (TDD) —
   updated `For` lowering in `lib/codegen.ml` to check the initial `sv <= ev` /
   `sv >= ev` entry condition once before entering `@fbody`, then test `iv < ev`
