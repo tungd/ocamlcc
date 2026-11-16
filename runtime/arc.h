@@ -72,6 +72,7 @@ int64_t ocamlcc_weak_check(int64_t weak_val, int64_t idx);
 int64_t ocamlcc_print_int_val(int64_t val);
 int64_t ocamlcc_print_char_val(int64_t val);
 int64_t ocamlcc_print_string_val(int64_t val);
+int64_t ocamlcc_prerr_string_val(int64_t val);
 int64_t ocamlcc_print_endline_val(int64_t val);
 void    ocamlcc_exit_val(int64_t val) __attribute__((noreturn));
 

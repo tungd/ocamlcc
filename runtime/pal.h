@@ -52,6 +52,7 @@ int     pal_fd_set_nonblock(int fd);
 int64_t pal_fd_read(int fd, void *buf, size_t len);
 int64_t pal_fd_write(int fd, const void *buf, size_t len);
 void    pal_fd_close(int fd);
+void    pal_stderr_write(const void *buf, size_t len);
 
 /* 6. Memory primitives (freestanding fallback or platform libc). */
 void *pal_memcpy(void *dst, const void *src, size_t n);

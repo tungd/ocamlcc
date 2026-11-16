@@ -261,6 +261,22 @@ void pal_fd_close(int fd)
         close(fd);
 }
 
+void pal_stderr_write(const void *buf, size_t len)
+{
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(STDERR_FILENO, p + off, len - off);
+        if (n > 0) {
+            off += (size_t)n;
+        } else if (n < 0 && errno == EINTR) {
+            continue;
+        } else {
+            break;
+        }
+    }
+}
+
 void *pal_memcpy(void *dst, const void *src, size_t n)
 {
     return memcpy(dst, src, n);

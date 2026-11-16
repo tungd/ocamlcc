@@ -853,6 +853,13 @@ int64_t ocamlcc_print_string_val(int64_t val)
     return 1;
 }
 
+int64_t ocamlcc_prerr_string_val(int64_t val)
+{
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)val - 1;
+    pal_stderr_write((const void *)(uintptr_t)val, (size_t)hdr->reserved);
+    return 1;
+}
+
 int64_t ocamlcc_print_endline_val(int64_t val)
 {
     ocamlcc_print_endline((const char *)(uintptr_t)val);
