@@ -124,8 +124,16 @@ let is_yielding_ccall = function
 let ce_may_raise_fn = function
   | Anf.App _ -> true
   | Binop ((Div | Mod), _, _) -> true
+  | StringGet (true, _, _)
+  | BytesSet (true, _, _, _)
+  | ArrayGet (true, _, _, _)
+  | ArraySet (true, _, _, _, _)
+  | CreateBytes _ | MakeArrayInit _ ->
+      true
   | Ccall (name, _) ->
       name = "ocamlcc_fiber_resume" || name = "ocamlcc_fiber_await"
+      || name = "ocamlcc_weak_create" || name = "ocamlcc_weak_set"
+      || name = "ocamlcc_weak_get" || name = "ocamlcc_weak_check"
   | _ -> false
 
 let is_yielding_ce (env : state) = function

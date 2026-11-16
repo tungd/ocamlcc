@@ -255,16 +255,32 @@ let cmp_of_ocaml : Lambda.integer_comparison -> Cmp.t = function
   | Cgt -> Sgt
   | Cge -> Sge
 
-let bounds_check b idx_untagged len_val =
+let compile_bounds_guarded b ?drop_on_oob idx_untagged len_val
+    (on_ok : unit -> t) : t =
   let ok = fresh_temp b "bnd" in
   emit b (Cmp (Ult, Long, ok, idx_untagged, len_val));
   let lok = fresh_label b "bnd_ok" in
   let loob = fresh_label b "bnd_oob" in
+  let ldone = fresh_label b "bnd_done" in
   close_block b (Br (ok, lok, loob));
+  start_block b lok;
+  let ok_res = on_ok () in
+  let lok_end = b.open_label in
+  close_block b (Jmp ldone);
   start_block b loob;
-  emit b (Call_void { fn = Global "pal_abort"; args = [] });
-  close_block b Hlt;
-  start_block b lok
+  Option.iter
+    (fun v ->
+      emit b
+        (Call_void { fn = Global "arc_release_val"; args = [ (Long, v) ] }))
+    drop_on_oob;
+  emit b
+    (Call_void { fn = Global "ocamlcc_raise_invalid_arg_oob"; args = [] });
+  let loob_end = b.open_label in
+  close_block b (Jmp ldone);
+  start_block b ldone;
+  let dst = fresh_temp b "bndv" in
+  emit b (Phi (Long, dst, [ (lok_end, ok_res); (loob_end, unit_const) ]));
+  dst
 
 let string_len_raw b sv =
   let addr = fresh_temp b "slenp" in
@@ -552,69 +568,78 @@ and compile_cexpr b ~tail (ce : Anf.cexpr) : t =
       let sv = compile_atom b s in
       let iv = compile_atom b idx in
       let ui = untag b iv in
-      if safe then begin
+      let do_read () =
+        let caddr = fresh_temp b "strp" in
+        emit b (Binop (Add, Long, caddr, sv, ui));
+        let ch = fresh_temp b "chr" in
+        emit b (Load (Loadub, Long, ch, caddr));
+        retag b ch
+      in
+      if safe then
         let len = string_len_raw b sv in
-        bounds_check b ui len
-      end;
-      let caddr = fresh_temp b "strp" in
-      emit b (Binop (Add, Long, caddr, sv, ui));
-      let ch = fresh_temp b "chr" in
-      emit b (Load (Loadub, Long, ch, caddr));
-      retag b ch
+        compile_bounds_guarded b ui len do_read
+      else do_read ()
   | BytesSet (safe, bs, idx, ch) ->
       let bsv = compile_atom b bs in
       let iv = compile_atom b idx in
       let cv = compile_atom b ch in
       let ui = untag b iv in
-      if safe then begin
-        let len = string_len_raw b bsv in
-        bounds_check b ui len
-      end;
       let uc = untag b cv in
-      let caddr = fresh_temp b "strp" in
-      emit b (Binop (Add, Long, caddr, bsv, ui));
-      emit b (Store (Storeb, uc, caddr));
-      unit_const
+      let do_write () =
+        let caddr = fresh_temp b "strp" in
+        emit b (Binop (Add, Long, caddr, bsv, ui));
+        emit b (Store (Storeb, uc, caddr));
+        unit_const
+      in
+      if safe then
+        let len = string_len_raw b bsv in
+        compile_bounds_guarded b ui len do_write
+      else do_write ()
   | ArrayGet (safe, _, arr, idx) ->
       let av = compile_atom b arr in
       let iv = compile_atom b idx in
       let ui = untag b iv in
-      if safe then begin
+      let do_read () =
+        let off = fresh_temp b "aoff" in
+        emit b (Binop (Shl, Long, off, ui, Int 3L));
+        let eaddr = fresh_temp b "arrp" in
+        emit b (Binop (Add, Long, eaddr, av, off));
+        let dst = fresh_temp b "avel" in
+        emit b (Load (Loadl, Long, dst, eaddr));
+        emit b
+          (Call_void { fn = Global "arc_retain_val"; args = [ (Long, dst) ] });
+        dst
+      in
+      if safe then
         let len = array_len_raw b av in
-        bounds_check b ui len
-      end;
-      let off = fresh_temp b "aoff" in
-      emit b (Binop (Shl, Long, off, ui, Int 3L));
-      let eaddr = fresh_temp b "arrp" in
-      emit b (Binop (Add, Long, eaddr, av, off));
-      let dst = fresh_temp b "avel" in
-      emit b (Load (Loadl, Long, dst, eaddr));
-      emit b (Call_void { fn = Global "arc_retain_val"; args = [ (Long, dst) ] });
-      dst
+        compile_bounds_guarded b ui len do_read
+      else do_read ()
   | ArraySet (safe, kind, arr, idx, v) ->
       let av = compile_atom b arr in
       let iv = compile_atom b idx in
       let vv = compile_atom b v in
       let ui = untag b iv in
-      if safe then begin
+      let do_write () =
+        let off = fresh_temp b "aoff" in
+        emit b (Binop (Shl, Long, off, ui, Int 3L));
+        let eaddr = fresh_temp b "arrp" in
+        emit b (Binop (Add, Long, eaddr, av, off));
+        (match kind with
+        | Lambda.Pintarray | Lambda.Pfloatarray ->
+            emit b (Store (Storel, vv, eaddr))
+        | Pgenarray | Paddrarray ->
+            let old_v = fresh_temp b "olda" in
+            emit b (Load (Loadl, Long, old_v, eaddr));
+            emit b (Store (Storel, vv, eaddr));
+            emit b
+              (Call_void
+                 { fn = Global "arc_release_val"; args = [ (Long, old_v) ] }));
+        unit_const
+      in
+      if safe then
         let len = array_len_raw b av in
-        bounds_check b ui len
-      end;
-      let off = fresh_temp b "aoff" in
-      emit b (Binop (Shl, Long, off, ui, Int 3L));
-      let eaddr = fresh_temp b "arrp" in
-      emit b (Binop (Add, Long, eaddr, av, off));
-      (match kind with
-      | Lambda.Pintarray | Lambda.Pfloatarray ->
-          emit b (Store (Storel, vv, eaddr))
-      | Pgenarray | Paddrarray ->
-          let old_v = fresh_temp b "olda" in
-          emit b (Load (Loadl, Long, old_v, eaddr));
-          emit b (Store (Storel, vv, eaddr));
-          emit b
-            (Call_void
-               { fn = Global "arc_release_val"; args = [ (Long, old_v) ] }));
-      unit_const
+        compile_bounds_guarded b ~drop_on_oob:vv ui len do_write
+      else do_write ()
   | CreateBytes len ->
       let lv = compile_atom b len in
       let ul = untag b lv in
