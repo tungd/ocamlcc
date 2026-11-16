@@ -1,5 +1,13 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): `Printf` integer zero-padding & precision fix
+  (TDD) — replaced `format_int` + post-hoc string padding in
+  `stdlib/stdlib__printf.ml` with `format_int_padded`, `with_pad_spec`, and
+  `with_prec_spec` so integer precision zero-pads digits before prepending
+  sign/alternate prefixes and `Zeros` padding (`%05d`, `%#05x`, `%0*d`)
+  inserts `'0'`s between the prefix and digits (while negative dynamic widths
+  left-align with spaces). Extended `examples/stdlib_test.ml` and
+  `tests/stdlib_test.expected` (`19/19` passing, `arc_delta=0`).
 - 2026-11-16 (autoagent/1): `Printf` integer formatting fix (TDD) — updated
   `format_int` in `stdlib/stdlib__printf.ml` to accumulate negative magnitudes
   for signed specifiers (`%d`/`%i`, avoiding `-min_int` overflow/punctuation)
