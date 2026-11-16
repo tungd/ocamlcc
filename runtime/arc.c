@@ -265,10 +265,42 @@ void *arc_alloc(uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
     return hdr + 1;
 }
 
+extern const void *ocamlcc_global_Invalid_argument;
+
+#define DEFINE_IMMORTAL_STR(sym, lit)                                          \
+    static const struct __attribute__((aligned(16))) {                         \
+        ArcHeader hdr;                                                         \
+        char str[sizeof(lit)];                                                 \
+    } sym = {                                                                  \
+        { ARC_IMMORTAL, (uint16_t)ARC_TAG_STRING, 0u,                          \
+          (uint32_t)sizeof(lit), (uint32_t)(sizeof(lit) - 1u) },               \
+        lit                                                                    \
+    }
+
+DEFINE_IMMORTAL_STR(g_inv_arg_oob_str, "index out of bounds");
+DEFINE_IMMORTAL_STR(g_inv_arg_bytes_str, "Bytes.create");
+DEFINE_IMMORTAL_STR(g_inv_arg_array_str, "Array.make");
+DEFINE_IMMORTAL_STR(g_inv_arg_weak_str, "Weak.create");
+
+static void raise_invalid_arg_imm(const char *imm_str)
+{
+    int64_t *blk = (int64_t *)arc_alloc(0u, 2u, 16u);
+    blk[0] = (int64_t)(uintptr_t)ocamlcc_global_Invalid_argument;
+    blk[1] = (int64_t)(uintptr_t)imm_str;
+    ocamlcc_exn_slot = (int64_t)(uintptr_t)blk;
+}
+
+void ocamlcc_raise_invalid_arg_oob(void)
+{
+    raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+}
+
 void *arc_alloc_bytes(uint64_t len)
 {
-    if (len > (uint64_t)UINT32_MAX - 1u - (uint64_t)sizeof(ArcHeader))
-        pal_abort();
+    if (len > (uint64_t)UINT32_MAX - 1u - (uint64_t)sizeof(ArcHeader)) {
+        raise_invalid_arg_imm(g_inv_arg_bytes_str.str);
+        return (void *)(uintptr_t)1;
+    }
     char *s = arc_alloc((uint16_t)ARC_TAG_STRING, 0u, (uint32_t)(len + 1u));
     ArcHeader *hdr = (ArcHeader *)s - 1;
     hdr->reserved = (uint32_t)len;
@@ -278,8 +310,11 @@ void *arc_alloc_bytes(uint64_t len)
 
 void *arc_alloc_array(uint64_t len, int64_t init)
 {
-    if (len > ((uint64_t)UINT32_MAX - (uint64_t)sizeof(ArcHeader)) / 8u)
-        pal_abort();
+    if (len > ((uint64_t)UINT32_MAX - (uint64_t)sizeof(ArcHeader)) / 8u) {
+        arc_release_val(init);
+        raise_invalid_arg_imm(g_inv_arg_array_str.str);
+        return (void *)(uintptr_t)1;
+    }
     uint16_t scan = (len > 0xffffu) ? 0xffffu : (uint16_t)len;
     int64_t *arr = arc_alloc((uint16_t)ARC_TAG_ARRAY, scan, (uint32_t)(len * 8u));
     if (len == 0) {
@@ -713,12 +748,16 @@ int64_t ocamlcc_arc_collect(int64_t unit)
 int64_t ocamlcc_weak_create(int64_t len_val)
 {
     int64_t len_s = len_val >> 1;
-    if (len_s < 0)
-        pal_abort();
+    if (len_s < 0) {
+        raise_invalid_arg_imm(g_inv_arg_weak_str.str);
+        return 1;
+    }
     uint64_t len = (uint64_t)len_s;
     if (len > ((uint64_t)UINT32_MAX - (uint64_t)sizeof(ArcHeader) -
-               (uint64_t)sizeof(ArcWeakArray)) / 8u)
-        pal_abort();
+               (uint64_t)sizeof(ArcWeakArray)) / 8u) {
+        raise_invalid_arg_imm(g_inv_arg_weak_str.str);
+        return 1;
+    }
     uint32_t bsz = (uint32_t)(sizeof(ArcWeakArray) + len * sizeof(int64_t));
     ArcWeakArray *w = (ArcWeakArray *)arc_alloc((uint16_t)ARC_TAG_WEAK, 0u, bsz);
     w->len = len;
@@ -743,8 +782,10 @@ int64_t ocamlcc_weak_set(int64_t weak_val, int64_t idx_val, int64_t opt_val)
 {
     ArcWeakArray *w = (ArcWeakArray *)(uintptr_t)weak_val;
     int64_t idx = idx_val >> 1;
-    if (idx < 0 || (uint64_t)idx >= w->len)
-        pal_abort();
+    if (idx < 0 || (uint64_t)idx >= w->len) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return 1;
+    }
     if (opt_val == 1) {
         w->slots[idx] = 0;
     } else {
@@ -758,8 +799,10 @@ int64_t ocamlcc_weak_get(int64_t weak_val, int64_t idx_val)
 {
     ArcWeakArray *w = (ArcWeakArray *)(uintptr_t)weak_val;
     int64_t idx = idx_val >> 1;
-    if (idx < 0 || (uint64_t)idx >= w->len)
-        pal_abort();
+    if (idx < 0 || (uint64_t)idx >= w->len) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return 1;
+    }
     int64_t val = w->slots[idx];
     if (val == 0)
         return 1; /* None */
@@ -773,8 +816,10 @@ int64_t ocamlcc_weak_check(int64_t weak_val, int64_t idx_val)
 {
     ArcWeakArray *w = (ArcWeakArray *)(uintptr_t)weak_val;
     int64_t idx = idx_val >> 1;
-    if (idx < 0 || (uint64_t)idx >= w->len)
-        pal_abort();
+    if (idx < 0 || (uint64_t)idx >= w->len) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return 1;
+    }
     return (w->slots[idx] != 0) ? 3 : 1; /* OCaml bool: true=3, false=1 */
 }
 
@@ -1088,7 +1133,7 @@ int64_t caml_hash(int64_t count_val, int64_t limit_val,
 /* ------------------------------------------------------------------ */
 
 #define DEFINE_PREDEF_EXN(name, uid)                                         \
-    static const struct {                                                    \
+    static const struct __attribute__((aligned(16))) {                       \
         ArcHeader hdr;                                                       \
         char str[sizeof(#name)];                                             \
     } g_predef_str_##name = {                                                \
@@ -1096,7 +1141,7 @@ int64_t caml_hash(int64_t count_val, int64_t limit_val,
           (uint32_t)sizeof(#name), (uint32_t)(sizeof(#name) - 1u) },         \
         #name                                                                \
     };                                                                       \
-    static const struct {                                                    \
+    static const struct __attribute__((aligned(16))) {                       \
         ArcHeader hdr;                                                       \
         const void *fields[2];                                               \
     } g_predef_exn_##name = {                                                \

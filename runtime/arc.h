@@ -60,6 +60,7 @@ int64_t ocamlcc_arc_reuse(int64_t unit);
 int64_t ocamlcc_arc_collect(int64_t unit);
 
 extern int64_t ocamlcc_exn_slot;
+void ocamlcc_raise_invalid_arg_oob(void);
 int64_t caml_fresh_oo_id(int64_t ignored);
 
 int64_t ocamlcc_weak_create(int64_t len);
