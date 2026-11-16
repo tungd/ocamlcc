@@ -38,11 +38,21 @@ type ('b, 'c) acc_elem =
 
 and ('b, 'c) acc = ('b, 'c) acc_elem
 
-let format_int iconv n =
+let pad_string pad_dir width fill_ch s =
+  let len = S.length s in
+  if width <= len then s
+  else
+    let pad = S.make (width - len) fill_ch in
+    match pad_dir with
+    | Left -> S.cat s pad
+    | Right | Zeros -> S.cat pad s
+
+let format_int_padded iconv pad_opt prec n =
   let base, upper, is_signed =
     match iconv with
-    | Int_d | Int_pd | Int_sd | Int_i | Int_pi | Int_si -> (10, false, true)
-    | Int_u -> (10, false, false)
+    | Int_d | Int_pd | Int_sd | Int_i | Int_pi | Int_si | Int_Cd | Int_Ci ->
+        (10, false, true)
+    | Int_u | Int_Cu -> (10, false, false)
     | Int_x | Int_Cx -> (16, false, false)
     | Int_X | Int_CX -> (16, true, false)
     | Int_o | Int_Co -> (8, false, false)
@@ -96,6 +106,12 @@ let format_int iconv n =
       in
       fill 0 ds
   in
+  let prec_abs = if prec < 0 then -prec else prec in
+  let blen = S.length body in
+  let digits =
+    if prec_abs <= blen then body
+    else S.cat (S.make (prec_abs - blen) '0') body
+  in
   let alt_prefix =
     if n = 0 then ""
     else
@@ -105,30 +121,53 @@ let format_int iconv n =
       | Int_Co -> "0o"
       | _ -> ""
   in
-  S.cat sign_prefix (S.cat alt_prefix body)
+  let prefix = S.cat sign_prefix alt_prefix in
+  match pad_opt with
+  | None -> S.cat prefix digits
+  | Some (dir, width) -> (
+      if width < 0 then pad_string Left (-width) ' ' (S.cat prefix digits)
+      else
+        match dir with
+        | Left | Right -> pad_string dir width ' ' (S.cat prefix digits)
+        | Zeros ->
+            let plen = S.length prefix in
+            let dlen = S.length digits in
+            if width <= plen + dlen then S.cat prefix digits
+            else S.cat prefix (S.cat (S.make (width - plen - dlen) '0') digits))
 
-let pad_string pad_dir width fill_ch s =
-  let len = S.length s in
-  if width <= len then s
-  else
-    let pad = S.make (width - len) fill_ch in
-    match pad_dir with
-    | Left -> S.cat s pad
-    | Right | Zeros -> S.cat pad s
+let with_pad_spec :
+    type x y.
+    (x, y) padding -> ((padty * int) option -> y) -> x =
+  fun pad k ->
+  match pad with
+  | No_padding -> k None
+  | Lit_padding (dir, width) -> k (Some (dir, width))
+  | Arg_padding dir -> fun width -> k (Some (dir, width))
+
+let with_prec_spec :
+    type x y.
+    (x, y) precision -> (int -> y) -> x =
+  fun prec k ->
+  match prec with
+  | No_precision -> k 0
+  | Lit_precision p -> k p
+  | Arg_precision -> fun p -> k p
 
 let format_with_padding :
     type x y.
     (x, y) padding -> ((string -> string) -> y) -> x =
   fun pad k ->
-  match pad with
-  | No_padding -> k (fun s -> s)
-  | Lit_padding (Zeros, width) -> k (fun s -> pad_string Zeros width '0' s)
-  | Lit_padding ((Left | Right as dir), width) ->
-      k (fun s -> pad_string dir width ' ' s)
-  | Arg_padding Zeros ->
-      fun width -> k (fun s -> pad_string Zeros width '0' s)
-  | Arg_padding (Left | Right as dir) ->
-      fun width -> k (fun s -> pad_string dir width ' ' s)
+  with_pad_spec pad (fun pad_opt ->
+      let pfn s =
+        match pad_opt with
+        | None -> s
+        | Some (dir, width) ->
+            if width < 0 then pad_string Left (-width) ' ' s
+            else
+              let ch = match dir with Zeros -> '0' | Left | Right -> ' ' in
+              pad_string dir width ch s
+      in
+      k pfn)
 
 let rec make_printf :
     type a b c d e f.
@@ -153,15 +192,11 @@ let rec make_printf :
       format_with_padding pad (fun pfn b ->
           let s = if b then "true" else "false" in
           make_printf k (Acc_data_string (acc, pfn s)) rest)
-  | Int (iconv, pad, No_precision, rest) ->
-      format_with_padding pad (fun pfn n ->
-          make_printf k (Acc_data_string (acc, pfn (format_int iconv n))) rest)
-  | Int (iconv, pad, Lit_precision _, rest) ->
-      format_with_padding pad (fun pfn n ->
-          make_printf k (Acc_data_string (acc, pfn (format_int iconv n))) rest)
-  | Int (iconv, pad, Arg_precision, rest) ->
-      format_with_padding pad (fun pfn _prec n ->
-          make_printf k (Acc_data_string (acc, pfn (format_int iconv n))) rest)
+  | Int (iconv, pad, prec, rest) ->
+      with_pad_spec pad (fun pad_opt ->
+          with_prec_spec prec (fun p n ->
+              let s = format_int_padded iconv pad_opt p n in
+              make_printf k (Acc_data_string (acc, s)) rest))
   | Flush rest ->
       make_printf k (Acc_flush acc) rest
   | String_literal (s, rest) ->
