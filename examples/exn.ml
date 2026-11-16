@@ -139,6 +139,41 @@ let test_overapp_raise2 () =
   try over_raise2 10 r r2
   with Empty -> !r + !r2
 
+let test_while_cond_raise () =
+  let a =
+    try
+      while raise Empty do
+        ()
+      done;
+      0
+    with Empty -> 77
+  in
+  let keep = ref 10 in
+  let b =
+    try
+      while
+        let c = ref 5 in
+        if !c = 5 then raise Empty else true
+      do
+        ()
+      done;
+      0
+    with Empty -> !keep + 5
+  in
+  let c =
+    try
+      let outer = ref 30 in
+      while
+        let inner = ref 40 in
+        !outer + !inner > 0 && raise Empty
+      do
+        ()
+      done;
+      0
+    with Empty -> 88
+  in
+  a + b + c
+
 let out v =
   print_int v;
   print_endline ""
@@ -167,9 +202,12 @@ let () =
   let l10 = arc_live () - b0 in
   let r11 = test_overapp_raise2 () in
   let l11 = arc_live () - b0 in
+  let r12 = test_while_cond_raise () in
+  let l12 = arc_live () - b0 in
   out r1; out l1; out r2; out l2;
   out r3; out l3; out r4; out l4;
   out r5; out l5; out r6; out l6;
   out r7; out l7; out r8; out l8;
   out r9; out l9; out r10; out l10;
-  out r11; out l11
+  out r11; out l11;
+  out r12; out l12
