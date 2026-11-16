@@ -1,5 +1,12 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): `Printf` integer formatting fix (TDD) — updated
+  `format_int` in `stdlib/stdlib__printf.ml` to accumulate negative magnitudes
+  for signed specifiers (`%d`/`%i`, avoiding `-min_int` overflow/punctuation)
+  and split negative inputs with `(v lsr 1)` / `(v land 1)` for 63-bit
+  unsigned specifiers (`%u`/`%x`/`%X`/`%o`, avoiding `/` on `-1`). Extended
+  `examples/stdlib_test.ml` and `tests/stdlib_test.expected` (`19/19` passing,
+  `arc_delta=0`).
 - 2026-11-16 (autoagent/1): Raising `while` condition terminator fix (TDD) —
   guarded `While` loop condition emission in `lib/codegen.ml` on
   `if b.term = None` so conditions that unconditionally raise/terminate do not
