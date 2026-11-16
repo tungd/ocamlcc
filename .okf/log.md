@@ -1,5 +1,12 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): `Printf` `%S` and `%C` escaping & quoting fix
+  (TDD) — added `add_escaped_char`, `format_caml_char`, and
+  `format_caml_string` in `stdlib/stdlib__printf.ml` to emit OCaml-escaped
+  literals wrapped in `'...'` (`%C`) and `"..."` (`%S`), including `\n`, `\r`,
+  `\t`, `\b`, `\\`, `\"`/`\'`, and `\ddd` decimal escapes for control/non-ASCII
+  bytes. Extended `examples/stdlib_test.ml` and `tests/stdlib_test.expected`
+  (`19/19` passing, `arc_delta=0`).
 - 2026-11-16 (autoagent/1): `Printf` integer zero-padding & precision fix
   (TDD) — replaced `format_int` + post-hoc string padding in
   `stdlib/stdlib__printf.ml` with `format_int_padded`, `with_pad_spec`, and
