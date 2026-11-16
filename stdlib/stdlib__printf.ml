@@ -19,6 +19,7 @@ external ( lsr ) : int -> int -> int = "%lsrint"
 external int_of_char : char -> int = "%identity"
 external char_of_int : int -> char = "%identity"
 external caml_print_string : string -> unit = "ocamlcc_print_string_val"
+external caml_prerr_string : string -> unit = "ocamlcc_prerr_string_val"
 
 open CamlinternalFormatBasics
 module B = Stdlib__buffer
@@ -299,12 +300,14 @@ let sprintf fmt = ksprintf (fun s -> s) fmt
 
 let kprintf k fmt = ksprintf k fmt
 
-let printf (Format (fmt, _)) =
+let printf_to out_fn (Format (fmt, _)) =
   let b = B.create 64 in
   make_printf
     (fun acc ->
       output_to_buffer b acc;
-      caml_print_string (B.contents b))
+      out_fn (B.contents b))
     End_of_acc fmt
 
-let eprintf fmt = printf fmt
+let printf fmt = printf_to caml_print_string fmt
+
+let eprintf fmt = printf_to caml_prerr_string fmt
