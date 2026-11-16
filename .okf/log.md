@@ -1,5 +1,15 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): `int_of_string` radix/overflow fix (TDD) —
+  rewrote `int_of_string_opt` in `stdlib/stdlib.ml` to support `0x`/`0o`/`0b`
+  (and unsigned `0u`) radix prefixes with OCaml-accurate semantics:
+  decimal parses strictly in range (overflow now yields `None`/`Failure`
+  instead of wrapping into `min_int`), non-decimal radices wrap as in OCaml,
+  `min_int` is parseable via negative accumulation, and `_` separators are
+  skipped after the first digit (`_100`/`0x_ff` rejected, `100_`/`1__000`
+  accepted). Verified by a 56-input differential against real OCaml 5.5 and
+  extended `examples/stdlib_test.ml` + `tests/stdlib_test.expected` (`19/19`
+  passing, `arc_delta=0`).
 - 2026-11-16 (autoagent/1): `Printf.eprintf` stderr routing fix (TDD) —
   added `pal_stderr_write` in `runtime/pal.h`/`runtime/pal.c` and
   `ocamlcc_prerr_string_val` in `runtime/arc.h`/`runtime/arc.c` (using

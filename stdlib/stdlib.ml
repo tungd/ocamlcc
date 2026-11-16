@@ -120,16 +120,40 @@ let int_of_string_opt s =
     in
     if start >= len then None
     else
-      let rec go i acc =
-        if i >= len then Some (if neg then -acc else acc)
-        else
-          let c = Stdlib__string.unsafe_get s i in
-          if c >= '0' && c <= '9' then
-            let d = int_of_char c - 48 in
-            go (i + 1) ((acc * 10) + d)
-          else None
+      let base, start, checked =
+        if Stdlib__string.unsafe_get s start = '0' && start + 1 < len then
+          match Stdlib__string.unsafe_get s (start + 1) with
+          | 'x' | 'X' -> (16, start + 2, false)
+          | 'o' | 'O' -> (8, start + 2, false)
+          | 'b' | 'B' -> (2, start + 2, false)
+          | 'u' | 'U' -> (10, start + 2, false)
+          | _ -> (10, start, true)
+        else (10, start, true)
       in
-      go start 0
+      if start >= len then None
+      else
+        let digit_value c =
+          if c >= '0' && c <= '9' then int_of_char c - 48
+          else if c >= 'a' && c <= 'f' then int_of_char c - 87
+          else if c >= 'A' && c <= 'F' then int_of_char c - 55
+          else base (* sentinel: not a digit in [base] *)
+        in
+        (* Accumulate negatively so [min_int] stays representable.
+           Underscores are skipped after the first digit. *)
+        let floor_min d = (if neg then min_int else min_int + 1) + d in
+        let rec go i acc seen_digit =
+          if i >= len then
+            if seen_digit then Some (if neg then acc else -acc) else None
+          else
+            let c = Stdlib__string.unsafe_get s i in
+            if c = '_' && seen_digit then go (i + 1) acc true
+            else
+              let d = digit_value c in
+              if d >= base then None
+              else if checked && acc < (floor_min d / base) then None
+              else go (i + 1) ((acc * base) - d) true
+        in
+        go start 0 false
 
 let int_of_string s =
   match int_of_string_opt s with

@@ -95,6 +95,29 @@ let run () =
   Printf.printf "misc=%d,%d,%b\n" !r cmp (("x" ^ "y") = "xy");
   Printf.printf "div0=%d,%d,%d,%d,%d,%d,%d\n" d1 m1 d2 d3 m2 m3 un;
 
+  (* int_of_string: radix prefixes (0x/0o/0b), underscores, decimal overflow *)
+  Printf.printf "intparse_hex=%d,%d,%d\n"
+    (Option.value (int_of_string_opt "0xff") ~default:(-1))
+    (Option.value (int_of_string_opt "-0xff") ~default:(-1))
+    (Option.value (int_of_string_opt "0XAB") ~default:(-1));
+  Printf.printf "intparse_ovf=%d,%b,%b\n"
+    (Option.value (int_of_string_opt "4611686018427387903") ~default:0)
+    (int_of_string_opt "4611686018427387904" = None)
+    (int_of_string_opt "99999999999999999999" = None);
+  Printf.printf "intparse_edge=%d,%b,%b,%b,%b,%b,%b,%b\n"
+    (Option.value (int_of_string_opt "-4611686018427387904") ~default:0)
+    (int_of_string_opt "-4611686018427387905" = None)
+    (int_of_string_opt "0x4000000000000000" = Some min_int)
+    (int_of_string_opt "007" = Some 7)
+    (int_of_string_opt "+42" = Some 42)
+    (int_of_string_opt "1_000" = Some 1000)
+    (int_of_string_opt "100_" = Some 100)
+    (int_of_string_opt "0u10" = Some 10);
+  let parse_fails s = try ignore (int_of_string s); false with Failure _ -> true in
+  Printf.printf "intparse_fail=%b,%b,%b,%b,%b\n"
+    (parse_fails "12x") (parse_fails "0x") (parse_fails "_100")
+    (parse_fails "4611686018427387904") (parse_fails "0x_ff");
+
   (* Bounds checks and invalid allocation sizes -> Invalid_argument *)
   let ia_arr = [| 10; 20 |] in
   let i1 = try ia_arr.(2) with Invalid_argument _ -> -1 in
