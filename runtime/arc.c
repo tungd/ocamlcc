@@ -278,6 +278,7 @@ extern const void *ocamlcc_global_Invalid_argument;
     }
 
 DEFINE_IMMORTAL_STR(g_inv_arg_oob_str, "index out of bounds");
+DEFINE_IMMORTAL_STR(g_inv_arg_fn_str, "compare: functional value");
 DEFINE_IMMORTAL_STR(g_inv_arg_bytes_str, "Bytes.create");
 DEFINE_IMMORTAL_STR(g_inv_arg_array_str, "Array.make");
 DEFINE_IMMORTAL_STR(g_inv_arg_weak_str, "Weak.create");
@@ -1001,7 +1002,7 @@ int64_t caml_bytes_compare(int64_t a, int64_t b)
 /* Polymorphic structural comparison & bounded hashing                 */
 /* ------------------------------------------------------------------ */
 
-static int val_compare_raw(int64_t a, int64_t b)
+static int val_compare_raw(int64_t a, int64_t b, int total)
 {
     for (;;) {
         if (a == b)
@@ -1025,6 +1026,15 @@ static int val_compare_raw(int64_t a, int64_t b)
         if (ta == (uint16_t)ARC_TAG_STRING)
             return bytes_compare_raw(a, b);
 
+        /* Functional values (closures / partial applications): ordered
+         * comparison is undefined in OCaml and must raise; ( = ) / ( <> )
+         * fall through to physical equality below. */
+        if (total &&
+            (ta == (uint16_t)ARC_TAG_CLOSURE || ta == (uint16_t)ARC_TAG_PAP)) {
+            raise_invalid_arg_imm(g_inv_arg_fn_str.str);
+            return 1;
+        }
+
         if (ta == (uint16_t)ARC_TAG_ARRAY || ta < 245u) {
             uint32_t fa = (ta == (uint16_t)ARC_TAG_ARRAY)
                               ? (ha->byte_size / 8u)
@@ -1039,7 +1049,7 @@ static int val_compare_raw(int64_t a, int64_t b)
             const int64_t *pa = (const int64_t *)(uintptr_t)a;
             const int64_t *pb = (const int64_t *)(uintptr_t)b;
             for (uint32_t i = 0; i + 1u < fa; i++) {
-                int c = val_compare_raw(pa[i], pb[i]);
+                int c = val_compare_raw(pa[i], pb[i], total);
                 if (c != 0)
                     return c;
             }
@@ -1049,6 +1059,8 @@ static int val_compare_raw(int64_t a, int64_t b)
             continue;
         }
 
+        /* Physical comparison: distinct closures under ( = ), weak/fiber
+         * arrays, and partial applications compared by address. */
         uintptr_t ua = (uintptr_t)a;
         uintptr_t ub = (uintptr_t)b;
         return (ua < ub) ? -1 : 1;
@@ -1057,38 +1069,38 @@ static int val_compare_raw(int64_t a, int64_t b)
 
 int64_t caml_compare(int64_t a, int64_t b)
 {
-    int c = val_compare_raw(a, b);
+    int c = val_compare_raw(a, b, 1);
     return ((int64_t)c << 1) | 1;
 }
 
 int64_t caml_equal(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b) == 0) ? 3 : 1;
+    return (val_compare_raw(a, b, 0) == 0) ? 3 : 1;
 }
 
 int64_t caml_notequal(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b) != 0) ? 3 : 1;
+    return (val_compare_raw(a, b, 0) != 0) ? 3 : 1;
 }
 
 int64_t caml_lessthan(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b) < 0) ? 3 : 1;
+    return (val_compare_raw(a, b, 1) < 0) ? 3 : 1;
 }
 
 int64_t caml_lessequal(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b) <= 0) ? 3 : 1;
+    return (val_compare_raw(a, b, 1) <= 0) ? 3 : 1;
 }
 
 int64_t caml_greaterthan(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b) > 0) ? 3 : 1;
+    return (val_compare_raw(a, b, 1) > 0) ? 3 : 1;
 }
 
 int64_t caml_greaterequal(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b) >= 0) ? 3 : 1;
+    return (val_compare_raw(a, b, 1) >= 0) ? 3 : 1;
 }
 
 static uint32_t hash_mix32(uint32_t h, uint32_t d)

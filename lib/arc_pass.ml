@@ -133,7 +133,11 @@ let ce_may_raise_fn = function
   | Ccall (name, _) ->
       name = "ocamlcc_fiber_resume" || name = "ocamlcc_fiber_await"
       || name = "ocamlcc_weak_create" || name = "ocamlcc_weak_set"
-      || name = "ocamlcc_weak_get" || name = "ocamlcc_weak_check"
+      || name = "ocamlcc_weak_get" || name = "ocamlcc_weak_get_copy"
+      || name = "ocamlcc_weak_check"
+      || name = "caml_compare" || name = "caml_lessthan"
+      || name = "caml_lessequal" || name = "caml_greaterthan"
+      || name = "caml_greaterequal"
   | _ -> false
 
 let is_yielding_ce (env : state) = function

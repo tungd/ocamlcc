@@ -111,6 +111,19 @@ let run () =
     with Division_by_zero -> !keep + 5
   in
   Printf.printf "misc=%d,%d,%b\n" !r cmp (("x" ^ "y") = "xy");
+
+  (* Structural compare on closures: ordered compare raises, ( = ) is physical *)
+  let f1 x = x + 1 in
+  let f2 x = x + 2 in
+  let raises_cmp =
+    try let _ = compare f1 f2 in false with Invalid_argument _ -> true
+  in
+  let raises_lt =
+    try let _ = f1 < f2 in false with Invalid_argument _ -> true
+  in
+  let eq_fns = f1 = f2 in
+  let eq_self = f1 = f1 in
+  Printf.printf "fncompare=%b,%b,%b,%b\n" raises_cmp raises_lt eq_fns eq_self;
   Printf.printf "div0=%d,%d,%d,%d,%d,%d,%d\n" d1 m1 d2 d3 m2 m3 un;
 
   (* int_of_string: radix prefixes (0x/0o/0b), underscores, decimal overflow *)

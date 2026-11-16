@@ -1,5 +1,18 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): Functional-value compare fix (TDD) — added a
+  `total` flag to `val_compare_raw` in `runtime/arc.c` so ordered comparison
+  (`compare`, `<`, `<=`, `>`, `>=` via `caml_compare`/`caml_lessthan`/
+  `caml_lessequal`/`caml_greaterthan`/`caml_greaterequal`) raises
+  `Invalid_argument "compare: functional value"` for `ARC_TAG_CLOSURE` and
+  `ARC_TAG_PAP` values, while `( = )`/`( <> )` (`caml_equal`/`caml_notequal`,
+  `total = 0`) keep physical (address) comparison on closures — matching real
+  OCaml semantics. Registered the five total-compare `Ccall`s (plus the
+  previously missed `ocamlcc_weak_get_copy`) in `ce_may_raise_fn`
+  (`lib/arc_pass.ml`) so `TryWith` unwinds live values when compare raises.
+  Probe `fncompare=true,true,false,true` in `examples/stdlib_test.ml` +
+  `tests/stdlib_test.expected` (red run observed `false,false,false,true`)
+  (`19/19` passing, `arc_delta=0`).
 - 2026-11-16 (autoagent/1): `Weak.get_copy` aliasing fix (TDD) — replaced
   `let get_copy = get` in `stdlib/stdlib__weak.ml` with a real
   `ocamlcc_weak_get_copy` primitive (`runtime/arc.c`/`runtime/arc.h`,
