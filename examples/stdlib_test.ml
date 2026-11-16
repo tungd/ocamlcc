@@ -155,7 +155,9 @@ let run () =
     with Invalid_argument msg -> !ia_keep + String.length msg
   in
   Printf.printf "invarg=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n"
-    i1 i2 i3 i4 i5 i6 i7 i8 i9 i10 i11 i12 i13 i14 i15 i16 i_un
+    i1 i2 i3 i4 i5 i6 i7 i8 i9 i10 i11 i12 i13 i14 i15 i16 i_un;
+  Printf.printf "fmt=%d,%i,%d,%u,%u,%x,%X,%o\n"
+    min_int min_int max_int (-1) min_int (-1) (-1) (-1)
 
 let () =
   (* Warm up printf once outside the measurement window. *)
