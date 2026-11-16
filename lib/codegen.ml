@@ -920,18 +920,20 @@ and compile_aexpr b (tail : bool) (e : Anf.aexpr) : t =
       | None -> failwith "codegen: uncaught static raise")
   | While (cond, body) ->
       let lcond = fresh_label b "wcond" in
-      let lbody = fresh_label b "wbody" in
-      let ldone = fresh_label b "wdone" in
       close_block b (Jmp lcond);
       start_block b lcond;
       let cv_tagged = compile_aexpr b false cond in
-      let cv = fresh_temp b "wcmp" in
-      emit b (Cmp (Ne, Long, cv, cv_tagged, Int 1L));
-      close_block b (Br (cv, lbody, ldone));
-      start_block b lbody;
-      ignore (compile_aexpr b false body);
-      if b.term = None then close_block b (Jmp lcond);
-      start_block b ldone;
+      if b.term = None then begin
+        let lbody = fresh_label b "wbody" in
+        let ldone = fresh_label b "wdone" in
+        let cv = fresh_temp b "wcmp" in
+        emit b (Cmp (Ne, Long, cv, cv_tagged, Int 1L));
+        close_block b (Br (cv, lbody, ldone));
+        start_block b lbody;
+        ignore (compile_aexpr b false body);
+        if b.term = None then close_block b (Jmp lcond);
+        start_block b ldone
+      end;
       unit_const
   | For (id, start_a, stop_a, dir, body) ->
       let sv = compile_atom b start_a in
