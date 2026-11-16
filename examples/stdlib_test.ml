@@ -159,7 +159,10 @@ let run () =
   Printf.printf "fmt=%d,%i,%d,%u,%u,%x,%X,%o\n"
     min_int min_int max_int (-1) min_int (-1) (-1) (-1);
   Printf.printf "fmtpad=[%05d],[%+05d],[% 05d],[%#05x],[%.3d],[%.3d],[%5.3d],[%-5.3d],[%*.*d],[%0*d]\n"
-    (-12) 12 12 15 7 (-7) (-7) 7 6 3 (-12) 5 (-12)
+    (-12) 12 12 15 7 (-7) (-7) 7 6 3 (-12) 5 (-12);
+  Printf.printf "fmtsc=%C,%C,%C,%C,%C,%C,%S,[%10S]\n"
+    'a' '\'' '"' '\\' '\n' '\255'
+    "a\"'\\\n\t\r\b\000\255" "a\nb"
 
 let () =
   (* Warm up printf once outside the measurement window. *)
