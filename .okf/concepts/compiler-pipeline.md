@@ -43,10 +43,11 @@ The pipeline has four stages[^design-doc]:
    [QBE IL](/concepts/vendored-qbe.md) model in `Qbe_il`; QBE turns SSA into
    target assembly (including void `arc_retain_val` calls on `GetGlobal`,
    exception/intermediate-closure cleanup on direct over-application,
-   explicit zero-divisor guards raising `Division_by_zero` on `Div`/`Mod`, and
+   explicit zero-divisor guards raising `Division_by_zero` on `Div`/`Mod`,
    `compile_bounds_guarded` raising `Invalid_argument` via
    `ocamlcc_raise_invalid_arg_oob`—with consumed RHS release on failed
-   `ArraySet`—on out-of-range indexing instead of aborting).
+   `ArraySet`—on out-of-range indexing instead of aborting, and overflow-safe
+   `For` loops that check `iv < ev` / `iv > ev` before stepping).
 4. **Linking & packaging** — `dune` exposes the `ocamlcc` public executable,
    `build.ninja` archives `build/rt/libocamlrt.a` and
    `build/stdlib/libocamlstdlib.a`, and Phase 4 adds `.mli → .h` C ABI header

@@ -1,5 +1,12 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): `for` loop integer-limit wrap fix (TDD) —
+  updated `For` lowering in `lib/codegen.ml` to check the initial `sv <= ev` /
+  `sv >= ev` entry condition once before entering `@fbody`, then test `iv < ev`
+  / `iv > ev` at `@fstep` before adding `±2L` to `iv` in `@fnext`, avoiding
+  63-bit counter wraparound at `max_int` and `min_int`. Extended
+  `examples/loops.ml` and `tests/loops.expected` with boundary `max_int`/`min_int`
+  `to`/`downto` probes (`19/19` passing).
 - 2026-11-16 (autoagent/1): Safe indexing & invalid size `Invalid_argument`
   (TDD) — updated `ce_may_raise_fn` in `lib/arc_pass.ml` for safe
   `StringGet`/`BytesSet`/`ArrayGet`/`ArraySet`, `CreateBytes`, `MakeArrayInit`,
