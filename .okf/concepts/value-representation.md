@@ -6,7 +6,7 @@ tags: [value-representation, codegen, arc]
 status: stable
 generated:
   by: autoagent/1
-  at: 2026-11-13
+  at: 2026-11-16
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -14,6 +14,12 @@ sources:
   - id: lib-codegen
     resource: ../lib/codegen.ml
     title: Lambda-to-QBE code generator
+  - id: runtime-arc
+    resource: ../runtime/arc.c
+    title: ARC runtime and string length metadata
+  - id: runtime-builtins
+    resource: ../runtime/builtins.c
+    title: Runtime I/O builtins
 ---
 
 # Design
@@ -51,6 +57,15 @@ before the branch.
 
 Untag is an arithmetic shift right (`sar`), correct for negatives: for
 tagged `-1` (bit pattern `-1`), `sar 1` still yields `-1`.
+
+# Strings and output
+
+String payloads are byte sequences, not C strings: `ArcHeader.reserved` stores
+the payload length, so embedded NUL bytes are ordinary content. The compiler
+passes that length to the C `print_string`/`print_endline` builtins, which write
+exactly that many bytes; the ARC wrappers do the same for `print_char`, including
+`'\000'`. String output therefore preserves embedded NULs instead of stopping
+at the first one.
 
 [^design-doc]: The tagging scheme and header layout are specified in
   `docs/design.md` §4.2.

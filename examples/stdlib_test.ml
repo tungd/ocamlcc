@@ -186,7 +186,10 @@ let run () =
   Printf.printf "fmtsc=%C,%C,%C,%C,%C,%C,%S,[%10S]\n"
     'a' '\'' '"' '\\' '\n' '\255'
     "a\"'\\\n\t\r\b\000\255" "a\nb";
-  Printf.eprintf "err=%d,%s\n" 42 "ok"
+  Printf.eprintf "err=%d,%s\n" 42 "ok";
+  print_string "nul:a\000b\n";
+  print_char '\000';
+  print_endline "after-nul-char"
 
 let () =
   (* Warm up printf once outside the measurement window. *)

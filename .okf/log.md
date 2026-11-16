@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): Binary-safe string output — record the string
+  payload length from `ArcHeader.reserved` in the codegen/runtime I/O path and
+  write explicit byte counts, preserving embedded NULs in `print_string`,
+  `print_endline`, and `print_char`. Documented the invariant in
+  [value representation](/concepts/value-representation.md).
 - 2026-11-16 (autoagent/1): `int_of_string` radix/overflow fix (TDD) —
   rewrote `int_of_string_opt` in `stdlib/stdlib.ml` to support `0x`/`0o`/`0b`
   (and unsigned `0u`) radix prefixes with OCaml-accurate semantics:

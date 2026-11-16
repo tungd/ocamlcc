@@ -664,7 +664,12 @@ and compile_cexpr b ~tail (ce : Anf.cexpr) : t =
         | Builtins.Int_arg -> untag b v
         | Builtins.String_arg -> v
       in
-      emit b (Call_void { fn = Global symbol; args = [ (Long, raw) ] });
+      let args =
+        match arg_kind with
+        | Builtins.Int_arg -> [ (Long, raw) ]
+        | Builtins.String_arg -> [ (Long, raw); (Long, string_len_raw b v) ]
+      in
+      emit b (Call_void { fn = Global symbol; args });
       unit_const
   | Ccall (sym, args) ->
       let dst = fresh_temp b "cc" in

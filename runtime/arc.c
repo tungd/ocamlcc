@@ -828,8 +828,8 @@ int64_t ocamlcc_weak_check(int64_t weak_val, int64_t idx_val)
 /* ------------------------------------------------------------------ */
 
 extern void ocamlcc_print_int(int64_t n);
-extern void ocamlcc_print_string(const char *s);
-extern void ocamlcc_print_endline(const char *s);
+extern void ocamlcc_print_string(const char *s, size_t len);
+extern void ocamlcc_print_endline(const char *s, size_t len);
 extern void ocamlcc_exit(int64_t code) __attribute__((noreturn));
 
 int64_t ocamlcc_print_int_val(int64_t val)
@@ -840,16 +840,15 @@ int64_t ocamlcc_print_int_val(int64_t val)
 
 int64_t ocamlcc_print_char_val(int64_t val)
 {
-    char buf[2];
-    buf[0] = (char)(val >> 1);
-    buf[1] = '\0';
-    ocamlcc_print_string(buf);
+    char ch = (char)(val >> 1);
+    ocamlcc_print_string(&ch, 1u);
     return 1;
 }
 
 int64_t ocamlcc_print_string_val(int64_t val)
 {
-    ocamlcc_print_string((const char *)(uintptr_t)val);
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)val - 1;
+    ocamlcc_print_string((const char *)(uintptr_t)val, (size_t)hdr->reserved);
     return 1;
 }
 
@@ -862,7 +861,8 @@ int64_t ocamlcc_prerr_string_val(int64_t val)
 
 int64_t ocamlcc_print_endline_val(int64_t val)
 {
-    ocamlcc_print_endline((const char *)(uintptr_t)val);
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)val - 1;
+    ocamlcc_print_endline((const char *)(uintptr_t)val, (size_t)hdr->reserved);
     return 1;
 }
 
