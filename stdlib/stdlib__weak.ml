@@ -11,9 +11,8 @@ external create : int -> 'a t = "ocamlcc_weak_create"
 external length : 'a t -> int = "ocamlcc_weak_length"
 external set : 'a t -> int -> 'a option -> unit = "ocamlcc_weak_set"
 external get : 'a t -> int -> 'a option = "ocamlcc_weak_get"
+external get_copy : 'a t -> int -> 'a option = "ocamlcc_weak_get_copy"
 external check : 'a t -> int -> bool = "ocamlcc_weak_check"
-
-let get_copy = get
 
 let fill ar ofs len x =
   if ofs < 0 || len < 0 || ofs > length ar - len then

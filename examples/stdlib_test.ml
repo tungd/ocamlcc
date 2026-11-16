@@ -79,6 +79,17 @@ let run () =
   helper ();
   Printf.printf "weak_cleared=%b\n" (Weak.check w 0);
 
+  (* Weak.get_copy returns an independent copy of the stored value *)
+  let w2 = Weak.create 1 in
+  let orig = ref 10 in
+  Weak.set w2 0 (Some orig);
+  let copied =
+    match Weak.get_copy w2 0 with Some cp -> cp := 20; !cp | None -> -1
+  in
+  let stored = match Weak.get w2 0 with Some r -> !r | None -> -1 in
+  let alive = Weak.check w2 0 in
+  Printf.printf "weak_copy=%d,%d,%b,%d\n" copied stored alive !orig;
+
   (* Structural compare, division/modulo by zero & refs *)
   let r = ref 10 in
   incr r;

@@ -1,5 +1,21 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): `Weak.get_copy` aliasing fix (TDD) — replaced
+  `let get_copy = get` in `stdlib/stdlib__weak.ml` with a real
+  `ocamlcc_weak_get_copy` primitive (`runtime/arc.c`/`runtime/arc.h`,
+  registered as potentially raising in `ce_may_raise_fn`,
+  `lib/arc_pass.ml`) that copies the stored block one level deep (same
+  `tag`/`scan_fields`/`byte_size`, scanned fields retained, no wrap-retain —
+  the fresh block's refcount 1 is exactly balanced to one free by the
+  caller's field-read retain + `Some` drop + binding release), matching real
+  OCaml semantics where mutating the copy never affects the stored element.
+  The probe in `examples/stdlib_test.ml` (`weak_copy=20,10,true,10` in
+  `tests/stdlib_test.expected`) also surfaced two learning points captured in
+  [perceus-arc](/concepts/perceus-arc.md): the ARC pass releases a binding
+  mid-expression right after its last read (so probes must finish
+  observations before the target's last use), and the earlier `check=false`
+  observations were correct drop-after-last-use behavior, not a runtime bug.
+  (`19/19` passing, `arc_delta=0`).
 - 2026-11-16 (autoagent/1): `List.init` effect-order fix (TDD) — rewrote
   `init` in `stdlib/stdlib__list.ml` to invoke `f` in order `0..len-1`
   (tail-recursively accumulating `f i :: acc` with an ascending index, then

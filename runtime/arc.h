@@ -67,6 +67,7 @@ int64_t ocamlcc_weak_create(int64_t len);
 int64_t ocamlcc_weak_length(int64_t weak_val);
 int64_t ocamlcc_weak_set(int64_t weak_val, int64_t idx, int64_t opt_val);
 int64_t ocamlcc_weak_get(int64_t weak_val, int64_t idx);
+int64_t ocamlcc_weak_get_copy(int64_t weak_val, int64_t idx);
 int64_t ocamlcc_weak_check(int64_t weak_val, int64_t idx);
 
 int64_t ocamlcc_print_int_val(int64_t val);

@@ -812,6 +812,40 @@ int64_t ocamlcc_weak_get(int64_t weak_val, int64_t idx_val)
     return (int64_t)(uintptr_t)some;
 }
 
+int64_t ocamlcc_weak_get_copy(int64_t weak_val, int64_t idx_val)
+{
+    ArcWeakArray *w = (ArcWeakArray *)(uintptr_t)weak_val;
+    int64_t idx = idx_val >> 1;
+    if (idx < 0 || (uint64_t)idx >= w->len) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return 1;
+    }
+    int64_t val = w->slots[idx];
+    if (val == 0)
+        return 1; /* None */
+    if ((val & 1) == 0) {
+        /* Copy the block one level deep (same tag / scan_fields / size), so
+         * mutating the copy never reaches the value stored in the slot. */
+        ArcHeader *hdr = (ArcHeader *)(uintptr_t)val - 1;
+        uint32_t nbytes = hdr->byte_size;
+        int64_t *copy = (int64_t *)arc_alloc(hdr->tag, hdr->scan_fields, nbytes);
+        uint64_t *dst = (uint64_t *)(void *)copy;
+        uint64_t *src = (uint64_t *)(void *)(uintptr_t)val;
+        for (uint32_t i = 0; i < nbytes / 8u; i++)
+            dst[i] = src[i];
+        for (uint16_t i = 0; i < hdr->scan_fields; i++)
+            arc_retain_val(copy[i]);
+        val = (int64_t)(uintptr_t)copy;
+    }
+    /* No retain here: unlike ocamlcc_weak_get (which must stay rc-neutral for
+     * the slot's uncounted target), a fresh copy starts at refcount 1 and the
+     * caller's field-read retain + Some drop + binding release balance it to
+     * exactly one free. */
+    int64_t *some = (int64_t *)arc_alloc(0u, 1u, 8u);
+    some[0] = val;
+    return (int64_t)(uintptr_t)some;
+}
+
 int64_t ocamlcc_weak_check(int64_t weak_val, int64_t idx_val)
 {
     ArcWeakArray *w = (ArcWeakArray *)(uintptr_t)weak_val;
