@@ -14,6 +14,8 @@ external ( >= ) : 'a -> 'a -> bool = "%greaterequal"
 external ( && ) : bool -> bool -> bool = "%sequand"
 external ( || ) : bool -> bool -> bool = "%sequor"
 external not : bool -> bool = "%boolnot"
+external ( land ) : int -> int -> int = "%andint"
+external ( lsr ) : int -> int -> int = "%lsrint"
 external int_of_char : char -> int = "%identity"
 external char_of_int : int -> char = "%identity"
 external caml_print_string : string -> unit = "ocamlcc_print_string_val"
@@ -45,30 +47,48 @@ let format_int iconv n =
     | Int_X | Int_CX -> (16, true, false)
     | Int_o | Int_Co -> (8, false, false)
   in
-  let sign_prefix, mag =
+  let sign_prefix =
     if is_signed then
-      if n < 0 then ("-", -n)
+      if n < 0 then "-"
       else
         match iconv with
-        | Int_pd | Int_pi -> ("+", n)
-        | Int_sd | Int_si -> (" ", n)
-        | _ -> ("", n)
-    else
-      ("", n)
+        | Int_pd | Int_pi -> "+"
+        | Int_sd | Int_si -> " "
+        | _ -> ""
+    else ""
   in
   let digit_char d =
     if d < 10 then char_of_int (48 + d)
     else if upper then char_of_int (55 + d)
     else char_of_int (87 + d)
   in
-  let rec digits_rev acc v =
+  let rec signed_neg_digits acc v =
     if v = 0 then acc
-    else digits_rev (digit_char (v mod base) :: acc) (v / base)
+    else signed_neg_digits (digit_char (-(v mod base)) :: acc) (v / base)
+  in
+  let rec pos_digits acc v =
+    if v = 0 then acc
+    else pos_digits (digit_char (v mod base) :: acc) (v / base)
+  in
+  let unsigned_digits v =
+    if v >= 0 then pos_digits [] v
+    else
+      (* v < 0 represents 2^63 + v; shift right by 1 to stay <= max_int. *)
+      let h = v lsr 1 in
+      let q0 = h / base in
+      let r0 = h mod base in
+      let rem2 = (2 * r0) + (v land 1) in
+      let q = (q0 * 2) + (rem2 / base) in
+      let d = rem2 mod base in
+      pos_digits [ digit_char d ] q
   in
   let body =
-    if mag = 0 then "0"
+    if n = 0 then "0"
     else
-      let ds = digits_rev [] mag in
+      let ds =
+        if is_signed then signed_neg_digits [] (if n < 0 then n else -n)
+        else unsigned_digits n
+      in
       let b = BY.create (Stdlib__list.length ds) in
       let rec fill i = function
         | [] -> BY.unsafe_to_string b
