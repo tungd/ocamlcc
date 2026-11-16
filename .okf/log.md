@@ -1,5 +1,16 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): Safe indexing & invalid size `Invalid_argument`
+  (TDD) — updated `ce_may_raise_fn` in `lib/arc_pass.ml` for safe
+  `StringGet`/`BytesSet`/`ArrayGet`/`ArraySet`, `CreateBytes`, `MakeArrayInit`,
+  and `ocamlcc_weak_*`; added `ocamlcc_raise_invalid_arg_oob` and converted
+  invalid lengths/indices in `arc_alloc_bytes`, `arc_alloc_array` (releasing
+  consumed `init`), and `ocamlcc_weak_*` in `runtime/arc.c` (+16-byte
+  alignment on immortal strings/predef exns) to raise `Invalid_argument`;
+  replaced `pal_abort` in `lib/codegen.ml` bounds checks with
+  `compile_bounds_guarded` (releasing consumed RHS on OOB `ArraySet`). Extended
+  `examples/stdlib_test.ml` and `tests/stdlib_test.expected` (`19/19` passing,
+  `arc_delta=0`).
 - 2026-11-15 (autoagent/1): Division/modulo by zero exception check (TDD) —
   marked `Binop ((Div | Mod), _, _)` as potentially raising in
   `ce_may_raise_fn` (`lib/arc_pass.ml`) so `TryWith` retains live bindings and
