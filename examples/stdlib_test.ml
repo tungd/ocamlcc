@@ -93,7 +93,69 @@ let run () =
     with Division_by_zero -> !keep + 5
   in
   Printf.printf "misc=%d,%d,%b\n" !r cmp (("x" ^ "y") = "xy");
-  Printf.printf "div0=%d,%d,%d,%d,%d,%d,%d\n" d1 m1 d2 d3 m2 m3 un
+  Printf.printf "div0=%d,%d,%d,%d,%d,%d,%d\n" d1 m1 d2 d3 m2 m3 un;
+
+  (* Bounds checks and invalid allocation sizes -> Invalid_argument *)
+  let ia_arr = [| 10; 20 |] in
+  let i1 = try ia_arr.(2) with Invalid_argument _ -> -1 in
+  let i2 = try ia_arr.(-1) with Invalid_argument _ -> -2 in
+  let ia_ref_arr = [| ref 1; ref 2 |] in
+  let i3 =
+    try ia_ref_arr.(5) <- ref 77; 0
+    with Invalid_argument _ -> -3
+  in
+  let i4 =
+    try ia_ref_arr.(-1) <- ref 88; 0
+    with Invalid_argument _ -> -4
+  in
+  let i5 = try int_of_char "ab".[2] with Invalid_argument _ -> -5 in
+  let i6 = try int_of_char "ab".[-1] with Invalid_argument _ -> -6 in
+  let ia_b = Bytes.of_string "xy" in
+  let i7 = try int_of_char (Bytes.get ia_b 9) with Invalid_argument _ -> -7 in
+  let i8 = try Bytes.set ia_b (-1) 'z'; 0 with Invalid_argument _ -> -8 in
+  let i9 =
+    try Array.length (Array.make (-1) 0)
+    with Invalid_argument _ -> -9
+  in
+  let i10 =
+    try Array.length (Array.make (-1) (ref 99))
+    with Invalid_argument _ -> -10
+  in
+  let i11 =
+    try Bytes.length (Bytes.create (-1))
+    with Invalid_argument _ -> -11
+  in
+  let i12 =
+    try String.length (String.make (-1) 'q')
+    with Invalid_argument _ -> -12
+  in
+  let i13 =
+    try Weak.length (Weak.create (-1))
+    with Invalid_argument _ -> -13
+  in
+  let ia_w = Weak.create 1 in
+  let i14 =
+    try match Weak.get ia_w 2 with Some _ -> 1 | None -> 0
+    with Invalid_argument _ -> -14
+  in
+  let i15 =
+    try Weak.set ia_w (-1) None; 0
+    with Invalid_argument _ -> -15
+  in
+  let i16 =
+    try if Weak.check ia_w 4 then 1 else 0
+    with Invalid_argument _ -> -16
+  in
+  let ia_keep = ref 300 in
+  let i_un =
+    try
+      let tmp = ref 400 in
+      let _ = Array.make (!tmp - 401) (ref 500) in
+      !ia_keep + 1
+    with Invalid_argument msg -> !ia_keep + String.length msg
+  in
+  Printf.printf "invarg=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n"
+    i1 i2 i3 i4 i5 i6 i7 i8 i9 i10 i11 i12 i13 i14 i15 i16 i_un
 
 let () =
   (* Warm up printf once outside the measurement window. *)
