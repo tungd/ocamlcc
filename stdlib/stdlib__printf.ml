@@ -169,6 +169,42 @@ let format_with_padding :
       in
       k pfn)
 
+let add_escaped_char ~in_string buf c =
+  match c with
+  | '"' when in_string -> B.add_string buf "\\\""
+  | '\'' when not in_string -> B.add_string buf "\\'"
+  | '\\' -> B.add_string buf "\\\\"
+  | '\n' -> B.add_string buf "\\n"
+  | '\r' -> B.add_string buf "\\r"
+  | '\t' -> B.add_string buf "\\t"
+  | '\b' -> B.add_string buf "\\b"
+  | _ ->
+      let code = int_of_char c in
+      if code >= 32 && code <= 126 then B.add_char buf c
+      else begin
+        B.add_char buf '\\';
+        B.add_char buf (char_of_int (48 + (code / 100)));
+        B.add_char buf (char_of_int (48 + ((code / 10) mod 10)));
+        B.add_char buf (char_of_int (48 + (code mod 10)))
+      end
+
+let format_caml_char c =
+  let b = B.create 6 in
+  B.add_char b '\'';
+  add_escaped_char ~in_string:false b c;
+  B.add_char b '\'';
+  B.contents b
+
+let format_caml_string s =
+  let len = S.length s in
+  let b = B.create (len + 2) in
+  B.add_char b '"';
+  for i = 0 to len - 1 do
+    add_escaped_char ~in_string:true b (S.unsafe_get s i)
+  done;
+  B.add_char b '"';
+  B.contents b
+
 let rec make_printf :
     type a b c d e f.
     ((b, c) acc -> f) ->
@@ -180,14 +216,13 @@ let rec make_printf :
   | Char rest ->
       fun c -> make_printf k (Acc_data_char (acc, c)) rest
   | Caml_char rest ->
-      fun c -> make_printf k (Acc_data_string (acc, S.make 1 c)) rest
+      fun c -> make_printf k (Acc_data_string (acc, format_caml_char c)) rest
   | String (pad, rest) ->
       format_with_padding pad (fun pfn s ->
           make_printf k (Acc_data_string (acc, pfn s)) rest)
   | Caml_string (pad, rest) ->
       format_with_padding pad (fun pfn s ->
-          let q = S.cat "\"" (S.cat s "\"") in
-          make_printf k (Acc_data_string (acc, pfn q)) rest)
+          make_printf k (Acc_data_string (acc, pfn (format_caml_string s))) rest)
   | Bool (pad, rest) ->
       format_with_padding pad (fun pfn b ->
           let s = if b then "true" else "false" in
