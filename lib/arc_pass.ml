@@ -12,7 +12,12 @@
      so exceptional unwinding drops them while never dropping caller captures.
    - Field/array loads retain in codegen; overwrites release old slots.
    - [TryWith] / [Raise] / [CheckExn] / [Unwind] ensure every local owned
-     value, [MutLet] slot, and open reuse token unwinds with zero leaks. *)
+     value, [MutLet] slot, and open reuse token unwinds with zero leaks.
+   - A [MutLet] slot is released exactly once, where it leaves scope: the
+     function-exit [Halt], a [Raise] path, or a [StaticRaise] to a narrower
+     handler. [Halt]s that flow into a [LetJoin] rhs / [While] / [For]
+     continuation are not scope exits; [env.no_release_muts] defers those
+     slots to the continuation that still owns them. *)
 
 module IntSet = Set.Make (Int)
 
@@ -25,6 +30,11 @@ type state = {
   known_funs : Ident.Set.t;
   yielding_funs : Ident.Set.t;
   muts : Ident.Set.t;
+  (* Mutable slots that stay in scope after the current join point or loop
+     exit ([LetJoin] rhs, [While]/[For] condition and body). Their single
+     [ReleaseMut] is emitted by the continuation that still uses them, so
+     [Halt] must skip them: [ReleaseMut env.muts - env.no_release_muts]. *)
+  no_release_muts : Ident.Set.t;
   handlers : (int, Ident.Set.t * Ident.Set.t) Hashtbl.t;
   try_owned : Ident.Set.t;
   try_muts : Ident.Set.t;
@@ -503,7 +513,14 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
         ~live_after:Ident.Set.empty [ a ] (fun remaining_owned atoms' ->
           let a' = match atoms' with [ x ] -> x | _ -> assert false in
           let cont = Anf.Halt a' in
-          let cont = emit_mut_releases env.muts cont in
+          (* A [Halt] may flow into a join point or loop exit instead of
+             leaving the function; only release mutables that really leave
+             scope here (muts introduced inside this region). *)
+          let cont =
+            emit_mut_releases
+              (Ident.Set.diff env.muts env.no_release_muts)
+              cont
+          in
           emit_drops env remaining_owned cont)
   | Raise a ->
       prepare_consumed env ~borrowed_also:Ident.Set.empty
@@ -653,7 +670,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let env_rhs =
         { env with
           owned = owned_for_rhs;
-          frame_borrowed = Ident.Set.union env.frame_borrowed shared }
+          frame_borrowed = Ident.Set.union env.frame_borrowed shared;
+          no_release_muts = env.muts }
       in
       let rhs' = transform_aexpr env_rhs rhs in
       let env_body = { env with owned = Ident.Set.add id shared } in
@@ -811,7 +829,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let loop_env =
         { env with
           owned = Ident.Set.empty;
-          frame_borrowed = Ident.Set.union env.frame_borrowed env.owned }
+          frame_borrowed = Ident.Set.union env.frame_borrowed env.owned;
+          no_release_muts = env.muts }
       in
       let cond' = transform_aexpr loop_env cond in
       let body' = transform_aexpr loop_env body in
@@ -819,27 +838,24 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
         While (cond', body')
       else
         let u = Ident.create_local "wend" in
-        let cont =
-          emit_drops env env.owned
-            (emit_mut_releases env.muts (Halt (Var u)))
-        in
+        (* Muts in scope outlive the loop (they are released by the join
+           continuation's own scope exit); only dead owned values drop here. *)
+        let cont = emit_drops env env.owned (Halt (Var u)) in
         LetJoin (u, While (cond', body'), cont)
   | For (idx, s, e, dir, body) ->
       let loop_env =
         { env with
           owned = Ident.Set.empty;
           frame_borrowed = Ident.Set.union env.frame_borrowed env.owned;
-          imm = Ident.Set.add idx env.imm }
+          imm = Ident.Set.add idx env.imm;
+          no_release_muts = env.muts }
       in
       let body' = transform_aexpr loop_env body in
       if Ident.Set.is_empty env.owned && Ident.Set.is_empty env.muts then
         For (idx, s, e, dir, body')
       else
         let u = Ident.create_local "fend" in
-        let cont =
-          emit_drops env env.owned
-            (emit_mut_releases env.muts (Halt (Var u)))
-        in
+        let cont = emit_drops env env.owned (Halt (Var u)) in
         LetJoin (u, For (idx, s, e, dir, body'), cont)
 
 and transform_branch (env : state) (arm : Anf.aexpr) : Anf.aexpr =
@@ -882,6 +898,7 @@ and transform_fun (env : state) ~self_id ~has_closure (lf : Anf.lfunction) :
       borrowed;
       frame_borrowed = Ident.Set.empty;
       muts = Ident.Set.empty;
+      no_release_muts = Ident.Set.empty;
       handlers = Hashtbl.create 8;
       imm = Ident.Set.diff env.imm params_set;
       try_owned = Ident.Set.empty;
@@ -922,6 +939,7 @@ let run (prog : Anf.program) : Anf.program =
       known_funs;
       yielding_funs;
       muts = Ident.Set.empty;
+      no_release_muts = Ident.Set.empty;
       handlers = Hashtbl.create 8;
       try_owned = Ident.Set.empty;
       try_muts = Ident.Set.empty;

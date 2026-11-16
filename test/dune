@@ -1,0 +1,16 @@
+(executable
+ (name arc_mutlet_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps arc_mutlet_test.exe arc_mutlet_test.expected)
+ (action
+  (with-stdout-to arc_mutlet_test.actual
+   (run ./arc_mutlet_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps arc_mutlet_test.actual arc_mutlet_test.expected)
+ (action
+  (diff arc_mutlet_test.expected arc_mutlet_test.actual)))

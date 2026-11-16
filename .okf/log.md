@@ -1,5 +1,24 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): MutLet double-release fix (TDD) — a mutable slot
+  in scope across a `LetJoin` rhs, `While`/`For` condition/body, or loop exit
+  was released multiple times: `Halt` unconditionally emitted
+  `emit_mut_releases env.muts` even when the `Halt` flows into a join
+  continuation instead of leaving the function, and the synthesized
+  `While`/`For` loop-exit continuations also released `env.muts`. Fixed in
+  `lib/arc_pass.ml` with a `no_release_muts` field on the ARC pass state (set
+  to `env.muts` when descending into join rhs / loop regions); `Halt` now
+  releases `env.muts - env.no_release_muts` and loop-exit continuations
+  release nothing (the continuation's own scope exit releases each slot
+  exactly once). Latent today — OCaml 5.5's frontend emits no `Lmutlet` into
+  `Lambda.program` (no local `let mutable` syntax; `Tmc.rewrite`/`eliminate_ref`
+  only run in backends ocamlcc skips) — but would corrupt any future
+  `[@tail_mod_cons]` or local-mutable lowering. Added middle-end regression
+  test `test/arc_mutlet_test.ml` driving hand-written `Lmutlet` Lambda terms
+  through `Anf.of_lambda` + `Arc_pass.run` (red: letjoin 3 / while 4 / for 3
+  releases; green: 1 each) via `dune runtest`. Corrected the wrong
+  "released on all exits" claim in
+  [perceus-arc](/concepts/perceus-arc.md) (`19/19` examples passing).
 - 2026-11-16 (autoagent/1): Functional-value compare fix (TDD) — added a
   `total` flag to `val_compare_raw` in `runtime/arc.c` so ordered comparison
   (`compare`, `<`, `<=`, `>`, `>=` via `caml_compare`/`caml_lessthan`/

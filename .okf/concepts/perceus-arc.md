@@ -6,7 +6,7 @@ tags: [arc, memory, allocator, perceus, phase-2]
 status: stable
 generated:
   by: autoagent/1
-  at: 2026-11-15
+  at: 2026-11-16
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -30,7 +30,9 @@ Phase 2 replaces libc `malloc`/`free` with a freestanding slab allocator and sta
 
 ## Middle-End ARC Pass (`lib/arc_pass.ml`)
 - **Ownership**: `Let`-bindings and function parameters start owned (`+1` rc); `Pure` global functions and static literals/immediates omit refcount traffic; closure captures (`env`), self-refs, and `LetJoin`/`While`/`For` outer references are **borrowed** (with `frame_borrowed` distinguished so exceptional unwinding cleans them up cleanly).
-- **Field & mutation balance**: `Field`/`ArrayGet` retain loaded values; `SetField`/`ArraySet`/`Assign` release overwritten values; `MutLet` slots release via `ReleaseMut` on all exits.
+- **Field & mutation balance**: `Field`/`ArrayGet` retain loaded values; `SetField`/`ArraySet`/`Assign` release overwritten values; a `MutLet` slot is released exactly once, where it leaves scope (function-exit `Halt`, `Raise`, or `StaticRaise` to a narrower handler).
+- **Mutable-slot scope invariant**: `Halt`s that flow into a `LetJoin` rhs, `While`/`For` condition/body, or a loop-exit continuation are *not* scope exits, so they must not emit `ReleaseMut` for slots that remain in scope. `env.no_release_muts` (set to `env.muts` when descending into those regions) defers such slots to the continuation that still uses them; `Halt` releases `env.muts - env.no_release_muts`. Muts introduced *inside* the region still release at its own `Halt`. Regression-tested at the middle-end level in `test/arc_mutlet_test.ml` (drives hand-written `Lmutlet` Lambda terms — the frontend emits none today; see below — through `Anf.of_lambda` + `Arc_pass.run` and counts `ReleaseMut` per slot).
+- **Lmutlet latency**: OCaml 5.5's frontend never emits `Lmutlet`/`Lmutvar` into `Lambda.program` (local `let mutable` is not source syntax; `Tmc.rewrite` and `eliminate_ref` run only in the backends ocamlcc does not use), so `MutLet` ANF nodes are currently unreachable from source. If `[@tail_mod_cons]` support or local-mutable lowering is added to `lib/frontend.ml`, the `test/arc_mutlet_test.ml` invariant guard must stay green.
 - **In-place reuse**: `DropReuse` pairs dead unique heap blocks with downstream `AllocReuse` (even across `If` and `CheckExn` via `FreeReuse`).
 
 ## Zero-Leak Exceptions, Cycle Collection & Weak Clearing
