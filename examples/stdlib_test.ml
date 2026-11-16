@@ -24,6 +24,13 @@ let run () =
   Printf.printf "list=%d,%d,%d,%b\n"
     (List.length sorted) folded found (xs @ [] = [ 5; 1; 4; 2; 3; 2 ]);
 
+  (* List.init: f is invoked in order 0..len-1 *)
+  let init_order = ref [] in
+  let inited = List.init 4 (fun i -> init_order := i :: !init_order; i * i) in
+  Printf.printf "listinit=%s,%b\n"
+    (String.concat "" (List.map string_of_int (List.rev !init_order)))
+    (inited = [ 0; 1; 4; 9 ]);
+
   (* Array *)
   let arr = Array.init 5 (fun i -> 5 - i) in
   Array.sort compare arr;

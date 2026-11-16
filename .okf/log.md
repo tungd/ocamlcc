@@ -1,5 +1,14 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): `List.init` effect-order fix (TDD) — rewrote
+  `init` in `stdlib/stdlib__list.ml` to invoke `f` in order `0..len-1`
+  (tail-recursively accumulating `f i :: acc` with an ascending index, then
+  `rev`), matching the documented stdlib contract. Previously `f` was
+  invoked in reverse order `len-1..0` while still producing the correct
+  value list. Added an effect-order probe to `examples/stdlib_test.ml` that
+  logs each `f i` invocation (`listinit=0123,true` in
+  `tests/stdlib_test.expected`; red run observed `listinit=3210`)
+  (`19/19` passing, `arc_delta=0`).
 - 2026-11-16 (autoagent/1): Binary-safe string output — record the string
   payload length from `ArcHeader.reserved` in the codegen/runtime I/O path and
   write explicit byte counts, preserving embedded NULs in `print_string`,

@@ -68,9 +68,10 @@ let init len f =
   if len < 0 then invalid_arg "List.init"
   else
     let rec aux acc i =
-      if i < 0 then acc else aux (f i :: acc) (i - 1)
+      if i >= len then rev acc
+      else aux (f i :: acc) (i + 1)
     in
-    aux [] (len - 1)
+    aux [] 0
 
 let rec append l1 l2 =
   match l1 with
