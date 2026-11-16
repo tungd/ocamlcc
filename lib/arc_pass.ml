@@ -94,35 +94,6 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | Assign (_, rhs) -> (Ident.Set.empty, [ rhs ])
   | Fun _ -> (Ident.Set.empty, [])
 
-let pure_defs_of_aexpr (e : Anf.aexpr) : Ident.Set.t =
-  let is_pure known (lf : Anf.lfunction) =
-    let params =
-      List.fold_left (fun s (p, _) -> Ident.Set.add p s) Ident.Set.empty lf.params
-    in
-    let free = Anf.free_vars lf.body in
-    Ident.Set.for_all
-      (fun v -> Ident.Set.mem v params || Ident.Set.mem v known)
-      free
-  in
-  let rec go known = function
-    | Anf.Let (id, Fun lf, body) ->
-        let known = if is_pure known lf then Ident.Set.add id known else known in
-        go known body
-    | Let (_, _, body) | MutLet (_, _, body) | LetJoin (_, _, body) ->
-        go known body
-    | LetRec (bindings, body) ->
-        let known_grp =
-          List.fold_left
-            (fun s (rb : Anf.rec_binding) -> Ident.Set.add rb.id s)
-            known bindings
-        in
-        if List.for_all (fun (rb : Anf.rec_binding) -> is_pure known_grp rb.def) bindings
-        then go known_grp body
-        else go known body
-    | _ -> known
-  in
-  go Ident.Set.empty e
-
 let is_yielding_ccall = function
   | "ocamlcc_fiber_yield" | "ocamlcc_fiber_resume"
   | "ocamlcc_fiber_suspend" | "ocamlcc_fiber_sleep_ms"
@@ -928,7 +899,9 @@ and rebuild_cexpr (ce : Anf.cexpr) (atoms' : Anf.atom list) : Anf.cexpr =
   | _ -> ce
 
 let run (prog : Anf.program) : Anf.program =
-  let pure = pure_defs_of_aexpr prog.code in
+  let pure =
+    Anf.pure_defs prog.code |> List.map fst |> Ident.Set.of_list
+  in
   let known_funs, yielding_funs = compute_yield_info prog.code in
   let init_env =
     { owned = Ident.Set.empty;

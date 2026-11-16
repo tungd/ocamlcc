@@ -1,5 +1,23 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): Nested pure-function analysis fix (TDD) —
+  `pure_defs_of_aexpr` (`lib/arc_pass.ml`) and `collect_pure_defs`
+  (`lib/codegen.ml`) duplicated the same top-level-spine walk and never
+  recursed into function bodies or branches, so a non-capturing helper
+  defined inside a branch (e.g. inside an `if` arm, which ANF places in a
+  `LetJoin` rhs) missed the pure set: `arc_pass` owned its binding and
+  emitted `Release` at its last use, while `codegen` compiled it with
+  `has_closure = false` and had to synthesize an immortal static closure
+  wrapper (`clos.N`) just to feed those `arc_release_val` calls (observed in
+  the QBE IL of `let f x = if x > 0 then let helper y = y + 1 in helper x
+  else x - 1`). Replaced both walks with a single shared, fully recursive
+  `Anf.pure_defs` (function bodies + `LetJoin` rhs + `If`/`Switch`/
+  `StringSwitch`/`StaticCatch`/`TryWith`/`While`/`For`/`CheckExn` +
+  instruction continuations; nested defs may capture enclosing pure ids).
+  Added `test/pure_nested_test.ml` (red: branch helper released 2×, nested
+  `let rec` pair released 2×/1×; green: 0 releases, controls — toplevel
+  helper already static, capturing helper still owned — preserved). `19/19`
+  examples pass. Documented in [perceus-arc](/concepts/perceus-arc.md).
 - 2026-11-16 (autoagent/1): `Lstaticraise` in let-RHS fix (TDD) —
   `Anf.conv_bind` (`lib/anf.ml`) raised `Unsupported "static raise"` for an
   `Lstaticraise` used as a let binding RHS, while `conv_expr` lowers the same

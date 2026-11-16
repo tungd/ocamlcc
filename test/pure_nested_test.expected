@@ -1,0 +1,7 @@
+toplevel_helper: PASS (1 static funs, 0 releases)
+toplevel helper not released: PASS
+capturing nested fun still owned: PASS
+nested_branch_helper: PASS (2 static funs, 0 releases)
+branch helper not released: PASS
+nested_branch_letrec: PASS (3 static funs, 0 releases)
+branch letrec not released: PASS

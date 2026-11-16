@@ -31,3 +31,20 @@
  (deps anf_staticraise_test.actual anf_staticraise_test.expected)
  (action
   (diff anf_staticraise_test.expected anf_staticraise_test.actual)))
+
+(executable
+ (name pure_nested_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps pure_nested_test.exe pure_nested_test.expected)
+ (action
+  (with-stdout-to pure_nested_test.actual
+   (run ./pure_nested_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps pure_nested_test.actual pure_nested_test.expected)
+ (action
+  (diff pure_nested_test.expected pure_nested_test.actual)))

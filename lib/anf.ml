@@ -578,6 +578,100 @@ let rec free_vars (e : aexpr) : Ident.Set.t =
       Ident.Set.union s (Ident.Set.of_list rtoks)
   | ShadowPop (_, _, body) -> free_vars body
 
+(* Non-capturing function definitions, in pre-order.
+
+   A function (or a whole mutual [let rec] group) whose free variables are
+   only its own parameters plus already-collected pure functions needs no
+   heap closure: it is compiled as an immortal static function. Both the ARC
+   pass (refcount traffic on the binding) and codegen (static definition +
+   direct-call grouping) must agree on this set, so it lives here once.
+
+   Unlike a top-level-spine-only walk, this recurses into function bodies
+   and every branch/join region ([LetJoin] rhs, [If], [Switch],
+   [StaticCatch], [TryWith], [While], [For], [CheckExn]) so helpers defined
+   inside other functions are found too, and works on both pre-ARC and
+   post-ARC ANF (instruction continuations included). *)
+let pure_defs (e : aexpr) : (Ident.t * lfunction) list =
+  let is_pure known (lf : lfunction) =
+    let params =
+      List.fold_left (fun s (p, _) -> Ident.Set.add p s) Ident.Set.empty lf.params
+    in
+    let free = free_vars lf.body in
+    Ident.Set.for_all
+      (fun v -> Ident.Set.mem v params || Ident.Set.mem v known)
+      free
+  in
+  let rec go known acc (e : aexpr) =
+    match e with
+    | Let (id, Fun lf, body) ->
+        let acc =
+          if is_pure known lf then begin
+            (* [id] is an immortal static function: nested helpers may
+               capture it without becoming closures. *)
+            let known' = Ident.Set.add id known in
+            go known' ((id, lf) :: acc) lf.body
+          end
+          else go known acc lf.body
+        in
+        go known acc body
+    | Let (_, _, body) | MutLet (_, _, body) -> go known acc body
+    | LetJoin (_, rhs, body) -> go known (go known acc rhs) body
+    | LetRec (bindings, body) ->
+        let rec_ids =
+          List.fold_left
+            (fun s (rb : rec_binding) -> Ident.Set.add rb.id s)
+            Ident.Set.empty bindings
+        in
+        let known_grp = Ident.Set.union rec_ids known in
+        if List.for_all (fun (rb : rec_binding) -> is_pure known_grp rb.def) bindings
+        then begin
+          let acc' =
+            List.fold_left
+              (fun acc (rb : rec_binding) -> (rb.id, rb.def) :: acc)
+              acc bindings
+          in
+          let acc'' =
+            List.fold_left
+              (fun acc (rb : rec_binding) -> go known_grp acc rb.def.body)
+              acc' bindings
+          in
+          go known_grp acc'' body
+        end
+        else begin
+          let acc' =
+            List.fold_left
+              (fun acc (rb : rec_binding) -> go known acc rb.def.body)
+              acc bindings
+          in
+          go known acc' body
+        end
+    | If (_, th, el) -> go known (go known acc th) el
+    | Switch (_, sw) ->
+        let acc =
+          List.fold_left
+            (fun acc arm -> go known acc arm) acc
+            (List.map snd sw.consts @ List.map snd sw.blocks)
+        in
+        (match sw.fail with Some f -> go known acc f | None -> acc)
+    | StringSwitch (_, cases, fail) ->
+        let acc =
+          List.fold_left (fun acc (_, arm) -> go known acc arm) acc cases
+        in
+        (match fail with Some f -> go known acc f | None -> acc)
+    | StaticCatch (body, _, _, handler) ->
+        go known (go known acc body) handler
+    | TryWith (body, _, handler) -> go known (go known acc body) handler
+    | While (cond, body) | CheckExn (cond, body) ->
+        go known (go known acc cond) body
+    | For (_, _, _, _, body) -> go known acc body
+    | Halt _ | Raise _ | Unwind | StaticRaise _ -> acc
+    | Retain (_, body) | Release (_, body) | ReleaseMut (_, body)
+    | DropReuse (_, _, body) | FreeReuse (_, body)
+    | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
+        go known acc body
+  in
+  List.rev (go Ident.Set.empty [] e)
+
 let of_lambda ?(use_builtins = true) (program : Lambda.program) :
     (program, string) result =
   let saved = !builtins_enabled in

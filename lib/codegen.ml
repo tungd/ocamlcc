@@ -1809,43 +1809,7 @@ and compile_group b gname (members : (Ident.t * Anf.lfunction) list) : unit =
 (* ------------------------------------------------------------------ *)
 
 let collect_pure_defs (e : Anf.aexpr) : (Ident.t * Anf.lfunction) list =
-  let is_pure known (lf : Anf.lfunction) =
-    let params =
-      List.fold_left (fun s (p, _) -> Ident.Set.add p s) Ident.Set.empty lf.params
-    in
-    let free = Anf.free_vars lf.body in
-    Ident.Set.for_all
-      (fun v -> Ident.Set.mem v params || Ident.Set.mem v known)
-      free
-  in
-  let rec go known acc (e : Anf.aexpr) =
-    match e with
-    | Let (id, Fun lf, body) ->
-        if is_pure known lf then
-          go (Ident.Set.add id known) ((id, lf) :: acc) body
-        else go known acc body
-    | Let (_, _, body) | MutLet (_, _, body) | LetJoin (_, _, body)
-    | Retain (_, body) | Release (_, body) | ReleaseMut (_, body)
-    | DropReuse (_, _, body) | FreeReuse (_, body)
-    | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
-        go known acc body
-    | LetRec (bindings, body) ->
-        let known_grp =
-          List.fold_left
-            (fun s (rb : Anf.rec_binding) -> Ident.Set.add rb.id s)
-            known bindings
-        in
-        if List.for_all (fun (rb : Anf.rec_binding) -> is_pure known_grp rb.def) bindings
-        then
-          go known_grp
-            (List.fold_left
-               (fun acc (rb : Anf.rec_binding) -> (rb.id, rb.def) :: acc)
-               acc bindings)
-            body
-        else go known acc body
-    | _ -> acc
-  in
-  List.rev (go Ident.Set.empty [] e)
+  Anf.pure_defs e
 
 let rec tail_callees (e : Anf.aexpr) : Ident.Set.t =
   match e with

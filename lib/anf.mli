@@ -115,3 +115,4 @@ type program = {
 
 val of_lambda : ?use_builtins:bool -> Lambda.program -> (program, string) result
 val free_vars : aexpr -> Ident.Set.t
+val pure_defs : aexpr -> (Ident.t * lfunction) list
