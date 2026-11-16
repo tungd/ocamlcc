@@ -940,8 +940,10 @@ int64_t caml_blit_bytes(int64_t src, int64_t src_off,
     int64_t n = len >> 1;
     if (soff < 0 || doff < 0 || n < 0 ||
         (uint64_t)soff + (uint64_t)n > hs->reserved ||
-        (uint64_t)doff + (uint64_t)n > hd->reserved)
-        pal_abort();
+        (uint64_t)doff + (uint64_t)n > hd->reserved) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return 1;
+    }
     const uint8_t *s = (const uint8_t *)(uintptr_t)src + soff;
     uint8_t *d = (uint8_t *)(uintptr_t)dst + doff;
     if (d < s || d >= s + n) {
@@ -964,8 +966,10 @@ int64_t caml_fill_bytes(int64_t dst, int64_t off_val, int64_t len_val, int64_t c
     const ArcHeader *hd = (const ArcHeader *)(uintptr_t)dst - 1;
     int64_t off = off_val >> 1;
     int64_t n = len_val >> 1;
-    if (off < 0 || n < 0 || (uint64_t)off + (uint64_t)n > hd->reserved)
-        pal_abort();
+    if (off < 0 || n < 0 || (uint64_t)off + (uint64_t)n > hd->reserved) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return 1;
+    }
     uint8_t *d = (uint8_t *)(uintptr_t)dst + off;
     pal_memset(d, (int)((ch >> 1) & 0xff), (size_t)n);
     return 1;

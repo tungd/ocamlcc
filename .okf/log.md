@@ -1,5 +1,28 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): C-call ABI registry fix (TDD) — the ARC pass
+  classified `Ccall`s via hardcoded name lists (`ce_may_raise_fn`,
+  `is_yielding_ccall`) that had drifted (`Weak.get_copy` was missed once),
+  and `anf.ml` lowered any non-`caml_` external (≤ 6 args) to `Ccall` while
+  silently assuming it borrows all args, returns an owned value, never
+  raises and never yields. Replaced both lists with a single typed registry
+  `lib/ccalls.ml` (`argc`/`raises`/`yields` per symbol, derived from the
+  `stdlib/` external declarations and the runtime implementations in
+  `runtime/arc.c`/`fiber.c`): `anf.ml` now rejects unknown `caml_`
+  primitives at compile time and gives unknown user C externals the
+  conservative default `raises = true` (so `TryWith` always unwinds
+  correctly) / `yields = false`; `arc_pass` derives `ce_may_raise_fn` and
+  `is_yielding_ccall` from the registry. Also fixed `caml_blit_bytes`/
+  `caml_blit_string`/`caml_fill_bytes` in `runtime/arc.c` to raise
+  `Invalid_argument "index out of bounds"` on out-of-bounds (matching real
+  OCaml) instead of `pal_abort` — red: `stdlib_test` aborted with SIGABRT
+  on an OOB `Bytes.unsafe_blit` inside `try`; green: caught as
+  `invarg=...,-17,-18`. Added `test/ccalls_test.ml` pinning the ABI of all
+  42 stdlib-bound C externals plus the unknown-external default (`19/19`
+  examples passing, `arc_delta=0`). The `Builtins` runtime-probing of
+  Stdlib entry-point lambdas (host-switch `.cmi` coupling) is now a
+  documented limitation — probe failures degrade to the conservative
+  unknown-external path instead of silently skipping unwinding.
 - 2026-11-16 (autoagent/1): Nested pure-function analysis fix (TDD) —
   `pure_defs_of_aexpr` (`lib/arc_pass.ml`) and `collect_pure_defs`
   (`lib/codegen.ml`) duplicated the same top-level-spine walk and never

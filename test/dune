@@ -48,3 +48,20 @@
  (deps pure_nested_test.actual pure_nested_test.expected)
  (action
   (diff pure_nested_test.expected pure_nested_test.actual)))
+
+(executable
+ (name ccalls_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps ccalls_test.exe ccalls_test.expected)
+ (action
+  (with-stdout-to ccalls_test.actual
+   (run ./ccalls_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps ccalls_test.actual ccalls_test.expected)
+ (action
+  (diff ccalls_test.expected ccalls_test.actual)))

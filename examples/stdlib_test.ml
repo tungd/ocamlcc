@@ -208,8 +208,18 @@ let run () =
       !ia_keep + 1
     with Invalid_argument msg -> !ia_keep + String.length msg
   in
-  Printf.printf "invarg=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n"
-    i1 i2 i3 i4 i5 i6 i7 i8 i9 i10 i11 i12 i13 i14 i15 i16 i_un;
+  let bsrc = Bytes.make 8 'a' in
+  let bdst = Bytes.make 8 'b' in
+  let i_blit =
+    try Bytes.unsafe_blit bsrc 0 bdst 6 4; 0
+    with Invalid_argument _ -> -17
+  in
+  let i_fill =
+    try Bytes.unsafe_fill bsrc 6 4 'z'; 0
+    with Invalid_argument _ -> -18
+  in
+  Printf.printf "invarg=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n"
+    i1 i2 i3 i4 i5 i6 i7 i8 i9 i10 i11 i12 i13 i14 i15 i16 i_un i_blit i_fill;
   Printf.printf "fmt=%d,%i,%d,%u,%u,%x,%X,%o\n"
     min_int min_int max_int (-1) min_int (-1) (-1) (-1);
   Printf.printf "fmtpad=[%05d],[%+05d],[% 05d],[%#05x],[%.3d],[%.3d],[%5.3d],[%-5.3d],[%*.*d],[%0*d]\n"

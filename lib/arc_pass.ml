@@ -94,13 +94,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | Assign (_, rhs) -> (Ident.Set.empty, [ rhs ])
   | Fun _ -> (Ident.Set.empty, [])
 
-let is_yielding_ccall = function
-  | "ocamlcc_fiber_yield" | "ocamlcc_fiber_resume"
-  | "ocamlcc_fiber_suspend" | "ocamlcc_fiber_sleep_ms"
-  | "ocamlcc_fiber_fd_wait_read" | "ocamlcc_fiber_fd_wait_write"
-  | "ocamlcc_fiber_await" | "ocamlcc_fiber_run_all" ->
-      true
-  | _ -> false
+let is_yielding_ccall name = (Ccalls.find name).Ccalls.yields
 
 let ce_may_raise_fn = function
   | Anf.App _ -> true
@@ -111,14 +105,7 @@ let ce_may_raise_fn = function
   | ArraySet (true, _, _, _, _)
   | CreateBytes _ | MakeArrayInit _ ->
       true
-  | Ccall (name, _) ->
-      name = "ocamlcc_fiber_resume" || name = "ocamlcc_fiber_await"
-      || name = "ocamlcc_weak_create" || name = "ocamlcc_weak_set"
-      || name = "ocamlcc_weak_get" || name = "ocamlcc_weak_get_copy"
-      || name = "ocamlcc_weak_check"
-      || name = "caml_compare" || name = "caml_lessthan"
-      || name = "caml_lessequal" || name = "caml_greaterthan"
-      || name = "caml_greaterequal"
+  | Ccall (name, _) -> (Ccalls.find name).Ccalls.raises
   | _ -> false
 
 let is_yielding_ce (env : state) = function

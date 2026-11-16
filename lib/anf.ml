@@ -164,15 +164,6 @@ let check_array_kind (k : Lambda.array_kind) =
 
 let builtins_enabled = ref true
 
-let supported_caml_prim = function
-  | "caml_fresh_oo_id" | "caml_equal" | "caml_notequal" | "caml_compare"
-  | "caml_lessthan" | "caml_lessequal" | "caml_greaterthan"
-  | "caml_greaterequal" | "caml_hash" | "caml_blit_bytes"
-  | "caml_blit_string" | "caml_fill_bytes" | "caml_string_equal"
-  | "caml_bytes_equal" | "caml_string_compare" | "caml_bytes_compare" ->
-      true
-  | _ -> false
-
 let rec conv_tail (lam : Lambda.lambda) : aexpr =
   conv_expr lam (fun a -> Halt a)
 
@@ -320,10 +311,23 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
           conv_expr arg (fun a -> emit_cexpr (Ccall ("caml_fresh_oo_id", [ a ])))
       | sym, args
         when pd.Primitive.prim_arity = List.length args
-             && List.length args <= 6
-             && (supported_caml_prim sym
-                || not (String.starts_with ~prefix:"caml_" sym)) ->
-          conv_atoms args (fun vs -> emit_cexpr (Ccall (sym, vs)))
+             && List.length args <= 6 -> (
+          (* C externals: [caml_*] primitives must be registered with their
+             C ABI in [Ccalls] (unknown ones are rejected — they are
+             compiler/runtime implementation details, not a user ABI);
+             non-[caml_] externals are user C FFI and always lower to
+             [Ccall] with the conservative default ABI. *)
+          if String.starts_with ~prefix:"caml_" sym then
+            match Ccalls.find_opt sym with
+            | Some abi when abi.Ccalls.argc = List.length args ->
+                conv_atoms args (fun vs -> emit_cexpr (Ccall (sym, vs)))
+            | Some _ ->
+                raise
+                  (Unsupported
+                    (Printf.sprintf "C primitive %s with %d arguments" sym
+                       (List.length args)))
+            | None -> raise (Unsupported (describe lam))
+          else conv_atoms args (fun vs -> emit_cexpr (Ccall (sym, vs))))
       | _ -> raise (Unsupported (describe lam)))
   | Lprim (Pgetglobal id, [], _) -> emit_cexpr (GetGlobal (Ident.name id))
   | Lprim (Praise _, [ arg ], _) ->
