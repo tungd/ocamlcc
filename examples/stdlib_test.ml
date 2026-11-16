@@ -162,7 +162,8 @@ let run () =
     (-12) 12 12 15 7 (-7) (-7) 7 6 3 (-12) 5 (-12);
   Printf.printf "fmtsc=%C,%C,%C,%C,%C,%C,%S,[%10S]\n"
     'a' '\'' '"' '\\' '\n' '\255'
-    "a\"'\\\n\t\r\b\000\255" "a\nb"
+    "a\"'\\\n\t\r\b\000\255" "a\nb";
+  Printf.eprintf "err=%d,%s\n" 42 "ok"
 
 let () =
   (* Warm up printf once outside the measurement window. *)
