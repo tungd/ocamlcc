@@ -40,6 +40,6 @@ sources:
 
 `runtime/pal.c` implements POSIX `mmap`/`munmap` (`pal_page_alloc`/`pal_page_free`),
 `clock_gettime` (`pal_monotonic_ns`), `abort` (`pal_abort`), `memcpy`/`memset`,
-non-blocking pipe/fd helpers, and real `kqueue` (Darwin/BSD) / `epoll` (Linux)
+non-blocking pipe/fd helpers, `pal_stderr_write`, and real `kqueue` (Darwin/BSD) / `epoll` (Linux)
 event polling behind `pal_poll_wait`. `runtime/pal_ctx.S` implements callee-saved
 register switching (`pal_ctx_init` / `pal_ctx_swap`) for `arm64` and `x86_64`.

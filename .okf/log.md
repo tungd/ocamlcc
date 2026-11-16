@@ -1,5 +1,13 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): `Printf.eprintf` stderr routing fix (TDD) —
+  added `pal_stderr_write` in `runtime/pal.h`/`runtime/pal.c` and
+  `ocamlcc_prerr_string_val` in `runtime/arc.h`/`runtime/arc.c` (using
+  `ArcHeader.reserved` length without modifying `runtime/builtins.c`), and
+  factored `printf_to` in `stdlib/stdlib__printf.ml` so `eprintf` writes to
+  `stderr` rather than `stdout`. Extended `examples/stdlib_test.ml` (`19/19`
+  passing, stdout diff excludes `eprintf` output and `stderr` verified
+  separately with `arc_delta=0`).
 - 2026-11-16 (autoagent/1): `Printf` `%S` and `%C` escaping & quoting fix
   (TDD) — added `add_escaped_char`, `format_caml_char`, and
   `format_caml_string` in `stdlib/stdlib__printf.ml` to emit OCaml-escaped
