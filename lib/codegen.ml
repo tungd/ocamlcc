@@ -936,23 +936,23 @@ and compile_aexpr b (tail : bool) (e : Anf.aexpr) : t =
   | For (id, start_a, stop_a, dir, body) ->
       let sv = compile_atom b start_a in
       let ev = compile_atom b stop_a in
+      let enter_op, cont_op, step =
+        match dir with
+        | Asttypes.Upto -> (Cmp.Sle, Cmp.Slt, 2L)
+        | Asttypes.Downto -> (Cmp.Sge, Cmp.Sgt, -2L)
+      in
+      let enter = fresh_temp b "forenter" in
+      emit b (Cmp (enter_op, Long, enter, sv, ev));
       let lpre = b.open_label in
-      let lcond = fresh_label b "fcond" in
       let lbody = fresh_label b "fbody" in
       let lstep = fresh_label b "fstep" in
+      let lnext = fresh_label b "fnext" in
       let ldone = fresh_label b "fdone" in
       let iv = fresh_temp b "fori" in
       let next_i = fresh_temp b "forn" in
-      close_block b (Jmp lcond);
-      start_block b lcond;
-      emit b (Phi (Long, iv, [ (lpre, sv); (lstep, next_i) ]));
-      let cmp_op =
-        match dir with Asttypes.Upto -> Cmp.Sle | Asttypes.Downto -> Cmp.Sge
-      in
-      let cv = fresh_temp b "forcmp" in
-      emit b (Cmp (cmp_op, Long, cv, iv, ev));
-      close_block b (Br (cv, lbody, ldone));
+      close_block b (Br (enter, lbody, ldone));
       start_block b lbody;
+      emit b (Phi (Long, iv, [ (lpre, sv); (lnext, next_i) ]));
       let saved = Hashtbl.find_opt b.vars id in
       Hashtbl.replace b.vars id iv;
       ignore (compile_aexpr b false body);
@@ -961,11 +961,12 @@ and compile_aexpr b (tail : bool) (e : Anf.aexpr) : t =
       | None -> Hashtbl.remove b.vars id);
       if b.term = None then close_block b (Jmp lstep);
       start_block b lstep;
-      let step =
-        match dir with Asttypes.Upto -> 2L | Asttypes.Downto -> -2L
-      in
+      let more = fresh_temp b "formore" in
+      emit b (Cmp (cont_op, Long, more, iv, ev));
+      close_block b (Br (more, lnext, ldone));
+      start_block b lnext;
       emit b (Binop (Add, Long, next_i, iv, Int step));
-      close_block b (Jmp lcond);
+      close_block b (Jmp lbody);
       start_block b ldone;
       unit_const
   | Retain (id, body) ->
