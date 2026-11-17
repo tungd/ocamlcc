@@ -1,0 +1,5 @@
+syntax_error: PASS
+type_error: PASS
+unbound_value: PASS
+unbound_module: PASS
+intf_unbound_type: PASS

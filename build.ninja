@@ -324,4 +324,63 @@ build test_fiber_io: run_test | $builddir/fiber_io
 
 build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io
 
+rule cc_rt_asan
+  command = $cc $rt_cflags -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iruntime -c $in -o $out
+  description = CC(ASAN) $out
+
+rule cc_link_asan
+  command = $cc -fsanitize=address,undefined -fno-sanitize-recover=all $in -o $out
+  description = LINK(ASAN) $out
+
+rule run_asan_test
+  command = $builddir/asan/$name > $builddir/asan/$name.out && diff - tests/$name.expected < $builddir/asan/$name.out && echo "PASS(ASAN) $name"
+  pool = console
+  description = TEST(ASAN) $name
+
+build $builddir/asan/rt/pal.o:      cc_rt_asan runtime/pal.c      | runtime/pal.h
+build $builddir/asan/rt/pal_ctx.o:  as_obj     runtime/pal_ctx.S
+build $builddir/asan/rt/arc.o:      cc_rt_asan runtime/arc.c      | runtime/arc.h runtime/pal.h runtime/fiber.h
+build $builddir/asan/rt/closure.o:  cc_rt_asan runtime/closure.c  | runtime/arc.h runtime/pal.h
+build $builddir/asan/rt/fiber.o:    cc_rt_asan runtime/fiber.c    | runtime/fiber.h runtime/arc.h runtime/pal.h
+build $builddir/asan/rt/builtins.o: cc_rt_asan runtime/builtins.c
+
+build $builddir/asan/rt/libocamlrt.a: ar $builddir/asan/rt/pal.o $builddir/asan/rt/pal_ctx.o $builddir/asan/rt/arc.o $builddir/asan/rt/closure.o $builddir/asan/rt/fiber.o $builddir/asan/rt/builtins.o
+
+build $builddir/asan/adt:           cc_link_asan $builddir/adt.s           $builddir/asan/rt/libocamlrt.a
+build $builddir/asan/closures:      cc_link_asan $builddir/closures.s      $builddir/asan/rt/libocamlrt.a
+build $builddir/asan/arrays_bytes:  cc_link_asan $builddir/arrays_bytes.s  $builddir/asan/rt/libocamlrt.a
+build $builddir/asan/arc_test:      cc_link_asan $builddir/arc_test.s      $builddir/asan/rt/libocamlrt.a
+build $builddir/asan/exn:           cc_link_asan $builddir/exn.s           $builddir/asan/rt/libocamlrt.a
+build $builddir/asan/weak_cycle:    cc_link_asan $builddir/weak_cycle.s    $builddir/asan/rt/libocamlrt.a
+build $builddir/asan/cycle_collect: cc_link_asan $builddir/cycle_collect.s $builddir/asan/rt/libocamlrt.a
+build $builddir/asan/mod_main:      cc_link_asan $builddir/mod_main.s $builddir/mod_lib.s $builddir/asan/rt/libocamlrt.a
+build $builddir/asan/stdlib_test:   cc_link_asan $builddir/stdlib_test.s   $stdlibdir/libocamlstdlib.a $builddir/asan/rt/libocamlrt.a
+build $builddir/asan/fiber_test:    cc_link_asan $builddir/fiber_test.s    $stdlibdir/libocamlstdlib.a $builddir/asan/rt/libocamlrt.a
+build $builddir/asan/fiber_io:      cc_link_asan $builddir/fiber_io.s      $stdlibdir/libocamlstdlib.a $builddir/asan/rt/libocamlrt.a
+
+build asan_adt:           run_asan_test | $builddir/asan/adt
+  name = adt
+build asan_closures:      run_asan_test | $builddir/asan/closures
+  name = closures
+build asan_arrays_bytes:  run_asan_test | $builddir/asan/arrays_bytes
+  name = arrays_bytes
+build asan_arc_test:      run_asan_test | $builddir/asan/arc_test
+  name = arc_test
+build asan_exn:           run_asan_test | $builddir/asan/exn
+  name = exn
+build asan_weak_cycle:    run_asan_test | $builddir/asan/weak_cycle
+  name = weak_cycle
+build asan_cycle_collect: run_asan_test | $builddir/asan/cycle_collect
+  name = cycle_collect
+build asan_mod_main:      run_asan_test | $builddir/asan/mod_main
+  name = mod_main
+build asan_stdlib_test:   run_asan_test | $builddir/asan/stdlib_test
+  name = stdlib_test
+build asan_fiber_test:    run_asan_test | $builddir/asan/fiber_test
+  name = fiber_test
+build asan_fiber_io:      run_asan_test | $builddir/asan/fiber_io
+  name = fiber_io
+
+build asan_test: phony asan_adt asan_closures asan_arrays_bytes asan_arc_test asan_exn asan_weak_cycle asan_cycle_collect asan_mod_main asan_stdlib_test asan_fiber_test asan_fiber_io
+
 default $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a $builddir/bin/ocamlcc $builddir/hello

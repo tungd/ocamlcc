@@ -1,0 +1,4 @@
+tail_loop_and_entry: PASS
+mod_no_entry: PASS
+mod_no_entry_omits_init: PASS
+closure_arc_and_exn: PASS

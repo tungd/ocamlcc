@@ -28,12 +28,16 @@ One checked-in `build.ninja` drives everything[^build-ninja]:
 | `build/bin/ocamlcc` | `dune build bin/ocamlcc` (with `(public_name ocamlcc)` for `dune build -p ocamlcc`) → copy out of `_build/`. |
 | `build/stdlib/libocamlstdlib.a` | `ocamlcc compile-mli` / `compile --mod` over `stdlib/*.ml` → `qbe` → `cc -c` → `ar rcs`. |
 | `build/<name>` | `ocamlcc compile x.ml -o x.ssa` → `qbe x.ssa > x.s` → `cc x.s libocamlstdlib.a libocamlrt.a`. |
+| `build/asan/<name>` | ASan + UBSan (`-fsanitize=address,undefined -fno-sanitize-recover=all`) runtime `build/asan/rt/libocamlrt.a` linked with compiled examples. |
 
 `ninja smoke` builds and runs `build/hello`; `ninja test` runs all checked
 tests by redirecting `$builddir/$name > $builddir/$name.out` before `diff` so
-non-zero exit codes never fail silently; the default target builds all
-artifacts. All outputs stay under the gitignored `build/` directory —
-nothing is ever written into `vendor/qbe` or `_build` by ninja itself.
+non-zero exit codes never fail silently; `ninja asan_test` runs key runtime-heavy
+examples under ASan+UBSan; `dune runtest` runs the compiler unit, IR, and
+negative diagnostic tests in `test/`; `.github/workflows/ci.yml` runs all
+three suites on both Linux (epoll) and macOS (kqueue). All outputs stay under
+the gitignored `build/` directory — nothing is ever written into `vendor/qbe`
+or `_build` by ninja itself.
 
 # Decisions and gotchas
 

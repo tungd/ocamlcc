@@ -1,5 +1,16 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Repo hygiene, unit/IR/negative tests, ASan/UBSan & CI (TDD) —
+  removed tracked `examples/hello.cmi` (`*.cmi` ignored in `.gitignore`), added
+  `Pipeline.compile_source` for in-memory compilation tests, added
+  `test/frontend_negative_test.ml`, `test/anf_negative_test.ml`, and
+  `test/pipeline_ir_test.ml` to `dune runtest` (7/7 suites passing), added
+  `ninja asan_test` (`-fsanitize=address,undefined -fno-sanitize-recover=all`),
+  fixed signed left-shift UB caught by UBSan in `runtime/arc.c` (`tag_int`
+  helper using `uint64_t`), and added `.github/workflows/ci.yml` covering Linux
+  (epoll) and macOS (kqueue). Documented in
+  [build-pipeline](/concepts/build-pipeline.md) and
+  [getting-started](/concepts/getting-started.md).
 - 2026-11-16 (autoagent/1): Bounded compare + fd/pipe contract fixes (TDD) —
   `val_compare_raw` (`runtime/arc.c`) had no cycle/depth limit: comparing two
   cyclic records recursed until the C stack crashed (red probe:

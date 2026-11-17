@@ -1,5 +1,18 @@
 val module_name_of_file : string -> string
 
+val compile_source :
+  ?include_dirs:string list ->
+  ?output_prefix:string ->
+  ?emit_cmi:bool ->
+  ?nopervasives:bool ->
+  ?nostdlib:bool ->
+  ?emit_entry:bool ->
+  filename:string ->
+  modname:string ->
+  string ->
+  (string, string) result
+(** Compile an in-memory OCaml source string to QBE IL text. *)
+
 val compile_file :
   ?include_dirs:string list ->
   ?output_prefix:string ->

@@ -287,11 +287,16 @@ static int64_t g_reuse_hits = 0;
 int64_t ocamlcc_exn_slot = 0;
 static int64_t g_next_oo_id = 0;
 
+static inline int64_t tag_int(int64_t n)
+{
+    return (int64_t)(((uint64_t)n << 1) | 1ull);
+}
+
 int64_t caml_fresh_oo_id(int64_t ignored)
 {
     (void)ignored;
     int64_t id = g_next_oo_id++;
-    return (id << 1) | 1;
+    return tag_int(id);
 }
 
 static inline int is_heap_ptr(int64_t val)
@@ -665,13 +670,13 @@ int64_t arc_reuse_hits(void)
 int64_t ocamlcc_arc_live(int64_t unit)
 {
     (void)unit;
-    return (g_live_objects << 1) | 1;
+    return tag_int(g_live_objects);
 }
 
 int64_t ocamlcc_arc_reuse(int64_t unit)
 {
     (void)unit;
-    return (g_reuse_hits << 1) | 1;
+    return tag_int(g_reuse_hits);
 }
 
 typedef void (*CcChildFn)(int64_t val, void *ctx);
@@ -923,7 +928,7 @@ int64_t ocamlcc_arc_collect(int64_t unit)
     ccvec_free(&work);
     ccvec_free(&black_work);
     ccvec_free(&dead);
-    return (reclaimed << 1) | 1;
+    return tag_int(reclaimed);
 }
 
 int64_t ocamlcc_weak_create(int64_t len_val)
@@ -956,7 +961,7 @@ int64_t ocamlcc_weak_create(int64_t len_val)
 int64_t ocamlcc_weak_length(int64_t weak_val)
 {
     ArcWeakArray *w = (ArcWeakArray *)(uintptr_t)weak_val;
-    return ((int64_t)w->len << 1) | 1;
+    return tag_int((int64_t)w->len);
 }
 
 int64_t ocamlcc_weak_set(int64_t weak_val, int64_t idx_val, int64_t opt_val)
@@ -1176,7 +1181,7 @@ int64_t caml_bytes_equal(int64_t a, int64_t b)
 int64_t caml_string_compare(int64_t a, int64_t b)
 {
     int c = bytes_compare_raw(a, b);
-    return ((int64_t)c << 1) | 1;
+    return tag_int((int64_t)c);
 }
 
 int64_t caml_bytes_compare(int64_t a, int64_t b)
@@ -1283,7 +1288,7 @@ static int val_compare(int64_t a, int64_t b, int total)
 int64_t caml_compare(int64_t a, int64_t b)
 {
     int c = val_compare(a, b, 1);
-    return ((int64_t)c << 1) | 1;
+    return tag_int((int64_t)c);
 }
 
 int64_t caml_equal(int64_t a, int64_t b)
@@ -1391,7 +1396,7 @@ int64_t caml_hash(int64_t count_val, int64_t limit_val,
     h ^= h >> 13;
     h *= 0xc2b2ae35u;
     h ^= h >> 16;
-    return ((int64_t)(h & 0x3fffffffu) << 1) | 1;
+    return tag_int((int64_t)(h & 0x3fffffffu));
 }
 
 /* ------------------------------------------------------------------ */

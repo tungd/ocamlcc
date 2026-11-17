@@ -65,3 +65,54 @@
  (deps ccalls_test.actual ccalls_test.expected)
  (action
   (diff ccalls_test.expected ccalls_test.actual)))
+
+(executable
+ (name frontend_negative_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps frontend_negative_test.exe frontend_negative_test.expected)
+ (action
+  (with-stdout-to frontend_negative_test.actual
+   (run ./frontend_negative_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps frontend_negative_test.actual frontend_negative_test.expected)
+ (action
+  (diff frontend_negative_test.expected frontend_negative_test.actual)))
+
+(executable
+ (name anf_negative_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps anf_negative_test.exe anf_negative_test.expected)
+ (action
+  (with-stdout-to anf_negative_test.actual
+   (run ./anf_negative_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps anf_negative_test.actual anf_negative_test.expected)
+ (action
+  (diff anf_negative_test.expected anf_negative_test.actual)))
+
+(executable
+ (name pipeline_ir_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps pipeline_ir_test.exe pipeline_ir_test.expected)
+ (action
+  (with-stdout-to pipeline_ir_test.actual
+   (run ./pipeline_ir_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps pipeline_ir_test.actual pipeline_ir_test.expected)
+ (action
+  (diff pipeline_ir_test.expected pipeline_ir_test.actual)))

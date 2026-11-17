@@ -29,6 +29,9 @@ Requirements: OCaml 5.3+ (opam switch), dune >= 3.0, a C compiler, and
 ```sh
 ninja            # vendored QBE + ARC/fiber runtime + ocamlcc compiler + examples
 ninja smoke      # compile examples/hello.ml end-to-end and run it
+ninja test       # run all checked end-to-end examples
+ninja asan_test  # run runtime-heavy examples under ASan + UBSan
+dune runtest     # run unit, IR, and negative diagnostic tests in test/
 ninja -t clean   # remove build/
 ```
 

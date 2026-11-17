@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 5.3.x
+      - run: opam install -y dune
+      - name: Build and run dune unit tests
+        run: opam exec -- dune runtest
+      - name: Build and run ninja end-to-end tests (epoll)
+        run: opam exec -- ninja test
+      - name: Run ASan + UBSan runtime tests
+        run: opam exec -- ninja asan_test
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ninja
+        run: brew install ninja
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 5.3.x
+      - run: opam install -y dune
+      - name: Build and run dune unit tests
+        run: opam exec -- dune runtest
+      - name: Build and run ninja end-to-end tests (kqueue)
+        run: opam exec -- ninja test
+      - name: Run ASan + UBSan runtime tests
+        run: opam exec -- ninja asan_test
