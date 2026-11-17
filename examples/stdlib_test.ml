@@ -1,4 +1,9 @@
 external arc_live : unit -> int = "ocamlcc_arc_live"
+external arc_collect : unit -> int = "ocamlcc_arc_collect"
+external ocamlcc_pipe : unit -> int * int = "ocamlcc_pipe"
+external ocamlcc_fd_read : int -> bytes -> int -> int -> int = "ocamlcc_fd_read"
+
+type cyc = { mutable cnxt : cyc option; cv : int }
 
 let run () =
   (* Option *)
@@ -220,6 +225,38 @@ let run () =
   in
   Printf.printf "invarg=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n"
     i1 i2 i3 i4 i5 i6 i7 i8 i9 i10 i11 i12 i13 i14 i15 i16 i_un i_blit i_fill;
+
+  (* compare contract: cyclic structures raise Invalid_argument instead of
+     recursing forever; exception constructor ids compare structurally
+     (name string + OID), not by raw heap address. *)
+  let cmp_cyc =
+    let probe () =
+      let mk_cyc () =
+        let c = { cnxt = None; cv = 1 } in
+        c.cnxt <- Some c;
+        c
+      in
+      let c1 = mk_cyc () in
+      let c2 = mk_cyc () in
+      match (ignore (compare c1 c2); 0) with
+      | _ -> 0
+      | exception Invalid_argument _ -> 1
+    in
+    let r = probe () in
+    (* the cyclic probes' garbage needs the opt-in collector *)
+    let _freed = arc_collect () in
+    r
+  in
+  let cmp_exn =
+    if compare (Invalid_argument "x") (Failure "x") > 0 then 1 else 0
+  in
+  let fd_oob =
+    let rfd, _wfd = ocamlcc_pipe () in
+    let b = Bytes.create 4 in
+    try (ignore (ocamlcc_fd_read rfd b 2 8); 0)
+    with Invalid_argument _ -> 1
+  in
+  Printf.printf "cmp=%d,%d,%d\n" cmp_cyc cmp_exn fd_oob;
   Printf.printf "fmt=%d,%i,%d,%u,%u,%x,%X,%o\n"
     min_int min_int max_int (-1) min_int (-1) (-1) (-1);
   Printf.printf "fmtpad=[%05d],[%+05d],[% 05d],[%#05x],[%.3d],[%.3d],[%5.3d],[%-5.3d],[%*.*d],[%0*d]\n"

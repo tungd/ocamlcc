@@ -372,6 +372,7 @@ void *arc_alloc(uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
 }
 
 extern const void *ocamlcc_global_Invalid_argument;
+extern const void *ocamlcc_global_Sys_error;
 
 #define DEFINE_IMMORTAL_STR(sym, lit)                                          \
     static const struct __attribute__((aligned(16))) {                         \
@@ -407,6 +408,16 @@ void ocamlcc_raise_invalid_arg_oob(void)
 void ocamlcc_fiber_raise_invalid(void)
 {
     raise_invalid_arg_imm(g_inv_arg_fiber_str.str);
+}
+
+DEFINE_IMMORTAL_STR(g_sys_err_pipe_str, "pipe failed");
+
+void ocamlcc_raise_sys_error_pipe(void)
+{
+    int64_t *blk = (int64_t *)arc_alloc(0u, 2u, 16u);
+    blk[0] = (int64_t)(uintptr_t)ocamlcc_global_Sys_error;
+    blk[1] = (int64_t)(uintptr_t)g_sys_err_pipe_str.str;
+    ocamlcc_exn_slot = (int64_t)(uintptr_t)blk;
 }
 
 void *arc_alloc_bytes(uint64_t len)
@@ -1177,9 +1188,23 @@ int64_t caml_bytes_compare(int64_t a, int64_t b)
 /* Polymorphic structural comparison & bounded hashing                 */
 /* ------------------------------------------------------------------ */
 
-static int val_compare_raw(int64_t a, int64_t b, int total)
+/* C recursion depth is bounded so cyclic records cannot smash the C
+ * stack; the shared step budget bounds tail-iterated cycles (e.g. cyclic
+ * lists), which would otherwise spin forever without growing the stack. */
+#define COMPARE_MAX_DEPTH 50000
+#define COMPARE_MAX_STEPS 100000000LL
+
+DEFINE_IMMORTAL_STR(g_inv_arg_cyc_str, "compare: cyclic structure");
+
+static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
+                           int64_t *steps)
 {
     for (;;) {
+        if (*steps <= 0) {
+            raise_invalid_arg_imm(g_inv_arg_cyc_str.str);
+            return 1;
+        }
+        (*steps)--;
         if (a == b)
             return 0;
         int ia = (a & 1) != 0;
@@ -1210,21 +1235,28 @@ static int val_compare_raw(int64_t a, int64_t b, int total)
             return 1;
         }
 
-        if (ta == (uint16_t)ARC_TAG_ARRAY || ta < 245u) {
-            uint32_t fa = (ta == (uint16_t)ARC_TAG_ARRAY)
+        /* Exception-constructor id blocks (tag 248: field 0 = name string,
+         * field 1 = OID) compare structurally, like real OCaml, instead of
+         * by raw heap address. */
+        if (ta == (uint16_t)ARC_TAG_ARRAY || ta == 248u || ta < 245u) {
+            uint32_t fa = (ta == (uint16_t)ARC_TAG_ARRAY || ta == 248u)
                               ? (ha->byte_size / 8u)
                               : (uint32_t)ha->scan_fields;
-            uint32_t fb = (tb == (uint16_t)ARC_TAG_ARRAY)
+            uint32_t fb = (tb == (uint16_t)ARC_TAG_ARRAY || tb == 248u)
                               ? (hb->byte_size / 8u)
                               : (uint32_t)hb->scan_fields;
             if (fa != fb)
                 return (fa < fb) ? -1 : 1;
             if (fa == 0u)
                 return 0;
+            if (depth >= COMPARE_MAX_DEPTH) {
+                raise_invalid_arg_imm(g_inv_arg_cyc_str.str);
+                return 1;
+            }
             const int64_t *pa = (const int64_t *)(uintptr_t)a;
             const int64_t *pb = (const int64_t *)(uintptr_t)b;
             for (uint32_t i = 0; i + 1u < fa; i++) {
-                int c = val_compare_raw(pa[i], pb[i], total);
+                int c = val_compare_raw(pa[i], pb[i], total, depth + 1, steps);
                 if (c != 0)
                     return c;
             }
@@ -1242,40 +1274,46 @@ static int val_compare_raw(int64_t a, int64_t b, int total)
     }
 }
 
+static int val_compare(int64_t a, int64_t b, int total)
+{
+    int64_t steps = COMPARE_MAX_STEPS;
+    return val_compare_raw(a, b, total, 0, &steps);
+}
+
 int64_t caml_compare(int64_t a, int64_t b)
 {
-    int c = val_compare_raw(a, b, 1);
+    int c = val_compare(a, b, 1);
     return ((int64_t)c << 1) | 1;
 }
 
 int64_t caml_equal(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b, 0) == 0) ? 3 : 1;
+    return (val_compare(a, b, 0) == 0) ? 3 : 1;
 }
 
 int64_t caml_notequal(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b, 0) != 0) ? 3 : 1;
+    return (val_compare(a, b, 0) != 0) ? 3 : 1;
 }
 
 int64_t caml_lessthan(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b, 1) < 0) ? 3 : 1;
+    return (val_compare(a, b, 1) < 0) ? 3 : 1;
 }
 
 int64_t caml_lessequal(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b, 1) <= 0) ? 3 : 1;
+    return (val_compare(a, b, 1) <= 0) ? 3 : 1;
 }
 
 int64_t caml_greaterthan(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b, 1) > 0) ? 3 : 1;
+    return (val_compare(a, b, 1) > 0) ? 3 : 1;
 }
 
 int64_t caml_greaterequal(int64_t a, int64_t b)
 {
-    return (val_compare_raw(a, b, 1) >= 0) ? 3 : 1;
+    return (val_compare(a, b, 1) >= 0) ? 3 : 1;
 }
 
 static uint32_t hash_mix32(uint32_t h, uint32_t d)

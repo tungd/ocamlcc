@@ -41,10 +41,10 @@ let table =
     ("ocamlcc_print_endline_val", abi 1 false false);
     ("ocamlcc_prerr_string_val", abi 1 false false);
     ("ocamlcc_exit_val", abi 1 false false);
-    (* fd / pipe (error-returning, non-raising) *)
-    ("ocamlcc_pipe", abi 0 false false);
-    ("ocamlcc_fd_read", abi 4 false false);
-    ("ocamlcc_fd_write", abi 4 false false);
+    (* fd / pipe *)
+    ("ocamlcc_pipe", abi 0 true false);
+    ("ocamlcc_fd_read", abi 4 true false);
+    ("ocamlcc_fd_write", abi 4 true false);
     ("ocamlcc_fd_close", abi 1 false false);
     (* weak arrays *)
     ("ocamlcc_weak_create", abi 1 true false);

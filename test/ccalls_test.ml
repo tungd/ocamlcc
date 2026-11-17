@@ -34,9 +34,9 @@ let stdlib_abis =
     ("ocamlcc_print_endline_val", 1, false, false);
     ("ocamlcc_prerr_string_val", 1, false, false);
     ("ocamlcc_exit_val", 1, false, false);
-    ("ocamlcc_pipe", 0, false, false);
-    ("ocamlcc_fd_read", 4, false, false);
-    ("ocamlcc_fd_write", 4, false, false);
+    ("ocamlcc_pipe", 0, true, false);
+    ("ocamlcc_fd_read", 4, true, false);
+    ("ocamlcc_fd_write", 4, true, false);
     ("ocamlcc_fd_close", 1, false, false);
     ("ocamlcc_weak_create", 1, true, false);
     ("ocamlcc_weak_length", 1, false, false);

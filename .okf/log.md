@@ -1,5 +1,25 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): Bounded compare + fd/pipe contract fixes (TDD) —
+  `val_compare_raw` (`runtime/arc.c`) had no cycle/depth limit: comparing two
+  cyclic records recursed until the C stack crashed (red probe:
+  `stdlib_test` died with SIGSEGV before printing the `cmp=` line), and
+  tail-cyclic lists spun forever. Structural comparison is now bounded by a
+  C-recursion depth limit (50 000) plus a shared step budget (10⁸), raising
+  `Invalid_argument "compare: cyclic structure"`. Exception-constructor id
+  blocks (tag 248: field 0 = name string, field 1 = OID) now compare
+  structurally (name string, then OID) like real OCaml instead of by raw
+  heap address. `ocamlcc_fd_read`/`ocamlcc_fd_write` raised
+  `pal_abort` on out-of-bounds buffers and `ocamlcc_pipe` aborted on
+  pipe creation failure (the `caml_blit_*`/`caml_fill_bytes` half of this
+  item was already fixed in the C-call ABI registry slice): they now raise
+  `Invalid_argument "index out of bounds"` / `Sys_error "pipe failed"` and
+  are registered `raises = true` in `lib/ccalls.ml` so `TryWith` unwinds
+  correctly (OS errors on read/write keep returning the negative count for
+  the Fiber I/O poller). Green probes in `examples/stdlib_test.ml`
+  (`cmp=1,1,1`: cyclic compare caught, deterministic exn-id ordering, fd
+  bounds caught) with `arc_delta=0`. `19/19` examples pass. Documented in
+  [perceus-arc](/concepts/perceus-arc.md).
 - 2026-11-16 (autoagent/1): Weak-drop O(1) registry + fiber cycle collection
   (TDD) — two cycle-collector/weak fixes in `runtime/arc.c`:
   (1) **Weak-target registry** — whenever `g_weak_count > 0`, every dying

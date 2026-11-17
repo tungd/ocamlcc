@@ -638,8 +638,10 @@ int64_t ocamlcc_pipe(int64_t unit)
 {
     (void)unit;
     int fds[2];
-    if (pal_pipe(fds) < 0)
-        pal_abort();
+    if (pal_pipe(fds) < 0) {
+        ocamlcc_raise_sys_error_pipe();
+        return 1;
+    }
     int64_t *blk = (int64_t *)arc_alloc(0u, 0u, 16u);
     blk[0] = tag_int((int64_t)fds[0]);
     blk[1] = tag_int((int64_t)fds[1]);
@@ -653,8 +655,11 @@ int64_t ocamlcc_fd_read(int64_t fd_val, int64_t bytes_val,
     int64_t off = off_val >> 1;
     int64_t len = len_val >> 1;
     ArcHeader *hdr = (ArcHeader *)(uintptr_t)bytes_val - 1;
-    if (off < 0 || len < 0 || (uint64_t)off + (uint64_t)len > (uint64_t)hdr->reserved)
-        pal_abort();
+    if (off < 0 || len < 0 ||
+        (uint64_t)off + (uint64_t)len > (uint64_t)hdr->reserved) {
+        ocamlcc_raise_invalid_arg_oob();
+        return 1;
+    }
     char *buf = (char *)(uintptr_t)bytes_val + off;
     return tag_int(pal_fd_read(fd, buf, (size_t)len));
 }
@@ -666,8 +671,11 @@ int64_t ocamlcc_fd_write(int64_t fd_val, int64_t bytes_val,
     int64_t off = off_val >> 1;
     int64_t len = len_val >> 1;
     ArcHeader *hdr = (ArcHeader *)(uintptr_t)bytes_val - 1;
-    if (off < 0 || len < 0 || (uint64_t)off + (uint64_t)len > (uint64_t)hdr->reserved)
-        pal_abort();
+    if (off < 0 || len < 0 ||
+        (uint64_t)off + (uint64_t)len > (uint64_t)hdr->reserved) {
+        ocamlcc_raise_invalid_arg_oob();
+        return 1;
+    }
     const char *buf = (const char *)(uintptr_t)bytes_val + off;
     return tag_int(pal_fd_write(fd, buf, (size_t)len));
 }
