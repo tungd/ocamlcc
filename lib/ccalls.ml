@@ -177,6 +177,11 @@ let table =
     ("caml_ml_close_channel", abi 1 true false);
     ("caml_ml_set_binary_mode", abi 2 true false);
     ("caml_ml_set_channel_name", abi 2 false false);
+    ("caml_output_value_to_bytes", abi 2 true false);
+    ("caml_output_value_to_string", abi 2 true false);
+    ("caml_output_value_to_buffer", abi 5 true false);
+    ("caml_input_value_from_bytes", abi 2 true false);
+    ("caml_marshal_data_size", abi 2 true false);
     ("caml_output_value", abi 3 true false);
     ("caml_input_value", abi 1 true false);
     (* obj / string hash / hex float / atomic contended *)

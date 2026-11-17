@@ -2318,8 +2318,8 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
 
         const ArcHeader *ha = (const ArcHeader *)(uintptr_t)a - 1;
         const ArcHeader *hb = (const ArcHeader *)(uintptr_t)b - 1;
-        uint16_t ta = ha->tag;
-        uint16_t tb = hb->tag;
+        uint16_t ta = ha->tag == ARC_TAG_ARRAY ? 0 : ha->tag;
+        uint16_t tb = hb->tag == ARC_TAG_ARRAY ? 0 : hb->tag;
         if (ta != tb)
             return (ta < tb) ? -1 : 1;
 
@@ -2354,12 +2354,8 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
          * field 1 = OID) compare structurally, like real OCaml, instead of
          * by raw heap address. */
         if (ta == (uint16_t)ARC_TAG_ARRAY || ta == 248u || ta < 245u) {
-            uint32_t fa = (ta == (uint16_t)ARC_TAG_ARRAY || ta == 248u)
-                              ? (ha->byte_size / 8u)
-                              : (uint32_t)ha->scan_fields;
-            uint32_t fb = (tb == (uint16_t)ARC_TAG_ARRAY || tb == 248u)
-                              ? (hb->byte_size / 8u)
-                              : (uint32_t)hb->scan_fields;
+            uint32_t fa = ha->byte_size / 8u;
+            uint32_t fb = hb->byte_size / 8u;
             if (fa != fb)
                 return (fa < fb) ? -1 : 1;
             if (fa == 0u)
@@ -2583,7 +2579,7 @@ int64_t caml_hash(int64_t count_val, int64_t limit_val,
                 }
             } else if (tag == (uint16_t)ARC_TAG_ARRAY || tag < 245u) {
                 uint32_t wosize = hdr->byte_size / 8u;
-                h = hash_mix32(h, (wosize << 10) | (uint32_t)tag);
+                h = hash_mix32(h, (wosize << 10) | (uint32_t)(tag == ARC_TAG_ARRAY ? 0 : tag));
                 const int64_t *fields = (const int64_t *)(uintptr_t)v;
                 for (uint32_t i = 0u; i < wosize; i++) {
                     if (wr >= sz)
@@ -3691,22 +3687,6 @@ int64_t caml_ml_set_channel_name(int64_t chan_val, int64_t name_val)
 {
     (void)chan_val;
     (void)name_val;
-    return 1;
-}
-
-int64_t caml_output_value(int64_t chan_val, int64_t v, int64_t flags)
-{
-    (void)chan_val;
-    (void)v;
-    (void)flags;
-    raise_failure_cstr("output_value: unsupported", 25u);
-    return 1;
-}
-
-int64_t caml_input_value(int64_t chan_val)
-{
-    (void)chan_val;
-    raise_failure_cstr("input_value: unsupported", 24u);
     return 1;
 }
 
@@ -4999,3 +4979,5 @@ int64_t caml_get_continuation_callstack(int64_t cont, int64_t n)
     (void)cont; (void)n;
     return caml_get_current_callstack(tag_int(0));
 }
+
+#include "marshal.inc"

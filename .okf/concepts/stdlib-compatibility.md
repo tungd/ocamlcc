@@ -42,7 +42,16 @@ retain a backing descriptor, which releases its PAL allocation after the last
 view dies. The core API supports all element kinds, both layouts, checked
 indexing, fill/blit, and shared sub/slice/reshape/layout views. These helpers
 live in `runtime/bigarray.inc`, included by `arc.c`.
-The native stdlib build now compiles 71/72 modules; Marshal remains unsupported.
+The native stdlib build now compiles all 72/72 modules. Marshal supports
+uncompressed standard streams for integers, ordinary blocks, strings, floats,
+float arrays, and boxed integers, via strings/bytes/buffers/channels. The
+encoder uses an external pointer table and an explicit work stack. The decoder
+registers objects before their fields, retains each backpatch, and owns partial
+nodes until successful return or cleanup. Arrays and ordinary tag-zero blocks
+share OCaml structural comparison/hash semantics despite their ARC tags.
+Functional values raise `Invalid_argument`, including when `Closures` is set;
+there is no portable native code-pointer registry. Bigarray Marshal payloads
+are the next interoperability slice.
 The initial public API regression verifies int/float64 access, dimensions,
 bounds, and C/Fortran indexing. Follow-up regressions verify view lifetime,
 structural comparison/hash equality, and complex record representation.
