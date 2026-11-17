@@ -34,6 +34,15 @@ Phase 3 implements Wren-style stackful coroutines (§4.4 of the design doc)[^des
 - **Deterministic cleanup** — when a suspended or abandoned fiber's refcount hits zero, `fiber_destroy` in `runtime/fiber.c` walks its shadow-stack slots and releases each live value and open reuse token before freeing the C stack and shadow buffer.
 - **Event poller** — non-blocking I/O suspends the active fiber and parks file descriptors or millisecond timers with `pal_poll_wait` (backed by `kqueue` on Darwin/BSD and `epoll` on Linux in `runtime/pal.c`).
 
+## Scheduling-mode guards
+
+The two fiber kinds have disjoint operation sets, and crossing them corrupted the runtime (leaked stranded fibers, use-after-free of queued coroutines):
+
+- **Coroutines** (`Fiber.create` / `resume` / `suspend`): `Fiber.suspend` transfers to the resumer.
+- **Scheduler fibers** (`Fiber.spawn` / `yield` / `sleep_ms` / `fd_wait_*` / `await` / `run_all`): scheduler-queued, `+1` retained by the queue.
+
+Cross-calls now raise `Invalid_argument` (`ocamlcc_fiber_raise_invalid` in `runtime/arc.c`, checked by the `CheckExn` emitted because these Ccalls are registered `raises = true` in the [C-call ABI registry](/concepts/perceus-arc.md)): `Fiber.suspend` inside a spawned fiber (it would strand the fiber off every scheduler queue, leaking it and its payload), `Fiber.yield`/`sleep_ms`/`fd_wait_*` inside a coroutine (they would queue the coroutine without scheduler ownership and return the resume payload to the resumer), and `Fiber.await` across modes in either direction (waiter handoff routes through the scheduler ready queue, which is only sound between scheduler fibers; awaiting a live coroutine from main can never complete). Regression probes in `examples/fiber_test.ml` (`cross=1,1,1,1,1`, all `delta=0`).
+
 No OCaml 5 multicore domains and no multi-shot effects: one cooperative scheduler, explicit single-shot coroutines (`Stdlib.Fiber`, design doc §2 non-goals).
 
 # Status

@@ -282,6 +282,8 @@ DEFINE_IMMORTAL_STR(g_inv_arg_fn_str, "compare: functional value");
 DEFINE_IMMORTAL_STR(g_inv_arg_bytes_str, "Bytes.create");
 DEFINE_IMMORTAL_STR(g_inv_arg_array_str, "Array.make");
 DEFINE_IMMORTAL_STR(g_inv_arg_weak_str, "Weak.create");
+DEFINE_IMMORTAL_STR(g_inv_arg_fiber_str,
+                    "Fiber: coroutine/scheduler cross-call");
 
 static void raise_invalid_arg_imm(const char *imm_str)
 {
@@ -294,6 +296,11 @@ static void raise_invalid_arg_imm(const char *imm_str)
 void ocamlcc_raise_invalid_arg_oob(void)
 {
     raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+}
+
+void ocamlcc_fiber_raise_invalid(void)
+{
+    raise_invalid_arg_imm(g_inv_arg_fiber_str.str);
 }
 
 void *arc_alloc_bytes(uint64_t len)

@@ -115,7 +115,7 @@ build $builddir/rt/libocamlrt.a: ar $builddir/rt/pal.o $builddir/rt/pal_ctx.o $b
 
 # ------------------------------------------------------------- ocamlcc ----
 
-build $builddir/bin/ocamlcc: dune_ocamlcc bin/main.ml lib/qbe_il.ml lib/qbe_il.mli lib/frontend.ml lib/frontend.mli lib/builtins.ml lib/builtins.mli lib/anf.ml lib/anf.mli lib/arc_pass.ml lib/arc_pass.mli lib/codegen.ml lib/codegen.mli lib/pipeline.ml lib/pipeline.mli lib/dune bin/dune dune-project
+build $builddir/bin/ocamlcc: dune_ocamlcc bin/main.ml lib/qbe_il.ml lib/qbe_il.mli lib/frontend.ml lib/frontend.mli lib/builtins.ml lib/builtins.mli lib/anf.ml lib/anf.mli lib/arc_pass.ml lib/arc_pass.mli lib/ccalls.ml lib/ccalls.mli lib/codegen.ml lib/codegen.mli lib/pipeline.ml lib/pipeline.mli lib/dune bin/dune dune-project
 
 # ------------------------------------------------------------- stdlib -----
 

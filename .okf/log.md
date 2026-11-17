@@ -1,5 +1,29 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): Fiber cross-call guard fix (TDD) — the two
+  fiber kinds (coroutines from `Fiber.create` vs scheduler fibers from
+  `Fiber.spawn`) had unguarded cross-calling: `Fiber.suspend` inside a
+  spawned fiber stranded the fiber off every scheduler queue (leaking the
+  fiber and its payload — `sched_step` sees `state != FIBER_DONE` and never
+  releases it), and `Fiber.yield`/`sleep_ms`/`fd_wait_*` inside a coroutine
+  queued it on `g_sched` without scheduler ownership while returning the
+  resume payload to the resumer, leaving a dangling queue entry if the
+  coroutine handle was dropped (UAF). Added mode guards in
+  `runtime/fiber.c` using the stored `is_scheduled` flag plus a new
+  `ocamlcc_fiber_raise_invalid` (`runtime/arc.c`/`arc.h`) raising
+  `Invalid_argument` for: suspend-in-scheduler-fiber, yield/sleep/fd-wait in
+  coroutines, and `Fiber.await` across modes in either direction (waiter
+  handoff is only sound between scheduler fibers; awaiting a live coroutine
+  from main can never complete). The guards' Ccalls are registered
+  `raises = true` in `lib/ccalls.ml` so the ARC pass wraps them in
+  `CheckExn` and the raise is catchable. Red run (pristine runtime):
+  `cross=-0,0,0,-0,0` with `delta=1` (leaked fiber) and the raise escaping
+  the coroutine as `pending_exn`; green: `cross=1,1,1,1,1`, all `delta=0`.
+  Also fixed `build.ninja`'s `dune_ocamlcc` rule missing `lib/ccalls.ml`
+  from its dependency list — registry-only edits left a stale compiler
+  binary (found because the guards appeared to not catch until the
+  compiler was rebuilt). `19/19` examples passing. Documented in
+  [wren-fibers](/concepts/wren-fibers.md).
 - 2026-11-16 (autoagent/1): C-call ABI registry fix (TDD) — the ARC pass
   classified `Ccall`s via hardcoded name lists (`ce_may_raise_fn`,
   `is_yielding_ccall`) that had drifted (`Weak.get_copy` was missed once),

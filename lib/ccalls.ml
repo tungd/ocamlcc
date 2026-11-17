@@ -57,11 +57,11 @@ let table =
     ("ocamlcc_fiber_create", abi 1 false false);
     ("ocamlcc_fiber_spawn", abi 1 false false);
     ("ocamlcc_fiber_is_done", abi 1 false false);
-    ("ocamlcc_fiber_yield", abi 1 false true);
-    ("ocamlcc_fiber_suspend", abi 1 false true);
-    ("ocamlcc_fiber_sleep_ms", abi 1 false true);
-    ("ocamlcc_fiber_fd_wait_read", abi 1 false true);
-    ("ocamlcc_fiber_fd_wait_write", abi 1 false true);
+    ("ocamlcc_fiber_yield", abi 1 true true);
+    ("ocamlcc_fiber_suspend", abi 1 true true);
+    ("ocamlcc_fiber_sleep_ms", abi 1 true true);
+    ("ocamlcc_fiber_fd_wait_read", abi 1 true true);
+    ("ocamlcc_fiber_fd_wait_write", abi 1 true true);
     ("ocamlcc_fiber_resume", abi 2 true true);
     ("ocamlcc_fiber_await", abi 1 true true);
     ("ocamlcc_fiber_run_all", abi 0 false true);

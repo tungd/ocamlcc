@@ -420,7 +420,14 @@ int64_t ocamlcc_fiber_resume(int64_t fiber_val, int64_t send_val)
 int64_t ocamlcc_fiber_suspend(int64_t send_val)
 {
     Fiber *cur = g_current_fiber;
-    if (cur == &g_main_fiber || cur->caller == NULL)
+    if (cur == &g_main_fiber || cur->is_scheduled) {
+        /* Fiber.suspend is a coroutine operation; inside a spawned fiber it
+           would strand the fiber off every scheduler queue (leaking it and
+           its payload). */
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
+    if (cur->caller == NULL)
         pal_abort();
 
     arc_retain_val(send_val);
@@ -470,8 +477,13 @@ int64_t ocamlcc_fiber_yield(int64_t unit)
         }
         return 1;
     }
-    if (cur->caller == NULL)
-        pal_abort();
+    if (cur->caller == NULL || !cur->is_scheduled) {
+        /* Fiber.yield is a scheduler operation; inside a coroutine it would
+           queue the coroutine without scheduler ownership and return the
+           resume payload to the resumer. */
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
     sched_push_ready(cur);
     Fiber *target = cur->caller;
     cur->caller = NULL;
@@ -506,8 +518,10 @@ int64_t ocamlcc_fiber_sleep_ms(int64_t ms_val)
         return 1;
     }
 
-    if (cur->caller == NULL)
-        pal_abort();
+    if (cur->caller == NULL || !cur->is_scheduled) {
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
     cur->wake_ns = deadline;
     cur->state = FIBER_WAITING_TIMER;
     cur->sched_next = g_sched.timer_head;
@@ -536,8 +550,10 @@ static int64_t fiber_fd_wait(int64_t fd_val, uint32_t events)
         return 1;
     }
 
-    if (cur->caller == NULL)
-        pal_abort();
+    if (cur->caller == NULL || !cur->is_scheduled) {
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
     cur->wait_fd = fd;
     cur->wait_events = events;
     cur->state = FIBER_WAITING_IO;
@@ -571,11 +587,23 @@ int64_t ocamlcc_fiber_await(int64_t fiber_val)
 
     if (f->state != FIBER_DONE) {
         if (cur == &g_main_fiber) {
+            if (!f->is_scheduled) {
+                /* Awaiting a live coroutine from the main fiber can never
+                   complete: only Fiber.resume drives coroutines. */
+                ocamlcc_fiber_raise_invalid();
+                return 1;
+            }
             while (f->state != FIBER_DONE) {
                 if (!sched_step())
                     pal_abort();
             }
         } else {
+            if (!cur->is_scheduled || !f->is_scheduled) {
+                /* Waiter handoff routes through the scheduler ready queue,
+                   which is only sound between scheduler fibers. */
+                ocamlcc_fiber_raise_invalid();
+                return 1;
+            }
             if (cur->caller == NULL)
                 pal_abort();
             cur->state = FIBER_WAITING_IO;

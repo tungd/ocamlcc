@@ -47,11 +47,11 @@ let stdlib_abis =
     ("ocamlcc_fiber_create", 1, false, false);
     ("ocamlcc_fiber_spawn", 1, false, false);
     ("ocamlcc_fiber_is_done", 1, false, false);
-    ("ocamlcc_fiber_yield", 1, false, true);
-    ("ocamlcc_fiber_suspend", 1, false, true);
-    ("ocamlcc_fiber_sleep_ms", 1, false, true);
-    ("ocamlcc_fiber_fd_wait_read", 1, false, true);
-    ("ocamlcc_fiber_fd_wait_write", 1, false, true);
+    ("ocamlcc_fiber_yield", 1, true, true);
+    ("ocamlcc_fiber_suspend", 1, true, true);
+    ("ocamlcc_fiber_sleep_ms", 1, true, true);
+    ("ocamlcc_fiber_fd_wait_read", 1, true, true);
+    ("ocamlcc_fiber_fd_wait_write", 1, true, true);
     ("ocamlcc_fiber_resume", 2, true, true);
     ("ocamlcc_fiber_await", 1, true, true);
     ("ocamlcc_fiber_run_all", 0, false, true);

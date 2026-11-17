@@ -116,6 +116,36 @@ let test_coop_scheduler () =
   Fiber.run_all ();
   (Buffer.contents log, s1 + s2)
 
+let test_cross_calls () =
+  (* Fiber.yield inside a coroutine must raise, not queue the coroutine on
+     the scheduler without ownership and return the resume payload. *)
+  let c =
+    Fiber.create (fun () ->
+        try (Fiber.yield (); 0) with Invalid_argument _ -> 1)
+  in
+  let yield_in_coro = Fiber.resume c () in
+  let d1 = if Fiber.is_done c then 1 else 0 in
+  (* Fiber.suspend inside a spawned fiber must raise, not strand the fiber
+     off every scheduler queue (leaking it and its payload). *)
+  let f =
+    Fiber.spawn (fun () ->
+        try (Fiber.suspend 0; 0) with Invalid_argument _ -> 1)
+  in
+  let suspend_in_sched = Fiber.await f in
+  (* Fiber.await inside a coroutine must raise: waiter handoff is only
+     sound between scheduler fibers. *)
+  let c2 =
+    Fiber.create (fun () ->
+        let child = Fiber.spawn (fun () -> 42) in
+        try (Fiber.await child; 0) with Invalid_argument _ -> 1)
+  in
+  let await_in_coro = Fiber.resume c2 () in
+  let d2 = if Fiber.is_done c2 then 1 else 0 in
+  (* Drain the child spawn fiber queued by the await probe so the live
+     object count returns to baseline. *)
+  Fiber.run_all ();
+  (yield_in_coro, d1, suspend_in_sched, await_in_coro, d2)
+
 let () =
   let live0 = arc_live () in
   let a1, a2, d1, b1, b2, d2, c1, c2, d3 = test_coro () in
@@ -125,6 +155,7 @@ let () =
   let v1, caught1, caught2 = test_exns () in
   let delta3 = arc_live () - live0 in
   let trace, total = test_coop_scheduler () in
+  let x1, x2, x3, x4, x5 = test_cross_calls () in
   Printf.printf "coro=%d,%d,%d,%d,%d,%d,%d,%d,%d delta=%d\n" a1 a2 d1 b1 b2 d2
     c1 c2 d3 delta1;
   Printf.printf "abandon=%d susp=%d open=%d after=%d delta=%d\n" y alive_susp
@@ -132,4 +163,5 @@ let () =
   Printf.printf "exns=%d,%d,%d delta=%d\n" v1 caught1 caught2 delta3;
   Printf.printf "sched=[%s] sum=%d " trace total;
   let delta4 = arc_live () - live0 in
-  Printf.printf "delta=%d\n" delta4
+  Printf.printf "delta=%d\n" delta4;
+  Printf.printf "cross=%d,%d,%d,%d,%d\n" x1 x2 x3 x4 x5
