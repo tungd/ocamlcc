@@ -31,8 +31,11 @@ against that archive and our ARC runtime. It does not use the host OCaml runtime
 The Lexing overlay implements both DFA engines in OCaml, including signed
 16-bit transitions, unsigned memory-code offsets, captures, backtracking,
 refill continuations, EOF, and positions. `tests/stdlib/lexing` uses real
-ocamllex output and passes against both stock OCaml and ocamlcc. The native
-stdlib build now compiles 69/72 modules; Parsing, Bigarray, and Marshal remain
+ocamllex output and passes against both stock OCaml and ocamlcc. The Parsing overlay interprets ocamlyacc action/goto tables in OCaml and
+preserves token translation, stack growth, reductions, error recovery,
+semantic-action suspension, positions, and trace state. A generated-parser
+fixture checks reductions, deep nesting, parse errors, and subsequent parses.
+The native stdlib build now compiles 70/72 modules; Bigarray and Marshal remain
 unsupported. A pre-existing report records 53/77 standalone
 tests passing; this count is historical until the runner is executed again.
 Compilation success alone does not establish behavioral compatibility.

@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-17 (codex/1): Add pure OCaml Parsing LR engine and tracing. Generated ocamlyacc parser failed to link before the overlay and passes afterward, including stock differential checks, stack growth, parse errors, and restoration. Stdlib module build: 70/72.
+
 - 2026-11-17 (codex/1): Add pure OCaml Lexing DFA and capture engines. Real ocamllex fixtures failed to link before the overlay and pass afterward, including stock differential checks. Stdlib module build: 69/72.
 
 - 2026-11-17 (codex/1): Record the existing upstream stdlib import and ARC primitive integration as the foundation for Lexing, Parsing, Bigarray, and Marshal. Existing core checks pass (`ninja -j1 test`, `dune runtest -j1`); compatibility report is historical.
