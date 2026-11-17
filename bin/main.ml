@@ -233,7 +233,7 @@ let bindgen opts =
       | Error msg ->
           prerr_endline ("ocamlcc: error: " ^ msg);
           2
-      | Ok { header; shim_c } ->
+      | Ok { header; shim_c; _ } ->
           write_out opts.out header;
           (let shim_path =
              match (opts.shim_out, opts.out) with

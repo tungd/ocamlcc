@@ -883,6 +883,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
               in
               let asm_files = ref [] in
               let shim_c_files = ref [] in
+              let shim_exported_syms = ref [] in
               let has_mli modname =
                 List.exists (fun (s : build_step) -> s.modname = modname) mli_steps
               in
@@ -952,43 +953,93 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                             let hdr_dir = Filename.dirname hdr_path in
                             mkdir_p hdr_dir;
                             let multi = List.length mli_steps > 1 in
-                            List.fold_left
-                              (fun acc (s : build_step) ->
-                                match acc with
-                                | Error _ as e -> e
-                                | Ok () -> (
-                                    let out_h =
-                                      if multi then
-                                        Filename.concat hdr_dir
+                            let hdr_base = Filename.basename hdr_path in
+                            let hdr_stem = Filename.remove_extension hdr_base in
+                            let hdr_ext =
+                              let e = Filename.extension hdr_base in
+                              if e = "" then ".h" else e
+                            in
+                            let sub_headers = ref [] in
+                            let res =
+                              List.fold_left
+                                (fun acc (s : build_step) ->
+                                  match acc with
+                                  | Error _ as e -> e
+                                  | Ok () -> (
+                                      let out_h =
+                                        if multi then
+                                          let name =
+                                            Printf.sprintf "%s_%s%s" hdr_stem
+                                              (String.uncapitalize_ascii
+                                                 s.modname)
+                                              hdr_ext
+                                          in
+                                          sub_headers := name :: !sub_headers;
+                                          Filename.concat hdr_dir name
+                                        else hdr_path
+                                      in
+                                      let out_c =
+                                        Filename.concat work_dir
                                           (String.uncapitalize_ascii s.modname
-                                         ^ ".h")
-                                      else hdr_path
-                                    in
-                                    let out_c =
-                                      Filename.concat work_dir
-                                        (String.uncapitalize_ascii s.modname
-                                       ^ "_shim.c")
-                                    in
-                                    match
-                                      C_bindgen.generate_file
-                                        ~include_dirs:inc_dirs
-                                        ~nopervasives:cfg.nopervasives
-                                        ~nostdlib:eff_nostdlib
-                                        ~header_include:(Filename.basename out_h)
-                                        ~filename:s.path ~modname:s.modname ()
-                                    with
-                                    | Error msg -> Error msg
-                                    | Ok { header; shim_c } ->
-                                        write_file out_h header;
-                                        write_file out_c shim_c;
-                                        shim_c_files := out_c :: !shim_c_files;
-                                        Ok ()))
-                              (Ok ()) mli_steps)
+                                         ^ "_shim.c")
+                                      in
+                                      match
+                                        C_bindgen.generate_file
+                                          ~include_dirs:inc_dirs
+                                          ~nopervasives:cfg.nopervasives
+                                          ~nostdlib:eff_nostdlib
+                                          ~header_include:
+                                            (Filename.basename out_h)
+                                          ~filename:s.path ~modname:s.modname ()
+                                      with
+                                      | Error msg -> Error msg
+                                      | Ok { header; shim_c; exported_symbols } ->
+                                          write_file out_h header;
+                                          write_file out_c shim_c;
+                                          shim_c_files := out_c :: !shim_c_files;
+                                          shim_exported_syms :=
+                                            List.rev_append exported_symbols
+                                              !shim_exported_syms;
+                                          Ok ()))
+                                (Ok ()) mli_steps
+                            in
+                            (match res with
+                            | Ok () when multi ->
+                                let sanitize_guard s =
+                                  String.map
+                                    (fun c ->
+                                      if
+                                        (c >= 'A' && c <= 'Z')
+                                        || (c >= '0' && c <= '9')
+                                      then c
+                                      else if c >= 'a' && c <= 'z' then
+                                        Char.uppercase_ascii c
+                                      else '_')
+                                    s
+                                in
+                                let guard =
+                                  "OCAMLCC_UMBRELLA_"
+                                  ^ sanitize_guard hdr_base
+                                in
+                                let includes =
+                                  List.rev !sub_headers
+                                  |> List.map (Printf.sprintf "#include \"%s\"")
+                                  |> String.concat "\n"
+                                in
+                                let umbrella =
+                                  Printf.sprintf
+                                    "#ifndef %s\n#define %s\n\n%s\n\n#endif /* %s */\n"
+                                    guard guard includes guard
+                                in
+                                write_file hdr_path umbrella
+                            | _ -> ());
+                            res)
                   in
                   match bindgen_res with
                   | Error _ as e -> e
                   | Ok () -> (
                       let shim_c_files = List.rev !shim_c_files in
+                      let shim_exported_syms = List.rev !shim_exported_syms in
                       let out_path =
                         match cfg.output with
                         | Some o -> o
@@ -1188,19 +1239,186 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                                   | Error _ as e -> e
                                                   | Ok () -> Ok out_path)
                                               | Kind_shared -> (
-                                                  let link_args =
-                                                    tc.cc_base_args
-                                                    @ [ "-shared" ] @ all_objs
-                                                    @ [ "-lm" ]
-                                                    @ cfg.extra_ldflags
-                                                    @ [ "-o"; out_path ]
+                                                  let internal_objs =
+                                                    stdlib_objs @ rt_objs
                                                   in
-                                                  match
-                                                    run_cmd ~verbose tc.cc_prog
-                                                      link_args
-                                                  with
+                                                  let vis_res =
+                                                    if
+                                                      cfg.emit_header <> None
+                                                      && c_inputs = []
+                                                      && obj_inputs = []
+                                                      && shim_exported_syms <> []
+                                                    then
+                                                      match target.os with
+                                                      | Darwin | Ios | Ios_sim ->
+                                                          let exp_f =
+                                                            Filename.concat
+                                                              work_dir
+                                                              "exports.txt"
+                                                          in
+                                                          let body =
+                                                            shim_exported_syms
+                                                            |> List.sort_uniq
+                                                                 String.compare
+                                                            |> List.map
+                                                                 (fun s ->
+                                                                   "_" ^ s)
+                                                            |> String.concat
+                                                                 "\n"
+                                                          in
+                                                          write_file exp_f
+                                                            (body ^ "\n");
+                                                          Ok
+                                                            ( all_objs,
+                                                              [ "-Wl,-exported_symbols_list,"
+                                                                ^ exp_f ] )
+                                                      | Linux | Android ->
+                                                          let ver_f =
+                                                            Filename.concat
+                                                              work_dir
+                                                              "exports.ver"
+                                                          in
+                                                          let syms =
+                                                            shim_exported_syms
+                                                            |> List.sort_uniq
+                                                                 String.compare
+                                                            |> List.map
+                                                                 (fun s ->
+                                                                   "    " ^ s
+                                                                   ^ ";")
+                                                            |> String.concat
+                                                                 "\n"
+                                                          in
+                                                          write_file ver_f
+                                                            ("{\n  global:\n"
+                                                           ^ syms
+                                                           ^ "\n  local:\n    *;\n};\n");
+                                                          Ok
+                                                            ( all_objs,
+                                                              [ "-Wl,--version-script="
+                                                                ^ ver_f ] )
+                                                      | Windows ->
+                                                          Ok (all_objs, [])
+                                                    else
+                                                      match target.os with
+                                                      | Darwin | Ios | Ios_sim ->
+                                                          if internal_objs = []
+                                                          then Ok (all_objs, [])
+                                                          else (
+                                                            match
+                                                              capture_cmd "nm"
+                                                                ("-gUj"
+                                                                :: internal_objs
+                                                                )
+                                                            with
+                                                            | Error _ as e -> e
+                                                            | Ok raw_syms ->
+                                                                let syms =
+                                                                  String
+                                                                  .split_on_char
+                                                                    '\n'
+                                                                    raw_syms
+                                                                  |> List
+                                                                     .filter_map
+                                                                       (fun l ->
+                                                                         let s =
+                                                                           String
+                                                                           .trim
+                                                                             l
+                                                                         in
+                                                                         if
+                                                                           s
+                                                                           = ""
+                                                                           || s.[
+                                                                              String
+                                                                              .length
+                                                                                s
+                                                                              - 1]
+                                                                              = ':'
+                                                                         then
+                                                                           None
+                                                                         else
+                                                                           Some
+                                                                             s)
+                                                                  |> List
+                                                                     .sort_uniq
+                                                                       String
+                                                                       .compare
+                                                                in
+                                                                if syms = []
+                                                                then
+                                                                  Ok
+                                                                    ( all_objs,
+                                                                      [] )
+                                                                else
+                                                                  let unexp_f =
+                                                                    Filename
+                                                                    .concat
+                                                                      work_dir
+                                                                      "unexports.txt"
+                                                                  in
+                                                                  write_file
+                                                                    unexp_f
+                                                                    (String
+                                                                     .concat
+                                                                       "\n" syms
+                                                                    ^ "\n");
+                                                                  Ok
+                                                                    ( all_objs,
+                                                                      [ "-Wl,-unexported_symbols_list,"
+                                                                        ^ unexp_f
+                                                                      ] ))
+                                                      | Linux | Android ->
+                                                          if internal_objs = []
+                                                          then Ok (all_objs, [])
+                                                          else
+                                                            let internal_a =
+                                                              Filename.concat
+                                                                work_dir
+                                                                "libocaml_internal.a"
+                                                            in
+                                                            if
+                                                              Sys.file_exists
+                                                                internal_a
+                                                            then
+                                                              Sys.remove
+                                                                internal_a;
+                                                            (match
+                                                               run_cmd ~verbose
+                                                                 tc.ar_prog
+                                                                 ([ "rcs";
+                                                                    internal_a ]
+                                                                 @ internal_objs
+                                                                 )
+                                                             with
+                                                            | Error _ as e -> e
+                                                            | Ok () ->
+                                                                Ok
+                                                                  ( user_objs
+                                                                    @ [ internal_a
+                                                                      ],
+                                                                    [ "-Wl,--exclude-libs,ALL"
+                                                                    ] ))
+                                                      | Windows ->
+                                                          Ok (all_objs, [])
+                                                  in
+                                                  match vis_res with
                                                   | Error _ as e -> e
-                                                  | Ok () -> Ok out_path)
+                                                  | Ok (link_objs, vis_flags) -> (
+                                                      let link_args =
+                                                        tc.cc_base_args
+                                                        @ [ "-shared" ]
+                                                        @ link_objs @ vis_flags
+                                                        @ [ "-lm" ]
+                                                        @ cfg.extra_ldflags
+                                                        @ [ "-o"; out_path ]
+                                                      in
+                                                      match
+                                                        run_cmd ~verbose
+                                                          tc.cc_prog link_args
+                                                      with
+                                                      | Error _ as e -> e
+                                                      | Ok () -> Ok out_path))
                                               | Kind_exe -> (
                                                   let link_args =
                                                     tc.cc_base_args @ all_objs
@@ -1240,12 +1458,19 @@ and build (cfg : config) : (string, string) result =
         let out_xcf =
           Option.value ~default:"Out.xcframework" cfg.output
         in
-        let hdr_dir = Filename.concat work_dir "headers" in
-        mkdir_p hdr_dir;
-        let hdr_path =
+        let has_mli_input =
+          List.exists (fun f -> Filename.check_suffix f ".mli") cfg.inputs
+        in
+        let eff_emit_header =
           match cfg.emit_header with
-          | Some h -> h
-          | None -> Filename.concat hdr_dir "ocamlcc_ffi.h"
+          | Some _ as h -> h
+          | None ->
+              if has_mli_input then begin
+                let hdr_dir = Filename.concat work_dir "headers" in
+                mkdir_p hdr_dir;
+                Some (Filename.concat hdr_dir "ocamlcc_ffi.h")
+              end
+              else None
         in
         let dev_a = Filename.concat work_dir "ios_arm64.a" in
         let sim_a = Filename.concat work_dir "ios_sim_arm64.a" in
@@ -1264,13 +1489,13 @@ and build (cfg : config) : (string, string) result =
         let cfg_dev =
           { cfg with
             output = Some dev_a;
-            emit_header = Some hdr_path;
+            emit_header = eff_emit_header;
             kind = Some Kind_static }
         in
         let cfg_sim =
           { cfg with
             output = Some sim_a;
-            emit_header = Some hdr_path;
+            emit_header = eff_emit_header;
             kind = Some Kind_static }
         in
         match
@@ -1286,13 +1511,22 @@ and build (cfg : config) : (string, string) result =
             | Error _ as e -> e
             | Ok _ -> (
                 if Sys.file_exists out_xcf then rm_rf out_xcf;
-                match
-                  run_cmd ~verbose:cfg.verbose "xcodebuild"
-                    [ "-create-xcframework"; "-library"; dev_a; "-headers";
-                      Filename.dirname hdr_path; "-library"; sim_a;
-                      "-headers"; Filename.dirname hdr_path; "-output";
-                      out_xcf ]
-                with
+                let hdr_args =
+                  match eff_emit_header with
+                  | Some h -> [ "-headers"; Filename.dirname h ]
+                  | None -> []
+                in
+                let xcb_args =
+                  [ "-create-xcframework"; "-library"; dev_a ]
+                  @ hdr_args
+                  @ [ "-library"; sim_a ]
+                  @ hdr_args
+                  @ [ "-output"; out_xcf ]
+                in
+                let stdout_file =
+                  if cfg.verbose then None else Some "/dev/null"
+                in
+                match run_cmd ~verbose:cfg.verbose ?stdout_file "xcodebuild" xcb_args with
                 | Error _ as e -> e
                 | Ok () -> Ok out_xcf))
       else

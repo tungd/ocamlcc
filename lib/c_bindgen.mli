@@ -1,6 +1,7 @@
 type generated = {
   header : string; (* C99 .h header *)
   shim_c : string; (* C99 FFI shim implementation *)
+  exported_symbols : string list; (* public C API symbols declared in header *)
 }
 
 val generate :

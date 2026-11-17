@@ -3,6 +3,7 @@
 type generated = {
   header : string;
   shim_c : string;
+  exported_symbols : string list;
 }
 
 type record_field = {
@@ -754,7 +755,20 @@ let generate ?(include_dirs = []) ?(nopervasives = false) ?(nostdlib = false)
           let shim_c =
             emit_shim ~modname ~mod_prefix ~header_include:hdr_inc decls vals
           in
-          Ok { header; shim_c }
+          let decl_syms =
+            List.concat_map
+              (function
+                | CT_opaque cname -> [ cname ^ "_retain"; cname ^ "_release" ]
+                | CT_record r when needs_free (CT_record r) ->
+                    [ r.ri_cname ^ "_free" ]
+                | _ -> [])
+              decls
+          in
+          let val_syms =
+            List.map (fun ev -> mod_prefix ^ "_" ^ ev.ev_name) vals
+          in
+          let exported_symbols = (mod_prefix ^ "_init") :: (decl_syms @ val_syms) in
+          Ok { header; shim_c; exported_symbols }
         with Failure msg -> Error msg)
   with
   | Error { msg } -> Error msg

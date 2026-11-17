@@ -62,11 +62,17 @@ or `_build` by ninja itself.
 When compiling user projects without `build.ninja`, `ocamlcc build`
 (`lib/driver.ml`) orchestrates the full pipeline in one command:
 topological dependency ordering over `.mli`/`.ml` units via compiler-libs
-`Depend`, automatic resolution of `ocamlcc`'s own `stdlib.cmi` (from
+`Depend` (allowing `.mli`-mediated mutual `.ml` dependencies via Tarjan SCC
+condensation), automatic resolution of `ocamlcc`'s own `stdlib.cmi` (from
 prebuilt `build/stdlib` on host or compiled from `stdlib/` into `work_dir/stdlib`
 before user units, passing `--nostdlib` internally unless `--nostdlib` was
 explicitly requested), `.cmi`/`.ssa` compilation, optional `.mli -> .h` +
-`_shim.c` generation (`lib/c_bindgen.ml`), `qbe -t <target>` assembly, target
-C/xcrun/NDK toolchain compilation of `runtime/` and `stdlib/` (excluding
-`main_entry.o` for library targets), and executable, shared, static, or
-`.xcframework` packaging.
+`_shim.c` generation (`lib/c_bindgen.ml`, emitting an umbrella header +
+`<stem>_<mod>.h` sub-headers when multiple `.mli`s are passed to `--emit-header`),
+`qbe -t <target>` assembly, target C/xcrun/NDK toolchain compilation of
+`runtime/` and `stdlib/` (excluding `main_entry.o` for library targets and
+hiding internal runtime/stdlib symbols on `--shared` via Darwin
+`-exported_symbols_list` / `-unexported_symbols_list` or ELF `--version-script`
+/ `--exclude-libs,ALL`), and executable, shared, static, or `.xcframework`
+packaging (only emitting/attaching `-headers` for `ios-xcframework` when a `.mli`
+is present or `--emit-header` is explicitly passed).

@@ -8,3 +8,6 @@ static library no main: PASS
 cross-target asm emission: PASS
 mt bindgen mutator gate: PASS
 mli-mediated mutual deps: PASS
+two shared libs no collision: PASS
+multi-mli emit-header naming: PASS
+ios-xcframework without mli: PASS

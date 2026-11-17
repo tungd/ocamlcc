@@ -1,5 +1,22 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Fix multi-`.mli` `--emit-header`, `.mli`-less `ios-xcframework`, and `Kind_shared` symbol visibility (TDD) —
+  added `exported_symbols` to `C_bindgen.generated` (`lib/c_bindgen.mli`,
+  `lib/c_bindgen.ml`, `bin/main.ml`, `test/c_bindgen_test.ml`); updated
+  `lib/driver.ml` so multi-`.mli` `--emit-header <dir>/<stem>.h` writes
+  `<stem>_<mod>.h` sub-headers plus an umbrella `<stem>.h` header,
+  `ios-xcframework` skips forced `--emit-header` / `-headers` when no `.mli`
+  input is present (and suppresses noisy `xcodebuild` stdout unless `-v`),
+  and `Kind_shared` hides internal runtime/stdlib symbols (via
+  `-Wl,-exported_symbols_list` / `-Wl,-unexported_symbols_list` on Darwin
+  and `-Wl,--version-script` / `ar` + `-Wl,--exclude-libs,ALL` on
+  Linux/Android) so two separate OCaml shared libraries link into one host
+  without symbol collision. Added `two shared libs no collision`, `multi-mli
+  emit-header naming`, and `ios-xcframework without mli` tests and updated
+  `shared library + header` in `test/driver_test.ml`. `dune runtest` (14/14),
+  `ninja test` (25/25), and `ninja asan_test` (15/15) pass. Updated
+  [build-pipeline](/concepts/build-pipeline.md).
+
 - 2026-11-17 (autoagent/1): Support `.mli`-mediated mutual `.ml` dependencies in `Driver.plan_build_order` (TDD) —
   separated compile-time `.cmi` edges (`hard_deps`) from `.ml -> .ml`
   ordering hints (`soft_deps`) in `lib/driver.ml` (`plan_build_order`), using

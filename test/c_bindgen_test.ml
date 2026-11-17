@@ -114,7 +114,7 @@ let () =
   | Error msg ->
       Printf.printf "generate sample: FAIL %s\n" msg;
       incr failures
-  | Ok { C_bindgen.header; shim_c } ->
+  | Ok { C_bindgen.header; shim_c; _ } ->
       if
         not
           (check_contains "header signatures" header
@@ -204,7 +204,7 @@ val make_bag : string option -> string * int -> (int * int) option -> bag
   | Error msg ->
       Printf.printf "nested typedef order: FAIL %s\n" msg;
       incr failures
-  | Ok { C_bindgen.header; shim_c } ->
+  | Ok { C_bindgen.header; shim_c; _ } ->
       let before a b =
         match (find_substr ~sub:a header, find_substr ~sub:b header) with
         | Some pa, Some pb -> pa < pb
