@@ -1,13 +1,15 @@
 (* Pseudo-random number generator overlay: identical LXM algorithm to upstream
-   OCaml 5.5.0 Random, backed by [int64 array] instead of Bigarray.Array1. *)
+   OCaml 5.5.0 Random, using the upstream Bigarray.Array1 state representation. *)
+
+open Bigarray
 
 external random_seed: unit -> int array = "caml_sys_random_seed"
 
 module State = struct
-  type t = int64 array
+  type t = (int64, int64_elt, c_layout) Array1.t
 
   let next (st : t) : int64 =
-    let a = st.(0) and s = st.(1) and q0 = st.(2) and q1 = st.(3) in
+    let a = st.{0} and s = st.{1} and q0 = st.{2} and q1 = st.{3} in
     let z = Int64.add s q0 in
     let z =
       Int64.mul
@@ -20,7 +22,7 @@ module State = struct
         0xdaba0b6eb09322e3L
     in
     let z = Int64.logxor z (Int64.shift_right_logical z 32) in
-    st.(1) <- Int64.add (Int64.mul s 0xd1342543de82ef95L) a;
+    st.{1} <- Int64.add (Int64.mul s 0xd1342543de82ef95L) a;
     let q1 = Int64.logxor q1 q0 in
     let q0 =
       Int64.logor (Int64.shift_left q0 24) (Int64.shift_right_logical q0 40)
@@ -29,17 +31,17 @@ module State = struct
     let q1 =
       Int64.logor (Int64.shift_left q1 37) (Int64.shift_right_logical q1 27)
     in
-    st.(2) <- q0;
-    st.(3) <- q1;
+    st.{2} <- q0;
+    st.{3} <- q1;
     z
 
-  let create () : t = Array.make 4 0L
+  let create () : t = Array1.create int64 c_layout 4
 
   let set (s : t) i1 i2 i3 i4 =
-    s.(0) <- Int64.logor i1 1L;
-    s.(1) <- i2;
-    s.(2) <- (if i3 <> 0L then i3 else 1L);
-    s.(3) <- (if i4 <> 0L then i4 else 2L)
+    s.{0} <- Int64.logor i1 1L;
+    s.{1} <- i2;
+    s.{2} <- (if i3 <> 0L then i3 else 1L);
+    s.{3} <- (if i4 <> 0L then i4 else 2L)
 
   let mk i1 i2 i3 i4 =
     let s = create () in
@@ -55,7 +57,7 @@ module State = struct
     let buf = Bytes.create (preflen + (4 * 8)) in
     Bytes.blit_string prefix 0 buf 0 preflen;
     for i = 0 to 3 do
-      Bytes.set_int64_le buf (preflen + (i * 8)) s.(i)
+      Bytes.set_int64_le buf (preflen + (i * 8)) s.{i}
     done;
     Bytes.unsafe_to_string buf
 
@@ -74,7 +76,7 @@ module State = struct
     let i4 = String.get_int64_le buf (preflen + (3 * 8)) in
     mk i1 i2 i3 i4
 
-  let assign (dst : t) (src : t) = Array.blit src 0 dst 0 4
+  let assign (dst : t) (src : t) = Array1.blit src dst
 
   let copy s =
     let s' = create () in

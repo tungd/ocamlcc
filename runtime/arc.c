@@ -66,6 +66,9 @@ typedef struct ArcBigarray {
     int64_t dims[16];
 } ArcBigarray;
 
+static int ba_compare(const ArcBigarray *, const ArcBigarray *, int);
+static uint32_t ba_hash(const ArcBigarray *);
+
 typedef struct ArcSpinLock {
     _Atomic uint32_t locked;
 } ArcSpinLock;
@@ -2331,6 +2334,8 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
         if (ta == (uint16_t)ARC_TAG_CUSTOM) {
             if (ha->reserved != hb->reserved)
                 return (ha->reserved < hb->reserved) ? -1 : 1;
+            if (ha->reserved == ARC_CUSTOM_BIGARRAY)
+                return ba_compare((void *)(uintptr_t)a, (void *)(uintptr_t)b, total);
             int64_t va = unbox_custom_i64(a);
             int64_t vb = unbox_custom_i64(b);
             return (va < vb) ? -1 : (va > vb ? 1 : 0);
@@ -2568,6 +2573,9 @@ int64_t caml_hash(int64_t count_val, int64_t limit_val,
                 if (hdr->reserved == ARC_CUSTOM_INT32 ||
                     hdr->reserved == ARC_CUSTOM_NATIVEINT) {
                     h = hash_mix_intnat(h, cv);
+                    num--;
+                } else if (hdr->reserved == ARC_CUSTOM_BIGARRAY) {
+                    h = hash_mix_intnat(h, ba_hash((void *)(uintptr_t)v));
                     num--;
                 } else if (hdr->reserved == ARC_CUSTOM_INT64) {
                     h = hash_mix_int64(h, cv);
@@ -4554,21 +4562,29 @@ int64_t caml_ml_is_buffered(int64_t chan_val)
     return ch->unbuffered ? 1 : 3;
 }
 
+#include "bigarray.inc"
+
+static int ba_channel_range(int64_t ba, int64_t offset, int64_t length)
+{
+    ArcBigarray *a = (void *)(uintptr_t)ba;
+    int64_t o = offset >> 1, n = length >> 1;
+    if (a->ndims != 1 || a->layout || ba_sizes[a->kind] != 1 || o < 0 || n < 0
+        || (uint64_t)o > ba_count(a) || (uint64_t)n > ba_count(a) - o) {
+        ba_invalid("Bigarray channel I/O: invalid range"); return 0;
+    }
+    return 1;
+}
 int64_t caml_ml_input_bigarray(int64_t c, int64_t ba, int64_t o, int64_t l)
 {
-    (void)c; (void)ba; (void)o; (void)l;
-    raise_failure_cstr("input_bigarray: unsupported", 27u);
-    return 1;
+    if (!ba_channel_range(ba, o, l)) return 1;
+    return caml_ml_input(c, (int64_t)(uintptr_t)((ArcBigarray *)(uintptr_t)ba)->data, o, l);
 }
-
 int64_t caml_ml_output_bigarray(int64_t c, int64_t ba, int64_t o, int64_t l)
 {
-    (void)c; (void)ba; (void)o; (void)l;
-    raise_failure_cstr("output_bigarray: unsupported", 28u);
-    return 1;
+    if (!ba_channel_range(ba, o, l)) return 1;
+    return caml_ml_output(c, (int64_t)(uintptr_t)((ArcBigarray *)(uintptr_t)ba)->data, o, l);
 }
 
-#include "bigarray.inc"
 
 /* ---- Lazy & Obj primitives ---- */
 

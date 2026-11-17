@@ -9,4 +9,17 @@ let () =
   f.{2,3} <- 1.25;
   assert (f.{2,3} = 1.25);
   assert (try ignore f.{0,1}; false with Invalid_argument _ -> true);
+  let view =
+    let owner = Array1.of_array int c_layout [|1; 2; 3; 4|] in
+    let sub = Array1.sub owner 1 2 in
+    sub.{0} <- 20;
+    assert (owner.{1} = 20);
+    sub
+  in
+  assert (view.{1} = 3);
+  let other = Array1.of_array int c_layout [|20; 3|] in
+  assert (compare view other = 0 && view = other);
+  assert (Hashtbl.hash view = Hashtbl.hash other);
+  let z = Array1.of_array complex64 c_layout [|{Complex.re = 1.5; im = -2.0}|] in
+  assert (z.{0}.Complex.re = 1.5 && z.{0}.Complex.im = -2.0);
   print_endline "bigarray: typed access, layouts, dimensions, bounds"

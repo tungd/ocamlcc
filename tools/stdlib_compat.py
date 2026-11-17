@@ -14,6 +14,9 @@ vendor/ocaml-stdlib/testsuite/tests/lib-* tests against the compiled stdlib.
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import json
+import time
 import os
 import platform
 import re
@@ -21,7 +24,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
@@ -77,20 +80,39 @@ def extract_first_error(stderr_text: str | None, stdout_text: str | None) -> str
     return lines[0][:220]
 
 
+COMMAND_LOG_DIR: Path | None = None
+COMMAND_NUMBER = 0
+
 def run_cmd(
     cmd: list[str],
     cwd: Path | None = None,
     timeout: int = 30,
     merge_stderr: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
-        timeout=timeout,
-    )
+    global COMMAND_NUMBER
+    COMMAND_NUMBER += 1
+    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            cmd, cwd=str(cwd) if cwd else None, text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        def decoded(value):
+            return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+        result = subprocess.CompletedProcess(cmd, 124, decoded(error.stdout),
+                                            decoded(error.stderr) + f"\ntimeout ({timeout}s)")
+    if COMMAND_LOG_DIR is not None:
+        COMMAND_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        path = COMMAND_LOG_DIR / f"{COMMAND_NUMBER:05d}.log"
+        path.write_text("$ " + shlex.join(cmd) + "\n" + (result.stdout or "") +
+                        (result.stderr or ""), encoding="utf-8")
+        with (COMMAND_LOG_DIR / "commands.jsonl").open("a") as receipt:
+            receipt.write(json.dumps(dict(command=cmd, cwd=str(cwd), exit_code=result.returncode,
+                                          seconds=time.monotonic()-started, log=str(path))) + "\n")
+    return result
 
 
 @dataclass
@@ -387,6 +409,7 @@ def run_lib_tests(
     stdlib_out: Path,
     rt_dir: Path,
     test_build_dir: Path,
+    patterns: list[str] | None = None,
 ) -> list[TestResult]:
     if test_build_dir.exists():
         shutil.rmtree(test_build_dir)
@@ -412,6 +435,8 @@ def run_lib_tests(
             continue
         for ml_file in sorted(suite_dir.glob("*.ml")):
             rel_name = f"{suite_dir.name}/{ml_file.name}"
+            if patterns and not any(fnmatch.fnmatchcase(rel_name, pattern) for pattern in patterns):
+                continue
             src = ml_file.read_text(encoding="utf-8", errors="replace")
             hdr = parse_ocamltest_header(src)
             if hdr is None:
@@ -454,6 +479,9 @@ def run_lib_tests(
             asm = test_build_dir / f"{stem}.s"
             obj = test_build_dir / f"{stem}.o"
             exe = test_build_dir / stem
+
+            run_dir = test_build_dir / (stem + "-work")
+            shutil.copytree(suite_dir, run_dir)
 
             p_ml = run_cmd(
                 [
@@ -506,7 +534,7 @@ def run_lib_tests(
                 continue
 
             try:
-                p_run = run_cmd([str(exe), *run_args], cwd=suite_dir, timeout=10, merge_stderr=True)
+                p_run = run_cmd([str(exe), *run_args], cwd=run_dir, timeout=30, merge_stderr=True)
             except subprocess.TimeoutExpired:
                 results.append(TestResult(rel_name, "FAIL_RUN", "timeout (10s)"))
                 continue
@@ -595,6 +623,8 @@ def write_report(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build & test upstream OCaml stdlib with overlay")
+    parser.add_argument("--tests", nargs="+", help="Select upstream paths by glob, e.g. 'lib-bigarray/*'")
+    parser.add_argument("--reuse-stdlib", action="store_true", help="Reuse the last stdlib build and module receipt")
     parser.add_argument("--skip-tests", action="store_true", help="Only compile stdlib modules")
     parser.add_argument("--report", default="build/stdlib_compat/report.md")
     args = parser.parse_args()
@@ -617,15 +647,22 @@ def main() -> int:
             print(f"error: missing required path {req} (run ninja first?)", file=sys.stderr)
             return 2
 
+    global COMMAND_LOG_DIR
+    COMMAND_LOG_DIR = compat_dir / "logs" / time.strftime("%Y%m%d-%H%M%S")
     qbe_target = detect_host_qbe_target()
-    mod_results, _ = compile_stdlib(
-        root, ocamlcc, qbe, qbe_target, vendor_src, overlay_dir, out_dir, work_src
-    )
+    module_receipt = compat_dir / "modules.json"
+    if args.reuse_stdlib:
+        mod_results = [ModuleResult(**result) for result in json.loads(module_receipt.read_text())]
+    else:
+        mod_results, _ = compile_stdlib(
+            root, ocamlcc, qbe, qbe_target, vendor_src, overlay_dir, out_dir, work_src
+        )
+        module_receipt.write_text(json.dumps([asdict(result) for result in mod_results], indent=2))
 
     test_results: list[TestResult] | None = None
     if not args.skip_tests and testsuite_dir.exists():
         test_results = run_lib_tests(
-            testsuite_dir, ocamlcc, qbe, qbe_target, out_dir, rt_dir, test_build_dir
+            testsuite_dir, ocamlcc, qbe, qbe_target, out_dir, rt_dir, test_build_dir, args.tests
         )
 
     write_report(report_path, mod_results, test_results)
@@ -640,6 +677,11 @@ def main() -> int:
         passed = sum(1 for tr in test_results if tr.status == "PASS")
         print(f"Upstream lib-* standalone tests: {passed}/{len(runnable)} passed (total scanned: {len(test_results)})")
     print(f"Report written to {report_path}")
+    print(f"Command logs: {COMMAND_LOG_DIR}")
+    (report_path.with_suffix(".json")).write_text(json.dumps(dict(
+        modules=[asdict(result) for result in mod_results],
+        tests=[asdict(result) for result in test_results] if test_results is not None else None,
+        command_logs=str(COMMAND_LOG_DIR)), indent=2))
     return 0
 
 

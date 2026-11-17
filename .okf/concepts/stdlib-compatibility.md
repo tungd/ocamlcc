@@ -44,7 +44,22 @@ indexing, fill/blit, and shared sub/slice/reshape/layout views. These helpers
 live in `runtime/bigarray.inc`, included by `arc.c`.
 The native stdlib build now compiles 71/72 modules; Marshal remains unsupported.
 The initial public API regression verifies int/float64 access, dimensions,
-bounds, and C/Fortran indexing; further upstream coverage is recorded below. A pre-existing report records 53/77 standalone
+bounds, and C/Fortran indexing. Follow-up regressions verify view lifetime,
+structural comparison/hash equality, and complex record representation.
+Bigarray channel I/O works through existing buffered channel helpers.
+Random retains the upstream Bigarray state representation and the pure OCaml
+LXM algorithm, so upstream testvectors can inspect the state directly.
+
+Eight of nine selected upstream standalone tests pass: change_layout, fftba,
+pr5115, reshape_overflow, specialized, weak_bigarray, channel bigarrays, and
+Random testvectors. The large Bigarray test reaches its Marshal I/O section
+with no preceding Bad result lines and fails at the unsupported Marshal stub.
+The C-stub subarray test is explicitly skipped by the native runner.
+
+Use `--tests 'lib-bigarray/*'` to select upstream tests and `--reuse-stdlib`
+after a build. The runner saves module/test JSON receipts and complete per-command
+logs, including timeouts. Tests run in isolated copied working directories so
+test-created files do not modify the vendor tree. A pre-existing report records 53/77 standalone
 tests passing; this count is historical until the runner is executed again.
 Compilation success alone does not establish behavioral compatibility.
 

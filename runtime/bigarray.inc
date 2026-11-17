@@ -91,7 +91,7 @@ static int64_t ba_read(const ArcBigarray *a, size_t offset)
     case 8: return tag_int(*(const int64_t *)p);
     case 9: return ocamlcc_alloc_custom(ARC_CUSTOM_NATIVEINT, *(const uint64_t *)p);
     case 10: case 11: {
-        double *z = arc_alloc(0, 0, 16);
+        double *z = arc_alloc(ARC_TAG_FLOAT_ARRAY, 0, 16);
         z[0] = a->kind == 10 ? ((const float *)p)[0] : ((const double *)p)[0];
         z[1] = a->kind == 10 ? ((const float *)p)[1] : ((const double *)p)[1];
         return (int64_t)(uintptr_t)z;
@@ -202,7 +202,7 @@ int64_t caml_ba_reshape(int64_t v, int64_t dimensions)
     for (int i = 0; i < n; i++) {
         dims[i] = idx[i] >> 1;
         if (dims[i] < 0 || (dims[i] && count > SIZE_MAX / (uint64_t)dims[i]))
-            return ba_invalid("Bigarray.reshape: size overflow");
+            return ba_invalid("Bigarray.reshape: size mismatch");
         count *= (size_t)dims[i];
     }
     if (count != ba_count(a)) return ba_invalid("Bigarray.reshape: size mismatch");
@@ -229,4 +229,63 @@ int64_t caml_ba_blit(int64_t src, int64_t dst)
         for (size_t i = 0; i < n; i++) d->data[i] = s->data[i];
     }
     return 1;
+}
+
+static int ba_compare(const ArcBigarray *a, const ArcBigarray *b, int total)
+{
+    int fa = a->kind + 256 * a->layout, fb = b->kind + 256 * b->layout;
+    if (fa != fb) return fb < fa ? -1 : 1;
+    if (a->ndims != b->ndims) return b->ndims < a->ndims ? -1 : 1;
+    for (int i = 0; i < a->ndims; i++) if (a->dims[i] != b->dims[i])
+        return a->dims[i] < b->dims[i] ? -1 : 1;
+    size_t count = ba_count(a);
+#define BA_CMP(T) do { const T *x = (const void *)a->data, *y = (const void *)b->data; \
+    for (size_t i = 0; i < count; i++) { if (x[i] < y[i]) return -1; if (x[i] > y[i]) return 1; } return 0; } while (0)
+#define BA_FCMP(T) do { const T *x = (const void *)a->data, *y = (const void *)b->data; \
+    for (size_t i = 0; i < count; i++) { int c = compare_f64_raw(x[i], y[i], total); if (c) return c; } return 0; } while (0)
+    switch (a->kind) {
+    case 2: BA_CMP(int8_t);
+    case 3: case 12: BA_CMP(uint8_t);
+    case 4: BA_CMP(int16_t);
+    case 5: BA_CMP(uint16_t);
+    case 6: BA_CMP(int32_t);
+    case 7: case 8: case 9: BA_CMP(int64_t);
+    case 10: count *= 2; /* fall through */
+    case 0: BA_FCMP(float);
+    case 11: count *= 2; /* fall through */
+    case 1: BA_FCMP(double);
+    case 13: BA_FCMP(_Float16);
+    default: pal_abort();
+    }
+#undef BA_CMP
+#undef BA_FCMP
+}
+
+static uint32_t ba_hash(const ArcBigarray *a)
+{
+    size_t n = ba_count(a); uint32_t h = 0;
+    int k = a->kind;
+    if (k == 2 || k == 3 || k == 12 || k == 4 || k == 5) {
+        size_t bytes = n * ba_sizes[k]; if (bytes > 256) bytes = 256;
+        for (size_t i = 0; i < bytes; i += 4) {
+            uint32_t word = 0;
+            for (size_t j = 0; j < 4 && i + j < bytes; j++) word |= (uint32_t)a->data[i+j] << (8*j);
+            h = hash_mix32(h, word);
+        }
+    } else {
+        if (k == 10 || k == 11) n *= 2;
+        size_t limit = (k == 7 || k == 1 || k == 11) ? 32 : (k == 13 ? 128 : 64);
+        if (n > limit) n = limit;
+        for (size_t i = 0; i < n; i++) {
+            switch (k) {
+            case 6: h = hash_mix32(h, ((const uint32_t *)a->data)[i]); break;
+            case 7: h = hash_mix_int64(h, ((const int64_t *)a->data)[i]); break;
+            case 8: case 9: h = hash_mix_intnat(h, ((const int64_t *)a->data)[i]); break;
+            case 1: case 11: h = hash_mix_f64(h, ((const double *)a->data)[i]); break;
+            case 0: case 10: h = hash_mix_f64(h, ((const float *)a->data)[i]); break;
+            case 13: h = hash_mix_f64(h, ((const _Float16 *)a->data)[i]); break;
+            }
+        }
+    }
+    return h;
 }
