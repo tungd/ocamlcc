@@ -204,7 +204,7 @@
 
 (executable
  (name c_bindgen_test)
- (libraries ocamlcc))
+ (libraries ocamlcc unix))
 
 (rule
  (alias runtest)

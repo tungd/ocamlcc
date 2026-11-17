@@ -188,4 +188,98 @@ let () =
       Printf.printf "reject higher-order: FAIL\n";
       incr failures
   | Error _ -> Printf.printf "reject higher-order: PASS\n");
+  (* Dependency-ordered typedefs + _free helpers for option/tuple + const char* free *)
+  let nested_mli =
+    {|
+type item = { tag : string option; pt : int * int }
+type bag = { label : string; item : item; opt_pair : (string * int) option }
+val make_bag : string option -> string * int -> (int * int) option -> bag
+|}
+  in
+  (match
+     C_bindgen.generate ~nopervasives:true ~nostdlib:true
+       ~header_include:"nested.h" ~filename:"nested.mli" ~modname:"Nested"
+       nested_mli
+   with
+  | Error msg ->
+      Printf.printf "nested typedef order: FAIL %s\n" msg;
+      incr failures
+  | Ok { C_bindgen.header; shim_c } ->
+      let before a b =
+        match (find_substr ~sub:a header, find_substr ~sub:b header) with
+        | Some pa, Some pb -> pa < pb
+        | _ -> false
+      in
+      let order_ok =
+        before "} ocamlcc_opt_cstr_t;" "} nested_item_t;"
+        && before "} ocamlcc_tuple_int64_t_int64_t;" "} nested_item_t;"
+        && before "} ocamlcc_tuple_cstr_int64_t;"
+             "} ocamlcc_opt_tuple_cstr_int64_t;"
+        && before "} nested_item_t;" "} nested_bag_t;"
+        && before "} ocamlcc_opt_tuple_cstr_int64_t;" "} nested_bag_t;"
+        && before "} ocamlcc_tuple_int64_t_int64_t;"
+             "} ocamlcc_opt_tuple_int64_t_int64_t;"
+      in
+      let free_ok =
+        has_substr ~sub:"ocamlcc_opt_cstr_t_free(" header
+        && has_substr ~sub:"ocamlcc_tuple_cstr_int64_t_free(" header
+        && has_substr ~sub:"ocamlcc_opt_tuple_cstr_int64_t_free(" header
+        && has_substr ~sub:"nested_item_t_free(" header
+        && has_substr ~sub:"nested_bag_t_free(" header
+      in
+      let tmp =
+        Filename.concat (Filename.get_temp_dir_name ())
+          (Printf.sprintf "ocamlcc_bindgen_nested_%d" (Unix.getpid ()))
+      in
+      if not (Sys.file_exists tmp) then Sys.mkdir tmp 0o755;
+      let write p s =
+        let oc = open_out_bin p in
+        output_string oc s;
+        close_out oc
+      in
+      let hdr_p = Filename.concat tmp "nested.h" in
+      let shim_p = Filename.concat tmp "nested_shim.c" in
+      let use_p = Filename.concat tmp "use_nested.c" in
+      let shim_o = Filename.concat tmp "nested_shim.o" in
+      let use_o = Filename.concat tmp "use_nested.o" in
+      write hdr_p header;
+      write shim_p shim_c;
+      write use_p
+        {|
+#include "nested.h"
+void test_cleanup(void) {
+    ocamlcc_opt_cstr_t o = { true, "x" };
+    ocamlcc_free_string(o.value);
+    ocamlcc_opt_cstr_t_free(&o);
+    ocamlcc_tuple_cstr_int64_t t = { "y", 1 };
+    ocamlcc_tuple_cstr_int64_t_free(&t);
+    ocamlcc_opt_tuple_cstr_int64_t ot = { true, { "z", 2 } };
+    ocamlcc_opt_tuple_cstr_int64_t_free(&ot);
+}
+|};
+      let cc_shim =
+        Sys.command
+          (Printf.sprintf
+             "cc -std=c99 -Wall -Wextra -Werror -I%s -c %s -o %s"
+             (Filename.quote tmp) (Filename.quote shim_p)
+             (Filename.quote shim_o))
+      in
+      let cc_use =
+        Sys.command
+          (Printf.sprintf
+             "cc -std=c99 -Wall -Wextra -Werror -I%s -c %s -o %s"
+             (Filename.quote tmp) (Filename.quote use_p)
+             (Filename.quote use_o))
+      in
+      List.iter
+        (fun f -> if Sys.file_exists f then Sys.remove f)
+        [ hdr_p; shim_p; use_p; shim_o; use_o ];
+      (try Sys.rmdir tmp with Sys_error _ -> ());
+      let ok = order_ok && free_ok && cc_shim = 0 && cc_use = 0 in
+      if not ok then
+        Printf.printf "debug: order=%b free=%b cc_shim=%d cc_use=%d\n"
+          order_ok free_ok cc_shim cc_use;
+      Printf.printf "nested typedef order + free: %s\n"
+        (if ok then "PASS" else "FAIL");
+      if not ok then incr failures);
   exit (if !failures = 0 then 0 else 1)

@@ -135,36 +135,46 @@ let zero_expr = function
   | CT_string -> "NULL"
   | CT_option _ | CT_tuple _ | CT_record _ | CT_opaque _ -> "{0}"
 
+type header_decl =
+  | HD_opaque of string
+  | HD_record of record_info
+  | HD_option of string * c_type
+  | HD_tuple of string * c_type list
+
 let translate_signature ~modname sg env =
   let mod_prefix = sanitize_c (String.uncapitalize_ascii modname) in
   let local_types : (string, c_type) Hashtbl.t = Hashtbl.create 16 in
   let decls_rev = ref [] in
-  let seen_opt_structs = Hashtbl.create 8 in
-  let seen_tuple_structs = Hashtbl.create 8 in
-  let opt_structs_rev = ref [] in
-  let tuple_structs_rev = ref [] in
-  let register_composite t =
-    let rec visit = function
-      | CT_option inner ->
-          visit inner;
-          let sname = c_type_in_struct (CT_option inner) in
-          if not (Hashtbl.mem seen_opt_structs sname) then begin
-            Hashtbl.add seen_opt_structs sname ();
-            opt_structs_rev := (sname, inner) :: !opt_structs_rev
-          end
-      | CT_tuple ts ->
-          List.iter visit ts;
-          let sname = c_type_in_struct (CT_tuple ts) in
-          if not (Hashtbl.mem seen_tuple_structs sname) then begin
-            Hashtbl.add seen_tuple_structs sname ();
-            tuple_structs_rev := (sname, ts) :: !tuple_structs_rev
-          end
-      | CT_record r ->
-          List.iter (fun rf -> visit rf.rf_type) r.ri_fields
-      | CT_unit | CT_int | CT_bool | CT_char | CT_float
-      | CT_string | CT_int32 | CT_int64 | CT_nativeint | CT_opaque _ -> ()
-    in
-    visit t
+  let seen_header_decls = Hashtbl.create 16 in
+  let header_decls_rev = ref [] in
+  let rec register_decl = function
+    | CT_opaque cname ->
+        if not (Hashtbl.mem seen_header_decls cname) then begin
+          Hashtbl.add seen_header_decls cname ();
+          header_decls_rev := HD_opaque cname :: !header_decls_rev
+        end
+    | CT_record r ->
+        if not (Hashtbl.mem seen_header_decls r.ri_cname) then begin
+          List.iter (fun rf -> register_decl rf.rf_type) r.ri_fields;
+          Hashtbl.add seen_header_decls r.ri_cname ();
+          header_decls_rev := HD_record r :: !header_decls_rev
+        end
+    | CT_option inner ->
+        let sname = c_type_in_struct (CT_option inner) in
+        if not (Hashtbl.mem seen_header_decls sname) then begin
+          register_decl inner;
+          Hashtbl.add seen_header_decls sname ();
+          header_decls_rev := HD_option (sname, inner) :: !header_decls_rev
+        end
+    | CT_tuple ts ->
+        let sname = c_type_in_struct (CT_tuple ts) in
+        if not (Hashtbl.mem seen_header_decls sname) then begin
+          List.iter register_decl ts;
+          Hashtbl.add seen_header_decls sname ();
+          header_decls_rev := HD_tuple (sname, ts) :: !header_decls_rev
+        end
+    | CT_unit | CT_int | CT_bool | CT_char | CT_float
+    | CT_string | CT_int32 | CT_int64 | CT_nativeint -> ()
   in
   let rec resolve_type ?(seen = []) ~ctx ty =
     let ty = Ctype.expand_head env ty in
@@ -239,6 +249,7 @@ let translate_signature ~modname sg env =
             | Types.Type_abstract _ when td.Types.type_manifest = None ->
                 let ct = CT_opaque cname in
                 Hashtbl.replace local_types tname ct;
+                register_decl ct;
                 decls_rev := ct :: !decls_rev
             | Types.Type_record (labels, rep) ->
                 let is_float =
@@ -254,7 +265,6 @@ let translate_signature ~modname sg env =
                   List.map
                     (fun (ld : Types.label_declaration) ->
                       let ft = resolve_type ~seen:[ tname ] ~ctx ld.ld_type in
-                      register_composite ft;
                       { rf_name = sanitize_c (Ident.name ld.ld_id); rf_type = ft })
                     labels
                 in
@@ -266,6 +276,7 @@ let translate_signature ~modname sg env =
                 in
                 let ct = CT_record ri in
                 Hashtbl.replace local_types tname ct;
+                register_decl ct;
                 decls_rev := ct :: !decls_rev
             | _ -> ())
       | Types.Sig_value (id, vd, _) ->
@@ -284,9 +295,9 @@ let translate_signature ~modname sg env =
             let params =
               match params with [ CT_unit ] -> [] | ps -> ps
             in
-            List.iter register_composite params;
+            List.iter register_decl params;
             let ret = resolve_type ~ctx raw_ret in
-            register_composite ret;
+            register_decl ret;
             vals_rev :=
               { ev_name = sanitize_c vname;
                 ev_slot = cur_slot;
@@ -304,16 +315,30 @@ let translate_signature ~modname sg env =
     sg.Typedtree.sig_type;
   ( mod_prefix,
     List.rev !decls_rev,
-    List.rev !opt_structs_rev,
-    List.rev !tuple_structs_rev,
+    List.rev !header_decls_rev,
     List.rev !vals_rev )
 
-let emit_header ~modname ~mod_prefix decls opt_structs tuple_structs vals =
+let emit_free_field ?(indent = "    ") b ptr t =
+  let p fmt = Printf.bprintf b fmt in
+  match t with
+  | CT_string -> p "%socamlcc_free_string(%s);\n" indent ptr
+  | CT_opaque cname -> p "%s%s_release(%s);\n" indent cname ptr
+  | CT_option inner when needs_free inner ->
+      let sname = c_type_in_struct (CT_option inner) in
+      p "%s%s_free(&(%s));\n" indent sname ptr
+  | CT_tuple ts when List.exists needs_free ts ->
+      let sname = c_type_in_struct (CT_tuple ts) in
+      p "%s%s_free(&(%s));\n" indent sname ptr
+  | CT_record r2 when needs_free (CT_record r2) ->
+      p "%s%s_free(&(%s));\n" indent r2.ri_cname ptr
+  | _ -> ()
+
+let emit_header ~modname ~mod_prefix header_decls vals =
   let b = Buffer.create 2048 in
   let p fmt = Printf.bprintf b fmt in
   let guard = "OCAMLCC_" ^ String.uppercase_ascii mod_prefix ^ "_H" in
   p "#ifndef %s\n#define %s\n\n" guard guard;
-  p "#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n\n";
+  p "#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n#include <stdlib.h>\n\n";
   p "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
   p "#ifndef OCAMLCC_ERROR_T_DEFINED\n#define OCAMLCC_ERROR_T_DEFINED\n";
   p "typedef struct ocamlcc_error_t {\n";
@@ -322,15 +347,17 @@ let emit_header ~modname ~mod_prefix decls opt_structs tuple_structs vals =
   p "} ocamlcc_error_t;\n";
   p "#endif\n\n";
   p "#ifndef OCAMLCC_FREE_STRING_DECLARED\n#define OCAMLCC_FREE_STRING_DECLARED\n";
-  p "void ocamlcc_free_string(char *s);\n";
+  p "static inline void ocamlcc_free_string(const char *s) {\n";
+  p "    free((void *)(uintptr_t)s);\n";
+  p "}\n";
   p "#endif\n\n";
   List.iter
     (function
-      | CT_opaque cname ->
+      | HD_opaque cname ->
           p "typedef struct { int64_t raw; } %s;\n" cname;
           p "void %s_retain(%s h);\n" cname cname;
           p "void %s_release(%s h);\n\n" cname cname
-      | CT_record r ->
+      | HD_record r ->
           p "typedef struct {\n";
           List.iter
             (fun rf -> p "    %s %s;\n" (c_type_in_struct rf.rf_type) rf.rf_name)
@@ -339,27 +366,40 @@ let emit_header ~modname ~mod_prefix decls opt_structs tuple_structs vals =
           if needs_free (CT_record r) then
             p "void %s_free(%s *v);\n" r.ri_cname r.ri_cname;
           p "\n"
-      | _ -> ())
-    decls;
-  List.iter
-    (fun (sname, inner) ->
-      let dg = "OCAMLCC_DEF_" ^ String.uppercase_ascii sname in
-      p "#ifndef %s\n#define %s\n" dg dg;
-      p "typedef struct {\n    bool is_some;\n    %s value;\n} %s;\n"
-        (c_type_in_struct inner) sname;
-      p "#endif\n\n")
-    opt_structs;
-  List.iter
-    (fun (sname, ts) ->
-      let dg = "OCAMLCC_DEF_" ^ String.uppercase_ascii sname in
-      p "#ifndef %s\n#define %s\n" dg dg;
-      p "typedef struct {\n";
-      List.iteri
-        (fun i t -> p "    %s f%d;\n" (c_type_in_struct t) i)
-        ts;
-      p "} %s;\n" sname;
-      p "#endif\n\n")
-    tuple_structs;
+      | HD_option (sname, inner) ->
+          let dg = "OCAMLCC_DEF_" ^ String.uppercase_ascii sname in
+          p "#ifndef %s\n#define %s\n" dg dg;
+          p "typedef struct {\n    bool is_some;\n    %s value;\n} %s;\n"
+            (c_type_in_struct inner) sname;
+          if needs_free (CT_option inner) then begin
+            p "static inline void %s_free(%s *v) {\n" sname sname;
+            p "    if (v == NULL)\n        return;\n";
+            p "    if (v->is_some) {\n";
+            emit_free_field ~indent:"        " b "v->value" inner;
+            p "    }\n";
+            p "}\n"
+          end;
+          p "#endif\n\n"
+      | HD_tuple (sname, ts) ->
+          let dg = "OCAMLCC_DEF_" ^ String.uppercase_ascii sname in
+          p "#ifndef %s\n#define %s\n" dg dg;
+          p "typedef struct {\n";
+          List.iteri
+            (fun i t -> p "    %s f%d;\n" (c_type_in_struct t) i)
+            ts;
+          p "} %s;\n" sname;
+          if needs_free (CT_tuple ts) then begin
+            p "static inline void %s_free(%s *v) {\n" sname sname;
+            p "    if (v == NULL)\n        return;\n";
+            List.iteri
+              (fun i ft ->
+                if needs_free ft then
+                  emit_free_field b (Printf.sprintf "v->f%d" i) ft)
+              ts;
+            p "}\n"
+          end;
+          p "#endif\n\n")
+    header_decls;
   p "void %s_init(void);\n\n" mod_prefix;
   ignore modname;
   List.iter
@@ -441,7 +481,6 @@ let emit_shim ~modname ~mod_prefix ~header_include decls vals =
   p "    arc_release_val(ex);\n";
   p "    return 1;\n";
   p "}\n\n";
-  p "void ocamlcc_free_string(char *s) { free(s); }\n\n";
   let emitted_helpers = Hashtbl.create 16 in
   let rec ensure_helpers t =
     let k = type_key t in
@@ -602,30 +641,12 @@ let emit_shim ~modname ~mod_prefix ~header_include decls vals =
           p "    arc_mutator_leave(_entered);\n";
           p "}\n\n"
       | CT_record r when needs_free (CT_record r) ->
-          let rec emit_free_field ptr t =
-            match t with
-            | CT_string -> p "    free((void *)(%s));\n" ptr
-            | CT_opaque cname -> p "    %s_release(%s);\n" cname ptr
-            | CT_option inner when needs_free inner ->
-                p "    if ((%s).is_some) {\n" ptr;
-                emit_free_field (Printf.sprintf "(%s).value" ptr) inner;
-                p "    }\n"
-            | CT_tuple ts when List.exists needs_free ts ->
-                List.iteri
-                  (fun i ft ->
-                    if needs_free ft then
-                      emit_free_field (Printf.sprintf "(%s).f%d" ptr i) ft)
-                  ts
-            | CT_record r2 when needs_free (CT_record r2) ->
-                p "    %s_free(&(%s));\n" r2.ri_cname ptr
-            | _ -> ()
-          in
           p "void %s_free(%s *v) {\n" r.ri_cname r.ri_cname;
           p "    if (v == NULL)\n        return;\n";
           List.iter
             (fun rf ->
               if needs_free rf.rf_type then
-                emit_free_field ("v->" ^ rf.rf_name) rf.rf_type)
+                emit_free_field b ("v->" ^ rf.rf_name) rf.rf_type)
             r.ri_fields;
           p "}\n\n"
       | _ -> ())
@@ -719,7 +740,7 @@ let generate ?(include_dirs = []) ?(nopervasives = false) ?(nostdlib = false)
     Frontend.with_typed_interface ~include_dirs ~nopervasives ~nostdlib ~filename
       source (fun sg env ->
         try
-          let mod_prefix, decls, opt_structs, tuple_structs, vals =
+          let mod_prefix, decls, header_decls, vals =
             translate_signature ~modname sg env
           in
           let hdr_inc =
@@ -728,8 +749,7 @@ let generate ?(include_dirs = []) ?(nopervasives = false) ?(nostdlib = false)
             | None -> mod_prefix ^ ".h"
           in
           let header =
-            emit_header ~modname ~mod_prefix decls opt_structs tuple_structs
-              vals
+            emit_header ~modname ~mod_prefix header_decls vals
           in
           let shim_c =
             emit_shim ~modname ~mod_prefix ~header_include:hdr_inc decls vals

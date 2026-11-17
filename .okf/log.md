@@ -1,5 +1,19 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Topological header typedef ordering & option/tuple `_free` helpers (TDD) —
+  refactored `lib/c_bindgen.ml` (`translate_signature` / `emit_header`) to
+  record and emit `HD_opaque`, `HD_record`, `HD_option`, and `HD_tuple`
+  typedefs in topological post-order so inner types (records containing
+  `option`/tuples, options of tuples) always precede outer structs; added
+  `static inline` `<sname>_free` destructors for `CT_option` and `CT_tuple`
+  when `needs_free` is true; changed `ocamlcc_free_string` to a header
+  `static inline void ocamlcc_free_string(const char *s)` (removing the
+  duplicate definition from `emit_shim`) so `const char *` fields free
+  without qualifier warnings and multiple shims link cleanly; shared
+  `emit_free_field` across header and shim destructors. Added `nested typedef
+  order + free` test in `test/c_bindgen_test.ml` verified with `cc -std=c99
+  -Wall -Wextra -Werror`. `dune runtest` (14/14) and `ninja test` (25/25) pass.
+
 - 2026-11-17 (autoagent/1): Wrap C_bindgen shims in the ARC mutator gate (TDD) —
   updated `lib/c_bindgen.ml` (`emit_shim`) to declare `arc_mutator_enter` and
   `arc_mutator_leave` and enter/leave the mutator gate across `<mod>_init`,

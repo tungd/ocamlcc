@@ -2,3 +2,4 @@ header signatures: PASS
 shim body: PASS
 shim mutator gate: PASS
 reject higher-order: PASS
+nested typedef order + free: PASS
