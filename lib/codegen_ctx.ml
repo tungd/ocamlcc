@@ -189,6 +189,13 @@ let close_ret b value =
 let arc_tag_array = 245
 let arc_tag_closure = 247
 let arc_tag_string = 252
+let arc_tag_float = 253
+let arc_tag_float_array = 254
+let arc_tag_custom = 255
+
+let custom_kind_int32 = 0l
+let custom_kind_int64 = 1l
+let custom_kind_nativeint = 2l
 
 let unit_const = Int 1L
 
@@ -248,11 +255,45 @@ let string_data b s =
     :: b.datas;
   name
 
+let immortal_box_data b ~prefix ~tag ~byte_size ?(reserved = 0l) items =
+  let name = Printf.sprintf "%s.%d" prefix b.data_counter in
+  b.data_counter <- b.data_counter + 1;
+  let hdr_items =
+    [ D_word (-1l);
+      D_half tag;
+      D_half 0;
+      D_word byte_size;
+      D_word reserved ]
+  in
+  b.datas <-
+    { name; export = false; align = Some 16; items = hdr_items @ items }
+    :: b.datas;
+  name
+
+let float_data b f =
+  immortal_box_data b ~prefix:"flt" ~tag:arc_tag_float ~byte_size:8l
+    [ D_long (Int64.bits_of_float f) ]
+
+let custom_data b kind bits =
+  immortal_box_data b ~prefix:"cst" ~tag:arc_tag_custom ~byte_size:8l
+    ~reserved:kind [ D_long bits ]
+
+let float_array_data b fs =
+  let items = List.map (fun f -> D_long (Int64.bits_of_float f)) fs in
+  immortal_box_data b ~prefix:"fa" ~tag:arc_tag_float_array
+    ~byte_size:(Int32.of_int (8 * List.length fs)) items
+
 let rec const_data_item b (c : Anf.const_item) : data_item =
   match c with
   | C_int n -> D_long (tag_int n)
   | C_char ch -> D_long (tag_int (Char.code ch))
   | C_string s -> D_ref (string_data b s, 16L)
+  | C_float f -> D_ref (float_data b f, 16L)
+  | C_int32 n -> D_ref (custom_data b custom_kind_int32 (Int64.of_int32 n), 16L)
+  | C_int64 n -> D_ref (custom_data b custom_kind_int64 n, 16L)
+  | C_nativeint n ->
+      D_ref (custom_data b custom_kind_nativeint (Int64.of_nativeint n), 16L)
+  | C_float_array fs -> D_ref (float_array_data b fs, 16L)
   | C_block (tag, items) ->
       let sym = emit_const_block b tag items in
       D_ref (sym, 16L)

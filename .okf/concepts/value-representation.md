@@ -58,6 +58,29 @@ before the branch.
 Untag is an arithmetic shift right (`sar`), correct for negatives: for
 tagged `-1` (bit pattern `-1`), `sar 1` still yields `-1`.
 
+# Boxed floats, float arrays, and boxed integers
+
+Polymorphically passed `float`, `float array` / all-float records, `int32`,
+`int64`, and `nativeint` values use 16-byte-aligned heap or immortal static
+ARC objects (`val land 1 = 0`) with unscanned payloads (`scan_fields = 0`):
+
+| Type | `ArcHeader.tag` | `reserved` | Payload |
+|------|-----------------|------------|---------|
+| `float` | `ARC_TAG_FLOAT (253)` | `0` | unboxed 64-bit IEEE 754 `double` |
+| `float array` / float record | `ARC_TAG_FLOAT_ARRAY (254)` | `0` | unboxed `double[len]` (`byte_size = 8 * len`) |
+| `int32` | `ARC_TAG_CUSTOM (255)` | `ARC_CUSTOM_INT32 (0)` | sign-extended 32-bit value |
+| `int64` | `ARC_TAG_CUSTOM (255)` | `ARC_CUSTOM_INT64 (1)` | 64-bit signed integer |
+| `nativeint` | `ARC_TAG_CUSTOM (255)` | `ARC_CUSTOM_NATIVEINT (2)` | 64-bit native signed integer |
+
+Both `ARC_TAG_ARRAY` and `ARC_TAG_FLOAT_ARRAY` store `byte_size = 8 * len`, so
+`Array.length` reads `byte_size >> 3` uniformly. Polymorphic `Pgenarray`
+primitives dispatch at runtime on `hdr->tag` (`arc_alloc_array`,
+`ocamlcc_gen_makearray`, `ocamlcc_gen_array_get`, `ocamlcc_gen_array_set`).
+Structural comparison (`val_compare_raw`) and `caml_hash` handle all three tags,
+normalizing `-0.0` to `+0.0` and canonicalizing `NaN` in `caml_hash` while
+preserving OCaml semantics (`nan = nan` is `false` under `(=)`, `compare nan x`
+is `-1`, `compare nan nan = 0`).
+
 # Strings and output
 
 String payloads are byte sequences, not C strings: `ArcHeader.reserved` stores

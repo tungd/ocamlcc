@@ -1,5 +1,32 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Add `float`, `float array`, `int32`, `int64`, `nativeint`, and `Printf` `%f`/`%ld`/`%Ld`/`%nd` (TDD) —
+  implemented unboxed QBE `Double` (`d`) and 32/64-bit boxed integer lowering
+  in `lib/qbe_il.ml`, `lib/anf.ml`, `lib/arc_pass.ml`, `lib/codegen_ctx.ml`,
+  and `lib/codegen_expr.ml`: `Const_float`, `Const_float_array`, `Const_int32`,
+  `Const_int64`, `Const_nativeint`, float arithmetic/neg/abs/conversions/
+  comparisons (`ceqd`..`cged`/`Fcmp`), `Pfloatarray` + all-float records
+  (`Pfloatfield`/`Psetfloatfield`) + `Pgenarray` runtime dispatch
+  (`arc_alloc_array`, `ocamlcc_gen_makearray`, `ocamlcc_gen_array_get`,
+  `ocamlcc_gen_array_set`), and boxed int ops (`Pint32` via `Word`/`extsw`,
+  `Pint64`/`Pnativeint` via `Long`, with zero-divisor `Division_by_zero` and
+  `-1` guards against `INT_MIN / -1` SIGFPE). Added `ARC_TAG_CUSTOM = 255`
+  (`ARC_CUSTOM_INT32/INT64/NATIVEINT`) alongside `ARC_TAG_FLOAT`/`ARC_TAG_FLOAT_ARRAY`
+  in `runtime/arc.h`/`runtime/arc.c`, excluded all unscanned leaves via
+  `is_unscanned_leaf_tag`, added structural float/float-array/custom
+  comparison + hashing (with NaN semantics and `-0.0` normalization), capped
+  `COMPARE_MAX_DEPTH` at `10000` with `noinline` float compare helpers so
+  deep cyclic compare stays ASan stack-safe (`asan_stdlib_test`), added `-lm`
+  link flag in `build.ninja`, implemented formatting/parsing/math helpers in
+  `runtime/builtins.c`/`runtime/arc.c`/`lib/ccalls.ml`, added `Stdlib.Int32`,
+  `Stdlib.Int64`, `Stdlib.Nativeint`, stdlib `float` primitives, and `Printf`
+  `Int32`/`Int64`/`Nativeint`/`Float` formatters (`%f`, `%.2f`, `%e`, `%g`,
+  `%F`, `%ld`, `%Ld`, `%nd`, width/zero-padding/`#`). Added `test/primitives_ir_test.ml`
+  and `examples/primitives_test.ml` (`delta=0`). `dune runtest` (11/11),
+  `ninja test` (24/24), `ninja asan_test` (14/14). Documented in
+  [compiler-pipeline](/concepts/compiler-pipeline.md),
+  [value-representation](/concepts/value-representation.md), and
+  [perceus-arc](/concepts/perceus-arc.md).
 - 2026-11-17 (autoagent/1): Add `Tupled` functions and `value let rec` (`caml_alloc_dummy*` / `caml_update_dummy*`) (TDD) —
   lowered `Lambda.Tupled` functions in `Anf.conv_fun` by unpacking tuple fields
   via `Field (i, Var tup)` from a single tuple parameter so both direct calls

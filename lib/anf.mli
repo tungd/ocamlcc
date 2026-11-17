@@ -9,6 +9,11 @@ type const_item =
   | C_int of int
   | C_char of char
   | C_string of string
+  | C_float of float
+  | C_int32 of int32
+  | C_int64 of int64
+  | C_nativeint of nativeint
+  | C_float_array of float list
   | C_block of int * const_item list
 
 type atom =
@@ -17,6 +22,11 @@ type atom =
   | Int of int
   | Char of char
   | String of string
+  | Float of float
+  | Int32 of int32
+  | Int64 of int64
+  | Nativeint of nativeint
+  | ConstFloatArray of float list
   | ConstBlock of int * const_item list
   | Unit
 
@@ -35,6 +45,25 @@ type binop =
   | Cmp of Lambda.integer_comparison
   | Compare_ints
   | Isout
+  | Fadd
+  | Fsub
+  | Fmul
+  | Fdiv
+  | Fcmp of Lambda.float_comparison
+  | Compare_floats
+  | Bint_add of Lambda.boxed_integer
+  | Bint_sub of Lambda.boxed_integer
+  | Bint_mul of Lambda.boxed_integer
+  | Bint_div of Lambda.boxed_integer
+  | Bint_mod of Lambda.boxed_integer
+  | Bint_and of Lambda.boxed_integer
+  | Bint_or of Lambda.boxed_integer
+  | Bint_xor of Lambda.boxed_integer
+  | Bint_lsl of Lambda.boxed_integer
+  | Bint_lsr of Lambda.boxed_integer
+  | Bint_asr of Lambda.boxed_integer
+  | Bint_cmp of Lambda.boxed_integer * Lambda.integer_comparison
+  | Compare_bints of Lambda.boxed_integer
 
 type unop =
   | Neg
@@ -43,6 +72,14 @@ type unop =
   | Isint
   | String_length
   | Array_length
+  | Float_of_int
+  | Int_of_float
+  | Fneg
+  | Fabs
+  | Bint_of_int of Lambda.boxed_integer
+  | Int_of_bint of Lambda.boxed_integer
+  | Bint_cvt of Lambda.boxed_integer * Lambda.boxed_integer
+  | Bint_neg of Lambda.boxed_integer
 
 type cexpr =
   | Atom of atom
@@ -53,6 +90,8 @@ type cexpr =
   | MakeArray of Lambda.array_kind * atom list
   | Field of int * atom
   | SetField of int * atom * atom
+  | FloatField of int * atom
+  | SetFloatField of int * atom * atom
   | OffsetRef of int * atom
   | StringGet of bool * atom * atom
   | BytesSet of bool * atom * atom * atom

@@ -1,5 +1,6 @@
 ocamlcc_print_int_val: registered
 ocamlcc_print_char_val: registered
+ocamlcc_print_float_val: registered
 ocamlcc_print_string_val: registered
 ocamlcc_print_endline_val: registered
 ocamlcc_prerr_string_val: registered
@@ -38,7 +39,9 @@ caml_blit_bytes: registered
 caml_blit_string: registered
 caml_fill_bytes: registered
 caml_string_equal: registered
+caml_string_notequal: registered
 caml_bytes_equal: registered
+caml_bytes_notequal: registered
 caml_string_compare: registered
 caml_bytes_compare: registered
 caml_alloc_dummy: registered
@@ -46,5 +49,30 @@ caml_alloc_dummy_float: registered
 caml_alloc_dummy_lazy: registered
 caml_update_dummy: registered
 caml_update_dummy_lazy: registered
+caml_format_float: registered
+caml_format_int: registered
+caml_int32_format: registered
+caml_int64_format: registered
+caml_nativeint_format: registered
+caml_float_of_string: registered
+caml_int32_of_string: registered
+caml_int64_of_string: registered
+caml_nativeint_of_string: registered
+caml_int32_to_float: registered
+caml_int32_of_float: registered
+caml_int32_bits_of_float: registered
+caml_int32_float_of_bits: registered
+caml_int64_to_float: registered
+caml_int64_of_float: registered
+caml_int64_bits_of_float: registered
+caml_int64_float_of_bits: registered
+caml_nativeint_to_float: registered
+caml_nativeint_of_float: registered
+caml_sqrt_float: registered
+caml_floor_float: registered
+caml_ceil_float: registered
+caml_fmod_float: registered
+caml_copysign_float: registered
+caml_classify_float: registered
 unknown external default: PASS
 is_known: PASS

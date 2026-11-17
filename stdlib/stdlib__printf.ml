@@ -18,6 +18,10 @@ external ( land ) : int -> int -> int = "%andint"
 external ( lsr ) : int -> int -> int = "%lsrint"
 external int_of_char : char -> int = "%identity"
 external char_of_int : int -> char = "%identity"
+external caml_format_float : string -> float -> string = "caml_format_float"
+external caml_int32_format : string -> int32 -> string = "caml_int32_format"
+external caml_int64_format : string -> int64 -> string = "caml_int64_format"
+external caml_nativeint_format : string -> nativeint -> string = "caml_nativeint_format"
 external caml_print_string : string -> unit = "ocamlcc_print_string_val"
 external caml_prerr_string : string -> unit = "ocamlcc_prerr_string_val"
 
@@ -154,6 +158,120 @@ let with_prec_spec :
   | Lit_precision p -> k p
   | Arg_precision -> fun p -> k p
 
+let with_opt_prec_spec :
+    type x y.
+    (x, y) precision -> (int option -> y) -> x =
+  fun prec k ->
+  match prec with
+  | No_precision -> k None
+  | Lit_precision p -> k (Some p)
+  | Arg_precision -> fun p -> k (Some p)
+
+let pos_int_str n =
+  let rec go acc v =
+    let d = v mod 10 in
+    let acc' = char_of_int (48 + d) :: acc in
+    if v < 10 then acc' else go acc' (v / 10)
+  in
+  let cs = go [] n in
+  let b = BY.create (Stdlib__list.length cs) in
+  let rec fill i = function
+    | [] -> BY.unsafe_to_string b
+    | c :: rest -> BY.unsafe_set b i c; fill (i + 1) rest
+  in
+  fill 0 cs
+
+let build_c_fmt flag spec pad_opt prec_opt =
+  let b = B.create 16 in
+  B.add_char b '%';
+  B.add_string b flag;
+  (match pad_opt with
+  | None -> ()
+  | Some (dir, width) ->
+      let dir, w = if width < 0 then (Left, -width) else (dir, width) in
+      (match dir with
+      | Left -> B.add_char b '-'
+      | Zeros -> B.add_char b '0'
+      | Right -> ());
+      B.add_string b (pos_int_str w));
+  (match prec_opt with
+  | Some p when p >= 0 ->
+      B.add_char b '.';
+      B.add_string b (pos_int_str p)
+  | _ -> ());
+  B.add_char b spec;
+  B.contents b
+
+let int_conv_c_spec = function
+  | Int_d | Int_i | Int_Cd | Int_Ci -> ("", 'd')
+  | Int_pd | Int_pi -> ("+", 'd')
+  | Int_sd | Int_si -> (" ", 'd')
+  | Int_u | Int_Cu -> ("", 'u')
+  | Int_x -> ("", 'x')
+  | Int_Cx -> ("#", 'x')
+  | Int_X -> ("", 'X')
+  | Int_CX -> ("#", 'X')
+  | Int_o | Int_Co -> ("", 'o')
+
+let format_boxed_int fmt_fn iconv pad_opt prec n =
+  let flag, spec_ch = int_conv_c_spec iconv in
+  let prec_opt = if prec > 0 then Some prec else None in
+  let fmt = build_c_fmt flag spec_ch pad_opt prec_opt in
+  let s = fmt_fn fmt n in
+  match iconv with
+  | Int_Co when s <> "0" -> S.cat "0o" s
+  | _ -> s
+
+let valid_float_lexem s =
+  let len = S.length s in
+  let rec has_dot_or_exp i =
+    if i >= len then false
+    else
+      let c = S.unsafe_get s i in
+      c = '.' || c = 'e' || c = 'E' || has_dot_or_exp (i + 1)
+  in
+  if s = "inf" then "infinity"
+  else if s = "-inf" then "neg_infinity"
+  else if s = "+inf" then "+infinity"
+  else if s = "nan" || s = "-nan" then "nan"
+  else if has_dot_or_exp 0 then s
+  else S.cat s "."
+
+let format_float_padded (fflag, fkind) pad_opt prec_opt f =
+  let sign_flag =
+    match fflag with
+    | Float_flag_ -> ""
+    | Float_flag_p -> "+"
+    | Float_flag_s -> " "
+  in
+  match fkind with
+  | Float_F | Float_CF ->
+      let prec =
+        match prec_opt with Some p when p >= 0 -> p | _ -> 12
+      in
+      let cfmt = build_c_fmt sign_flag 'g' None (Some prec) in
+      let raw = valid_float_lexem (caml_format_float cfmt f) in
+      (match pad_opt with
+      | None -> raw
+      | Some (dir, width) ->
+          let dir, w = if width < 0 then (Left, -width) else (dir, width) in
+          let ch = match dir with Zeros -> '0' | Left | Right -> ' ' in
+          pad_string dir w ch raw)
+  | _ ->
+      let spec =
+        match fkind with
+        | Float_f -> 'f'
+        | Float_e -> 'e'
+        | Float_E -> 'E'
+        | Float_g -> 'g'
+        | Float_G -> 'G'
+        | Float_h -> 'a'
+        | Float_H -> 'A'
+        | Float_F | Float_CF -> 'g'
+      in
+      let fmt = build_c_fmt sign_flag spec pad_opt prec_opt in
+      caml_format_float fmt f
+
 let format_with_padding :
     type x y.
     (x, y) padding -> ((string -> string) -> y) -> x =
@@ -233,6 +351,26 @@ let rec make_printf :
           with_prec_spec prec (fun p n ->
               let s = format_int_padded iconv pad_opt p n in
               make_printf k (Acc_data_string (acc, s)) rest))
+  | Int32 (iconv, pad, prec, rest) ->
+      with_pad_spec pad (fun pad_opt ->
+          with_prec_spec prec (fun p n ->
+              let s = format_boxed_int caml_int32_format iconv pad_opt p n in
+              make_printf k (Acc_data_string (acc, s)) rest))
+  | Nativeint (iconv, pad, prec, rest) ->
+      with_pad_spec pad (fun pad_opt ->
+          with_prec_spec prec (fun p n ->
+              let s = format_boxed_int caml_nativeint_format iconv pad_opt p n in
+              make_printf k (Acc_data_string (acc, s)) rest))
+  | Int64 (iconv, pad, prec, rest) ->
+      with_pad_spec pad (fun pad_opt ->
+          with_prec_spec prec (fun p n ->
+              let s = format_boxed_int caml_int64_format iconv pad_opt p n in
+              make_printf k (Acc_data_string (acc, s)) rest))
+  | Float (fconv, pad, prec, rest) ->
+      with_pad_spec pad (fun pad_opt ->
+          with_opt_prec_spec prec (fun prec_opt f ->
+              let s = format_float_padded fconv pad_opt prec_opt f in
+              make_printf k (Acc_data_string (acc, s)) rest))
   | Flush rest ->
       make_printf k (Acc_flush acc) rest
   | String_literal (s, rest) ->
@@ -248,7 +386,6 @@ let rec make_printf :
   | Formatting_lit (flit, rest) ->
       make_printf k (Acc_formatting_lit (acc, flit)) rest
   | End_of_format -> k acc
-  | Int32 _ | Nativeint _ | Int64 _ | Float _
   | Format_arg _ | Format_subst _ | Formatting_gen _
   | Reader _ | Scan_char_set _ | Scan_get_counter _ | Scan_next_char _
   | Ignored_param _ | Custom _ ->

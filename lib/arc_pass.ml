@@ -46,25 +46,49 @@ let is_borrowed (env : state) (id : Ident.t) : bool =
 
 let is_imm_atom (env : state) (a : Anf.atom) : bool =
   match a with
-  | Int _ | Char _ | Unit | String _ | ConstBlock _ -> true
+  | Int _ | Char _ | Unit | String _ | Float _ | Int32 _ | Int64 _
+  | Nativeint _ | ConstFloatArray _ | ConstBlock _ ->
+      true
   | Var id -> Ident.Set.mem id env.imm || Ident.Set.mem id env.pure
   | MutVar _ -> false
+
+let is_imm_binop : Anf.binop -> bool = function
+  | Add | Sub | Mul | Div | Mod | And | Or | Xor | Lsl | Lsr | Asr | Cmp _
+  | Compare_ints | Isout | Fcmp _ | Compare_floats | Bint_cmp _
+  | Compare_bints _ ->
+      true
+  | Fadd | Fsub | Fmul | Fdiv | Bint_add _ | Bint_sub _ | Bint_mul _
+  | Bint_div _ | Bint_mod _ | Bint_and _ | Bint_or _ | Bint_xor _
+  | Bint_lsl _ | Bint_lsr _ | Bint_asr _ ->
+      false
+
+let is_imm_unop : Anf.unop -> bool = function
+  | Neg | Not | Offset _ | Isint | String_length | Array_length
+  | Int_of_float | Int_of_bint _ ->
+      true
+  | Float_of_int | Fneg | Fabs | Bint_of_int _ | Bint_cvt _ | Bint_neg _ ->
+      false
 
 let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
   match ce with
   | Atom a -> is_imm_atom env a
-  | Binop _ | Unop _ | SetField _ | OffsetRef _ | StringGet _
+  | Binop (op, _, _) -> is_imm_binop op
+  | Unop (op, _) -> is_imm_unop op
+  | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
   | BytesSet _ | ArraySet _ | Builtin _ | Assign _ ->
       true
   | MakeBlock (_, []) -> true
-  | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | ArrayGet _
-  | CreateBytes _ | MakeArrayInit _ | App _ | Ccall _ | GetGlobal _ | Fun _ ->
+  | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _
+  | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _ | Ccall _
+  | GetGlobal _ | Fun _ ->
       false
 
 let atom_vars (a : Anf.atom) : Ident.Set.t =
   match a with
   | Var id | MutVar id -> Ident.Set.singleton id
-  | Int _ | Char _ | String _ | ConstBlock _ | Unit -> Ident.Set.empty
+  | Int _ | Char _ | String _ | Float _ | Int32 _ | Int64 _ | Nativeint _
+  | ConstFloatArray _ | ConstBlock _ | Unit ->
+      Ident.Set.empty
 
 let atoms_vars (xs : Anf.atom list) : Ident.Set.t =
   List.fold_left (fun s a -> Ident.Set.union s (atom_vars a)) Ident.Set.empty xs
@@ -77,8 +101,11 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | Unop (_, a) -> (atom_vars a, [])
   | MakeBlock (_, args) | AllocReuse (_, _, args) | MakeArray (_, args) ->
       (Ident.Set.empty, args)
-  | Field (_, a) | OffsetRef (_, a) | CreateBytes a -> (atom_vars a, [])
+  | Field (_, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a ->
+      (atom_vars a, [])
   | SetField (_, a, rhs) -> (atom_vars a, [ rhs ])
+  | SetFloatField (_, a, rhs) ->
+      (Ident.Set.union (atom_vars a) (atom_vars rhs), [])
   | StringGet (_, a, b) | ArrayGet (_, _, a, b) ->
       (Ident.Set.union (atom_vars a) (atom_vars b), [])
   | BytesSet (_, a, b, c) ->
@@ -98,7 +125,7 @@ let is_yielding_ccall name = (Ccalls.find name).Ccalls.yields
 
 let ce_may_raise_fn = function
   | Anf.App _ -> true
-  | Binop ((Div | Mod), _, _) -> true
+  | Binop ((Div | Mod | Bint_div _ | Bint_mod _), _, _) -> true
   | StringGet (true, _, _)
   | BytesSet (true, _, _, _)
   | ArrayGet (true, _, _, _)
@@ -299,7 +326,8 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
   match e with
   | Let (res, MakeBlock (tag, (_ :: _ as args)), next) ->
       Some (Let (res, AllocReuse (tok, tag, args), next))
-  | Let (x, ((Atom _ | Binop _ | Unop _ | Field _ | SetField _ | OffsetRef _
+  | Let (x, ((Atom _ | Binop _ | Unop _ | Field _ | SetField _
+             | FloatField _ | SetFloatField _ | OffsetRef _
              | StringGet _ | BytesSet _ | ArrayGet _ | ArraySet _
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _
              | Builtin _ | Ccall _ | GetGlobal _ | Assign _ | MakeBlock (_, [])) as ce), body) -> (

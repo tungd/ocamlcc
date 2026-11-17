@@ -22,21 +22,30 @@ type fn_hooks = {
     Qbe_il.t;
 }
 
+let static_payload_ptr b base_name sym =
+  let dst = fresh_temp b base_name in
+  emit b (Binop (Add, Long, dst, Global sym, Int 16L));
+  dst
+
 let compile_atom hooks b (a : Anf.atom) : t =
   match a with
   | Int n -> Int (tag_int n)
   | Char c -> Int (tag_int (Char.code c))
   | Unit -> unit_const
-  | String s ->
-      let sym = string_data b s in
-      let dst = fresh_temp b "str" in
-      emit b (Binop (Add, Long, dst, Global sym, Int 16L));
-      dst
+  | String s -> static_payload_ptr b "str" (string_data b s)
+  | Float f -> static_payload_ptr b "flt" (float_data b f)
+  | Int32 n ->
+      static_payload_ptr b "i32"
+        (custom_data b custom_kind_int32 (Int64.of_int32 n))
+  | Int64 n ->
+      static_payload_ptr b "i64" (custom_data b custom_kind_int64 n)
+  | Nativeint n ->
+      static_payload_ptr b "nat"
+        (custom_data b custom_kind_nativeint (Int64.of_nativeint n))
+  | ConstFloatArray fs ->
+      static_payload_ptr b "farr" (float_array_data b fs)
   | ConstBlock (tag, items) ->
-      let sym = emit_const_block b tag items in
-      let dst = fresh_temp b "cblk" in
-      emit b (Binop (Add, Long, dst, Global sym, Int 16L));
-      dst
+      static_payload_ptr b "cblk" (emit_const_block b tag items)
   | Var id -> (
       match Hashtbl.find_opt b.vars id with
       | Some v -> v
@@ -84,6 +93,132 @@ let compile_div_mod b qop (av : t) (cv : t) : t =
   let dst = fresh_temp b "divv" in
   emit b (Phi (Long, dst, [ (lok_end, res); (lzero_end, unit_const) ]));
   dst
+
+let load_double b (v : t) : t =
+  let d = fresh_temp b "fval" in
+  emit b (Load (Loadd, Double, d, v));
+  d
+
+let box_double b (d : t) : t =
+  let dst = fresh_temp b "fbox" in
+  emit b
+    (Call (Long, dst, { fn = Global "ocamlcc_alloc_float"; args = [ (Double, d) ] }));
+  dst
+
+let bint_spec : Lambda.boxed_integer -> ty * int32 * int64 = function
+  | Pint32 -> (Word, custom_kind_int32, 31L)
+  | Pint64 -> (Long, custom_kind_int64, 63L)
+  | Pnativeint -> (Long, custom_kind_nativeint, 63L)
+
+let unbox_bint b bi (v : t) : t =
+  let ty, _, _ = bint_spec bi in
+  let op = match ty with Word -> Loadw | Long | Double -> Loadl in
+  let dst = fresh_temp b "bi" in
+  emit b (Load (op, ty, dst, v));
+  dst
+
+let box_bint b bi (raw : t) : t =
+  let ty, kind, _ = bint_spec bi in
+  let bits =
+    match ty with
+    | Word ->
+        let ext = fresh_temp b "bext" in
+        emit b (Extsw (ext, raw));
+        ext
+    | Long | Double -> raw
+  in
+  let dst = fresh_temp b "bbox" in
+  emit b
+    (Call
+       ( Long,
+         dst,
+         { fn = Global "ocamlcc_alloc_custom";
+           args = [ (Long, Int (Int64.of_int32 kind)); (Long, bits) ] } ));
+  dst
+
+let compile_bint_div_mod b bi qop (av : t) (cv : t) : t =
+  let ty, _, _ = bint_spec bi in
+  let ua = unbox_bint b bi av in
+  let uc = unbox_bint b bi cv in
+  let lok = fresh_label b "bdiv_ok" in
+  let lcheck = fresh_label b "bdiv_chk" in
+  let lneg1 = fresh_label b "bdiv_m1" in
+  let lzero = fresh_label b "bdiv_zero" in
+  let ldone = fresh_label b "bdiv_done" in
+  close_block b (Br (uc, lcheck, lzero));
+  start_block b lcheck;
+  let is_m1 = fresh_temp b "ism1" in
+  emit b (Cmp (Eq, ty, is_m1, uc, Int (-1L)));
+  close_block b (Br (is_m1, lneg1, lok));
+  start_block b lok;
+  let raw_ok = fresh_temp b "bdivr" in
+  emit b (Binop (qop, ty, raw_ok, ua, uc));
+  let res_ok = box_bint b bi raw_ok in
+  let lok_end = b.cur_fn.open_label in
+  close_block b (Jmp ldone);
+  start_block b lneg1;
+  let res_m1 =
+    match qop with
+    | Binop.Div ->
+        let c = fresh_temp b "bdivm" in
+        emit b (Copy (Long, c, av));
+        emit b (Call_void { fn = Global "arc_retain_val"; args = [ (Long, c) ] });
+        c
+    | _ -> box_bint b bi (Int 0L)
+  in
+  let lm1_end = b.cur_fn.open_label in
+  close_block b (Jmp ldone);
+  start_block b lzero;
+  let ex = fresh_temp b "divex" in
+  emit b (Load (Loadl, Long, ex, Global "ocamlcc_global_Division_by_zero"));
+  emit b (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, ex) ] });
+  let lzero_end = b.cur_fn.open_label in
+  close_block b (Jmp ldone);
+  start_block b ldone;
+  let dst = fresh_temp b "bdivv" in
+  emit b
+    (Phi
+       ( Long,
+         dst,
+         [ (lok_end, res_ok); (lm1_end, res_m1); (lzero_end, unit_const) ] ));
+  dst
+
+let compile_bint_shift b bi qop av cv : t =
+  let ty, _, mask = bint_spec bi in
+  let ua = unbox_bint b bi av in
+  let uc = untag b cv in
+  let shw = fresh_temp b "shw" in
+  emit b (Copy (Word, shw, uc));
+  let shm = fresh_temp b "shm" in
+  emit b (Binop (And, Word, shm, shw, Int mask));
+  let res = fresh_temp b "bsh" in
+  emit b (Binop (qop, ty, res, ua, shm));
+  box_bint b bi res
+
+let compile_fcmp b (cmp : Lambda.float_comparison) da db : t =
+  let fop, negate =
+    match cmp with
+    | CFeq -> (Fcmp.Feq, false)
+    | CFneq -> (Fcmp.Fne, false)
+    | CFlt -> (Fcmp.Flt, false)
+    | CFle -> (Fcmp.Fle, false)
+    | CFgt -> (Fcmp.Fgt, false)
+    | CFge -> (Fcmp.Fge, false)
+    | CFnlt -> (Fcmp.Flt, true)
+    | CFnle -> (Fcmp.Fle, true)
+    | CFngt -> (Fcmp.Fgt, true)
+    | CFnge -> (Fcmp.Fge, true)
+  in
+  let raw = fresh_temp b "fcmp" in
+  emit b (Fcmp (fop, Long, raw, da, db));
+  let fin =
+    if not negate then raw
+    else
+      let inv = fresh_temp b "fninv" in
+      emit b (Binop (Xor, Long, inv, raw, Int 1L));
+      inv
+  in
+  retag b fin
 
 let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
   let av = compile_atom hooks b a in
@@ -158,6 +293,85 @@ let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
       let raw = fresh_temp b "isout" in
       emit b (Cmp (Ult, Long, raw, av, cv));
       retag b raw
+  | Fadd | Fsub | Fmul | Fdiv ->
+      let da = load_double b av in
+      let db = load_double b cv in
+      let qop =
+        match op with
+        | Fadd -> Binop.Add
+        | Fsub -> Binop.Sub
+        | Fmul -> Binop.Mul
+        | Fdiv -> Binop.Div
+        | _ -> assert false
+      in
+      let dr = fresh_temp b "fop" in
+      emit b (Binop (qop, Double, dr, da, db));
+      box_double b dr
+  | Fcmp cmp ->
+      let da = load_double b av in
+      let db = load_double b cv in
+      compile_fcmp b cmp da db
+  | Compare_floats ->
+      let dst = fresh_temp b "fcmp_v" in
+      emit b
+        (Call (Long, dst, { fn = Global "caml_compare"; args = [ (Long, av); (Long, cv) ] }));
+      dst
+  | Bint_add bi | Bint_sub bi | Bint_mul bi | Bint_and bi | Bint_or bi | Bint_xor bi ->
+      let ty, _, _ = bint_spec bi in
+      let ua = unbox_bint b bi av in
+      let uc = unbox_bint b bi cv in
+      let qop =
+        match op with
+        | Bint_add _ -> Binop.Add
+        | Bint_sub _ -> Binop.Sub
+        | Bint_mul _ -> Binop.Mul
+        | Bint_and _ -> Binop.And
+        | Bint_or _ -> Binop.Or
+        | Bint_xor _ -> Binop.Xor
+        | _ -> assert false
+      in
+      let res = fresh_temp b "bop" in
+      emit b (Binop (qop, ty, res, ua, uc));
+      box_bint b bi res
+  | Bint_div bi -> compile_bint_div_mod b bi Div av cv
+  | Bint_mod bi -> compile_bint_div_mod b bi Rem av cv
+  | Bint_lsl bi -> compile_bint_shift b bi Shl av cv
+  | Bint_lsr bi -> compile_bint_shift b bi Shr av cv
+  | Bint_asr bi -> compile_bint_shift b bi Sar av cv
+  | Bint_cmp (bi, cmp) ->
+      let ty, _, _ = bint_spec bi in
+      let ua = unbox_bint b bi av in
+      let uc = unbox_bint b bi cv in
+      let raw = fresh_temp b "bcmp" in
+      emit b (Cmp (cmp_of_ocaml cmp, ty, raw, ua, uc));
+      let raw_l =
+        match ty with
+        | Word ->
+            let ext = fresh_temp b "bcmp_l" in
+            emit b (Extsw (ext, raw));
+            ext
+        | Long | Double -> raw
+      in
+      retag b raw_l
+  | Compare_bints bi ->
+      let ty, _, _ = bint_spec bi in
+      let ua = unbox_bint b bi av in
+      let uc = unbox_bint b bi cv in
+      let gt = fresh_temp b "bcgt" in
+      let lt = fresh_temp b "bclt" in
+      let diff = fresh_temp b "bcdiff" in
+      emit b (Cmp (Sgt, ty, gt, ua, uc));
+      emit b (Cmp (Slt, ty, lt, ua, uc));
+      emit b (Binop (Sub, ty, diff, gt, lt));
+      let diff_l =
+        match ty with
+        | Word ->
+            let ext = fresh_temp b "bdiff_l" in
+            emit b (Extsw (ext, diff));
+            ext
+        | Long | Double -> diff
+      in
+      retag b diff_l
 
 let compile_unop hooks b (op : Anf.unop) (a : Anf.atom) : t =
   let av = compile_atom hooks b a in
@@ -184,6 +398,74 @@ let compile_unop hooks b (op : Anf.unop) (a : Anf.atom) : t =
   | Array_length ->
       let len = array_len_raw b av in
       retag b len
+  | Float_of_int ->
+      let ua = untag b av in
+      let d = fresh_temp b "fofint" in
+      emit b (Sltof (Double, d, ua));
+      box_double b d
+  | Int_of_float ->
+      let d = load_double b av in
+      let raw = fresh_temp b "ioff" in
+      emit b (Dtosi (Long, raw, d));
+      retag b raw
+  | Fneg ->
+      let d = load_double b av in
+      let r = fresh_temp b "fneg" in
+      emit b (Neg (Double, r, d));
+      box_double b r
+  | Fabs ->
+      let bits = fresh_temp b "fbits" in
+      emit b (Load (Loadl, Long, bits, av));
+      let masked = fresh_temp b "fabsm" in
+      emit b (Binop (And, Long, masked, bits, Int 0x7fffffffffffffffL));
+      let d = fresh_temp b "fabsd" in
+      emit b (Cast (Double, d, masked));
+      box_double b d
+  | Bint_of_int bi ->
+      let ty, _, _ = bint_spec bi in
+      let ua = untag b av in
+      let raw =
+        match ty with
+        | Word ->
+            let w = fresh_temp b "i2w" in
+            emit b (Copy (Word, w, ua));
+            w
+        | Long | Double -> ua
+      in
+      box_bint b bi raw
+  | Int_of_bint bi ->
+      let raw = unbox_bint b bi av in
+      let raw_l =
+        match bint_spec bi with
+        | Word, _, _ ->
+            let ext = fresh_temp b "w2l" in
+            emit b (Extsw (ext, raw));
+            ext
+        | (Long | Double), _, _ -> raw
+      in
+      retag b raw_l
+  | Bint_neg bi ->
+      let ty, _, _ = bint_spec bi in
+      let ua = unbox_bint b bi av in
+      let r = fresh_temp b "bneg" in
+      emit b (Neg (ty, r, ua));
+      box_bint b bi r
+  | Bint_cvt (src, dst) ->
+      let u = unbox_bint b src av in
+      let dst_ty, _, _ = bint_spec dst in
+      let converted =
+        match (src, dst_ty) with
+        | Pint32, Long ->
+            let ext = fresh_temp b "cvt_ext" in
+            emit b (Extsw (ext, u));
+            ext
+        | (Pint64 | Pnativeint), Word ->
+            let w = fresh_temp b "cvt_tr" in
+            emit b (Copy (Word, w, u));
+            w
+        | _ -> u
+      in
+      box_bint b dst converted
 
 let apply_closure b clos_val (arg_vals : t list) : t =
   let n = List.length arg_vals in
@@ -344,30 +626,67 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   | AllocReuse (tok_id, tag, args) ->
       let tok = Hashtbl.find b.vars tok_id in
       emit_block_alloc b ~reuse_tok:tok tag (List.map (compile_atom hooks b) args)
-  | MakeArray (kind, args) ->
+  | MakeArray (kind, args) -> (
       let vs = List.map (compile_atom hooks b) args in
       let n = List.length vs in
-      let scan =
-        match kind with
-        | Lambda.Pintarray | Pfloatarray -> 0
-        | Pgenarray | Paddrarray -> min n 0xffff
-      in
-      let arr = fresh_temp b "arr" in
-      emit b
-        (Call
-           ( Long,
-             arr,
-             { fn = Global "arc_alloc";
-               args =
-                 [ (Long, Int (Int64.of_int arc_tag_array));
-                   (Long, Int (Int64.of_int scan));
-                   (Long, Int (Int64.of_int (8 * n))) ] } ));
-      List.iteri
-        (fun i v ->
-          let addr = ptr_offset b arr (8 * i) "arrp" in
-          emit b (Store (Storel, v, addr)))
-        vs;
-      arr
+      match kind with
+      | Lambda.Pfloatarray ->
+          let arr = fresh_temp b "farr" in
+          emit b
+            (Call
+               ( Long,
+                 arr,
+                 { fn = Global "arc_alloc";
+                   args =
+                     [ (Long, Int (Int64.of_int arc_tag_float_array));
+                       (Long, Int 0L);
+                       (Long, Int (Int64.of_int (8 * n))) ] } ));
+          List.iteri
+            (fun i v ->
+              let d = load_double b v in
+              let addr = ptr_offset b arr (8 * i) "farrp" in
+              emit b (Store (Stored, d, addr));
+              emit b (Call_void { fn = Global "arc_release_val"; args = [ (Long, v) ] }))
+            vs;
+          arr
+      | Lambda.Pgenarray when n > 0 ->
+          let buf = fresh_temp b "gbuf" in
+          emit b (Alloc8 (buf, Int (Int64.of_int (8 * n))));
+          List.iteri
+            (fun i v ->
+              let addr = ptr_offset b buf (8 * i) "gbufp" in
+              emit b (Store (Storel, v, addr)))
+            vs;
+          let arr = fresh_temp b "garr" in
+          emit b
+            (Call
+               ( Long,
+                 arr,
+                 { fn = Global "ocamlcc_gen_makearray";
+                   args = [ (Long, Int (Int64.of_int n)); (Long, buf) ] } ));
+          arr
+      | Lambda.Pintarray | Paddrarray | Pgenarray ->
+          let scan =
+            match kind with
+            | Lambda.Pintarray -> 0
+            | Pgenarray | Paddrarray | Pfloatarray -> min n 0xffff
+          in
+          let arr = fresh_temp b "arr" in
+          emit b
+            (Call
+               ( Long,
+                 arr,
+                 { fn = Global "arc_alloc";
+                   args =
+                     [ (Long, Int (Int64.of_int arc_tag_array));
+                       (Long, Int (Int64.of_int scan));
+                       (Long, Int (Int64.of_int (8 * n))) ] } ));
+          List.iteri
+            (fun i v ->
+              let addr = ptr_offset b arr (8 * i) "arrp" in
+              emit b (Store (Storel, v, addr)))
+            vs;
+          arr)
   | Field (i, arg) ->
       let obj = compile_atom hooks b arg in
       let addr = ptr_offset b obj (8 * i) "fldp" in
@@ -384,6 +703,17 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       emit b (Store (Storel, v, addr));
       emit b
         (Call_void { fn = Global "arc_release_val"; args = [ (Long, old_v) ] });
+      unit_const
+  | FloatField (i, arg) ->
+      let obj = compile_atom hooks b arg in
+      let addr = ptr_offset b obj (8 * i) "ffldp" in
+      box_double b (load_double b addr)
+  | SetFloatField (i, arg, rhs) ->
+      let obj = compile_atom hooks b arg in
+      let v = compile_atom hooks b rhs in
+      let d = load_double b v in
+      let addr = ptr_offset b obj (8 * i) "ffldp" in
+      emit b (Store (Stored, d, addr));
       unit_const
   | OffsetRef (k, arg) ->
       let obj = compile_atom hooks b arg in
@@ -424,51 +754,109 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
         let len = string_len_raw b bsv in
         compile_bounds_guarded b ui len do_write
       else do_write ()
-  | ArrayGet (safe, _, arr, idx) ->
+  | ArrayGet (safe, kind, arr, idx) -> (
       let av = compile_atom hooks b arr in
       let iv = compile_atom hooks b idx in
-      let ui = untag b iv in
-      let do_read () =
-        let off = fresh_temp b "aoff" in
-        emit b (Binop (Shl, Long, off, ui, Int 3L));
-        let eaddr = fresh_temp b "arrp" in
-        emit b (Binop (Add, Long, eaddr, av, off));
-        let dst = fresh_temp b "avel" in
-        emit b (Load (Loadl, Long, dst, eaddr));
-        emit b
-          (Call_void { fn = Global "arc_retain_val"; args = [ (Long, dst) ] });
-        dst
-      in
-      if safe then
-        let len = array_len_raw b av in
-        compile_bounds_guarded b ui len do_read
-      else do_read ()
-  | ArraySet (safe, kind, arr, idx, v) ->
+      match kind with
+      | Lambda.Pgenarray ->
+          let dst = fresh_temp b "gavel" in
+          emit b
+            (Call
+               ( Long,
+                 dst,
+                 { fn = Global "ocamlcc_gen_array_get";
+                   args =
+                     [ (Long, Int (if safe then 1L else 0L));
+                       (Long, av);
+                       (Long, iv) ] } ));
+          dst
+      | Lambda.Pfloatarray ->
+          let ui = untag b iv in
+          let do_read () =
+            let off = fresh_temp b "aoff" in
+            emit b (Binop (Shl, Long, off, ui, Int 3L));
+            let eaddr = fresh_temp b "arrp" in
+            emit b (Binop (Add, Long, eaddr, av, off));
+            box_double b (load_double b eaddr)
+          in
+          if safe then
+            let len = array_len_raw b av in
+            compile_bounds_guarded b ui len do_read
+          else do_read ()
+      | Lambda.Paddrarray | Pintarray ->
+          let ui = untag b iv in
+          let do_read () =
+            let off = fresh_temp b "aoff" in
+            emit b (Binop (Shl, Long, off, ui, Int 3L));
+            let eaddr = fresh_temp b "arrp" in
+            emit b (Binop (Add, Long, eaddr, av, off));
+            let dst = fresh_temp b "avel" in
+            emit b (Load (Loadl, Long, dst, eaddr));
+            emit b
+              (Call_void { fn = Global "arc_retain_val"; args = [ (Long, dst) ] });
+            dst
+          in
+          if safe then
+            let len = array_len_raw b av in
+            compile_bounds_guarded b ui len do_read
+          else do_read ())
+  | ArraySet (safe, kind, arr, idx, v) -> (
       let av = compile_atom hooks b arr in
       let iv = compile_atom hooks b idx in
       let vv = compile_atom hooks b v in
-      let ui = untag b iv in
-      let do_write () =
-        let off = fresh_temp b "aoff" in
-        emit b (Binop (Shl, Long, off, ui, Int 3L));
-        let eaddr = fresh_temp b "arrp" in
-        emit b (Binop (Add, Long, eaddr, av, off));
-        (match kind with
-        | Lambda.Pintarray | Lambda.Pfloatarray ->
-            emit b (Store (Storel, vv, eaddr))
-        | Pgenarray | Paddrarray ->
-            let old_v = fresh_temp b "olda" in
-            emit b (Load (Loadl, Long, old_v, eaddr));
-            emit b (Store (Storel, vv, eaddr));
-            emit b
-              (Call_void
-                 { fn = Global "arc_release_val"; args = [ (Long, old_v) ] }));
-        unit_const
-      in
-      if safe then
-        let len = array_len_raw b av in
-        compile_bounds_guarded b ~drop_on_oob:vv ui len do_write
-      else do_write ()
+      match kind with
+      | Lambda.Pgenarray ->
+          let dst = fresh_temp b "gaset" in
+          emit b
+            (Call
+               ( Long,
+                 dst,
+                 { fn = Global "ocamlcc_gen_array_set";
+                   args =
+                     [ (Long, Int (if safe then 1L else 0L));
+                       (Long, av);
+                       (Long, iv);
+                       (Long, vv) ] } ));
+          unit_const
+      | Lambda.Pfloatarray ->
+          let ui = untag b iv in
+          let do_write () =
+            let off = fresh_temp b "aoff" in
+            emit b (Binop (Shl, Long, off, ui, Int 3L));
+            let eaddr = fresh_temp b "arrp" in
+            emit b (Binop (Add, Long, eaddr, av, off));
+            let d = load_double b vv in
+            emit b (Store (Stored, d, eaddr));
+            emit b (Call_void { fn = Global "arc_release_val"; args = [ (Long, vv) ] });
+            unit_const
+          in
+          if safe then
+            let len = array_len_raw b av in
+            compile_bounds_guarded b ~drop_on_oob:vv ui len do_write
+          else do_write ()
+      | Lambda.Pintarray | Paddrarray ->
+          let ui = untag b iv in
+          let do_write () =
+            let off = fresh_temp b "aoff" in
+            emit b (Binop (Shl, Long, off, ui, Int 3L));
+            let eaddr = fresh_temp b "arrp" in
+            emit b (Binop (Add, Long, eaddr, av, off));
+            (match kind with
+            | Lambda.Pintarray | Lambda.Pfloatarray ->
+                emit b (Store (Storel, vv, eaddr))
+            | Pgenarray | Paddrarray ->
+                let old_v = fresh_temp b "olda" in
+                emit b (Load (Loadl, Long, old_v, eaddr));
+                emit b (Store (Storel, vv, eaddr));
+                emit b
+                  (Call_void
+                     { fn = Global "arc_release_val"; args = [ (Long, old_v) ] }));
+            unit_const
+          in
+          if safe then
+            let len = array_len_raw b av in
+            compile_bounds_guarded b ~drop_on_oob:vv ui len do_write
+          else do_write ())
   | CreateBytes len ->
       let lv = compile_atom hooks b len in
       let ul = untag b lv in

@@ -3,6 +3,7 @@
 type ty =
   | Word
   | Long
+  | Double
 
 type t =
   | Temp of string
@@ -51,29 +52,52 @@ module Cmp = struct
     | Ult -> "ult"
 end
 
-let ty_char = function Word -> "w" | Long -> "l"
+module Fcmp = struct
+  type t = Feq | Fne | Flt | Fle | Fgt | Fge | Fuo | Fo
 
-type load_op = Loadl | Loaduh | Loadub | Loadsw | Loaduw
-type store_op = Storel | Storew | Storeh | Storeb
+  let opcode = function
+    | Feq -> "ceqd"
+    | Fne -> "cned"
+    | Flt -> "cltd"
+    | Fle -> "cled"
+    | Fgt -> "cgtd"
+    | Fge -> "cged"
+    | Fuo -> "cuod"
+    | Fo -> "cod"
+end
+
+let ty_char = function Word -> "w" | Long -> "l" | Double -> "d"
+
+type load_op = Loadl | Loadw | Loaduh | Loadub | Loadsw | Loaduw | Loadd
+type store_op = Storel | Storew | Storeh | Storeb | Stored
 
 let string_of_load_op = function
   | Loadl -> "loadl"
+  | Loadw -> "loadw"
   | Loaduh -> "loaduh"
   | Loadub -> "loadub"
   | Loadsw -> "loadsw"
   | Loaduw -> "loaduw"
+  | Loadd -> "loadd"
 
 let string_of_store_op = function
   | Storel -> "storel"
   | Storew -> "storew"
   | Storeh -> "storeh"
   | Storeb -> "storeb"
+  | Stored -> "stored"
 
 type call = { fn : t; args : (ty * t) list }
 
 type inst =
   | Binop of Binop.t * ty * t * t * t
+  | Neg of ty * t * t
   | Cmp of Cmp.t * ty * t * t * t
+  | Fcmp of Fcmp.t * ty * t * t * t
+  | Cast of ty * t * t
+  | Extsw of t * t
+  | Sltof of ty * t * t
+  | Dtosi of ty * t * t
   | Phi of ty * t * (string * t) list
   | Copy of ty * t * t
   | Load of load_op * ty * t * t
@@ -125,6 +149,7 @@ let string_of_t ?(is_local = fun _ -> true) ?(pic = false) = function
 let string_of_ty = function
   | Word -> "w"
   | Long -> "l"
+  | Double -> "d"
 
 let string_of_args ~is_local ~pic args =
   args
@@ -144,9 +169,22 @@ let string_of_inst ~is_local ~pic inst =
   | Binop (op, ty, dst, a, b) ->
       Printf.sprintf "%s =%s %s %s, %s" (st dst) (ty_char ty)
         (Binop.to_string op) (st a) (st b)
+  | Neg (ty, dst, a) ->
+      Printf.sprintf "%s =%s neg %s" (st dst) (ty_char ty) (st a)
   | Cmp (c, ty, dst, a, b) ->
       Printf.sprintf "%s =%s %s%s %s, %s" (st dst) (ty_char ty)
         (Cmp.prefix c) (ty_char ty) (st a) (st b)
+  | Fcmp (c, ty, dst, a, b) ->
+      Printf.sprintf "%s =%s %s %s, %s" (st dst) (ty_char ty)
+        (Fcmp.opcode c) (st a) (st b)
+  | Cast (ty, dst, a) ->
+      Printf.sprintf "%s =%s cast %s" (st dst) (ty_char ty) (st a)
+  | Extsw (dst, a) ->
+      Printf.sprintf "%s =l extsw %s" (st dst) (st a)
+  | Sltof (ty, dst, a) ->
+      Printf.sprintf "%s =%s sltof %s" (st dst) (ty_char ty) (st a)
+  | Dtosi (ty, dst, a) ->
+      Printf.sprintf "%s =%s dtosi %s" (st dst) (ty_char ty) (st a)
   | Phi (ty, dst, args) ->
       Printf.sprintf "%s =%s phi %s" (st dst) (ty_char ty)
         (args

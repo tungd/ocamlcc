@@ -4,6 +4,11 @@ type const_item =
   | C_int of int
   | C_char of char
   | C_string of string
+  | C_float of float
+  | C_int32 of int32
+  | C_int64 of int64
+  | C_nativeint of nativeint
+  | C_float_array of float list
   | C_block of int * const_item list
 
 type atom =
@@ -12,6 +17,11 @@ type atom =
   | Int of int
   | Char of char
   | String of string
+  | Float of float
+  | Int32 of int32
+  | Int64 of int64
+  | Nativeint of nativeint
+  | ConstFloatArray of float list
   | ConstBlock of int * const_item list
   | Unit
 
@@ -30,6 +40,25 @@ type binop =
   | Cmp of Lambda.integer_comparison
   | Compare_ints
   | Isout
+  | Fadd
+  | Fsub
+  | Fmul
+  | Fdiv
+  | Fcmp of Lambda.float_comparison
+  | Compare_floats
+  | Bint_add of Lambda.boxed_integer
+  | Bint_sub of Lambda.boxed_integer
+  | Bint_mul of Lambda.boxed_integer
+  | Bint_div of Lambda.boxed_integer
+  | Bint_mod of Lambda.boxed_integer
+  | Bint_and of Lambda.boxed_integer
+  | Bint_or of Lambda.boxed_integer
+  | Bint_xor of Lambda.boxed_integer
+  | Bint_lsl of Lambda.boxed_integer
+  | Bint_lsr of Lambda.boxed_integer
+  | Bint_asr of Lambda.boxed_integer
+  | Bint_cmp of Lambda.boxed_integer * Lambda.integer_comparison
+  | Compare_bints of Lambda.boxed_integer
 
 type unop =
   | Neg
@@ -38,6 +67,14 @@ type unop =
   | Isint
   | String_length
   | Array_length
+  | Float_of_int
+  | Int_of_float
+  | Fneg
+  | Fabs
+  | Bint_of_int of Lambda.boxed_integer
+  | Int_of_bint of Lambda.boxed_integer
+  | Bint_cvt of Lambda.boxed_integer * Lambda.boxed_integer
+  | Bint_neg of Lambda.boxed_integer
 
 type cexpr =
   | Atom of atom
@@ -48,6 +85,8 @@ type cexpr =
   | MakeArray of Lambda.array_kind * atom list
   | Field of int * atom
   | SetField of int * atom * atom
+  | FloatField of int * atom
+  | SetFloatField of int * atom * atom
   | OffsetRef of int * atom
   | StringGet of bool * atom * atom
   | BytesSet of bool * atom * atom * atom
@@ -141,26 +180,36 @@ let rec describe (lam : Lambda.lambda) : string =
   | Levent _ -> "event (internal)"
   | Lifused _ -> "ifused (internal)"
 
+let parse_const_float (s : string) : float =
+  match Float.of_string_opt s with
+  | Some f -> f
+  | None -> raise (Unsupported ("invalid float constant: " ^ s))
+
 let rec conv_const_item (c : Lambda.structured_constant) : const_item =
   match c with
   | Const_int n -> C_int n
   | Const_char ch -> C_char ch
   | Const_immstring s -> C_string s
+  | Const_float s -> C_float (parse_const_float s)
+  | Const_int32 n -> C_int32 n
+  | Const_int64 n -> C_int64 n
+  | Const_nativeint n -> C_nativeint n
+  | Const_float_array sl -> C_float_array (List.map parse_const_float sl)
   | Const_block (tag, items) -> C_block (tag, List.map conv_const_item items)
-  | _ -> raise (Unsupported "non-integer, non-string structured constant")
 
 let conv_const (c : Lambda.structured_constant) : atom =
   match c with
   | Const_int n -> Int n
   | Const_char ch -> Char ch
   | Const_immstring s -> String s
+  | Const_float s -> Float (parse_const_float s)
+  | Const_int32 n -> Int32 n
+  | Const_int64 n -> Int64 n
+  | Const_nativeint n -> Nativeint n
+  | Const_float_array sl -> ConstFloatArray (List.map parse_const_float sl)
   | Const_block (tag, items) -> ConstBlock (tag, List.map conv_const_item items)
-  | _ -> raise (Unsupported "non-integer, non-string structured constant")
 
-let check_array_kind (k : Lambda.array_kind) =
-  match k with
-  | Pgenarray | Paddrarray | Pintarray -> ()
-  | Pfloatarray -> raise (Unsupported "float array")
+let check_array_kind (_k : Lambda.array_kind) = ()
 
 let builtins_enabled = ref true
 
@@ -261,11 +310,19 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
   | Lprim (Pduparray (kind, _), [ Lambda.Lconst (Const_block (_, items)) ], _) ->
       check_array_kind kind;
       emit_cexpr (MakeArray (kind, List.map conv_const items))
+  | Lprim (Pduparray (kind, _), [ Lambda.Lconst (Const_float_array sl) ], _) ->
+      check_array_kind kind;
+      emit_cexpr (MakeArray (kind, List.map (fun s -> Float (parse_const_float s)) sl))
   | Lprim (Pfield (i, _, _), [ arg ], _) ->
       conv_expr arg (fun a -> emit_cexpr (Field (i, a)))
   | Lprim (Psetfield (i, _, _), [ arg; rhs ], _) ->
       conv_expr arg (fun a ->
           conv_expr rhs (fun v -> emit_cexpr (SetField (i, a, v))))
+  | Lprim (Pfloatfield i, [ arg ], _) ->
+      conv_expr arg (fun a -> emit_cexpr (FloatField (i, a)))
+  | Lprim (Psetfloatfield (i, _), [ arg; rhs ], _) ->
+      conv_expr arg (fun a ->
+          conv_expr rhs (fun v -> emit_cexpr (SetFloatField (i, a, v))))
   | Lprim (Poffsetref n, [ arg ], _) ->
       conv_expr arg (fun a -> emit_cexpr (OffsetRef (n, a)))
   | Lprim ((Pstringlength | Pbyteslength), [ arg ], _) ->
@@ -361,6 +418,45 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
   | Lprim (Pintcomp cmp, [ a; c ], _) -> binop (Cmp cmp) a c emit_cexpr
   | Lprim (Pcompare_ints, [ a; c ], _) -> binop Compare_ints a c emit_cexpr
   | Lprim (Pisout, [ a; c ], _) -> binop Isout a c emit_cexpr
+  | Lprim (Pfloatofint, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Unop (Float_of_int, av)))
+  | Lprim (Pintoffloat, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Unop (Int_of_float, av)))
+  | Lprim (Pnegfloat, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Unop (Fneg, av)))
+  | Lprim (Pabsfloat, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Unop (Fabs, av)))
+  | Lprim (Paddfloat, [ a; c ], _) -> binop Fadd a c emit_cexpr
+  | Lprim (Psubfloat, [ a; c ], _) -> binop Fsub a c emit_cexpr
+  | Lprim (Pmulfloat, [ a; c ], _) -> binop Fmul a c emit_cexpr
+  | Lprim (Pdivfloat, [ a; c ], _) -> binop Fdiv a c emit_cexpr
+  | Lprim (Pfloatcomp cmp, [ a; c ], _) -> binop (Fcmp cmp) a c emit_cexpr
+  | Lprim (Pcompare_floats, [ a; c ], _) -> binop Compare_floats a c emit_cexpr
+  | Lprim (Pbintofint bi, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Unop (Bint_of_int bi, av)))
+  | Lprim (Pintofbint bi, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Unop (Int_of_bint bi, av)))
+  | Lprim (Pcvtbint (src, dst), [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Unop (Bint_cvt (src, dst), av)))
+  | Lprim (Pnegbint bi, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Unop (Bint_neg bi, av)))
+  | Lprim (Paddbint bi, [ a; c ], _) -> binop (Bint_add bi) a c emit_cexpr
+  | Lprim (Psubbint bi, [ a; c ], _) -> binop (Bint_sub bi) a c emit_cexpr
+  | Lprim (Pmulbint bi, [ a; c ], _) -> binop (Bint_mul bi) a c emit_cexpr
+  | Lprim (Pdivbint { size; _ }, [ a; c ], _) ->
+      binop (Bint_div size) a c emit_cexpr
+  | Lprim (Pmodbint { size; _ }, [ a; c ], _) ->
+      binop (Bint_mod size) a c emit_cexpr
+  | Lprim (Pandbint bi, [ a; c ], _) -> binop (Bint_and bi) a c emit_cexpr
+  | Lprim (Porbint bi, [ a; c ], _) -> binop (Bint_or bi) a c emit_cexpr
+  | Lprim (Pxorbint bi, [ a; c ], _) -> binop (Bint_xor bi) a c emit_cexpr
+  | Lprim (Plslbint bi, [ a; c ], _) -> binop (Bint_lsl bi) a c emit_cexpr
+  | Lprim (Plsrbint bi, [ a; c ], _) -> binop (Bint_lsr bi) a c emit_cexpr
+  | Lprim (Pasrbint bi, [ a; c ], _) -> binop (Bint_asr bi) a c emit_cexpr
+  | Lprim (Pbintcomp (bi, cmp), [ a; c ], _) ->
+      binop (Bint_cmp (bi, cmp)) a c emit_cexpr
+  | Lprim (Pcompare_bints bi, [ a; c ], _) ->
+      binop (Compare_bints bi) a c emit_cexpr
   | _ -> raise (Unsupported (describe lam))
 
 and binop op a c emit_cexpr =
@@ -468,7 +564,9 @@ and seq_stmt (stmt : aexpr) (next : aexpr) : aexpr =
 
 let atom_vars acc = function
   | Var id | MutVar id -> Ident.Set.add id acc
-  | Int _ | Char _ | String _ | ConstBlock _ | Unit -> acc
+  | Int _ | Char _ | String _ | Float _ | Int32 _ | Int64 _ | Nativeint _
+  | ConstFloatArray _ | ConstBlock _ | Unit ->
+      acc
 
 let cexpr_vars free_aexpr acc = function
   | Atom a -> atom_vars acc a
@@ -478,8 +576,12 @@ let cexpr_vars free_aexpr acc = function
       List.fold_left atom_vars acc args
   | AllocReuse (tok, _, args) ->
       Ident.Set.add tok (List.fold_left atom_vars acc args)
-  | Field (_, a) | OffsetRef (_, a) | CreateBytes a -> atom_vars acc a
-  | SetField (_, a, b) | StringGet (_, a, b) | ArrayGet (_, _, a, b)
+  | Field (_, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a ->
+      atom_vars acc a
+  | SetField (_, a, b)
+  | SetFloatField (_, a, b)
+  | StringGet (_, a, b)
+  | ArrayGet (_, _, a, b)
   | MakeArrayInit (a, b) ->
       atom_vars (atom_vars acc a) b
   | BytesSet (_, a, b, c) | ArraySet (_, _, a, b, c) ->

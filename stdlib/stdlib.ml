@@ -33,6 +33,59 @@ external ( lsl ) : int -> int -> int = "%lslint"
 external ( lsr ) : int -> int -> int = "%lsrint"
 external ( asr ) : int -> int -> int = "%asrint"
 
+external ( ~-. ) : float -> float = "%negfloat"
+external ( ~+. ) : float -> float = "%identity"
+external ( +. ) : float -> float -> float = "%addfloat"
+external ( -. ) : float -> float -> float = "%subfloat"
+external ( *. ) : float -> float -> float = "%mulfloat"
+external ( /. ) : float -> float -> float = "%divfloat"
+external abs_float : float -> float = "%absfloat"
+external float_of_int : int -> float = "%floatofint"
+external truncate : float -> int = "%intoffloat"
+external int_of_float : float -> int = "%intoffloat"
+external float : int -> float = "%floatofint"
+external sqrt : float -> float = "caml_sqrt_float"
+external floor : float -> float = "caml_floor_float"
+external ceil : float -> float = "caml_ceil_float"
+external mod_float : float -> float -> float = "caml_fmod_float"
+external copysign : float -> float -> float = "caml_copysign_float"
+external caml_format_float : string -> float -> string = "caml_format_float"
+external float_of_string : string -> float = "caml_float_of_string"
+
+type fpclass =
+  | FP_normal
+  | FP_subnormal
+  | FP_zero
+  | FP_infinite
+  | FP_nan
+
+external classify_float : float -> fpclass = "caml_classify_float"
+
+let infinity = 1.0 /. 0.0
+let neg_infinity = -1.0 /. 0.0
+let nan = 0.0 /. 0.0
+let max_float = 1.79769313486231571e+308
+let min_float = 2.22507385850720138e-308
+let epsilon_float = 2.22044604925031308e-16
+
+let float_of_string_opt s =
+  try Some (float_of_string s) with Failure _ -> None
+
+let string_of_float f =
+  let raw = caml_format_float "%.12g" f in
+  if raw = "inf" then "infinity"
+  else if raw = "-inf" then "neg_infinity"
+  else if raw = "nan" || raw = "-nan" then "nan"
+  else
+    let len = Stdlib__string.length raw in
+    let rec has_dot i =
+      if i >= len then false
+      else
+        let c = Stdlib__string.unsafe_get raw i in
+        c = '.' || c = 'e' || c = 'E' || has_dot (i + 1)
+    in
+    if has_dot 0 then raw else Stdlib__string.cat raw "."
+
 external int_of_char : char -> int = "%identity"
 external unsafe_char_of_int : int -> char = "%identity"
 
@@ -162,6 +215,7 @@ let int_of_string s =
 
 external print_int : int -> unit = "ocamlcc_print_int_val"
 external print_char : char -> unit = "ocamlcc_print_char_val"
+external print_float : float -> unit = "ocamlcc_print_float_val"
 external print_string : string -> unit = "ocamlcc_print_string_val"
 external print_endline : string -> unit = "ocamlcc_print_endline_val"
 external exit : int -> 'a = "ocamlcc_exit_val"
@@ -173,6 +227,9 @@ external ( @@ ) : ('a -> 'b) -> 'a -> 'b = "%apply"
 
 module Option = Stdlib__option
 module Result = Stdlib__result
+module Int32 = Stdlib__int32
+module Int64 = Stdlib__int64
+module Nativeint = Stdlib__nativeint
 module List = Stdlib__list
 module Array = Stdlib__array
 module Bytes = Stdlib__bytes

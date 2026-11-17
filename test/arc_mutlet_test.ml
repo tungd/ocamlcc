@@ -75,6 +75,12 @@ and dump_atom (a : Anf.atom) : string =
   | Anf.Int n -> string_of_int n
   | Anf.Char c -> Printf.sprintf "%C" c
   | Anf.String s -> Printf.sprintf "%S" s
+  | Anf.Float f -> string_of_float f
+  | Anf.Int32 n -> Printf.sprintf "%ldl" n
+  | Anf.Int64 n -> Printf.sprintf "%LdL" n
+  | Anf.Nativeint n -> Printf.sprintf "%ndn" n
+  | Anf.ConstFloatArray fs ->
+      Printf.sprintf "farr[%d]" (List.length fs)
   | Anf.ConstBlock (t, _) -> Printf.sprintf "blk%d" t
   | Anf.Unit -> "()"
 and dump_ce (ce : Anf.cexpr) : string =
@@ -88,6 +94,16 @@ and dump_ce (ce : Anf.cexpr) : string =
         | Anf.Or -> "or" | Anf.Xor -> "xor" | Anf.Lsl -> "lsl"
         | Anf.Lsr -> "lsr" | Anf.Asr -> "asr" | Anf.Cmp _ -> "cmp"
         | Anf.Compare_ints -> "icmp" | Anf.Isout -> "isout"
+        | Anf.Fadd -> "fadd" | Anf.Fsub -> "fsub" | Anf.Fmul -> "fmul"
+        | Anf.Fdiv -> "fdiv" | Anf.Fcmp _ -> "fcmp"
+        | Anf.Compare_floats -> "fcmp3"
+        | Anf.Bint_add _ -> "badd" | Anf.Bint_sub _ -> "bsub"
+        | Anf.Bint_mul _ -> "bmul" | Anf.Bint_div _ -> "bdiv"
+        | Anf.Bint_mod _ -> "bmod" | Anf.Bint_and _ -> "band"
+        | Anf.Bint_or _ -> "bor" | Anf.Bint_xor _ -> "bxor"
+        | Anf.Bint_lsl _ -> "blsl" | Anf.Bint_lsr _ -> "blsr"
+        | Anf.Bint_asr _ -> "basr" | Anf.Bint_cmp _ -> "bcmp"
+        | Anf.Compare_bints _ -> "bcmp3"
       in
       Printf.sprintf "(binop %s %s %s)" name (dump_atom a) (dump_atom b)
   | Anf.Unop (op, a) ->
@@ -97,6 +113,10 @@ and dump_ce (ce : Anf.cexpr) : string =
             Printf.sprintf "offset%d" n
         | Anf.Isint -> "isint" | Anf.String_length -> "strlen"
         | Anf.Array_length -> "arrlen"
+        | Anf.Float_of_int -> "fofint" | Anf.Int_of_float -> "ioff"
+        | Anf.Fneg -> "fneg" | Anf.Fabs -> "fabs"
+        | Anf.Bint_of_int _ -> "bofint" | Anf.Int_of_bint _ -> "iofb"
+        | Anf.Bint_cvt _ -> "bcvt" | Anf.Bint_neg _ -> "bneg"
       in
       Printf.sprintf "(unop %s %s)" name (dump_atom a)
   | Anf.MakeBlock (t, args) ->
@@ -122,7 +142,8 @@ and dump_ce (ce : Anf.cexpr) : string =
 let rec count_release_mut id (e : Anf.aexpr) : int =
   let count_atom acc = function
     | Anf.Var _ | Anf.MutVar _ | Anf.Int _ | Anf.Char _ | Anf.String _
-    | Anf.ConstBlock _ | Anf.Unit ->
+    | Anf.Float _ | Anf.Int32 _ | Anf.Int64 _ | Anf.Nativeint _
+    | Anf.ConstFloatArray _ | Anf.ConstBlock _ | Anf.Unit ->
         acc
   in
   let count_ce acc = function
@@ -132,9 +153,11 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.MakeBlock (_, args) | Anf.AllocReuse (_, _, args)
     | Anf.MakeArray (_, args) ->
         List.fold_left count_atom acc args
-    | Anf.Field (_, a) | Anf.OffsetRef (_, a) | Anf.CreateBytes a ->
+    | Anf.Field (_, a) | Anf.FloatField (_, a) | Anf.OffsetRef (_, a)
+    | Anf.CreateBytes a ->
         count_atom acc a
-    | Anf.SetField (_, a, b) -> count_atom (count_atom acc a) b
+    | Anf.SetField (_, a, b) | Anf.SetFloatField (_, a, b) ->
+        count_atom (count_atom acc a) b
     | Anf.StringGet (_, a, b) | Anf.ArrayGet (_, _, a, b) ->
         count_atom (count_atom acc a) b
     | Anf.BytesSet (_, a, b, c) ->

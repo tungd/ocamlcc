@@ -7,8 +7,9 @@
    aggregate types are added as the compiler grows into them. *)
 
 type ty =
-  | Word  (* w: 32-bit *)
-  | Long  (* l: 64-bit *)
+  | Word    (* w: 32-bit *)
+  | Long    (* l: 64-bit *)
+  | Double  (* d: IEEE 754 64-bit float *)
 
 type t =
   | Temp of string      (* %temp *)
@@ -28,14 +29,24 @@ module Cmp : sig
   val to_string : t -> string
 end
 
-type load_op = Loadl | Loaduh | Loadub | Loadsw | Loaduw
-type store_op = Storel | Storew | Storeh | Storeb
+module Fcmp : sig
+  type t = Feq | Fne | Flt | Fle | Fgt | Fge | Fuo | Fo
+end
+
+type load_op = Loadl | Loadw | Loaduh | Loadub | Loadsw | Loaduw | Loadd
+type store_op = Storel | Storew | Storeh | Storeb | Stored
 
 type call = { fn : t; args : (ty * t) list }
 
 type inst =
   | Binop of Binop.t * ty * t * t * t  (* %dst =ty %a op %b *)
-  | Cmp of Cmp.t * ty * t * t * t      (* %dst =ty ceq %a, %b *)
+  | Neg of ty * t * t                  (* %dst =ty neg %a *)
+  | Cmp of Cmp.t * ty * t * t * t      (* %dst =ty cmp %a, %b *)
+  | Fcmp of Fcmp.t * ty * t * t * t    (* %dst =ty fcmpd %a, %b *)
+  | Cast of ty * t * t                 (* %dst =ty cast %a *)
+  | Extsw of t * t                     (* %dst =l extsw %a *)
+  | Sltof of ty * t * t                (* %dst =d sltof %a *)
+  | Dtosi of ty * t * t                (* %dst =ty dtosi %a *)
   | Phi of ty * t * (string * t) list  (* %dst =ty phi @l1 %v1, @l2 %v2 *)
   | Copy of ty * t * t                 (* %dst =ty copy %src *)
   | Load of load_op * ty * t * t       (* %dst =ty loadop %addr *)

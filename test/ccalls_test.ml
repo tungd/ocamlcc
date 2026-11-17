@@ -30,6 +30,7 @@ let check_abi name argc raises yields =
 let stdlib_abis =
   [ ("ocamlcc_print_int_val", 1, false, false);
     ("ocamlcc_print_char_val", 1, false, false);
+    ("ocamlcc_print_float_val", 1, false, false);
     ("ocamlcc_print_string_val", 1, false, false);
     ("ocamlcc_print_endline_val", 1, false, false);
     ("ocamlcc_prerr_string_val", 1, false, false);
@@ -68,14 +69,41 @@ let stdlib_abis =
     ("caml_blit_string", 5, true, false);
     ("caml_fill_bytes", 4, true, false);
     ("caml_string_equal", 2, false, false);
+    ("caml_string_notequal", 2, false, false);
     ("caml_bytes_equal", 2, false, false);
+    ("caml_bytes_notequal", 2, false, false);
     ("caml_string_compare", 2, false, false);
     ("caml_bytes_compare", 2, false, false);
     ("caml_alloc_dummy", 1, false, false);
     ("caml_alloc_dummy_float", 1, false, false);
     ("caml_alloc_dummy_lazy", 1, false, false);
     ("caml_update_dummy", 2, false, false);
-    ("caml_update_dummy_lazy", 2, false, false) ]
+    ("caml_update_dummy_lazy", 2, false, false);
+    ("caml_format_float", 2, false, false);
+    ("caml_format_int", 2, false, false);
+    ("caml_int32_format", 2, false, false);
+    ("caml_int64_format", 2, false, false);
+    ("caml_nativeint_format", 2, false, false);
+    ("caml_float_of_string", 1, true, false);
+    ("caml_int32_of_string", 1, true, false);
+    ("caml_int64_of_string", 1, true, false);
+    ("caml_nativeint_of_string", 1, true, false);
+    ("caml_int32_to_float", 1, false, false);
+    ("caml_int32_of_float", 1, false, false);
+    ("caml_int32_bits_of_float", 1, false, false);
+    ("caml_int32_float_of_bits", 1, false, false);
+    ("caml_int64_to_float", 1, false, false);
+    ("caml_int64_of_float", 1, false, false);
+    ("caml_int64_bits_of_float", 1, false, false);
+    ("caml_int64_float_of_bits", 1, false, false);
+    ("caml_nativeint_to_float", 1, false, false);
+    ("caml_nativeint_of_float", 1, false, false);
+    ("caml_sqrt_float", 1, false, false);
+    ("caml_floor_float", 1, false, false);
+    ("caml_ceil_float", 1, false, false);
+    ("caml_fmod_float", 2, false, false);
+    ("caml_copysign_float", 2, false, false);
+    ("caml_classify_float", 1, false, false) ]
 
 let () =
   let failures = ref 0 in

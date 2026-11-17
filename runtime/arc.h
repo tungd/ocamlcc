@@ -24,6 +24,11 @@
 #define ARC_TAG_STRING      252u
 #define ARC_TAG_FLOAT       253u
 #define ARC_TAG_FLOAT_ARRAY 254u
+#define ARC_TAG_CUSTOM      255u
+
+#define ARC_CUSTOM_INT32     0u
+#define ARC_CUSTOM_INT64     1u
+#define ARC_CUSTOM_NATIVEINT 2u
 
 typedef struct ArcHeader {
     _Atomic uint32_t refcount;    /* 0xFFFFFFFF = immortal/static */
@@ -90,10 +95,45 @@ int64_t ocamlcc_weak_check(int64_t weak_val, int64_t idx);
 
 int64_t ocamlcc_print_int_val(int64_t val);
 int64_t ocamlcc_print_char_val(int64_t val);
+int64_t ocamlcc_print_float_val(int64_t val);
 int64_t ocamlcc_print_string_val(int64_t val);
 int64_t ocamlcc_prerr_string_val(int64_t val);
 int64_t ocamlcc_print_endline_val(int64_t val);
 void    ocamlcc_exit_val(int64_t val) __attribute__((noreturn));
+
+int64_t ocamlcc_alloc_float(double d);
+int64_t ocamlcc_alloc_custom(uint32_t kind, uint64_t bits);
+int64_t ocamlcc_gen_makearray(int64_t n, const int64_t *elems);
+int64_t ocamlcc_gen_array_get(int64_t safe, int64_t arr, int64_t idx_val);
+int64_t ocamlcc_gen_array_set(int64_t safe, int64_t arr, int64_t idx_val, int64_t v);
+
+int64_t caml_format_float(int64_t fmt_val, int64_t float_val);
+int64_t caml_format_int(int64_t fmt_val, int64_t int_val);
+int64_t caml_int32_format(int64_t fmt_val, int64_t v);
+int64_t caml_int64_format(int64_t fmt_val, int64_t v);
+int64_t caml_nativeint_format(int64_t fmt_val, int64_t v);
+int64_t caml_float_of_string(int64_t s_val);
+int64_t caml_int32_of_string(int64_t s_val);
+int64_t caml_int64_of_string(int64_t s_val);
+int64_t caml_nativeint_of_string(int64_t s_val);
+
+int64_t caml_int32_to_float(int64_t v);
+int64_t caml_int32_of_float(int64_t v);
+int64_t caml_int32_bits_of_float(int64_t v);
+int64_t caml_int32_float_of_bits(int64_t v);
+int64_t caml_int64_to_float(int64_t v);
+int64_t caml_int64_of_float(int64_t v);
+int64_t caml_int64_bits_of_float(int64_t v);
+int64_t caml_int64_float_of_bits(int64_t v);
+int64_t caml_nativeint_to_float(int64_t v);
+int64_t caml_nativeint_of_float(int64_t v);
+
+int64_t caml_sqrt_float(int64_t v);
+int64_t caml_floor_float(int64_t v);
+int64_t caml_ceil_float(int64_t v);
+int64_t caml_fmod_float(int64_t a, int64_t b);
+int64_t caml_copysign_float(int64_t a, int64_t b);
+int64_t caml_classify_float(int64_t v);
 
 int64_t caml_compare(int64_t a, int64_t b);
 int64_t caml_equal(int64_t a, int64_t b);
@@ -108,7 +148,9 @@ int64_t caml_blit_bytes(int64_t src, int64_t src_off, int64_t dst, int64_t dst_o
 int64_t caml_blit_string(int64_t src, int64_t src_off, int64_t dst, int64_t dst_off, int64_t len);
 int64_t caml_fill_bytes(int64_t dst, int64_t off, int64_t len, int64_t ch);
 int64_t caml_string_equal(int64_t a, int64_t b);
+int64_t caml_string_notequal(int64_t a, int64_t b);
 int64_t caml_bytes_equal(int64_t a, int64_t b);
+int64_t caml_bytes_notequal(int64_t a, int64_t b);
 int64_t caml_string_compare(int64_t a, int64_t b);
 int64_t caml_bytes_compare(int64_t a, int64_t b);
 

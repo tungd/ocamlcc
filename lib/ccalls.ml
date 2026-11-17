@@ -37,6 +37,7 @@ let table =
   [ (* printing / process *)
     ("ocamlcc_print_int_val", abi 1 false false);
     ("ocamlcc_print_char_val", abi 1 false false);
+    ("ocamlcc_print_float_val", abi 1 false false);
     ("ocamlcc_print_string_val", abi 1 false false);
     ("ocamlcc_print_endline_val", abi 1 false false);
     ("ocamlcc_prerr_string_val", abi 1 false false);
@@ -80,7 +81,9 @@ let table =
     ("caml_blit_string", abi 5 true false);
     ("caml_fill_bytes", abi 4 true false);
     ("caml_string_equal", abi 2 false false);
+    ("caml_string_notequal", abi 2 false false);
     ("caml_bytes_equal", abi 2 false false);
+    ("caml_bytes_notequal", abi 2 false false);
     ("caml_string_compare", abi 2 false false);
     ("caml_bytes_compare", abi 2 false false);
     (* value let rec dummy allocation/backpatch *)
@@ -88,7 +91,33 @@ let table =
     ("caml_alloc_dummy_float", abi 1 false false);
     ("caml_alloc_dummy_lazy", abi 1 false false);
     ("caml_update_dummy", abi 2 false false);
-    ("caml_update_dummy_lazy", abi 2 false false) ]
+    ("caml_update_dummy_lazy", abi 2 false false);
+    (* floats, formatting, parsing, boxed-integer conversions *)
+    ("caml_format_float", abi 2 false false);
+    ("caml_format_int", abi 2 false false);
+    ("caml_int32_format", abi 2 false false);
+    ("caml_int64_format", abi 2 false false);
+    ("caml_nativeint_format", abi 2 false false);
+    ("caml_float_of_string", abi 1 true false);
+    ("caml_int32_of_string", abi 1 true false);
+    ("caml_int64_of_string", abi 1 true false);
+    ("caml_nativeint_of_string", abi 1 true false);
+    ("caml_int32_to_float", abi 1 false false);
+    ("caml_int32_of_float", abi 1 false false);
+    ("caml_int32_bits_of_float", abi 1 false false);
+    ("caml_int32_float_of_bits", abi 1 false false);
+    ("caml_int64_to_float", abi 1 false false);
+    ("caml_int64_of_float", abi 1 false false);
+    ("caml_int64_bits_of_float", abi 1 false false);
+    ("caml_int64_float_of_bits", abi 1 false false);
+    ("caml_nativeint_to_float", abi 1 false false);
+    ("caml_nativeint_of_float", abi 1 false false);
+    ("caml_sqrt_float", abi 1 false false);
+    ("caml_floor_float", abi 1 false false);
+    ("caml_ceil_float", abi 1 false false);
+    ("caml_fmod_float", abi 2 false false);
+    ("caml_copysign_float", abi 2 false false);
+    ("caml_classify_float", abi 1 false false) ]
 
 let find_opt name = List.assoc_opt name table
 

@@ -59,23 +59,32 @@ The pipeline has four stages[^design-doc]:
 
 # Implementation status
 
-The Lambda → ANF → ARC → QBE pipeline works end-to-end (`ninja test`, 19
-checked examples spanning ADTs, closures, Perceus ARC, exceptions, cycles,
-weak arrays, multi-module linking, ARC-native stdlib, and Wren fibers).
-Supported Lambda subset: integer/char constants, string literals,
-immortal structured constant blocks (`Const_block`), `let` / `let mut` /
-`let rec` bindings, sequences, arithmetic/bitwise/comparison/boolean
-primitives, `if/then/else`, `while`/`for` loops, heap blocks (`Pmakeblock`,
-`Pfield`, `Psetfield`, `Poffsetref`, `Pisint`, `Pisout`), arrays/bytes
-(`Pmakearray`, `Pduparray`, bounds-checked get/set), `match` on integers,
-constant constructors, strings, and block constructors (`Lswitch`,
-`Lstringswitch`, `Lstaticraise`/`Lstaticcatch`), closures with free-variable
-capture, lazy immortal wrappers for pure functions, partial & over-application
-(`ArcPap` + `runtime/closure.c`), top-level (mutually recursive) pure
-functions with direct saturated calls, `Ltrywith`/`Praise` exceptions, `Pccall`
-FFI, multi-module `GetGlobal`, and direct calls to known Stdlib builtins
-resolved via [Builtins](/concepts/compiler-pipeline.md). Everything else fails
-with an "unsupported" error naming the construct.
+The Lambda → ANF → ARC → QBE pipeline works end-to-end (`ninja test`, 24
+checked checks spanning ADTs, closures, Perceus ARC, exceptions, cycles,
+weak arrays, multi-module linking, PIC `.so`, multi-threaded FFI, `Tupled`
+functions + `value let rec`, `float` / `float array` / `int32` / `int64` /
+`nativeint` + `Printf`, ARC-native stdlib, and Wren fibers).
+Supported Lambda subset: integer/char constants, `float` (`Const_float`,
+`+.`/`-.`/`*.`/`/.`/`~-.`/`abs_float`/comparisons/`float_of_int`/`int_of_float`),
+`float array` & all-float records (`Const_float_array`, `Pfloatarray`,
+`Pgenarray` runtime dispatch, `Pfloatfield`/`Psetfloatfield`), boxed integers
+(`int32`, `int64`, `nativeint`, constants, arithmetic, shifts, `Division_by_zero`
+-guarded `div`/`mod` avoiding `INT_MIN / -1` traps, comparisons, conversions),
+string literals, immortal structured constant blocks (`Const_block`), `let` /
+`let mut` / `let rec` bindings (both function `let rec` and value `let rec` via
+`caml_alloc_dummy*`/`caml_update_dummy*`), sequences, arithmetic/bitwise/
+comparison/boolean primitives, `if/then/else`, `while`/`for` loops, heap blocks
+(`Pmakeblock`, `Pfield`, `Psetfield`, `Poffsetref`, `Pisint`, `Pisout`),
+arrays/bytes (`Pmakearray`, `Pduparray`, bounds-checked get/set), `match` on
+integers, constant constructors, strings, and block constructors (`Lswitch`,
+`Lstringswitch`, `Lstaticraise`/`Lstaticcatch`), `Curried` and `Tupled`
+functions, closures with free-variable capture, lazy immortal wrappers for pure
+functions, partial & over-application (`ArcPap` + `runtime/closure.c`),
+top-level (mutually recursive) pure functions with direct saturated calls,
+`Ltrywith`/`Praise` exceptions, `Pccall` FFI, multi-module `GetGlobal`, and
+direct calls to known Stdlib builtins resolved via
+[Builtins](/concepts/compiler-pipeline.md). Everything else fails with an
+"unsupported" error naming the construct.
 
 # Match lowering
 

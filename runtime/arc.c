@@ -95,15 +95,21 @@ typedef struct CCVec {
 
 static CCVec g_cc_roots = { NULL, 0, 0, 0 };
 
+static inline int is_unscanned_leaf_tag(uint16_t tag)
+{
+    return tag == (uint16_t)ARC_TAG_STRING ||
+           tag == (uint16_t)ARC_TAG_WEAK ||
+           tag == (uint16_t)ARC_TAG_FLOAT ||
+           tag == (uint16_t)ARC_TAG_FLOAT_ARRAY ||
+           tag == (uint16_t)ARC_TAG_CUSTOM;
+}
+
 static inline int is_cycle_candidate_obj(const ArcHeader *hdr)
 {
     if (atomic_load_explicit(&hdr->refcount, memory_order_relaxed) == ARC_IMMORTAL)
         return 0;
     uint16_t tag = hdr->tag;
-    if (tag == (uint16_t)ARC_TAG_STRING ||
-        tag == (uint16_t)ARC_TAG_WEAK ||
-        tag == (uint16_t)ARC_TAG_FLOAT ||
-        tag == (uint16_t)ARC_TAG_FLOAT_ARRAY)
+    if (is_unscanned_leaf_tag(tag))
         return 0;
     if (tag == (uint16_t)ARC_TAG_FIBER)
         return 1; /* the shadow stack holds owning references (see
@@ -393,10 +399,7 @@ int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
         uint32_t n = dhdr->byte_size / 8u;
         for (uint32_t i = 0; i < n; i++)
             arc_release_val(da[i]);
-    } else if (dhdr->tag != (uint16_t)ARC_TAG_STRING &&
-               dhdr->tag != (uint16_t)ARC_TAG_WEAK &&
-               dhdr->tag != (uint16_t)ARC_TAG_FLOAT &&
-               dhdr->tag != (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+    } else if (!is_unscanned_leaf_tag(dhdr->tag)) {
         int64_t *df = (int64_t *)(uintptr_t)dummy_val;
         for (uint16_t i = 0; i < dhdr->scan_fields; i++)
             arc_release_val(df[i]);
@@ -406,6 +409,9 @@ int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
                nhdr->byte_size);
     dhdr->tag = nhdr->tag;
     dhdr->scan_fields = nhdr->scan_fields;
+    if (nhdr->tag == (uint16_t)ARC_TAG_CUSTOM ||
+        nhdr->tag == (uint16_t)ARC_TAG_STRING)
+        dhdr->reserved = nhdr->reserved;
     /* Preserve dhdr->byte_size so slab_free returns it to its original class. */
 
     /* Retain newly-copied scanned children because [dummy] now owns a ref. */
@@ -418,10 +424,7 @@ int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
         uint32_t n = nhdr->byte_size / 8u;
         for (uint32_t i = 0; i < n; i++)
             arc_retain_val(da[i]);
-    } else if (dhdr->tag != (uint16_t)ARC_TAG_STRING &&
-               dhdr->tag != (uint16_t)ARC_TAG_WEAK &&
-               dhdr->tag != (uint16_t)ARC_TAG_FLOAT &&
-               dhdr->tag != (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+    } else if (!is_unscanned_leaf_tag(dhdr->tag)) {
         int64_t *df = (int64_t *)(uintptr_t)dummy_val;
         for (uint16_t i = 0; i < dhdr->scan_fields; i++)
             arc_retain_val(df[i]);
@@ -514,6 +517,7 @@ void *arc_alloc(uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
 }
 
 extern const void *ocamlcc_global_Invalid_argument;
+extern const void *ocamlcc_global_Failure;
 extern const void *ocamlcc_global_Sys_error;
 
 #define DEFINE_IMMORTAL_STR(sym, lit)                                          \
@@ -581,6 +585,19 @@ void *arc_alloc_array(uint64_t len, int64_t init)
         arc_release_val(init);
         raise_invalid_arg_imm(g_inv_arg_array_str.str);
         return (void *)(uintptr_t)1;
+    }
+    if (len > 0 && is_heap_ptr(init)) {
+        const ArcHeader *ihdr = (const ArcHeader *)(uintptr_t)init - 1;
+        if (ihdr->tag == (uint16_t)ARC_TAG_FLOAT) {
+            uint64_t bits;
+            pal_memcpy(&bits, (const void *)(uintptr_t)init, sizeof(bits));
+            uint64_t *farr = (uint64_t *)arc_alloc((uint16_t)ARC_TAG_FLOAT_ARRAY,
+                                                    0u, (uint32_t)(len * 8u));
+            for (uint64_t i = 0; i < len; i++)
+                farr[i] = bits;
+            arc_release_val(init);
+            return farr;
+        }
     }
     uint16_t scan = (len > 0xffffu) ? 0xffffu : (uint16_t)len;
     int64_t *arr = arc_alloc((uint16_t)ARC_TAG_ARRAY, scan, (uint32_t)(len * 8u));
@@ -718,9 +735,7 @@ static void release_subtree(ArcHeader *root, int free_root)
             weak_unlink((ArcWeakArray *)(cur + 1));
         } else if (tag == ARC_TAG_FIBER) {
             fiber_destroy((Fiber *)(cur + 1));
-        } else if (tag != ARC_TAG_STRING &&
-                   tag != ARC_TAG_FLOAT &&
-                   tag != ARC_TAG_FLOAT_ARRAY) {
+        } else if (!is_unscanned_leaf_tag(tag)) {
             int64_t *fields = (int64_t *)(cur + 1);
             uint32_t n = cur->scan_fields;
             for (uint32_t i = 0; i < n; i++)
@@ -881,10 +896,7 @@ static void cc_visit_children(ArcHeader *hdr, CcChildFn fn, void *ctx)
             fn(f->exn_slot, ctx);
         if (f->pending_exn != 0)
             fn(f->pending_exn, ctx);
-    } else if (tag != (uint16_t)ARC_TAG_STRING &&
-               tag != (uint16_t)ARC_TAG_WEAK &&
-               tag != (uint16_t)ARC_TAG_FLOAT &&
-               tag != (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+    } else if (!is_unscanned_leaf_tag(tag)) {
         int64_t *fields = (int64_t *)(hdr + 1);
         uint32_t n = hdr->scan_fields;
         for (uint32_t i = 0; i < n; i++)
@@ -1393,6 +1405,327 @@ int64_t ocamlcc_prerr_string_val(int64_t val)
     return 1;
 }
 
+static void raise_failure_cstr(const char *msg, size_t len)
+{
+    char *s = (char *)arc_alloc_bytes((uint64_t)len);
+    if (len > 0u)
+        pal_memcpy(s, msg, len);
+    int64_t *blk = (int64_t *)arc_alloc(0u, 2u, 16u);
+    blk[0] = (int64_t)(uintptr_t)ocamlcc_global_Failure;
+    blk[1] = (int64_t)(uintptr_t)s;
+    ocamlcc_set_exn((int64_t)(uintptr_t)blk);
+}
+
+int64_t ocamlcc_alloc_float(double d)
+{
+    double *p = (double *)arc_alloc((uint16_t)ARC_TAG_FLOAT, 0u, 8u);
+    *p = d;
+    return (int64_t)(uintptr_t)p;
+}
+
+int64_t ocamlcc_alloc_custom(uint32_t kind, uint64_t bits)
+{
+    uint64_t *p = (uint64_t *)arc_alloc((uint16_t)ARC_TAG_CUSTOM, 0u, 8u);
+    ArcHeader *hdr = (ArcHeader *)p - 1;
+    hdr->reserved = kind;
+    *p = bits;
+    return (int64_t)(uintptr_t)p;
+}
+
+static inline double unbox_float(int64_t v)
+{
+    double d;
+    pal_memcpy(&d, (const void *)(uintptr_t)v, sizeof(double));
+    return d;
+}
+
+static inline int64_t unbox_custom_i64(int64_t v)
+{
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)v - 1;
+    if (hdr->reserved == ARC_CUSTOM_INT32) {
+        int32_t w;
+        pal_memcpy(&w, (const void *)(uintptr_t)v, sizeof(w));
+        return (int64_t)w;
+    }
+    int64_t l;
+    pal_memcpy(&l, (const void *)(uintptr_t)v, sizeof(l));
+    return l;
+}
+
+int64_t ocamlcc_gen_makearray(int64_t n, const int64_t *elems)
+{
+    if (n <= 0)
+        return (int64_t)(uintptr_t)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 0u);
+    if (is_heap_ptr(elems[0])) {
+        const ArcHeader *h0 = (const ArcHeader *)(uintptr_t)elems[0] - 1;
+        if (h0->tag == (uint16_t)ARC_TAG_FLOAT) {
+            double *farr = (double *)arc_alloc(
+                (uint16_t)ARC_TAG_FLOAT_ARRAY, 0u, (uint32_t)((uint64_t)n * 8u));
+            for (int64_t i = 0; i < n; i++) {
+                farr[i] = unbox_float(elems[i]);
+                arc_release_val(elems[i]);
+            }
+            return (int64_t)(uintptr_t)farr;
+        }
+    }
+    uint16_t scan = (n > 0xffff) ? 0xffffu : (uint16_t)n;
+    int64_t *arr = (int64_t *)arc_alloc(
+        (uint16_t)ARC_TAG_ARRAY, scan, (uint32_t)((uint64_t)n * 8u));
+    for (int64_t i = 0; i < n; i++)
+        arr[i] = elems[i];
+    return (int64_t)(uintptr_t)arr;
+}
+
+int64_t ocamlcc_gen_array_get(int64_t safe, int64_t arr, int64_t idx_val)
+{
+    uint64_t idx = (uint64_t)(idx_val >> 1);
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)arr - 1;
+    uint64_t len = (uint64_t)(hdr->byte_size >> 3);
+    if (safe && idx >= len) {
+        ocamlcc_raise_invalid_arg_oob();
+        return 1;
+    }
+    if (hdr->tag == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+        const double *farr = (const double *)(uintptr_t)arr;
+        return ocamlcc_alloc_float(farr[idx]);
+    }
+    const int64_t *elems = (const int64_t *)(uintptr_t)arr;
+    int64_t v = elems[idx];
+    arc_retain_val(v);
+    return v;
+}
+
+int64_t ocamlcc_gen_array_set(int64_t safe, int64_t arr, int64_t idx_val, int64_t v)
+{
+    uint64_t idx = (uint64_t)(idx_val >> 1);
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)arr - 1;
+    uint64_t len = (uint64_t)(hdr->byte_size >> 3);
+    if (safe && idx >= len) {
+        arc_release_val(v);
+        ocamlcc_raise_invalid_arg_oob();
+        return 1;
+    }
+    if (hdr->tag == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+        double *farr = (double *)(uintptr_t)arr;
+        farr[idx] = unbox_float(v);
+        arc_release_val(v);
+        return 1;
+    }
+    int64_t *elems = (int64_t *)(uintptr_t)arr;
+    int64_t old_v = elems[idx];
+    elems[idx] = v;
+    arc_release_val(old_v);
+    return 1;
+}
+
+extern int ocamlcc_snprintf_double(char *out, size_t cap, const char *fmt,
+                                   size_t fmt_len, double d);
+extern int ocamlcc_snprintf_i64(char *out, size_t cap, const char *fmt,
+                                size_t fmt_len, int64_t v, int is_i32);
+extern int ocamlcc_parse_double(const char *s, size_t len, double *out);
+extern int ocamlcc_parse_i64(const char *s, size_t len, int is_i32, int64_t *out);
+extern double ocamlcc_c_sqrt(double d);
+extern double ocamlcc_c_floor(double d);
+extern double ocamlcc_c_ceil(double d);
+extern double ocamlcc_c_fmod(double a, double b);
+extern double ocamlcc_c_copysign(double a, double b);
+extern int ocamlcc_c_fpclassify(double d);
+
+int64_t ocamlcc_print_float_val(int64_t val)
+{
+    char buf[64];
+    int n = ocamlcc_snprintf_double(buf, sizeof(buf), "%.12g", 5u, unbox_float(val));
+    if (n > 0)
+        ocamlcc_print_string(buf, (size_t)n);
+    return 1;
+}
+
+static int64_t alloc_c_string_buf(const char *buf, int n)
+{
+    if (n < 0)
+        n = 0;
+    char *s = (char *)arc_alloc_bytes((uint64_t)n);
+    if (n > 0)
+        pal_memcpy(s, buf, (size_t)n);
+    return (int64_t)(uintptr_t)s;
+}
+
+int64_t caml_format_float(int64_t fmt_val, int64_t float_val)
+{
+    const ArcHeader *fh = (const ArcHeader *)(uintptr_t)fmt_val - 1;
+    char buf[512];
+    int n = ocamlcc_snprintf_double(
+        buf, sizeof(buf), (const char *)(uintptr_t)fmt_val,
+        (size_t)fh->reserved, unbox_float(float_val));
+    return alloc_c_string_buf(buf, n);
+}
+
+static int64_t format_i64_common(int64_t fmt_val, int64_t v, int is_i32)
+{
+    const ArcHeader *fh = (const ArcHeader *)(uintptr_t)fmt_val - 1;
+    char buf[128];
+    int n = ocamlcc_snprintf_i64(
+        buf, sizeof(buf), (const char *)(uintptr_t)fmt_val,
+        (size_t)fh->reserved, v, is_i32);
+    return alloc_c_string_buf(buf, n);
+}
+
+int64_t caml_format_int(int64_t fmt_val, int64_t int_val)
+{
+    return format_i64_common(fmt_val, int_val >> 1, 0);
+}
+
+int64_t caml_int32_format(int64_t fmt_val, int64_t v)
+{
+    return format_i64_common(fmt_val, unbox_custom_i64(v), 1);
+}
+
+int64_t caml_int64_format(int64_t fmt_val, int64_t v)
+{
+    return format_i64_common(fmt_val, unbox_custom_i64(v), 0);
+}
+
+int64_t caml_nativeint_format(int64_t fmt_val, int64_t v)
+{
+    return format_i64_common(fmt_val, unbox_custom_i64(v), 0);
+}
+
+int64_t caml_float_of_string(int64_t s_val)
+{
+    const ArcHeader *sh = (const ArcHeader *)(uintptr_t)s_val - 1;
+    double d = 0.0;
+    if (!ocamlcc_parse_double((const char *)(uintptr_t)s_val,
+                              (size_t)sh->reserved, &d)) {
+        raise_failure_cstr("float_of_string", 15u);
+        return 1;
+    }
+    return ocamlcc_alloc_float(d);
+}
+
+static int64_t parse_custom_int(int64_t s_val, uint32_t kind, const char *err)
+{
+    const ArcHeader *sh = (const ArcHeader *)(uintptr_t)s_val - 1;
+    int64_t out = 0;
+    if (!ocamlcc_parse_i64((const char *)(uintptr_t)s_val,
+                           (size_t)sh->reserved,
+                           kind == ARC_CUSTOM_INT32, &out)) {
+        size_t len = 0;
+        while (err[len] != '\0')
+            len++;
+        raise_failure_cstr(err, len);
+        return 1;
+    }
+    return ocamlcc_alloc_custom(kind, (uint64_t)out);
+}
+
+int64_t caml_int32_of_string(int64_t s_val)
+{
+    return parse_custom_int(s_val, ARC_CUSTOM_INT32, "Int32.of_string");
+}
+
+int64_t caml_int64_of_string(int64_t s_val)
+{
+    return parse_custom_int(s_val, ARC_CUSTOM_INT64, "Int64.of_string");
+}
+
+int64_t caml_nativeint_of_string(int64_t s_val)
+{
+    return parse_custom_int(s_val, ARC_CUSTOM_NATIVEINT, "Nativeint.of_string");
+}
+
+int64_t caml_int32_to_float(int64_t v)
+{
+    return ocamlcc_alloc_float((double)(int32_t)unbox_custom_i64(v));
+}
+
+int64_t caml_int32_of_float(int64_t v)
+{
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT32,
+                                (uint64_t)(int64_t)(int32_t)unbox_float(v));
+}
+
+int64_t caml_int32_bits_of_float(int64_t v)
+{
+    double d = unbox_float(v);
+    float f = (float)d;
+    uint32_t bits = 0;
+    pal_memcpy(&bits, &f, sizeof(bits));
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT32, (uint64_t)(int64_t)(int32_t)bits);
+}
+
+int64_t caml_int32_float_of_bits(int64_t v)
+{
+    uint32_t bits = (uint32_t)(int32_t)unbox_custom_i64(v);
+    float f = 0.0f;
+    pal_memcpy(&f, &bits, sizeof(f));
+    return ocamlcc_alloc_float((double)f);
+}
+
+int64_t caml_int64_to_float(int64_t v)
+{
+    return ocamlcc_alloc_float((double)unbox_custom_i64(v));
+}
+
+int64_t caml_int64_of_float(int64_t v)
+{
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, (uint64_t)(int64_t)unbox_float(v));
+}
+
+int64_t caml_int64_bits_of_float(int64_t v)
+{
+    uint64_t bits = 0;
+    pal_memcpy(&bits, (const void *)(uintptr_t)v, sizeof(bits));
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, bits);
+}
+
+int64_t caml_int64_float_of_bits(int64_t v)
+{
+    double d = 0.0;
+    uint64_t bits = (uint64_t)unbox_custom_i64(v);
+    pal_memcpy(&d, &bits, sizeof(d));
+    return ocamlcc_alloc_float(d);
+}
+
+int64_t caml_nativeint_to_float(int64_t v)
+{
+    return ocamlcc_alloc_float((double)unbox_custom_i64(v));
+}
+
+int64_t caml_nativeint_of_float(int64_t v)
+{
+    return ocamlcc_alloc_custom(ARC_CUSTOM_NATIVEINT, (uint64_t)(int64_t)unbox_float(v));
+}
+
+int64_t caml_sqrt_float(int64_t v)
+{
+    return ocamlcc_alloc_float(ocamlcc_c_sqrt(unbox_float(v)));
+}
+
+int64_t caml_floor_float(int64_t v)
+{
+    return ocamlcc_alloc_float(ocamlcc_c_floor(unbox_float(v)));
+}
+
+int64_t caml_ceil_float(int64_t v)
+{
+    return ocamlcc_alloc_float(ocamlcc_c_ceil(unbox_float(v)));
+}
+
+int64_t caml_fmod_float(int64_t a, int64_t b)
+{
+    return ocamlcc_alloc_float(ocamlcc_c_fmod(unbox_float(a), unbox_float(b)));
+}
+
+int64_t caml_copysign_float(int64_t a, int64_t b)
+{
+    return ocamlcc_alloc_float(ocamlcc_c_copysign(unbox_float(a), unbox_float(b)));
+}
+
+int64_t caml_classify_float(int64_t v)
+{
+    return tag_int((int64_t)ocamlcc_c_fpclassify(unbox_float(v)));
+}
+
 int64_t ocamlcc_print_endline_val(int64_t val)
 {
     const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)val - 1;
@@ -1490,6 +1823,16 @@ int64_t caml_bytes_equal(int64_t a, int64_t b)
     return caml_string_equal(a, b);
 }
 
+int64_t caml_string_notequal(int64_t a, int64_t b)
+{
+    return caml_string_equal(a, b) == 3 ? 1 : 3;
+}
+
+int64_t caml_bytes_notequal(int64_t a, int64_t b)
+{
+    return caml_string_notequal(a, b);
+}
+
 int64_t caml_string_compare(int64_t a, int64_t b)
 {
     int c = bytes_compare_raw(a, b);
@@ -1508,10 +1851,51 @@ int64_t caml_bytes_compare(int64_t a, int64_t b)
 /* C recursion depth is bounded so cyclic records cannot smash the C
  * stack; the shared step budget bounds tail-iterated cycles (e.g. cyclic
  * lists), which would otherwise spin forever without growing the stack. */
-#define COMPARE_MAX_DEPTH 50000
+#define COMPARE_MAX_DEPTH 10000
 #define COMPARE_MAX_STEPS 100000000LL
 
 DEFINE_IMMORTAL_STR(g_inv_arg_cyc_str, "compare: cyclic structure");
+
+static int is_nan_bits(uint64_t bits)
+{
+    return (bits & 0x7fffffffffffffffULL) > 0x7ff0000000000000ULL;
+}
+
+static __attribute__((noinline)) int compare_f64_raw(double da, double db, int total)
+{
+    uint64_t ba = 0, bb = 0;
+    pal_memcpy(&ba, &da, sizeof(ba));
+    pal_memcpy(&bb, &db, sizeof(bb));
+    int na = is_nan_bits(ba);
+    int nb = is_nan_bits(bb);
+    if (na) {
+        if (nb)
+            return total ? 0 : 1;
+        return -1;
+    }
+    if (nb)
+        return 1;
+    if (da < db)
+        return -1;
+    if (da > db)
+        return 1;
+    return 0;
+}
+
+static __attribute__((noinline)) int compare_float_arrays_raw(
+    int64_t a, int64_t b, uint32_t fa, uint32_t fb, int total)
+{
+    if (fa != fb)
+        return (fa < fb) ? -1 : 1;
+    const double *pa = (const double *)(uintptr_t)a;
+    const double *pb = (const double *)(uintptr_t)b;
+    for (uint32_t i = 0; i < fa; i++) {
+        int c = compare_f64_raw(pa[i], pb[i], total);
+        if (c != 0)
+            return c;
+    }
+    return 0;
+}
 
 static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
                            int64_t *steps)
@@ -1522,8 +1906,24 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
             return 1;
         }
         (*steps)--;
-        if (a == b)
+        if (a == b) {
+            if (!total && is_heap_ptr(a)) {
+                const ArcHeader *h = (const ArcHeader *)(uintptr_t)a - 1;
+                if (h->tag == (uint16_t)ARC_TAG_FLOAT) {
+                    double da = unbox_float(a);
+                    if (compare_f64_raw(da, da, 0) != 0)
+                        return 1;
+                } else if (h->tag == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+                    const double *fa = (const double *)(uintptr_t)a;
+                    uint32_t n = h->byte_size / 8u;
+                    for (uint32_t i = 0; i < n; i++) {
+                        if (compare_f64_raw(fa[i], fa[i], 0) != 0)
+                            return 1;
+                    }
+                }
+            }
             return 0;
+        }
         int ia = (a & 1) != 0;
         int ib = (b & 1) != 0;
         if (ia && ib)
@@ -1542,6 +1942,19 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
 
         if (ta == (uint16_t)ARC_TAG_STRING)
             return bytes_compare_raw(a, b);
+        if (ta == (uint16_t)ARC_TAG_FLOAT)
+            return compare_f64_raw(unbox_float(a), unbox_float(b), total);
+        if (ta == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+            return compare_float_arrays_raw(
+                a, b, ha->byte_size / 8u, hb->byte_size / 8u, total);
+        }
+        if (ta == (uint16_t)ARC_TAG_CUSTOM) {
+            if (ha->reserved != hb->reserved)
+                return (ha->reserved < hb->reserved) ? -1 : 1;
+            int64_t va = unbox_custom_i64(a);
+            int64_t vb = unbox_custom_i64(b);
+            return (va < vb) ? -1 : (va > vb ? 1 : 0);
+        }
 
         /* Functional values (closures / partial applications): ordered
          * comparison is undefined in OCaml and must raise; ( = ) / ( <> )
@@ -1643,6 +2056,18 @@ static uint32_t hash_mix32(uint32_t h, uint32_t d)
     return h * 5u + 0xe6546b64u;
 }
 
+static uint32_t hash_mix_f64(uint32_t h, double d)
+{
+    uint64_t bits = 0;
+    pal_memcpy(&bits, &d, sizeof(bits));
+    if (is_nan_bits(bits))
+        bits = 0x7ff8000000000001ULL;
+    else if (d == 0.0)
+        bits = 0ULL;
+    h = hash_mix32(h, (uint32_t)bits);
+    return hash_mix32(h, (uint32_t)(bits >> 32));
+}
+
 int64_t caml_hash(int64_t count_val, int64_t limit_val,
                   int64_t seed_val, int64_t obj)
 {
@@ -1687,6 +2112,24 @@ int64_t caml_hash(int64_t count_val, int64_t limit_val,
                 if (len > 0u)
                     h = hash_mix32(h, rem);
                 h = hash_mix32(h, len);
+                num--;
+            } else if (tag == (uint16_t)ARC_TAG_FLOAT) {
+                h = hash_mix_f64(h, unbox_float(v));
+                num--;
+            } else if (tag == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+                uint32_t nf = hdr->byte_size / 8u;
+                const double *fa = (const double *)(uintptr_t)v;
+                h = hash_mix32(h, ((uint32_t)tag << 16) ^ nf);
+                for (uint32_t i = 0; i < nf && num > 0 && limit > 0; i++) {
+                    h = hash_mix_f64(h, fa[i]);
+                    num--;
+                    limit--;
+                }
+            } else if (tag == (uint16_t)ARC_TAG_CUSTOM) {
+                uint64_t u = (uint64_t)unbox_custom_i64(v);
+                h = hash_mix32(h, hdr->reserved);
+                h = hash_mix32(h, (uint32_t)u);
+                h = hash_mix32(h, (uint32_t)(u >> 32));
                 num--;
             } else if (tag == (uint16_t)ARC_TAG_ARRAY || tag < 245u) {
                 uint32_t nf = (tag == (uint16_t)ARC_TAG_ARRAY)

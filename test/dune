@@ -167,3 +167,20 @@
  (deps tupled_letrec_test.actual tupled_letrec_test.expected)
  (action
   (diff tupled_letrec_test.expected tupled_letrec_test.actual)))
+
+(executable
+ (name primitives_ir_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps primitives_ir_test.exe primitives_ir_test.expected)
+ (action
+  (with-stdout-to primitives_ir_test.actual
+   (run ./primitives_ir_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps primitives_ir_test.actual primitives_ir_test.expected)
+ (action
+  (diff primitives_ir_test.expected primitives_ir_test.actual)))

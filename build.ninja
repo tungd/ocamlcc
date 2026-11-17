@@ -50,7 +50,7 @@ rule qbe_ssa
   description = QBE $out
 
 rule cc_link
-  command = $cc $in -o $out
+  command = $cc $in -lm -o $out
   description = LINK $out
 
 rule as_obj
@@ -187,12 +187,27 @@ build $stdlibdir/stdlib__fiber.ssa | $stdlibdir/stdlib__fiber.cmi: ocamlcc_ssa s
 build $stdlibdir/stdlib__fiber.s: qbe_ssa $stdlibdir/stdlib__fiber.ssa | $builddir/qbe/qbe
 build $stdlibdir/stdlib__fiber.o: as_obj $stdlibdir/stdlib__fiber.s
 
-build $stdlibdir/stdlib.ssa | $stdlibdir/stdlib.cmi: ocamlcc_ssa stdlib/stdlib.ml | $builddir/bin/ocamlcc $stdlibdir/camlinternalFormatBasics.cmi $stdlibdir/stdlib__option.cmi $stdlibdir/stdlib__result.cmi $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi $stdlibdir/stdlib__list.cmi $stdlibdir/stdlib__array.cmi $stdlibdir/stdlib__buffer.cmi $stdlibdir/stdlib__hashtbl.cmi $stdlibdir/stdlib__printf.cmi $stdlibdir/stdlib__weak.cmi $stdlibdir/stdlib__fiber.cmi
+build $stdlibdir/stdlib__int32.ssa | $stdlibdir/stdlib__int32.cmi: ocamlcc_ssa stdlib/stdlib__int32.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__int32
+build $stdlibdir/stdlib__int32.s: qbe_ssa $stdlibdir/stdlib__int32.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__int32.o: as_obj $stdlibdir/stdlib__int32.s
+
+build $stdlibdir/stdlib__int64.ssa | $stdlibdir/stdlib__int64.cmi: ocamlcc_ssa stdlib/stdlib__int64.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__int64
+build $stdlibdir/stdlib__int64.s: qbe_ssa $stdlibdir/stdlib__int64.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__int64.o: as_obj $stdlibdir/stdlib__int64.s
+
+build $stdlibdir/stdlib__nativeint.ssa | $stdlibdir/stdlib__nativeint.cmi: ocamlcc_ssa stdlib/stdlib__nativeint.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__nativeint
+build $stdlibdir/stdlib__nativeint.s: qbe_ssa $stdlibdir/stdlib__nativeint.ssa | $builddir/qbe/qbe
+build $stdlibdir/stdlib__nativeint.o: as_obj $stdlibdir/stdlib__nativeint.s
+
+build $stdlibdir/stdlib.ssa | $stdlibdir/stdlib.cmi: ocamlcc_ssa stdlib/stdlib.ml | $builddir/bin/ocamlcc $stdlibdir/camlinternalFormatBasics.cmi $stdlibdir/stdlib__option.cmi $stdlibdir/stdlib__result.cmi $stdlibdir/stdlib__int32.cmi $stdlibdir/stdlib__int64.cmi $stdlibdir/stdlib__nativeint.cmi $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi $stdlibdir/stdlib__list.cmi $stdlibdir/stdlib__array.cmi $stdlibdir/stdlib__buffer.cmi $stdlibdir/stdlib__hashtbl.cmi $stdlibdir/stdlib__printf.cmi $stdlibdir/stdlib__weak.cmi $stdlibdir/stdlib__fiber.cmi
   flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib
 build $stdlibdir/stdlib.s: qbe_ssa $stdlibdir/stdlib.ssa | $builddir/qbe/qbe
 build $stdlibdir/stdlib.o: as_obj $stdlibdir/stdlib.s
 
-build $stdlibdir/libocamlstdlib.a: ar $stdlibdir/camlinternalFormatBasics.o $stdlibdir/stdlib__option.o $stdlibdir/stdlib__result.o $stdlibdir/stdlib__bytes.o $stdlibdir/stdlib__string.o $stdlibdir/stdlib__list.o $stdlibdir/stdlib__array.o $stdlibdir/stdlib__buffer.o $stdlibdir/stdlib__hashtbl.o $stdlibdir/stdlib__printf.o $stdlibdir/stdlib__weak.o $stdlibdir/stdlib__fiber.o $stdlibdir/stdlib.o
+build $stdlibdir/libocamlstdlib.a: ar $stdlibdir/camlinternalFormatBasics.o $stdlibdir/stdlib__option.o $stdlibdir/stdlib__result.o $stdlibdir/stdlib__int32.o $stdlibdir/stdlib__int64.o $stdlibdir/stdlib__nativeint.o $stdlibdir/stdlib__bytes.o $stdlibdir/stdlib__string.o $stdlibdir/stdlib__list.o $stdlibdir/stdlib__array.o $stdlibdir/stdlib__buffer.o $stdlibdir/stdlib__hashtbl.o $stdlibdir/stdlib__printf.o $stdlibdir/stdlib__weak.o $stdlibdir/stdlib__fiber.o $stdlibdir/stdlib.o
 
 # ------------------------------------------------------------ examples ----
 
@@ -351,7 +366,7 @@ build test_qbe_pic: qbe_pic_check $builddir/mod_lib.ssa | $builddir/qbe/qbe
 build test_pic_so: run_pic_so | $builddir/pic_so_host tests/pic_so.expected
 
 rule cc_mt_host
-  command = $cc -O2 -g -pthread tests/mt_ffi_host.c $in -o $out
+  command = $cc -O2 -g -pthread tests/mt_ffi_host.c $in -lm -o $out
   description = LINK(MT) $out
 
 rule run_mt_ffi
@@ -375,14 +390,22 @@ build $builddir/tupled_letrec: cc_link $builddir/tupled_letrec.s $stdlibdir/libo
 build test_tupled_letrec: run_test | $builddir/tupled_letrec
   name = tupled_letrec
 
-build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec
+build $builddir/primitives_test.ssa: ocamlcc_ssa examples/primitives_test.ml | $builddir/bin/ocamlcc $stdlibdir/stdlib.cmi
+  flags = --nostdlib -I $stdlibdir
+build $builddir/primitives_test.s: qbe_ssa $builddir/primitives_test.ssa | $builddir/qbe/qbe
+build $builddir/primitives_test: cc_link $builddir/primitives_test.s $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
+
+build test_primitives_test: run_test | $builddir/primitives_test
+  name = primitives_test
+
+build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test
 
 rule cc_rt_asan
   command = $cc $rt_cflags -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iruntime -c $in -o $out
   description = CC(ASAN) $out
 
 rule cc_link_asan
-  command = $cc -fsanitize=address,undefined -fno-sanitize-recover=all $in -o $out
+  command = $cc -fsanitize=address,undefined -fno-sanitize-recover=all $in -lm -o $out
   description = LINK(ASAN) $out
 
 rule run_asan_test
@@ -449,6 +472,11 @@ build $builddir/asan/tupled_letrec: cc_link_asan $builddir/tupled_letrec.s $stdl
 build asan_tupled_letrec: run_asan_test | $builddir/asan/tupled_letrec
   name = tupled_letrec
 
-build asan_test: phony asan_adt asan_closures asan_arrays_bytes asan_arc_test asan_exn asan_weak_cycle asan_cycle_collect asan_mod_main asan_stdlib_test asan_fiber_test asan_fiber_io asan_mt_ffi asan_tupled_letrec
+build $builddir/asan/primitives_test: cc_link_asan $builddir/primitives_test.s $stdlibdir/libocamlstdlib.a $builddir/asan/rt/libocamlrt.a
+
+build asan_primitives_test: run_asan_test | $builddir/asan/primitives_test
+  name = primitives_test
+
+build asan_test: phony asan_adt asan_closures asan_arrays_bytes asan_arc_test asan_exn asan_weak_cycle asan_cycle_collect asan_mod_main asan_stdlib_test asan_fiber_test asan_fiber_io asan_mt_ffi asan_tupled_letrec asan_primitives_test
 
 default $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a $builddir/bin/ocamlcc $builddir/hello
