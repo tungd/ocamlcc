@@ -1,5 +1,18 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Fix Driver stdlib `.cmi` resolution and pre-user fallback compilation (TDD) —
+  `lib/driver.ml` now resolves `ocamlcc`'s own `stdlib.cmi` before user
+  compilation when `not cfg.nostdlib`: on host default toolchain it uses
+  `prebuilt_stdlib_dir` (requiring both `.o` objects and `stdlib.cmi`), and
+  otherwise compiles `stdlib/` `.cmi` + `.ssa` into `work_dir/stdlib` via
+  `compile_stdlib_cmis_and_ssa` ahead of user `.mli`/`.ml` and `C_bindgen`
+  steps, prepending that directory to `inc_dirs` and passing `~nostdlib:true`
+  (then assembling/compiling those `.ssa` files with `compile_stdlib_objs_from_ssa`
+  at link time). Added `default stdlib cmi` and `stdlib fallback cmi` tests
+  and removed the `nostdlib = true` workaround from the shared-library test in
+  `test/driver_test.ml`. `dune runtest` (14/14) and `ninja test` (25/25) pass.
+  Updated [build-pipeline](/concepts/build-pipeline.md).
+
 - 2026-11-17 (autoagent/1): Add single-binary driver `ocamlcc build --target <t>` (TDD) —
   implemented `lib/driver.ml`/`lib/driver.mli` and wired `ocamlcc build` in
   `bin/main.ml` (plus `unix` in `lib/dune`). Parses `.mli`/`.ml` module

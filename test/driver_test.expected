@@ -1,6 +1,8 @@
 target resolution: PASS
 dependency ordering: PASS
 exe build: PASS
+default stdlib cmi: PASS
+stdlib fallback cmi: PASS
 shared library + header: PASS
 static library no main: PASS
 cross-target asm emission: PASS

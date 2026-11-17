@@ -62,8 +62,11 @@ or `_build` by ninja itself.
 When compiling user projects without `build.ninja`, `ocamlcc build`
 (`lib/driver.ml`) orchestrates the full pipeline in one command:
 topological dependency ordering over `.mli`/`.ml` units via compiler-libs
-`Depend`, `.cmi`/`.ssa` compilation, optional `.mli -> .h` + `_shim.c`
-generation (`lib/c_bindgen.ml`), `qbe -t <target>` assembly, target C/xcrun/NDK
-toolchain compilation of `runtime/` and `stdlib/` (excluding `main_entry.o`
-for library targets), and executable, shared, static, or `.xcframework`
-packaging.
+`Depend`, automatic resolution of `ocamlcc`'s own `stdlib.cmi` (from
+prebuilt `build/stdlib` on host or compiled from `stdlib/` into `work_dir/stdlib`
+before user units, passing `--nostdlib` internally unless `--nostdlib` was
+explicitly requested), `.cmi`/`.ssa` compilation, optional `.mli -> .h` +
+`_shim.c` generation (`lib/c_bindgen.ml`), `qbe -t <target>` assembly, target
+C/xcrun/NDK toolchain compilation of `runtime/` and `stdlib/` (excluding
+`main_entry.o` for library targets), and executable, shared, static, or
+`.xcframework` packaging.

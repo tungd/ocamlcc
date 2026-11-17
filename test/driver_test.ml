@@ -119,6 +119,13 @@ let () =
 
   (* 3. Full driver builds inside temp dir *)
   with_temp_dir (fun tmp ->
+      let write_tmp name content =
+        let p = Filename.concat tmp name in
+        let oc = open_out_bin p in
+        output_string oc content;
+        close_out oc;
+        p
+      in
       (* 3a. Multi-module executable (inputs reversed) *)
       let exe_out = Filename.concat tmp "mod_app" in
       let base_cfg =
@@ -146,6 +153,61 @@ let () =
           in
           check "exe build" (code = 0 && out = expected));
 
+      (* 3a'. Default nostdlib=false uses ocamlcc stdlib.cmi (List/Array/Option/Printf) *)
+      let std_app_ml =
+        write_tmp "std_app.ml"
+          {|
+let () =
+  let xs = List.map (fun x -> x * 2) [ 1; 2; 3 ] in
+  let arr = [| 10; 20; 30; 40 |] in
+  let o = Option.value ~default:0 (Some 7) in
+  let s = Printf.sprintf "sum=%d arr=%d opt=%d"
+    (List.fold_left ( + ) 0 xs) (Array.length arr) o in
+  print_endline s
+|}
+      in
+      let std_app_out = Filename.concat tmp "std_app" in
+      (match
+         Driver.build
+           { base_cfg with
+             inputs = [ std_app_ml ];
+             output = Some std_app_out;
+             work_dir = Some (Filename.concat tmp "work_std_app") }
+       with
+      | Error msg ->
+          Printf.printf "default stdlib cmi error: %s\n" msg;
+          check "default stdlib cmi" false
+      | Ok _ ->
+          let code, out = run_capture std_app_out [] in
+          check "default stdlib cmi"
+            (code = 0 && out = "sum=12 arr=4 opt=7\n"));
+
+      (* 3a''. Fallback without prebuilt stdlib dir compiles stdlib.cmi before user *)
+      let fb_app_ml =
+        write_tmp "fb_app.ml"
+          {|
+let () =
+  let tot = List.fold_left ( + ) 0 [ 4; 5; 6 ] in
+  let v = Option.value ~default:0 (Option.map (fun x -> x + 1) (Some 9)) in
+  print_endline (Printf.sprintf "tot=%d v=%d" tot v)
+|}
+      in
+      let fb_app_out = Filename.concat tmp "fb_app" in
+      (match
+         Driver.build
+           { base_cfg with
+             prebuilt_stdlib_dir = Some (Filename.concat tmp "no_prebuilt_stdlib");
+             inputs = [ fb_app_ml ];
+             output = Some fb_app_out;
+             work_dir = Some (Filename.concat tmp "work_fb_app") }
+       with
+      | Error msg ->
+          Printf.printf "stdlib fallback cmi error: %s\n" msg;
+          check "stdlib fallback cmi" false
+      | Ok _ ->
+          let code, out = run_capture fb_app_out [] in
+          check "stdlib fallback cmi" (code = 0 && out = "tot=15 v=10\n"));
+
       (* 3b. Shared library + --emit-header + C host (verifying no main_entry.o) *)
       let bindgen_mli = Filename.concat root "examples/bindgen_lib.mli" in
       let bindgen_ml = Filename.concat root "examples/bindgen_lib.ml" in
@@ -160,8 +222,6 @@ let () =
       (match
          Driver.build
            { base_cfg with
-             nostdlib = true;
-             include_dirs = [ stdlib_build_dir ];
              inputs = [ bindgen_ml; bindgen_mli ];
              kind = Some Driver.Kind_shared;
              emit_header = Some hdr_out;

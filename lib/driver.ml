@@ -619,8 +619,13 @@ let stdlib_ordered_units =
     "stdlib__fiber.ml";
     "stdlib.ml" ]
 
-let compile_stdlib_objs ~verbose ~qbe (tc : toolchain) ~qbe_target stdlib_src_dir
-    out_dir =
+type stdlib_plan =
+  | Stdlib_prebuilt of string * string list
+  | Stdlib_compiled of (string * string) list
+  | Stdlib_none
+
+let compile_stdlib_cmis_and_ssa stdlib_src_dir out_dir :
+    ((string * string) list, string) result =
   mkdir_p out_dir;
   let units =
     List.filter_map
@@ -629,13 +634,12 @@ let compile_stdlib_objs ~verbose ~qbe (tc : toolchain) ~qbe_target stdlib_src_di
         if Sys.file_exists p then Some p else None)
       stdlib_ordered_units
   in
-  let rec go objs = function
-    | [] -> Ok (List.rev objs)
+  let rec go acc = function
+    | [] -> Ok (List.rev acc)
     | ml :: rest -> (
         let base = Filename.chop_extension (Filename.basename ml) in
         let prefix = Filename.concat out_dir base in
         let ssa = prefix ^ ".ssa" in
-        let asm = prefix ^ ".s" in
         let obj = prefix ^ ".o" in
         let modname = Pipeline.module_name_of_file ml in
         match
@@ -644,18 +648,35 @@ let compile_stdlib_objs ~verbose ~qbe (tc : toolchain) ~qbe_target stdlib_src_di
             ~filename:ml ~modname ()
         with
         | Error msg -> Error msg
-        | Ok ssa_txt -> (
+        | Ok ssa_txt ->
             write_file ssa ssa_txt;
-            match
-              run_cmd ~verbose ~stdout_file:asm qbe [ "-t"; qbe_target; ssa ]
-            with
-            | Error _ as e -> e
-            | Ok () -> (
-                match compile_c_or_s ~verbose tc [] asm obj with
-                | Error _ as e -> e
-                | Ok () -> go (obj :: objs) rest)))
+            go ((ssa, obj) :: acc) rest)
   in
   go [] units
+
+let compile_stdlib_objs_from_ssa ~verbose ~qbe (tc : toolchain) ~qbe_target
+    ssa_obj_pairs =
+  let rec go objs = function
+    | [] -> Ok (List.rev objs)
+    | (ssa, obj) :: rest -> (
+        let asm = Filename.chop_extension ssa ^ ".s" in
+        match
+          run_cmd ~verbose ~stdout_file:asm qbe [ "-t"; qbe_target; ssa ]
+        with
+        | Error _ as e -> e
+        | Ok () -> (
+            match compile_c_or_s ~verbose tc [] asm obj with
+            | Error _ as e -> e
+            | Ok () -> go (obj :: objs) rest))
+  in
+  go [] ssa_obj_pairs
+
+let compile_stdlib_objs ~verbose ~qbe (tc : toolchain) ~qbe_target stdlib_src_dir
+    out_dir =
+  match compile_stdlib_cmis_and_ssa stdlib_src_dir out_dir with
+  | Error _ as e -> e
+  | Ok pairs ->
+      compile_stdlib_objs_from_ssa ~verbose ~qbe tc ~qbe_target pairs
 
 let list_o_files dir =
   if Sys.file_exists dir && Sys.is_directory dir then
@@ -707,7 +728,35 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
               in
               let cmi_dir = Filename.concat work_dir "cmi" in
               mkdir_p cmi_dir;
-              let inc_dirs = cmi_dir :: cfg.include_dirs in
+              let stdlib_prep_res =
+                if cfg.nostdlib then Ok (Stdlib_none, [], true)
+                else
+                  let try_src () =
+                    match resolve_stdlib_src_dir cfg with
+                    | Some sdir
+                      when Sys.file_exists (Filename.concat sdir "stdlib.ml") ->
+                        let out_dir = Filename.concat work_dir "stdlib" in
+                        (match compile_stdlib_cmis_and_ssa sdir out_dir with
+                        | Error _ as e -> e
+                        | Ok pairs ->
+                            Ok (Stdlib_compiled pairs, [ out_dir ], true))
+                    | _ -> Ok (Stdlib_none, [], false)
+                  in
+                  if is_host_default_toolchain cfg target then
+                    match resolve_prebuilt_stdlib_dir cfg with
+                    | Some d
+                      when list_o_files d <> []
+                           && Sys.file_exists (Filename.concat d "stdlib.cmi") ->
+                        Ok (Stdlib_prebuilt (d, list_o_files d), [ d ], true)
+                    | _ -> try_src ()
+                  else try_src ()
+              in
+              match stdlib_prep_res with
+              | Error _ as e -> e
+              | Ok (stdlib_plan, stdlib_cmi_dirs, eff_nostdlib) ->
+              let inc_dirs =
+                cmi_dir :: (stdlib_cmi_dirs @ cfg.include_dirs)
+              in
               let is_lib_kind =
                 match kind with
                 | Kind_shared | Kind_static | Kind_obj | Kind_asm
@@ -740,7 +789,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                               Pipeline.compile_interface_file
                                 ~include_dirs:inc_dirs ~output_prefix:prefix
                                 ~nopervasives:cfg.nopervasives
-                                ~nostdlib:cfg.nostdlib ~filename:s.path
+                                ~nostdlib:eff_nostdlib ~filename:s.path
                                 ~modname:s.modname ()
                             with
                             | Error msg -> Error msg
@@ -757,7 +806,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                               Pipeline.compile_file ~include_dirs:inc_dirs
                                 ~output_prefix:prefix ~emit_cmi
                                 ~nopervasives:cfg.nopervasives
-                                ~nostdlib:cfg.nostdlib ~emit_entry
+                                ~nostdlib:eff_nostdlib ~emit_entry
                                 ~filename:s.path ~modname:s.modname ()
                             with
                             | Error msg -> Error msg
@@ -813,7 +862,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                       C_bindgen.generate_file
                                         ~include_dirs:inc_dirs
                                         ~nopervasives:cfg.nopervasives
-                                        ~nostdlib:cfg.nostdlib
+                                        ~nostdlib:eff_nostdlib
                                         ~header_include:(Filename.basename out_h)
                                         ~filename:s.path ~modname:s.modname ()
                                     with
@@ -961,15 +1010,42 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                       | Error _ as e -> e
                                       | Ok rt_objs -> (
                                           let stdlib_objs_res =
-                                            if is_host_default_toolchain cfg target
-                                            then
-                                              match
-                                                resolve_prebuilt_stdlib_dir cfg
-                                              with
-                                              | Some d
-                                                when list_o_files d <> [] ->
-                                                  Ok (list_o_files d)
-                                              | _ -> (
+                                            match stdlib_plan with
+                                            | Stdlib_prebuilt (_, objs) ->
+                                                Ok objs
+                                            | Stdlib_compiled pairs ->
+                                                compile_stdlib_objs_from_ssa
+                                                  ~verbose ~qbe tc
+                                                  ~qbe_target:target.qbe_target
+                                                  pairs
+                                            | Stdlib_none ->
+                                                if not cfg.nostdlib then Ok []
+                                                else if
+                                                  is_host_default_toolchain cfg
+                                                    target
+                                                then
+                                                  match
+                                                    resolve_prebuilt_stdlib_dir
+                                                      cfg
+                                                  with
+                                                  | Some d
+                                                    when list_o_files d <> [] ->
+                                                      Ok (list_o_files d)
+                                                  | _ -> (
+                                                      match
+                                                        resolve_stdlib_src_dir
+                                                          cfg
+                                                      with
+                                                      | Some sdir ->
+                                                          compile_stdlib_objs
+                                                            ~verbose ~qbe tc
+                                                            ~qbe_target:
+                                                              target.qbe_target
+                                                            sdir
+                                                            (Filename.concat
+                                                               work_dir "stdlib")
+                                                      | None -> Ok [])
+                                                else
                                                   match
                                                     resolve_stdlib_src_dir cfg
                                                   with
@@ -981,20 +1057,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                                         sdir
                                                         (Filename.concat
                                                            work_dir "stdlib")
-                                                  | None -> Ok [])
-                                            else
-                                              match
-                                                resolve_stdlib_src_dir cfg
-                                              with
-                                              | Some sdir ->
-                                                  compile_stdlib_objs ~verbose
-                                                    ~qbe tc
-                                                    ~qbe_target:
-                                                      target.qbe_target
-                                                    sdir
-                                                    (Filename.concat work_dir
-                                                       "stdlib")
-                                              | None -> Ok []
+                                                  | None -> Ok []
                                           in
                                           match stdlib_objs_res with
                                           | Error _ as e -> e
