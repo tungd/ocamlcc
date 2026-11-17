@@ -1,5 +1,20 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Fix `Anf.pure_defs` dropping `known'` across sequential `Let (id, Fun lf, body)` (TDD) —
+  in `lib/anf.ml`, the `Let (id, Fun lf, body)` arm added `id` to `known'`
+  when recursing into `lf.body`, but passed the stale `known` when recursing
+  into `body`. Any pure non-recursive function `f` defined after and calling
+  a prior pure non-recursive function `h` (`let h x = x + 1 in let f y = h y`)
+  was omitted from `Anf.pure_defs`, so `arc_pass` owned and `Release`d `f`
+  while `codegen` compiled it as static. `test/pure_nested_test.ml`'s
+  `static_fun_ids` helper had the identical `go extra acc body` omission
+  (plus missing `extra` propagation in `LetRec`), reporting `1 static funs`
+  for `toplevel_helper`. Fixed `static_fun_ids` and added unexported
+  `seq_unexported_helper` (Red: `toplevel_helper` released `f` 1x,
+  `seq_unexported_helper` released `f` 2x; Green: `toplevel_helper` 2 static
+  funs / 0 releases, `seq_unexported_helper` 3 static funs / 0 releases).
+  `dune runtest` (11/11), `ninja test` (24/24), `ninja asan_test` (14/14).
+
 - 2026-11-17 (autoagent/1): Add `float`, `float array`, `int32`, `int64`, `nativeint`, and `Printf` `%f`/`%ld`/`%Ld`/`%nd` (TDD) —
   implemented unboxed QBE `Double` (`d`) and 32/64-bit boxed integer lowering
   in `lib/qbe_il.ml`, `lib/anf.ml`, `lib/arc_pass.ml`, `lib/codegen_ctx.ml`,

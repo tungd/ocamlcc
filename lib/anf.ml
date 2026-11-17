@@ -717,16 +717,17 @@ let pure_defs (e : aexpr) : (Ident.t * lfunction) list =
   let rec go known acc (e : aexpr) =
     match e with
     | Let (id, Fun lf, body) ->
-        let acc =
-          if is_pure known lf then begin
-            (* [id] is an immortal static function: nested helpers may
-               capture it without becoming closures. *)
-            let known' = Ident.Set.add id known in
-            go known' ((id, lf) :: acc) lf.body
-          end
-          else go known acc lf.body
-        in
-        go known acc body
+        if is_pure known lf then begin
+          (* [id] is an immortal static function: both nested helpers inside
+             [lf.body] and subsequent bindings in [body] may call it without
+             becoming heap closures. *)
+          let known' = Ident.Set.add id known in
+          let acc = go known' ((id, lf) :: acc) lf.body in
+          go known' acc body
+        end
+        else
+          let acc = go known acc lf.body in
+          go known acc body
     | Let (_, _, body) | MutLet (_, _, body) -> go known acc body
     | LetJoin (_, rhs, body) -> go known (go known acc rhs) body
     | LetRec (bindings, body) ->

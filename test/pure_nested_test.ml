@@ -65,18 +65,16 @@ let static_fun_ids (e : Anf.aexpr) : Ident.Set.t =
     Ident.Set.for_all (fun v -> Ident.Set.mem v allowed) free
   in
   let rec go extra acc = function
-    | Anf.Let (id, ce, body) | Anf.MutLet (id, ce, body) -> (
-        let acc =
-          match ce with
-          | Anf.Fun lf ->
-              let acc =
-                if is_noncapturing ~extra lf then Ident.Set.add id acc else acc
-              in
-              (* nested defs inside the function body, incl. branches *)
-              go extra acc lf.Anf.body
-          | _ -> acc
-        in
-        go extra acc body)
+    | Anf.Let (id, Anf.Fun lf, body) ->
+        if is_noncapturing ~extra lf then
+          let extra' = Ident.Set.add id extra in
+          let acc = Ident.Set.add id acc in
+          let acc = go extra' acc lf.Anf.body in
+          go extra' acc body
+        else
+          let acc = go extra acc lf.Anf.body in
+          go extra acc body
+    | Anf.Let (_, _, body) | Anf.MutLet (_, _, body) -> go extra acc body
     | Anf.LetJoin (_, rhs, body) -> go extra (go extra acc rhs) body
     | Anf.LetRec (bindings, body) ->
         let rec_ids =
@@ -84,14 +82,25 @@ let static_fun_ids (e : Anf.aexpr) : Ident.Set.t =
             (fun s (rb : Anf.rec_binding) -> Ident.Set.add rb.id s)
             Ident.Set.empty bindings
         in
-        let acc =
-          if
-            List.for_all (fun (rb : Anf.rec_binding) ->
-                is_noncapturing ~extra:rec_ids rb.def) bindings
-          then Ident.Set.union rec_ids acc
-          else acc
-        in
-        go extra acc body
+        let extra_grp = Ident.Set.union rec_ids extra in
+        if
+          List.for_all (fun (rb : Anf.rec_binding) ->
+              is_noncapturing ~extra:extra_grp rb.def) bindings
+        then
+          let acc = Ident.Set.union rec_ids acc in
+          let acc =
+            List.fold_left
+              (fun acc (rb : Anf.rec_binding) -> go extra_grp acc rb.def.Anf.body)
+              acc bindings
+          in
+          go extra_grp acc body
+        else
+          let acc =
+            List.fold_left
+              (fun acc (rb : Anf.rec_binding) -> go extra acc rb.def.Anf.body)
+              acc bindings
+          in
+          go extra acc body
     | Anf.If (_, th, el) -> go extra (go extra acc th) el
     | Anf.Switch (_, sw) ->
         let arms =
@@ -191,6 +200,16 @@ let f x = h x + h (x * 2)
 let r = f 3
 |}
 
+let seq_unexported_helper =
+  {|
+let outer n =
+  let h x = x + 1 in
+  let f y = h y + h (y * 2) in
+  f n
+
+let r = outer 3
+|}
+
 let capturing =
   {|
 let k n =
@@ -226,5 +245,8 @@ let () =
   | None -> incr failures);
   (match compile "nested_branch_letrec" nested_branch_letrec with
   | Some anf -> expect_ok "branch letrec not released" (assert_no_release "nested_branch_letrec" anf)
+  | None -> incr failures);
+  (match compile "seq_unexported_helper" seq_unexported_helper with
+  | Some anf -> expect_ok "sequential unexported helper not released" (assert_no_release "seq_unexported_helper" anf)
   | None -> incr failures);
   exit (if !failures = 0 then 0 else 1)
