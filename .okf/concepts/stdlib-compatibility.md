@@ -28,15 +28,22 @@ implementations with ocamlcc/QBE, archives the objects, and links upstream tests
 against that archive and our ARC runtime. It does not use the host OCaml runtime.
 `build/stdlib_compat/report.md` records module and test outcomes.[^runner]
 
-The initial integration compiles 68/72 modules. Lexing, Parsing, Bigarray,
-and Marshal remain unsupported. A pre-existing report records 53/77 standalone
+The Lexing overlay implements both DFA engines in OCaml, including signed
+16-bit transitions, unsigned memory-code offsets, captures, backtracking,
+refill continuations, EOF, and positions. `tests/stdlib/lexing` uses real
+ocamllex output and passes against both stock OCaml and ocamlcc. The native
+stdlib build now compiles 69/72 modules; Parsing, Bigarray, and Marshal remain
+unsupported. A pre-existing report records 53/77 standalone
 tests passing; this count is historical until the runner is executed again.
 Compilation success alone does not establish behavioral compatibility.
 
 The runner skips toplevel expect tests and tests with C stubs, multiple modules,
 or unsupported ocamltest directives. Those require an adapter rather than being
 counted as passing. GC, domains, and OS-specific behavior may differ under ARC.
-Core regression commands are `ninja -j1 test`, `ninja -j1 asan_test`, and
+`python3 tools/stdlib_regressions.py` runs repository API fixtures against the
+compatibility archive; `--stock` checks the same fixtures with host OCaml.
+Generated sources, commands, executables, and outputs stay under
+`build/stdlib_regressions/`. Core regression commands are `ninja -j1 test`, `ninja -j1 asan_test`, and
 `dune runtest -j1`.[^runtime]
 
 [^runner]: Native compilation and test orchestration in the compatibility runner.
