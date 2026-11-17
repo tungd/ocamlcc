@@ -6,6 +6,8 @@ val compile_implementation :
   ?emit_cmi:bool ->
   ?nopervasives:bool ->
   ?nostdlib:bool ->
+  ?no_alias_deps:bool ->
+  ?nolabels:bool ->
   filename:string ->
   modname:string ->
   string ->
@@ -18,6 +20,8 @@ val compile_interface :
   ?output_prefix:string ->
   ?nopervasives:bool ->
   ?nostdlib:bool ->
+  ?no_alias_deps:bool ->
+  ?nolabels:bool ->
   filename:string ->
   modname:string ->
   string ->

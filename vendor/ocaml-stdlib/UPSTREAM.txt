@@ -1,0 +1,6 @@
+upstream: https://github.com/ocaml/ocaml.git
+version: 5.5.0
+commit: f5238509da6029a44ba0eb648f5dff7d9c89f519
+ml_files: 72
+mli_files: 72
+lib_test_suites: 48

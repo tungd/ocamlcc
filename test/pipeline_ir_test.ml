@@ -74,4 +74,24 @@ let () =
         "call extern $arc_release_val(";
         "call extern $ocamlcc_apply1(" ]
   in
-  exit (if ok1 && ok2 && ok2_no_main && ok3 then 0 else 1)
+  let ok4 =
+    match
+      Pipeline.compile_source ~nopervasives:true ~nostdlib:true
+        ~no_alias_deps:true ~nolabels:true ~emit_entry:false
+        ~filename:"alias_test.ml" ~modname:"Alias_test"
+        "module Unresolved = Nonexistent_module\n\
+         external ( + ) : int -> int -> int = \"%addint\"\n\
+         let add x y = x + y"
+    with
+    | Ok il when has_substr ~sub:"export function $ocamlcc_init_Alias_test()" il
+      ->
+        Printf.printf "no_alias_deps_and_nolabels: PASS\n";
+        true
+    | Ok _ ->
+        Printf.printf "no_alias_deps_and_nolabels: FAIL missing init\n";
+        false
+    | Error msg ->
+        Printf.printf "no_alias_deps_and_nolabels: FAIL %s\n" msg;
+        false
+  in
+  exit (if ok1 && ok2 && ok2_no_main && ok3 && ok4 then 0 else 1)

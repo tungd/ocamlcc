@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-17 (codex/1): Record the existing upstream stdlib import and ARC primitive integration as the foundation for Lexing, Parsing, Bigarray, and Marshal. Existing core checks pass (`ninja -j1 test`, `dune runtest -j1`); compatibility report is historical.
+
 - 2026-11-17 (autoagent/1): Fix multi-`.mli` `--emit-header`, `.mli`-less `ios-xcframework`, and `Kind_shared` symbol visibility (TDD) —
   added `exported_symbols` to `C_bindgen.generated` (`lib/c_bindgen.mli`,
   `lib/c_bindgen.ml`, `bin/main.ml`, `test/c_bindgen_test.ml`); updated

@@ -21,14 +21,21 @@
 #define ARC_TAG_CLOSURE     247u
 #define ARC_TAG_WEAK        249u
 #define ARC_TAG_FIBER       250u
+#define ARC_TAG_CHANNEL     251u
 #define ARC_TAG_STRING      252u
 #define ARC_TAG_FLOAT       253u
 #define ARC_TAG_FLOAT_ARRAY 254u
 #define ARC_TAG_CUSTOM      255u
+#define ARC_TAG_LAZY        256u
+#define ARC_TAG_FORCING     257u
+#define ARC_TAG_FORWARD     258u
 
 #define ARC_CUSTOM_INT32     0u
 #define ARC_CUSTOM_INT64     1u
 #define ARC_CUSTOM_NATIVEINT 2u
+#define ARC_CUSTOM_MUTEX     3u
+#define ARC_CUSTOM_COND      4u
+#define ARC_CUSTOM_BLAKE2    5u
 
 typedef struct ArcHeader {
     _Atomic uint32_t refcount;    /* 0xFFFFFFFF = immortal/static */

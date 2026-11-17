@@ -23,6 +23,8 @@ type cli_opts = {
   include_dirs : string list;
   nostdlib : bool;
   nopervasives : bool;
+  no_alias_deps : bool;
+  nolabels : bool;
   emit_cmi : bool;
   cmi_prefix : string option;
   is_mod : bool;
@@ -49,6 +51,8 @@ let default_opts =
   { include_dirs = [];
     nostdlib = false;
     nopervasives = false;
+    no_alias_deps = false;
+    nolabels = false;
     emit_cmi = false;
     cmi_prefix = None;
     is_mod = false;
@@ -83,6 +87,8 @@ let parse_opts args =
         go { opts with include_dirs = dir :: opts.include_dirs } rest
     | "--nostdlib" :: rest -> go { opts with nostdlib = true } rest
     | "--nopervasives" :: rest -> go { opts with nopervasives = true } rest
+    | "--no-alias-deps" :: rest -> go { opts with no_alias_deps = true } rest
+    | "--nolabels" :: rest -> go { opts with nolabels = true } rest
     | "--emit-cmi" :: rest -> go { opts with emit_cmi = true } rest
     | "--cmi-prefix" :: p :: rest ->
         go { opts with cmi_prefix = Some p; emit_cmi = true } rest
@@ -145,17 +151,22 @@ let compile opts =
       prerr_endline usage;
       2
   | Some file -> (
-      let modname = Pipeline.module_name_of_file file in
       let output_prefix =
         match opts.cmi_prefix with
         | Some _ as p -> p
         | None when opts.emit_cmi -> Some (Filename.remove_extension file)
         | None -> None
       in
+      let modname =
+        match output_prefix with
+        | Some p -> Pipeline.module_name_of_file (p ^ ".ml")
+        | None -> Pipeline.module_name_of_file file
+      in
       match
         Pipeline.compile_file ~include_dirs:opts.include_dirs ?output_prefix
           ~emit_cmi:opts.emit_cmi ~nopervasives:opts.nopervasives
-          ~nostdlib:opts.nostdlib ~emit_entry:(not opts.is_mod)
+          ~nostdlib:opts.nostdlib ~no_alias_deps:opts.no_alias_deps
+          ~nolabels:opts.nolabels ~emit_entry:(not opts.is_mod)
           ~filename:file ~modname ()
       with
       | Ok ssa ->
@@ -185,7 +196,8 @@ let compile_mli opts =
       match
         Pipeline.compile_interface_file ~include_dirs:opts.include_dirs
           ?output_prefix ~nopervasives:opts.nopervasives
-          ~nostdlib:opts.nostdlib ~filename:file ~modname ()
+          ~nostdlib:opts.nostdlib ~no_alias_deps:opts.no_alias_deps
+          ~nolabels:opts.nolabels ~filename:file ~modname ()
       with
       | Ok _ -> 0
       | Error msg ->

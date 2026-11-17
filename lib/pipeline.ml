@@ -9,11 +9,12 @@ let read_file filename =
       really_input_string ic (in_channel_length ic))
 
 let compile_source ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
-    ?(nopervasives = false) ?(nostdlib = false) ?(emit_entry = true) ~filename
-    ~modname source : (string, string) result =
+    ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
+    ?(nolabels = false) ?(emit_entry = true) ~filename ~modname source :
+    (string, string) result =
   match
     Frontend.compile_implementation ~include_dirs ?output_prefix ~emit_cmi
-      ~nopervasives ~nostdlib ~filename ~modname source
+      ~nopervasives ~nostdlib ~no_alias_deps ~nolabels ~filename ~modname source
   with
   | Error { msg } -> Error msg
   | Ok program -> (
@@ -24,23 +25,24 @@ let compile_source ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
           Ok (Qbe_il.to_string (Codegen.compile_program ~emit_entry anf)))
 
 let compile_file ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
-    ?(nopervasives = false) ?(nostdlib = false) ?(emit_entry = true) ~filename
-    ~modname () : (string, string) result =
+    ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
+    ?(nolabels = false) ?(emit_entry = true) ~filename ~modname () :
+    (string, string) result =
   match read_file filename with
   | exception Sys_error msg -> Error msg
   | source ->
       compile_source ~include_dirs ?output_prefix ~emit_cmi ~nopervasives
-        ~nostdlib ~emit_entry ~filename ~modname source
+        ~nostdlib ~no_alias_deps ~nolabels ~emit_entry ~filename ~modname source
 
 let compile_interface_file ?(include_dirs = []) ?output_prefix
-    ?(nopervasives = false) ?(nostdlib = false) ~filename ~modname () :
-    (string, string) result =
+    ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
+    ?(nolabels = false) ~filename ~modname () : (string, string) result =
   match read_file filename with
   | exception Sys_error msg -> Error msg
   | source -> (
       match
         Frontend.compile_interface ~include_dirs ?output_prefix ~nopervasives
-          ~nostdlib ~filename ~modname source
+          ~nostdlib ~no_alias_deps ~nolabels ~filename ~modname source
       with
       | Error { msg } -> Error msg
       | Ok cmi_path -> Ok cmi_path)

@@ -76,7 +76,9 @@ let compile_div_mod b qop (av : t) (cv : t) : t =
   let lok = fresh_label b "div_ok" in
   let lzero = fresh_label b "div_zero" in
   let ldone = fresh_label b "div_done" in
-  close_block b (Br (uc, lok, lzero));
+  let nz = fresh_temp b "div_nz" in
+  emit b (Cmp (Ne, Long, nz, uc, Int 0L));
+  close_block b (Br (nz, lok, lzero));
   start_block b lok;
   let raw = fresh_temp b "divr" in
   emit b (Binop (qop, Long, raw, ua, uc));
@@ -145,7 +147,9 @@ let compile_bint_div_mod b bi qop (av : t) (cv : t) : t =
   let lneg1 = fresh_label b "bdiv_m1" in
   let lzero = fresh_label b "bdiv_zero" in
   let ldone = fresh_label b "bdiv_done" in
-  close_block b (Br (uc, lcheck, lzero));
+  let nz = fresh_temp b "bdiv_nz" in
+  emit b (Cmp (Ne, ty, nz, uc, Int 0L));
+  close_block b (Br (nz, lcheck, lzero));
   start_block b lcheck;
   let is_m1 = fresh_temp b "ism1" in
   emit b (Cmp (Eq, ty, is_m1, uc, Int (-1L)));
@@ -160,10 +164,9 @@ let compile_bint_div_mod b bi qop (av : t) (cv : t) : t =
   let res_m1 =
     match qop with
     | Binop.Div ->
-        let c = fresh_temp b "bdivm" in
-        emit b (Copy (Long, c, av));
-        emit b (Call_void { fn = Global "arc_retain_val"; args = [ (Long, c) ] });
-        c
+        let neg_a = fresh_temp b "bdivneg" in
+        emit b (Binop (Binop.Sub, ty, neg_a, Int 0L, ua));
+        box_bint b bi neg_a
     | _ -> box_bint b bi (Int 0L)
   in
   let lm1_end = b.cur_fn.open_label in
@@ -580,7 +583,9 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
           let lerr = fresh_label b "oapp_err" in
           let lok = fresh_label b "oapp_ok" in
           let ljoin = fresh_label b "oapp_join" in
-          close_block b (Br (ex, lerr, lok));
+          let has_ex = fresh_temp b "ohasex" in
+          emit b (Cmp (Ne, Long, has_ex, ex, Int 0L));
+          close_block b (Br (has_ex, lerr, lok));
           start_block b lerr;
           List.iter
             (fun v ->
@@ -1119,7 +1124,9 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
       let lerr = fresh_label b "exn_err" in
       let lok = fresh_label b "exn_ok" in
-      close_block b (Br (ex, lerr, lok));
+      let has_ex = fresh_temp b "hasex" in
+      emit b (Cmp (Ne, Long, has_ex, ex, Int 0L));
+      close_block b (Br (has_ex, lerr, lok));
       start_block b lerr;
       ignore (compile_aexpr hooks b false on_err);
       if b.cur_fn.term = None then ignore (emit_unwind b);
@@ -1240,7 +1247,15 @@ and compile_switch hooks b tail (scrut : Anf.atom) (sw : Anf.switch_cases) =
       start_block b lblocks;
       emit_block_switch ()
   | _ :: _, [] -> emit_chain sv const_cases
-  | [], _ :: _ -> emit_block_switch ()
+  | [], _ :: _ ->
+      if sw.fail <> None then begin
+        let isint = fresh_temp b "isint" in
+        emit b (Binop (And, Long, isint, sv, Int 1L));
+        let lblocks = fresh_label b "swblocks" in
+        close_block b (Br (isint, lfail, lblocks));
+        start_block b lblocks
+      end;
+      emit_block_switch ()
   | [], [] -> close_block b (Jmp lfail));
   (match sw.fail with
   | Some fail ->

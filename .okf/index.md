@@ -25,6 +25,8 @@ links into the concepts below.
 | [/concepts/platform-abstraction-layer.md](/concepts/platform-abstraction-layer.md) | stable | The 6-hook freestanding PAL. |
 | [/concepts/roadmap.md](/concepts/roadmap.md) | stable | Phases, deliverables, and key risks. |
 
+| [/concepts/stdlib-compatibility.md](/concepts/stdlib-compatibility.md) | stable | Upstream stdlib overlays and native test execution. |
+
 ## Maintenance
 
 This bundle is maintained in-repo: when code changes, update the affected

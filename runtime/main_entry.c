@@ -5,10 +5,14 @@
 #include <stdio.h>
 
 extern void ocamlcc_module_init(void);
+extern void ocamlcc_run_at_exit(void);
+extern void ocamlcc_set_argv(int argc, char **argv);
 
-int main(void)
+int main(int argc, char **argv)
 {
+    ocamlcc_set_argv(argc, argv);
     ocamlcc_module_init();
+    ocamlcc_run_at_exit();
     fflush(stdout);
     return 0;
 }

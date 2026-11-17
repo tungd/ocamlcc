@@ -308,6 +308,13 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
       match args with
       | [] -> emit_cexpr (Atom Unit)
       | _ -> conv_atoms args (fun vs -> emit_cexpr (MakeBlock (tag, vs))))
+  | Lprim (Pmakelazyblock ltag, [ arg ], _) ->
+      let sym =
+        match ltag with
+        | Lambda.Lazy_tag -> "caml_lazy_make_block"
+        | Lambda.Forward_tag -> "caml_lazy_make_forward"
+      in
+      conv_expr arg (fun av -> emit_cexpr (Ccall (sym, [ av ])))
   | Lprim (Pmakearray (kind, _), args, _) ->
       check_array_kind kind;
       conv_atoms args (fun vs -> emit_cexpr (MakeArray (kind, vs)))
@@ -319,9 +326,18 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
       emit_cexpr (MakeArray (kind, List.map (fun s -> Float (parse_const_float s)) sl))
   | Lprim (Pfield (i, _, _), [ arg ], _) ->
       conv_expr arg (fun a -> emit_cexpr (Field (i, a)))
+  | Lprim (Pfield_computed, [ arg; idx ], _) ->
+      conv_atoms [ arg; idx ] (fun vs ->
+          emit_cexpr (Ccall ("caml_obj_field", vs)))
   | Lprim (Psetfield (i, _, _), [ arg; rhs ], _) ->
       conv_expr arg (fun a ->
           conv_expr rhs (fun v -> emit_cexpr (SetField (i, a, v))))
+  | Lprim (Psetfield_computed _, [ arg; idx; rhs ], _) ->
+      conv_atoms [ arg; idx; rhs ] (fun vs ->
+          emit_cexpr (Ccall ("caml_obj_set_field", vs)))
+  | Lprim (Pbigarraydim d, [ arg ], _) ->
+      conv_expr arg (fun a ->
+          emit_cexpr (Ccall ("caml_ba_dim", [ a; Int d ])))
   | Lprim (Pfloatfield i, [ arg ], _) ->
       conv_expr arg (fun a -> emit_cexpr (FloatField (i, a)))
   | Lprim (Psetfloatfield (i, _), [ arg; rhs ], _) ->
@@ -461,6 +477,65 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
       binop (Bint_cmp (bi, cmp)) a c emit_cexpr
   | Lprim (Pcompare_bints bi, [ a; c ], _) ->
       binop (Compare_bints bi) a c emit_cexpr
+  | Lprim (Patomic_load, [ ptr; idx ], _) ->
+      conv_atoms [ ptr; idx ] (fun vs ->
+          emit_cexpr (Ccall ("caml_atomic_load_field", vs)))
+  | Lprim (Patomic_load, [ ptr ], _) ->
+      conv_expr ptr (fun p ->
+          emit_cexpr (Ccall ("caml_atomic_load_field", [ p; Int 0 ])))
+  | Lprim (Pbswap16, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Ccall ("caml_bswap16", [ av ])))
+  | Lprim (Pbbswap Pint32, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Ccall ("caml_int32_bswap", [ av ])))
+  | Lprim (Pbbswap Pint64, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Ccall ("caml_int64_bswap", [ av ])))
+  | Lprim (Pbbswap Pnativeint, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (Ccall ("caml_nativeint_bswap", [ av ])))
+  | Lprim ((Pstring_load_16 unsafe | Pbytes_load_16 unsafe), [ s; i ], _) ->
+      let sym =
+        if unsafe then "caml_bytes_get16_unsafe" else "caml_bytes_get16_safe"
+      in
+      conv_atoms [ s; i ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+  | Lprim ((Pstring_load_32 unsafe | Pbytes_load_32 unsafe), [ s; i ], _) ->
+      let sym =
+        if unsafe then "caml_bytes_get32_unsafe" else "caml_bytes_get32_safe"
+      in
+      conv_atoms [ s; i ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+  | Lprim ((Pstring_load_64 unsafe | Pbytes_load_64 unsafe), [ s; i ], _) ->
+      let sym =
+        if unsafe then "caml_bytes_get64_unsafe" else "caml_bytes_get64_safe"
+      in
+      conv_atoms [ s; i ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+  | Lprim (Pbytes_set_16 unsafe, [ b; i; v ], _) ->
+      let sym =
+        if unsafe then "caml_bytes_set16_unsafe" else "caml_bytes_set16_safe"
+      in
+      conv_atoms [ b; i; v ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+  | Lprim (Pbytes_set_32 unsafe, [ b; i; v ], _) ->
+      let sym =
+        if unsafe then "caml_bytes_set32_unsafe" else "caml_bytes_set32_safe"
+      in
+      conv_atoms [ b; i; v ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+  | Lprim (Pbytes_set_64 unsafe, [ b; i; v ], _) ->
+      let sym =
+        if unsafe then "caml_bytes_set64_unsafe" else "caml_bytes_set64_safe"
+      in
+      conv_atoms [ b; i; v ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+  | Lprim (Pctconst c, _, _) ->
+      let atom =
+        match c with
+        | Big_endian -> Int (if Sys.big_endian then 1 else 0)
+        | Word_size -> Int 64
+        | Int_size -> Int 63
+        | Max_wosize -> Int ((1 lsl 29) - 1)
+        | Ostype_unix -> Int (if Sys.win32 then 0 else 1)
+        | Ostype_win32 -> Int (if Sys.win32 then 1 else 0)
+        | Ostype_cygwin -> Int 0
+        | Backend_type -> Int 0
+        | Standard_library_default -> String ""
+      in
+      emit_cexpr (Atom atom)
+  | Lprim (Ppoll, _, _) -> emit_cexpr (Atom Unit)
   | _ -> raise (Unsupported (describe lam))
 
 and binop op a c emit_cexpr =

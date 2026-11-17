@@ -34,6 +34,26 @@ typedef struct ArcWeakArray {
     int64_t              slots[];
 } ArcWeakArray;
 
+#define OCAMLC_CHAN_BUFSZ 4096u
+
+typedef struct OcamlccChannel {
+    struct OcamlccChannel *out_prev;
+    struct OcamlccChannel *out_next;
+    int                    fd;
+    int                    is_out;
+    int                    is_std;
+    int                    unbuffered;
+    int                    closed;
+    size_t                 cur;
+    size_t                 max;
+    uint8_t                buf[OCAMLC_CHAN_BUFSZ];
+} OcamlccChannel;
+
+static void channel_destroy(OcamlccChannel *ch);
+extern void ocamlcc_c_mutex_free(void *p);
+extern void ocamlcc_c_cond_free(void *c);
+extern void ocamlcc_c_blake2_free(void *p);
+
 typedef struct ArcSpinLock {
     _Atomic uint32_t locked;
 } ArcSpinLock;
@@ -150,6 +170,7 @@ static inline int is_unscanned_leaf_tag(uint16_t tag)
 {
     return tag == (uint16_t)ARC_TAG_STRING ||
            tag == (uint16_t)ARC_TAG_WEAK ||
+           tag == (uint16_t)ARC_TAG_CHANNEL ||
            tag == (uint16_t)ARC_TAG_FLOAT ||
            tag == (uint16_t)ARC_TAG_FLOAT_ARRAY ||
            tag == (uint16_t)ARC_TAG_CUSTOM;
@@ -392,6 +413,8 @@ static void weak_unlink(ArcWeakArray *w)
 static _Atomic int64_t g_live_objects = 0;
 static _Atomic int64_t g_reuse_hits = 0;
 static _Atomic int64_t g_active_slabs = 0;
+static _Atomic uint64_t g_alloc_words = 0;
+static _Atomic int64_t g_gc_collections = 0;
 
 static _Thread_local int64_t tls_exn_slot = 0;
 static _Atomic int64_t g_next_oo_id = 0;
@@ -794,6 +817,9 @@ void *arc_alloc(uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
     hdr->byte_size = byte_size;
     hdr->reserved = 0;
     atomic_fetch_add_explicit(&g_live_objects, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&g_alloc_words,
+                              (uint64_t)(byte_size / 8u) + 2u,
+                              memory_order_relaxed);
     return hdr + 1;
 }
 
@@ -1016,6 +1042,16 @@ static void release_subtree(ArcHeader *root, int free_root)
             weak_unlink((ArcWeakArray *)(cur + 1));
         } else if (tag == ARC_TAG_FIBER) {
             fiber_destroy((Fiber *)(cur + 1));
+        } else if (tag == ARC_TAG_CHANNEL) {
+            channel_destroy((OcamlccChannel *)(cur + 1));
+        } else if (tag == ARC_TAG_CUSTOM) {
+            void *p = (void *)(uintptr_t)(*(uint64_t *)(cur + 1));
+            if (cur->reserved == ARC_CUSTOM_MUTEX)
+                ocamlcc_c_mutex_free(p);
+            else if (cur->reserved == ARC_CUSTOM_COND)
+                ocamlcc_c_cond_free(p);
+            else if (cur->reserved == ARC_CUSTOM_BLAKE2)
+                ocamlcc_c_blake2_free(p);
         } else if (!is_unscanned_leaf_tag(tag)) {
             int64_t *fields = (int64_t *)(cur + 1);
             uint32_t n = cur->scan_fields;
@@ -1651,19 +1687,22 @@ int64_t ocamlcc_weak_get_copy(int64_t weak_val, int64_t idx_val)
         return 1; /* None */
     int64_t result = val;
     if (is_heap_ptr(val)) {
-        /* Copy the block one level deep (same tag / scan_fields / size), so
-         * mutating the copy never reaches the value stored in the slot. */
         ArcHeader *hdr = (ArcHeader *)(uintptr_t)val - 1;
-        uint32_t nbytes = hdr->byte_size;
-        int64_t *copy = (int64_t *)arc_alloc(hdr->tag, hdr->scan_fields, nbytes);
-        uint64_t *dst = (uint64_t *)(void *)copy;
-        uint64_t *src = (uint64_t *)(void *)(uintptr_t)val;
-        for (uint32_t i = 0; i < nbytes / 8u; i++)
-            dst[i] = src[i];
-        for (uint16_t i = 0; i < hdr->scan_fields; i++)
-            arc_retain_val(copy[i]);
-        arc_release_val(val);
-        result = (int64_t)(uintptr_t)copy;
+        if (hdr->tag != (uint16_t)ARC_TAG_CUSTOM &&
+            hdr->tag != (uint16_t)ARC_TAG_CHANNEL) {
+            /* Copy the block one level deep (same tag / scan_fields / size), so
+             * mutating the copy never reaches the value stored in the slot. */
+            uint32_t nbytes = hdr->byte_size;
+            int64_t *copy = (int64_t *)arc_alloc(hdr->tag, hdr->scan_fields, nbytes);
+            uint64_t *dst = (uint64_t *)(void *)copy;
+            uint64_t *src = (uint64_t *)(void *)(uintptr_t)val;
+            for (uint32_t i = 0; i < nbytes / 8u; i++)
+                dst[i] = src[i];
+            for (uint16_t i = 0; i < hdr->scan_fields; i++)
+                arc_retain_val(copy[i]);
+            arc_release_val(val);
+            result = (int64_t)(uintptr_t)copy;
+        }
     }
     int64_t *some = (int64_t *)arc_alloc(0u, 1u, 8u);
     some[0] = result;
@@ -2378,62 +2417,101 @@ static uint32_t hash_mix32(uint32_t h, uint32_t d)
     return h * 5u + 0xe6546b64u;
 }
 
+static uint32_t hash_mix_intnat(uint32_t h, int64_t d)
+{
+    uint32_t n = (uint32_t)(((uint64_t)(d >> 32)) ^ ((uint64_t)(d >> 63)) ^
+                            (uint64_t)d);
+    return hash_mix32(h, n);
+}
+
+static uint32_t hash_mix_int64(uint32_t h, int64_t d)
+{
+    uint32_t lo = (uint32_t)d;
+    uint32_t hi = (uint32_t)((uint64_t)d >> 32);
+    h = hash_mix32(h, lo);
+    return hash_mix32(h, hi);
+}
+
 static uint32_t hash_mix_f64(uint32_t h, double d)
 {
     uint64_t bits = 0;
     pal_memcpy(&bits, &d, sizeof(bits));
-    if (is_nan_bits(bits))
-        bits = 0x7ff8000000000001ULL;
-    else if (d == 0.0)
-        bits = 0ULL;
-    h = hash_mix32(h, (uint32_t)bits);
-    return hash_mix32(h, (uint32_t)(bits >> 32));
+    uint32_t lo = (uint32_t)bits;
+    uint32_t hi = (uint32_t)(bits >> 32);
+    if ((hi & 0x7FF00000u) == 0x7FF00000u && (lo | (hi & 0xFFFFFu)) != 0u) {
+        hi = 0x7FF00000u;
+        lo = 0x00000001u;
+    } else if (hi == 0x80000000u && lo == 0u) {
+        hi = 0u;
+    }
+    h = hash_mix32(h, lo);
+    return hash_mix32(h, hi);
+}
+
+static uint32_t hash_mix_string(uint32_t h, int64_t v)
+{
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)v - 1;
+    uint32_t len = hdr->reserved;
+    const uint8_t *s = (const uint8_t *)(uintptr_t)v;
+    uint32_t i = 0;
+    while (i + 4u <= len) {
+        uint32_t w = (uint32_t)s[i] |
+                     ((uint32_t)s[i + 1u] << 8) |
+                     ((uint32_t)s[i + 2u] << 16) |
+                     ((uint32_t)s[i + 3u] << 24);
+        h = hash_mix32(h, w);
+        i += 4u;
+    }
+    uint32_t rem = 0;
+    switch (len & 3u) {
+    case 3u: rem |= (uint32_t)s[i + 2u] << 16; /* fallthrough */
+    case 2u: rem |= (uint32_t)s[i + 1u] << 8;  /* fallthrough */
+    case 1u:
+        rem |= (uint32_t)s[i];
+        h = hash_mix32(h, rem);
+        break;
+    default:
+        break;
+    }
+    h ^= len;
+    return h;
+}
+
+static uint32_t hash_final_mix(uint32_t h)
+{
+    h ^= h >> 16;
+    h *= 0x85ebca6bu;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35u;
+    h ^= h >> 16;
+    return h;
 }
 
 int64_t caml_hash(int64_t count_val, int64_t limit_val,
                   int64_t seed_val, int64_t obj)
 {
     int64_t num = count_val >> 1;
-    int64_t limit = limit_val >> 1;
+    int64_t sz = limit_val >> 1;
+    if (sz < 0 || sz > 256)
+        sz = 256;
     uint32_t h = (uint32_t)(seed_val >> 1);
-    if (num <= 0)
-        num = 1;
-    if (limit <= 0)
-        limit = 1;
 
-    int64_t stack[256];
-    int sp = 0;
-    stack[sp++] = obj;
+    int64_t queue[256];
+    int64_t rd = 0;
+    int64_t wr = 1;
+    queue[0] = obj;
 
-    while (sp > 0 && num > 0 && limit > 0) {
-        int64_t v = stack[--sp];
-        limit--;
+    while (rd < wr && num > 0) {
+        int64_t v = queue[rd++];
+    again:
         if ((v & 1) != 0) {
-            uint64_t u = (uint64_t)(v >> 1);
-            h = hash_mix32(h, (uint32_t)u);
-            h = hash_mix32(h, (uint32_t)(u >> 32));
+            h = hash_mix_intnat(h, v);
             num--;
         } else {
             const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)v - 1;
             uint16_t tag = hdr->tag;
             if (tag == (uint16_t)ARC_TAG_STRING) {
-                uint32_t len = hdr->reserved;
-                const uint8_t *s = (const uint8_t *)(uintptr_t)v;
-                uint32_t i = 0;
-                while (i + 4u <= len) {
-                    uint32_t w = (uint32_t)s[i] |
-                                 ((uint32_t)s[i + 1u] << 8) |
-                                 ((uint32_t)s[i + 2u] << 16) |
-                                 ((uint32_t)s[i + 3u] << 24);
-                    h = hash_mix32(h, w);
-                    i += 4u;
-                }
-                uint32_t rem = 0;
-                for (uint32_t k = 0; i + k < len; k++)
-                    rem |= (uint32_t)s[i + k] << (8u * k);
-                if (len > 0u)
-                    h = hash_mix32(h, rem);
-                h = hash_mix32(h, len);
+                h = hash_mix_string(h, v);
                 num--;
             } else if (tag == (uint16_t)ARC_TAG_FLOAT) {
                 h = hash_mix_f64(h, unbox_float(v));
@@ -2441,38 +2519,73 @@ int64_t caml_hash(int64_t count_val, int64_t limit_val,
             } else if (tag == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
                 uint32_t nf = hdr->byte_size / 8u;
                 const double *fa = (const double *)(uintptr_t)v;
-                h = hash_mix32(h, ((uint32_t)tag << 16) ^ nf);
-                for (uint32_t i = 0; i < nf && num > 0 && limit > 0; i++) {
+                for (uint32_t i = 0; i < nf; i++) {
                     h = hash_mix_f64(h, fa[i]);
                     num--;
-                    limit--;
+                    if (num <= 0)
+                        break;
                 }
-            } else if (tag == (uint16_t)ARC_TAG_CUSTOM) {
-                uint64_t u = (uint64_t)unbox_custom_i64(v);
-                h = hash_mix32(h, hdr->reserved);
-                h = hash_mix32(h, (uint32_t)u);
-                h = hash_mix32(h, (uint32_t)(u >> 32));
-                num--;
-            } else if (tag == (uint16_t)ARC_TAG_ARRAY || tag < 245u) {
-                uint32_t nf = (tag == (uint16_t)ARC_TAG_ARRAY)
-                                  ? (hdr->byte_size / 8u)
-                                  : (uint32_t)hdr->scan_fields;
-                h = hash_mix32(h, ((uint32_t)tag << 16) ^ nf);
+            } else if (tag == (uint16_t)ARC_TAG_FORWARD) {
+                int64_t steps = 1000;
+                int ok = 0;
+                while (steps > 0) {
+                    v = ((const int64_t *)(uintptr_t)v)[0];
+                    if ((v & 1) != 0 ||
+                        ((const ArcHeader *)(uintptr_t)v - 1)->tag != (uint16_t)ARC_TAG_FORWARD) {
+                        ok = 1;
+                        break;
+                    }
+                    steps--;
+                }
+                if (ok)
+                    goto again;
+            } else if (tag == 248u) {
+                /* Object_tag / exception constructor: mix Oid_val = Field(v, 1) */
                 const int64_t *fields = (const int64_t *)(uintptr_t)v;
-                for (uint32_t i = nf; i > 0u && sp < 256; i--)
-                    stack[sp++] = fields[i - 1u];
-            } else {
-                h = hash_mix32(h, (uint32_t)tag);
+                h = hash_mix_intnat(h, fields[1]);
                 num--;
+            } else if (tag == (uint16_t)ARC_TAG_CUSTOM) {
+                int64_t cv = unbox_custom_i64(v);
+                if (hdr->reserved == ARC_CUSTOM_INT32 ||
+                    hdr->reserved == ARC_CUSTOM_NATIVEINT) {
+                    h = hash_mix_intnat(h, cv);
+                    num--;
+                } else if (hdr->reserved == ARC_CUSTOM_INT64) {
+                    h = hash_mix_int64(h, cv);
+                    num--;
+                }
+            } else if (tag == (uint16_t)ARC_TAG_ARRAY || tag < 245u) {
+                uint32_t wosize = hdr->byte_size / 8u;
+                h = hash_mix32(h, (wosize << 10) | (uint32_t)tag);
+                const int64_t *fields = (const int64_t *)(uintptr_t)v;
+                for (uint32_t i = 0u; i < wosize; i++) {
+                    if (wr >= sz)
+                        break;
+                    queue[wr++] = fields[i];
+                }
+            } else if (tag == (uint16_t)ARC_TAG_CLOSURE) {
+                const ArcClosure *c = (const ArcClosure *)(uintptr_t)v;
+                h = hash_mix32(h, (uint32_t)ARC_TAG_CLOSURE);
+                h = hash_mix_intnat(h, (int64_t)(uintptr_t)c->code);
+                num--;
+            } else if (tag == (uint16_t)ARC_TAG_LAZY ||
+                       tag == (uint16_t)ARC_TAG_FORCING) {
+                uint32_t otag = (tag == (uint16_t)ARC_TAG_LAZY) ? 246u : 249u;
+                uint32_t wosize = hdr->byte_size / 8u;
+                h = hash_mix32(h, (wosize << 10) | otag);
+                const int64_t *fields = (const int64_t *)(uintptr_t)v;
+                for (uint32_t i = 0u; i < wosize; i++) {
+                    if (wr >= sz)
+                        break;
+                    queue[wr++] = fields[i];
+                }
+            } else {
+                /* Abstract/Channel/Other: do nothing */
             }
         }
     }
 
-    h ^= h >> 16;
-    h *= 0x85ebca6bu;
-    h ^= h >> 13;
-    h *= 0xc2b2ae35u;
-    h ^= h >> 16;
+    h = hash_final_mix(h);
     return tag_int((int64_t)(h & 0x3fffffffu));
 }
 
@@ -2512,3 +2625,2347 @@ DEFINE_PREDEF_EXN(Stack_overflow, 9)
 DEFINE_PREDEF_EXN(Sys_blocked_io, 10)
 DEFINE_PREDEF_EXN(Assert_failure, 11)
 DEFINE_PREDEF_EXN(Undefined_recursive_module, 12)
+
+/* ------------------------------------------------------------------ */
+/* Batch 1 Stdlib Primitives: Atomics, Bytes/Array, Channels, Runtime */
+/* ------------------------------------------------------------------ */
+
+extern int         ocamlcc_c_int_of_string(const char *s, size_t len, int64_t *out);
+extern int         ocamlcc_c_sys_open(const char *path, int flags_mask, int perm, int *err_out);
+extern int64_t     ocamlcc_c_fd_read_raw(int fd, void *buf, size_t len, int *err_out);
+extern int         ocamlcc_c_fd_write_all(int fd, const void *buf, size_t len, int *err_out);
+extern int         ocamlcc_c_fd_lseek(int fd, int64_t off, int whence, int64_t *pos_out, int *err_out);
+extern int         ocamlcc_c_fd_size(int fd, int64_t *size_out, int *err_out);
+extern int         ocamlcc_c_fd_close_raw(int fd, int *err_out);
+extern void        ocamlcc_c_fflush_stdio(int fd);
+extern const char *ocamlcc_c_strerror(int err);
+
+static void raise_sys_error_cstr(const char *msg)
+{
+    size_t len = 0u;
+    while (msg[len] != '\0')
+        len++;
+    char *s = (char *)arc_alloc_bytes((uint64_t)len);
+    if (len > 0u)
+        pal_memcpy(s, msg, len);
+    int64_t *blk = (int64_t *)arc_alloc(0u, 2u, 16u);
+    blk[0] = (int64_t)(uintptr_t)ocamlcc_global_Sys_error;
+    blk[1] = (int64_t)(uintptr_t)s;
+    ocamlcc_set_exn((int64_t)(uintptr_t)blk);
+}
+
+static void raise_sys_error_errno(int err)
+{
+    const char *m = ocamlcc_c_strerror(err);
+    raise_sys_error_cstr(m != NULL ? m : "system error");
+}
+
+static void raise_end_of_file(void)
+{
+    ocamlcc_set_exn((int64_t)(uintptr_t)ocamlcc_global_End_of_file);
+}
+
+/* ---- Named values / exit ---- */
+
+static ArcSpinLock g_named_lock = { 0u };
+static int64_t g_do_at_exit_fn = 0;
+
+int64_t caml_register_named_value(int64_t name_val, int64_t val)
+{
+    const char *name = (const char *)(uintptr_t)name_val;
+    const ArcHeader *nh = (const ArcHeader *)(uintptr_t)name_val - 1;
+    const char *target = "Pervasives.do_at_exit";
+    size_t tlen = 21u;
+    if ((size_t)nh->reserved == tlen) {
+        int eq = 1;
+        for (size_t i = 0; i < tlen; i++) {
+            if (name[i] != target[i]) { eq = 0; break; }
+        }
+        if (eq) {
+            arc_lock(&g_named_lock);
+            int64_t old = g_do_at_exit_fn;
+            arc_retain_val(val);
+            g_do_at_exit_fn = val;
+            arc_unlock(&g_named_lock);
+            if (old != 0)
+                arc_release_val(old);
+        }
+    }
+    return 1;
+}
+
+static void chan_flush_all_out(void);
+
+void ocamlcc_run_at_exit(void)
+{
+    arc_lock(&g_named_lock);
+    int64_t fn = g_do_at_exit_fn;
+    if (fn != 0)
+        arc_retain_val(fn);
+    arc_unlock(&g_named_lock);
+    if (fn != 0) {
+        int64_t r = ocamlcc_apply1_raw(fn, 1);
+        arc_release_val(r);
+        arc_release_val(fn);
+        if (ocamlcc_get_exn() != 0)
+            ocamlcc_set_exn(0);
+    }
+    chan_flush_all_out();
+}
+
+void caml_sys_exit(int64_t code_val)
+{
+    ocamlcc_exit_val(code_val);
+}
+
+/* ---- Atomics ---- */
+
+int64_t caml_atomic_load_field(int64_t obj_val, int64_t idx_val)
+{
+    int64_t idx = idx_val >> 1;
+    _Atomic int64_t *slot = ((_Atomic int64_t *)(uintptr_t)obj_val) + idx;
+    int64_t v = atomic_load_explicit(slot, memory_order_acquire);
+    arc_retain_val(v);
+    return v;
+}
+
+int64_t caml_atomic_cas_field(int64_t obj_val, int64_t idx_val,
+                              int64_t expected_val, int64_t desired_val)
+{
+    int64_t idx = idx_val >> 1;
+    _Atomic int64_t *slot = ((_Atomic int64_t *)(uintptr_t)obj_val) + idx;
+    arc_retain_val(desired_val);
+    int64_t cur = expected_val;
+    if (atomic_compare_exchange_strong_explicit(
+            slot, &cur, desired_val, memory_order_acq_rel, memory_order_acquire)) {
+        arc_release_val(expected_val);
+        return 3; /* true */
+    }
+    arc_release_val(desired_val);
+    return 1; /* false */
+}
+
+int64_t caml_atomic_exchange_field(int64_t obj_val, int64_t idx_val,
+                                   int64_t desired_val)
+{
+    int64_t idx = idx_val >> 1;
+    _Atomic int64_t *slot = ((_Atomic int64_t *)(uintptr_t)obj_val) + idx;
+    arc_retain_val(desired_val);
+    return atomic_exchange_explicit(slot, desired_val, memory_order_acq_rel);
+}
+
+int64_t caml_atomic_fetch_add_field(int64_t obj_val, int64_t idx_val,
+                                    int64_t incr_val)
+{
+    int64_t idx = idx_val >> 1;
+    _Atomic int64_t *slot = ((_Atomic int64_t *)(uintptr_t)obj_val) + idx;
+    int64_t delta = (incr_val >> 1) * 2LL; /* preserve tagged low bit 1 */
+    return atomic_fetch_add_explicit(slot, delta, memory_order_acq_rel);
+}
+
+/* ---- int_of_string ---- */
+
+int64_t caml_int_of_string(int64_t s_val)
+{
+    const ArcHeader *sh = (const ArcHeader *)(uintptr_t)s_val - 1;
+    int64_t v = 0;
+    if (!ocamlcc_c_int_of_string((const char *)(uintptr_t)s_val,
+                                 (size_t)sh->reserved, &v)) {
+        raise_failure_cstr("int_of_string", 13u);
+        return 1;
+    }
+    return tag_int(v);
+}
+
+/* ---- Byte swap & unaligned 16/32/64-bit bytes/string access ---- */
+
+int64_t caml_bswap16(int64_t v_val)
+{
+    uint16_t u = (uint16_t)(v_val >> 1);
+    uint16_t swapped = (uint16_t)((u >> 8) | (u << 8));
+    return tag_int((int64_t)swapped);
+}
+
+int64_t caml_int32_bswap(int64_t v)
+{
+    uint32_t u = (uint32_t)(int32_t)unbox_custom_i64(v);
+    uint32_t s = __builtin_bswap32(u);
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT32, (uint64_t)(int64_t)(int32_t)s);
+}
+
+int64_t caml_int64_bswap(int64_t v)
+{
+    uint64_t u = (uint64_t)unbox_custom_i64(v);
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, __builtin_bswap64(u));
+}
+
+int64_t caml_nativeint_bswap(int64_t v)
+{
+    uint64_t u = (uint64_t)unbox_custom_i64(v);
+    return ocamlcc_alloc_custom(ARC_CUSTOM_NATIVEINT, __builtin_bswap64(u));
+}
+
+static inline int check_bytes_range(int64_t b_val, int64_t idx_val, size_t width,
+                                    int safe, int64_t *idx_out)
+{
+    int64_t idx = idx_val >> 1;
+    if (safe) {
+        const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)b_val - 1;
+        int64_t len = (int64_t)hdr->reserved;
+        if (idx < 0 || (int64_t)width > len || idx > len - (int64_t)width) {
+            ocamlcc_raise_invalid_arg_oob();
+            return 0;
+        }
+    }
+    *idx_out = idx;
+    return 1;
+}
+
+int64_t caml_bytes_get16_unsafe(int64_t b, int64_t i)
+{
+    int64_t idx = i >> 1;
+    uint16_t v = 0;
+    pal_memcpy(&v, (const uint8_t *)(uintptr_t)b + idx, 2u);
+    return tag_int((int64_t)v);
+}
+
+int64_t caml_bytes_get16_safe(int64_t b, int64_t i)
+{
+    int64_t idx = 0;
+    if (!check_bytes_range(b, i, 2u, 1, &idx))
+        return 1;
+    uint16_t v = 0;
+    pal_memcpy(&v, (const uint8_t *)(uintptr_t)b + idx, 2u);
+    return tag_int((int64_t)v);
+}
+
+int64_t caml_bytes_get32_unsafe(int64_t b, int64_t i)
+{
+    int64_t idx = i >> 1;
+    int32_t v = 0;
+    pal_memcpy(&v, (const uint8_t *)(uintptr_t)b + idx, 4u);
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT32, (uint64_t)(int64_t)v);
+}
+
+int64_t caml_bytes_get32_safe(int64_t b, int64_t i)
+{
+    int64_t idx = 0;
+    if (!check_bytes_range(b, i, 4u, 1, &idx))
+        return 1;
+    int32_t v = 0;
+    pal_memcpy(&v, (const uint8_t *)(uintptr_t)b + idx, 4u);
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT32, (uint64_t)(int64_t)v);
+}
+
+int64_t caml_bytes_get64_unsafe(int64_t b, int64_t i)
+{
+    int64_t idx = i >> 1;
+    uint64_t v = 0;
+    pal_memcpy(&v, (const uint8_t *)(uintptr_t)b + idx, 8u);
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, v);
+}
+
+int64_t caml_bytes_get64_safe(int64_t b, int64_t i)
+{
+    int64_t idx = 0;
+    if (!check_bytes_range(b, i, 8u, 1, &idx))
+        return 1;
+    uint64_t v = 0;
+    pal_memcpy(&v, (const uint8_t *)(uintptr_t)b + idx, 8u);
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, v);
+}
+
+int64_t caml_bytes_set16_unsafe(int64_t b, int64_t i, int64_t v)
+{
+    int64_t idx = i >> 1;
+    uint16_t u = (uint16_t)(v >> 1);
+    pal_memcpy((uint8_t *)(uintptr_t)b + idx, &u, 2u);
+    return 1;
+}
+
+int64_t caml_bytes_set16_safe(int64_t b, int64_t i, int64_t v)
+{
+    int64_t idx = 0;
+    if (!check_bytes_range(b, i, 2u, 1, &idx))
+        return 1;
+    uint16_t u = (uint16_t)(v >> 1);
+    pal_memcpy((uint8_t *)(uintptr_t)b + idx, &u, 2u);
+    return 1;
+}
+
+int64_t caml_bytes_set32_unsafe(int64_t b, int64_t i, int64_t v)
+{
+    int64_t idx = i >> 1;
+    int32_t u = (int32_t)unbox_custom_i64(v);
+    pal_memcpy((uint8_t *)(uintptr_t)b + idx, &u, 4u);
+    return 1;
+}
+
+int64_t caml_bytes_set32_safe(int64_t b, int64_t i, int64_t v)
+{
+    int64_t idx = 0;
+    if (!check_bytes_range(b, i, 4u, 1, &idx))
+        return 1;
+    int32_t u = (int32_t)unbox_custom_i64(v);
+    pal_memcpy((uint8_t *)(uintptr_t)b + idx, &u, 4u);
+    return 1;
+}
+
+int64_t caml_bytes_set64_unsafe(int64_t b, int64_t i, int64_t v)
+{
+    int64_t idx = i >> 1;
+    uint64_t u = (uint64_t)unbox_custom_i64(v);
+    pal_memcpy((uint8_t *)(uintptr_t)b + idx, &u, 8u);
+    return 1;
+}
+
+int64_t caml_bytes_set64_safe(int64_t b, int64_t i, int64_t v)
+{
+    int64_t idx = 0;
+    if (!check_bytes_range(b, i, 8u, 1, &idx))
+        return 1;
+    uint64_t u = (uint64_t)unbox_custom_i64(v);
+    pal_memcpy((uint8_t *)(uintptr_t)b + idx, &u, 8u);
+    return 1;
+}
+
+/* ---- Array primitives (supporting both ARC_TAG_ARRAY & ARC_TAG_FLOAT_ARRAY) ---- */
+
+static inline uint32_t arr_len_of(int64_t arr)
+{
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)arr - 1;
+    return hdr->byte_size / 8u;
+}
+
+static inline int arr_is_float(int64_t arr)
+{
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)arr - 1;
+    return hdr->tag == (uint16_t)ARC_TAG_FLOAT_ARRAY;
+}
+
+int64_t caml_array_create_float(int64_t len_val)
+{
+    int64_t n = len_val >> 1;
+    if (n < 0 || (uint64_t)n > ((uint64_t)UINT32_MAX - 16u) / 8u) {
+        raise_invalid_arg_imm(g_inv_arg_array_str.str);
+        return 1;
+    }
+    double *p = (double *)arc_alloc(
+        (uint16_t)ARC_TAG_FLOAT_ARRAY, 0u, (uint32_t)((uint64_t)n * 8u));
+    if (n > 0)
+        pal_memset(p, 0, (size_t)n * 8u);
+    return (int64_t)(uintptr_t)p;
+}
+
+int64_t caml_floatarray_create(int64_t len_val)
+{
+    return caml_array_create_float(len_val);
+}
+
+int64_t caml_array_sub(int64_t arr, int64_t ofs_val, int64_t len_val)
+{
+    int64_t ofs = ofs_val >> 1;
+    int64_t len = len_val >> 1;
+    int64_t alen = (int64_t)arr_len_of(arr);
+    if (ofs < 0 || len < 0 || ofs > alen - len) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return 1;
+    }
+    if (len == 0)
+        return (int64_t)(uintptr_t)arc_alloc(
+            arr_is_float(arr) ? (uint16_t)ARC_TAG_FLOAT_ARRAY
+                              : (uint16_t)ARC_TAG_ARRAY,
+            0u, 0u);
+    if (arr_is_float(arr)) {
+        double *out = (double *)arc_alloc(
+            (uint16_t)ARC_TAG_FLOAT_ARRAY, 0u, (uint32_t)((uint64_t)len * 8u));
+        const double *src = (const double *)(uintptr_t)arr + ofs;
+        pal_memcpy(out, src, (size_t)len * 8u);
+        return (int64_t)(uintptr_t)out;
+    }
+    int64_t *out = (int64_t *)arc_alloc(
+        (uint16_t)ARC_TAG_ARRAY, 0u, (uint32_t)((uint64_t)len * 8u));
+    const int64_t *src = (const int64_t *)(uintptr_t)arr + ofs;
+    for (int64_t i = 0; i < len; i++) {
+        out[i] = src[i];
+        arc_retain_val(out[i]);
+    }
+    return (int64_t)(uintptr_t)out;
+}
+
+int64_t caml_array_append(int64_t a1, int64_t a2)
+{
+    uint32_t n1 = arr_len_of(a1);
+    uint32_t n2 = arr_len_of(a2);
+    uint64_t total = (uint64_t)n1 + (uint64_t)n2;
+    int is_flt = (n1 > 0 && arr_is_float(a1)) || (n2 > 0 && arr_is_float(a2));
+    if (total > ((uint64_t)UINT32_MAX - 16u) / 8u) {
+        raise_invalid_arg_imm(g_inv_arg_array_str.str);
+        return 1;
+    }
+    if (total == 0)
+        return (int64_t)(uintptr_t)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 0u);
+    if (is_flt) {
+        double *out = (double *)arc_alloc(
+            (uint16_t)ARC_TAG_FLOAT_ARRAY, 0u, (uint32_t)(total * 8u));
+        if (n1 > 0)
+            pal_memcpy(out, (const void *)(uintptr_t)a1, (size_t)n1 * 8u);
+        if (n2 > 0)
+            pal_memcpy(out + n1, (const void *)(uintptr_t)a2, (size_t)n2 * 8u);
+        return (int64_t)(uintptr_t)out;
+    }
+    int64_t *out = (int64_t *)arc_alloc(
+        (uint16_t)ARC_TAG_ARRAY, 0u, (uint32_t)(total * 8u));
+    const int64_t *p1 = (const int64_t *)(uintptr_t)a1;
+    const int64_t *p2 = (const int64_t *)(uintptr_t)a2;
+    for (uint32_t i = 0; i < n1; i++) {
+        out[i] = p1[i];
+        arc_retain_val(out[i]);
+    }
+    for (uint32_t i = 0; i < n2; i++) {
+        out[n1 + i] = p2[i];
+        arc_retain_val(out[n1 + i]);
+    }
+    return (int64_t)(uintptr_t)out;
+}
+
+int64_t caml_array_concat(int64_t lst)
+{
+    uint64_t total = 0u;
+    int is_flt = 0;
+    int64_t cur = lst;
+    while (cur != 1) {
+        const int64_t *cons = (const int64_t *)(uintptr_t)cur;
+        int64_t arr = cons[0];
+        uint32_t n = arr_len_of(arr);
+        if (n > 0 && arr_is_float(arr))
+            is_flt = 1;
+        total += (uint64_t)n;
+        if (total > ((uint64_t)UINT32_MAX - 16u) / 8u) {
+            raise_invalid_arg_imm(g_inv_arg_array_str.str);
+            return 1;
+        }
+        cur = cons[1];
+    }
+    if (total == 0u)
+        return (int64_t)(uintptr_t)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 0u);
+    if (is_flt) {
+        double *out = (double *)arc_alloc(
+            (uint16_t)ARC_TAG_FLOAT_ARRAY, 0u, (uint32_t)(total * 8u));
+        size_t pos = 0u;
+        cur = lst;
+        while (cur != 1) {
+            const int64_t *cons = (const int64_t *)(uintptr_t)cur;
+            int64_t arr = cons[0];
+            uint32_t n = arr_len_of(arr);
+            if (n > 0) {
+                pal_memcpy(out + pos, (const void *)(uintptr_t)arr, (size_t)n * 8u);
+                pos += (size_t)n;
+            }
+            cur = cons[1];
+        }
+        return (int64_t)(uintptr_t)out;
+    }
+    int64_t *out = (int64_t *)arc_alloc(
+        (uint16_t)ARC_TAG_ARRAY, 0u, (uint32_t)(total * 8u));
+    size_t pos = 0u;
+    cur = lst;
+    while (cur != 1) {
+        const int64_t *cons = (const int64_t *)(uintptr_t)cur;
+        int64_t arr = cons[0];
+        uint32_t n = arr_len_of(arr);
+        const int64_t *elems = (const int64_t *)(uintptr_t)arr;
+        for (uint32_t i = 0; i < n; i++) {
+            out[pos] = elems[i];
+            arc_retain_val(out[pos]);
+            pos++;
+        }
+        cur = cons[1];
+    }
+    return (int64_t)(uintptr_t)out;
+}
+
+int64_t caml_array_blit(int64_t src, int64_t sofs_val,
+                        int64_t dst, int64_t dofs_val, int64_t len_val)
+{
+    int64_t sofs = sofs_val >> 1;
+    int64_t dofs = dofs_val >> 1;
+    int64_t len = len_val >> 1;
+    if (len <= 0)
+        return 1;
+    if (arr_is_float(dst) && arr_is_float(src)) {
+        double *dp = (double *)(uintptr_t)dst + dofs;
+        const double *sp = (const double *)(uintptr_t)src + sofs;
+        if (src == dst && dofs > sofs) {
+            for (int64_t i = len - 1; i >= 0; i--)
+                dp[i] = sp[i];
+        } else {
+            for (int64_t i = 0; i < len; i++)
+                dp[i] = sp[i];
+        }
+        return 1;
+    }
+    int64_t *dp = (int64_t *)(uintptr_t)dst + dofs;
+    const int64_t *sp = (const int64_t *)(uintptr_t)src + sofs;
+    if (src == dst && dofs > sofs) {
+        for (int64_t i = len - 1; i >= 0; i--) {
+            int64_t nv = sp[i];
+            int64_t ov = dp[i];
+            arc_retain_val(nv);
+            dp[i] = nv;
+            arc_release_val(ov);
+        }
+    } else {
+        for (int64_t i = 0; i < len; i++) {
+            int64_t nv = sp[i];
+            int64_t ov = dp[i];
+            arc_retain_val(nv);
+            dp[i] = nv;
+            arc_release_val(ov);
+        }
+    }
+    return 1;
+}
+
+int64_t caml_array_fill(int64_t dst, int64_t ofs_val, int64_t len_val, int64_t v)
+{
+    int64_t ofs = ofs_val >> 1;
+    int64_t len = len_val >> 1;
+    if (len <= 0)
+        return 1;
+    if (arr_is_float(dst)) {
+        double d = unbox_float(v);
+        double *dp = (double *)(uintptr_t)dst + ofs;
+        for (int64_t i = 0; i < len; i++)
+            dp[i] = d;
+        return 1;
+    }
+    int64_t *dp = (int64_t *)(uintptr_t)dst + ofs;
+    for (int64_t i = 0; i < len; i++) {
+        int64_t ov = dp[i];
+        arc_retain_val(v);
+        dp[i] = v;
+        arc_release_val(ov);
+    }
+    return 1;
+}
+
+/* ---- Channels & I/O ---- */
+
+static ArcSpinLock g_chan_lock = { 0u };
+static OcamlccChannel *g_out_channels_head = NULL;
+
+static void chan_unlink_locked(OcamlccChannel *ch)
+{
+    if (!ch->is_out)
+        return;
+    if (ch->out_prev != NULL)
+        ch->out_prev->out_next = ch->out_next;
+    else if (g_out_channels_head == ch)
+        g_out_channels_head = ch->out_next;
+    if (ch->out_next != NULL)
+        ch->out_next->out_prev = ch->out_prev;
+    ch->out_prev = NULL;
+    ch->out_next = NULL;
+}
+
+static int chan_flush_internal(OcamlccChannel *ch, int *err_out)
+{
+    *err_out = 0;
+    if (!ch->is_out || ch->closed)
+        return 0;
+    if (ch->cur > 0u) {
+        if (ocamlcc_c_fd_write_all(ch->fd, ch->buf, ch->cur, err_out) != 0)
+            return -1;
+        ch->cur = 0u;
+    }
+    if (ch->is_std)
+        ocamlcc_c_fflush_stdio(ch->fd);
+    return 0;
+}
+
+static void chan_flush_all_out(void)
+{
+    arc_lock(&g_chan_lock);
+    for (OcamlccChannel *c = g_out_channels_head; c != NULL; c = c->out_next) {
+        int err = 0;
+        (void)chan_flush_internal(c, &err);
+    }
+    arc_unlock(&g_chan_lock);
+}
+
+static void channel_destroy(OcamlccChannel *ch)
+{
+    arc_lock(&g_chan_lock);
+    chan_unlink_locked(ch);
+    arc_unlock(&g_chan_lock);
+    if (!ch->closed) {
+        int err = 0;
+        if (ch->is_out && ch->cur > 0u)
+            (void)chan_flush_internal(ch, &err);
+        if (!ch->is_std)
+            (void)ocamlcc_c_fd_close_raw(ch->fd, &err);
+        ch->closed = 1;
+    }
+}
+
+static OcamlccChannel *chan_alloc(int fd, int is_out)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)arc_alloc(
+        (uint16_t)ARC_TAG_CHANNEL, 0u, (uint32_t)sizeof(OcamlccChannel));
+    pal_memset(ch, 0, sizeof(*ch));
+    ch->fd = fd;
+    ch->is_out = is_out ? 1 : 0;
+    ch->is_std = (fd >= 0 && fd <= 2) ? 1 : 0;
+    if (ch->is_out) {
+        arc_lock(&g_chan_lock);
+        ch->out_next = g_out_channels_head;
+        if (g_out_channels_head != NULL)
+            g_out_channels_head->out_prev = ch;
+        g_out_channels_head = ch;
+        arc_unlock(&g_chan_lock);
+    }
+    return ch;
+}
+
+int64_t caml_sys_open(int64_t path_val, int64_t flags_val, int64_t perm_val)
+{
+    const char *path = (const char *)(uintptr_t)path_val;
+    int mask = 0;
+    int64_t cur = flags_val;
+    while (cur != 1) {
+        const int64_t *cons = (const int64_t *)(uintptr_t)cur;
+        int64_t ftag = cons[0] >> 1;
+        switch (ftag) {
+        case 0: mask |= 0x01; break; /* Open_rdonly */
+        case 1: mask |= 0x02; break; /* Open_wronly */
+        case 2: mask |= 0x04; break; /* Open_append */
+        case 3: mask |= 0x08; break; /* Open_creat */
+        case 4: mask |= 0x10; break; /* Open_trunc */
+        case 5: mask |= 0x20; break; /* Open_excl */
+        case 8: mask |= 0x40; break; /* Open_nonblock */
+        default: break;
+        }
+        cur = cons[1];
+    }
+    int perm = (int)(perm_val >> 1);
+    int err = 0;
+    int fd = ocamlcc_c_sys_open(path, mask, perm, &err);
+    if (fd < 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    return tag_int((int64_t)fd);
+}
+
+int64_t caml_ml_open_descriptor_in(int64_t fd_val)
+{
+    return (int64_t)(uintptr_t)chan_alloc((int)(fd_val >> 1), 0);
+}
+
+int64_t caml_ml_open_descriptor_out(int64_t fd_val)
+{
+    return (int64_t)(uintptr_t)chan_alloc((int)(fd_val >> 1), 1);
+}
+
+int64_t caml_ml_out_channels_list(int64_t ignored)
+{
+    (void)ignored;
+    int64_t lst = 1; /* [] */
+    arc_lock(&g_chan_lock);
+    for (OcamlccChannel *c = g_out_channels_head; c != NULL; c = c->out_next) {
+        ArcHeader *hdr = (ArcHeader *)c - 1;
+        uint32_t rc = atomic_load_explicit(&hdr->refcount, memory_order_acquire);
+        int retained = 0;
+        while (rc != 0u && rc != ARC_IMMORTAL) {
+            if (atomic_compare_exchange_weak_explicit(
+                    &hdr->refcount, &rc, rc + 1u,
+                    memory_order_acq_rel, memory_order_acquire)) {
+                retained = 1;
+                break;
+            }
+        }
+        if (rc == ARC_IMMORTAL)
+            retained = 1;
+        if (!retained)
+            continue;
+        int64_t *cons = (int64_t *)arc_alloc(0u, 2u, 16u);
+        cons[0] = (int64_t)(uintptr_t)c;
+        cons[1] = lst;
+        lst = (int64_t)(uintptr_t)cons;
+    }
+    arc_unlock(&g_chan_lock);
+    return lst;
+}
+
+int64_t caml_ml_flush(int64_t chan_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    if (ch->closed)
+        return 1;
+    int err = 0;
+    if (chan_flush_internal(ch, &err) != 0)
+        raise_sys_error_errno(err);
+    return 1;
+}
+
+static int chan_write_bytes(OcamlccChannel *ch, const uint8_t *p, size_t len)
+{
+    if (ch->closed) {
+        raise_sys_error_cstr("Bad file descriptor");
+        return -1;
+    }
+    int err = 0;
+    if (len >= OCAMLC_CHAN_BUFSZ || (ch->cur + len > OCAMLC_CHAN_BUFSZ)) {
+        if (chan_flush_internal(ch, &err) != 0) {
+            raise_sys_error_errno(err);
+            return -1;
+        }
+        if (len >= OCAMLC_CHAN_BUFSZ) {
+            if (ocamlcc_c_fd_write_all(ch->fd, p, len, &err) != 0) {
+                raise_sys_error_errno(err);
+                return -1;
+            }
+            return 0;
+        }
+    }
+    if (len > 0u) {
+        pal_memcpy(ch->buf + ch->cur, p, len);
+        ch->cur += len;
+        if (ch->unbuffered && chan_flush_internal(ch, &err) != 0) {
+            raise_sys_error_errno(err);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int64_t caml_ml_output_char(int64_t chan_val, int64_t ch_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    uint8_t byte = (uint8_t)(ch_val >> 1);
+    (void)chan_write_bytes(ch, &byte, 1u);
+    return 1;
+}
+
+int64_t caml_ml_output_bytes(int64_t chan_val, int64_t buf_val,
+                             int64_t ofs_val, int64_t len_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    int64_t ofs = ofs_val >> 1;
+    int64_t len = len_val >> 1;
+    if (len < 0)
+        return 1;
+    const uint8_t *p = (const uint8_t *)(uintptr_t)buf_val + ofs;
+    (void)chan_write_bytes(ch, p, (size_t)len);
+    return 1;
+}
+
+int64_t caml_ml_output(int64_t chan_val, int64_t buf_val,
+                       int64_t ofs_val, int64_t len_val)
+{
+    return caml_ml_output_bytes(chan_val, buf_val, ofs_val, len_val);
+}
+
+int64_t caml_ml_output_int(int64_t chan_val, int64_t n_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    uint32_t w = (uint32_t)(int32_t)(n_val >> 1);
+    uint8_t be[4];
+    be[0] = (uint8_t)(w >> 24);
+    be[1] = (uint8_t)(w >> 16);
+    be[2] = (uint8_t)(w >> 8);
+    be[3] = (uint8_t)w;
+    (void)chan_write_bytes(ch, be, 4u);
+    return 1;
+}
+
+static int chan_refill(OcamlccChannel *ch, int *err_out)
+{
+    *err_out = 0;
+    if (ch->closed) {
+        *err_out = 9; /* EBADF */
+        return -1;
+    }
+    ch->cur = 0u;
+    int64_t r = ocamlcc_c_fd_read_raw(ch->fd, ch->buf, OCAMLC_CHAN_BUFSZ, err_out);
+    if (r < 0) {
+        ch->max = 0u;
+        return -1;
+    }
+    ch->max = (size_t)r;
+    return (int)r;
+}
+
+int64_t caml_ml_input_char(int64_t chan_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    if (ch->cur >= ch->max) {
+        int err = 0;
+        int r = chan_refill(ch, &err);
+        if (r < 0) {
+            raise_sys_error_errno(err);
+            return 1;
+        }
+        if (r == 0) {
+            raise_end_of_file();
+            return 1;
+        }
+    }
+    uint8_t b = ch->buf[ch->cur++];
+    return tag_int((int64_t)b);
+}
+
+int64_t caml_ml_input(int64_t chan_val, int64_t buf_val,
+                      int64_t ofs_val, int64_t len_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    int64_t ofs = ofs_val >> 1;
+    int64_t len = len_val >> 1;
+    if (len <= 0)
+        return tag_int(0);
+    if (ch->cur < ch->max) {
+        size_t avail = ch->max - ch->cur;
+        size_t take = ((size_t)len < avail) ? (size_t)len : avail;
+        pal_memcpy((uint8_t *)(uintptr_t)buf_val + ofs, ch->buf + ch->cur, take);
+        ch->cur += take;
+        return tag_int((int64_t)take);
+    }
+    int err = 0;
+    if (ch->closed) {
+        raise_sys_error_cstr("Bad file descriptor");
+        return 1;
+    }
+    if ((size_t)len >= OCAMLC_CHAN_BUFSZ) {
+        int64_t r = ocamlcc_c_fd_read_raw(
+            ch->fd, (uint8_t *)(uintptr_t)buf_val + ofs, (size_t)len, &err);
+        if (r < 0) {
+            raise_sys_error_errno(err);
+            return 1;
+        }
+        return tag_int(r);
+    }
+    int r = chan_refill(ch, &err);
+    if (r < 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    size_t take = ((size_t)len < ch->max) ? (size_t)len : ch->max;
+    if (take > 0u)
+        pal_memcpy((uint8_t *)(uintptr_t)buf_val + ofs, ch->buf, take);
+    ch->cur = take;
+    return tag_int((int64_t)take);
+}
+
+int64_t caml_ml_input_int(int64_t chan_val)
+{
+    uint8_t be[4];
+    for (int i = 0; i < 4; i++) {
+        int64_t b = caml_ml_input_char(chan_val);
+        if (ocamlcc_get_exn() != 0)
+            return 1;
+        be[i] = (uint8_t)(b >> 1);
+    }
+    int32_t w = (int32_t)(((uint32_t)be[0] << 24) |
+                          ((uint32_t)be[1] << 16) |
+                          ((uint32_t)be[2] << 8)  |
+                           (uint32_t)be[3]);
+    return tag_int((int64_t)w);
+}
+
+int64_t caml_ml_input_scan_line(int64_t chan_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    if (ch->cur >= ch->max) {
+        int err = 0;
+        int r = chan_refill(ch, &err);
+        if (r < 0) {
+            raise_sys_error_errno(err);
+            return 1;
+        }
+        if (r == 0)
+            return tag_int(0);
+    }
+    for (size_t p = ch->cur; p < ch->max; p++) {
+        if (ch->buf[p] == (uint8_t)'\n')
+            return tag_int((int64_t)(p - ch->cur + 1u));
+    }
+    return tag_int(-(int64_t)(ch->max - ch->cur));
+}
+
+int64_t caml_ml_seek_out_64(int64_t chan_val, int64_t pos_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    int err = 0;
+    if (chan_flush_internal(ch, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    int64_t off = unbox_custom_i64(pos_val);
+    int64_t ignored = 0;
+    if (ocamlcc_c_fd_lseek(ch->fd, off, 0, &ignored, &err) != 0)
+        raise_sys_error_errno(err);
+    return 1;
+}
+
+int64_t caml_ml_seek_out(int64_t chan_val, int64_t pos_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    int err = 0;
+    if (chan_flush_internal(ch, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    int64_t ignored = 0;
+    if (ocamlcc_c_fd_lseek(ch->fd, pos_val >> 1, 0, &ignored, &err) != 0)
+        raise_sys_error_errno(err);
+    return 1;
+}
+
+int64_t caml_ml_pos_out_64(int64_t chan_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    int64_t pos = 0;
+    int err = 0;
+    if (ocamlcc_c_fd_lseek(ch->fd, 0, 1, &pos, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    pos += (int64_t)ch->cur;
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, (uint64_t)pos);
+}
+
+int64_t caml_ml_pos_out(int64_t chan_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    int64_t pos = 0;
+    int err = 0;
+    if (ocamlcc_c_fd_lseek(ch->fd, 0, 1, &pos, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    return tag_int(pos + (int64_t)ch->cur);
+}
+
+int64_t caml_ml_seek_in_64(int64_t chan_val, int64_t pos_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    ch->cur = 0u;
+    ch->max = 0u;
+    int err = 0;
+    int64_t ignored = 0;
+    if (ocamlcc_c_fd_lseek(ch->fd, unbox_custom_i64(pos_val), 0, &ignored, &err) != 0)
+        raise_sys_error_errno(err);
+    return 1;
+}
+
+int64_t caml_ml_seek_in(int64_t chan_val, int64_t pos_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    ch->cur = 0u;
+    ch->max = 0u;
+    int err = 0;
+    int64_t ignored = 0;
+    if (ocamlcc_c_fd_lseek(ch->fd, pos_val >> 1, 0, &ignored, &err) != 0)
+        raise_sys_error_errno(err);
+    return 1;
+}
+
+int64_t caml_ml_pos_in_64(int64_t chan_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    int64_t pos = 0;
+    int err = 0;
+    if (ocamlcc_c_fd_lseek(ch->fd, 0, 1, &pos, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    pos -= (int64_t)(ch->max - ch->cur);
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, (uint64_t)pos);
+}
+
+int64_t caml_ml_pos_in(int64_t chan_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    int64_t pos = 0;
+    int err = 0;
+    if (ocamlcc_c_fd_lseek(ch->fd, 0, 1, &pos, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    return tag_int(pos - (int64_t)(ch->max - ch->cur));
+}
+
+int64_t caml_ml_channel_size_64(int64_t chan_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    int64_t sz = 0;
+    int err = 0;
+    if (ch->is_out && chan_flush_internal(ch, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    if (ocamlcc_c_fd_size(ch->fd, &sz, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, (uint64_t)sz);
+}
+
+int64_t caml_ml_channel_size(int64_t chan_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    int64_t sz = 0;
+    int err = 0;
+    if (ch->is_out && chan_flush_internal(ch, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    if (ocamlcc_c_fd_size(ch->fd, &sz, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    return tag_int(sz);
+}
+
+int64_t caml_ml_close_channel(int64_t chan_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    if (ch->closed)
+        return 1;
+    int err = 0;
+    int flush_rc = 0;
+    if (ch->is_out) {
+        arc_lock(&g_chan_lock);
+        chan_unlink_locked(ch);
+        arc_unlock(&g_chan_lock);
+        flush_rc = chan_flush_internal(ch, &err);
+    }
+    int close_err = 0;
+    int close_rc = 0;
+    if (!ch->is_std)
+        close_rc = ocamlcc_c_fd_close_raw(ch->fd, &close_err);
+    ch->closed = 1;
+    if (flush_rc != 0)
+        raise_sys_error_errno(err);
+    else if (close_rc != 0)
+        raise_sys_error_errno(close_err);
+    return 1;
+}
+
+int64_t caml_ml_set_binary_mode(int64_t chan_val, int64_t mode_val)
+{
+    (void)chan_val;
+    (void)mode_val;
+    return 1;
+}
+
+int64_t caml_ml_set_channel_name(int64_t chan_val, int64_t name_val)
+{
+    (void)chan_val;
+    (void)name_val;
+    return 1;
+}
+
+int64_t caml_output_value(int64_t chan_val, int64_t v, int64_t flags)
+{
+    (void)chan_val;
+    (void)v;
+    (void)flags;
+    raise_failure_cstr("output_value: unsupported", 25u);
+    return 1;
+}
+
+int64_t caml_input_value(int64_t chan_val)
+{
+    (void)chan_val;
+    raise_failure_cstr("input_value: unsupported", 24u);
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Batch 2 Stdlib Primitives: Obj, String Hash, Sys, Backtrace, Math, */
+/* Digest, Sync, Floatarray                                           */
+/* ------------------------------------------------------------------ */
+
+extern int         ocamlcc_c_hexstring_of_float(char *out, size_t cap, double d, int64_t prec, char sign);
+extern int         ocamlcc_c_file_exists(const char *path);
+extern int         ocamlcc_c_stat_kind(const char *path, int *is_dir, int *is_reg, int *err_out);
+extern int         ocamlcc_c_unlink(const char *path, int *err_out);
+extern int         ocamlcc_c_rename(const char *oldp, const char *newp, int *err_out);
+extern int         ocamlcc_c_chdir(const char *path, int *err_out);
+extern int         ocamlcc_c_mkdir(const char *path, int mode, int *err_out);
+extern int         ocamlcc_c_rmdir(const char *path, int *err_out);
+extern char       *ocamlcc_c_getcwd(int *err_out);
+extern const char *ocamlcc_c_getenv(const char *name);
+extern int         ocamlcc_c_system(const char *cmd, int *err_out);
+extern double      ocamlcc_c_sys_time(void);
+extern int         ocamlcc_c_isatty(int fd);
+extern int         ocamlcc_c_readdir_alloc(const char *path, char ***out_names, size_t *out_cnt, int *err_out);
+extern void        ocamlcc_c_readdir_free(char **names, size_t cnt);
+extern void        ocamlcc_c_free(void *p);
+
+extern double ocamlcc_c_exp(double d);
+extern double ocamlcc_c_exp2(double d);
+extern double ocamlcc_c_expm1(double d);
+extern double ocamlcc_c_log(double d);
+extern double ocamlcc_c_log10(double d);
+extern double ocamlcc_c_log2(double d);
+extern double ocamlcc_c_log1p(double d);
+extern double ocamlcc_c_pow(double a, double b);
+extern double ocamlcc_c_sin(double d);
+extern double ocamlcc_c_cos(double d);
+extern double ocamlcc_c_tan(double d);
+extern double ocamlcc_c_asin(double d);
+extern double ocamlcc_c_acos(double d);
+extern double ocamlcc_c_atan(double d);
+extern double ocamlcc_c_atan2(double a, double b);
+extern double ocamlcc_c_sinh(double d);
+extern double ocamlcc_c_cosh(double d);
+extern double ocamlcc_c_tanh(double d);
+extern double ocamlcc_c_asinh(double d);
+extern double ocamlcc_c_acosh(double d);
+extern double ocamlcc_c_atanh(double d);
+extern double ocamlcc_c_cbrt(double d);
+extern double ocamlcc_c_hypot(double a, double b);
+extern double ocamlcc_c_fma(double a, double b, double c);
+extern double ocamlcc_c_erf(double d);
+extern double ocamlcc_c_erfc(double d);
+extern double ocamlcc_c_trunc(double d);
+extern double ocamlcc_c_round(double d);
+extern int    ocamlcc_c_signbit(double d);
+extern double ocamlcc_c_nextafter(double a, double b);
+extern double ocamlcc_c_frexp(double d, int *exp_out);
+extern double ocamlcc_c_ldexp(double d, int exp_v);
+extern double ocamlcc_c_modf(double d, double *iptr_out);
+
+extern void *ocamlcc_c_mutex_new(void);
+extern int   ocamlcc_c_mutex_lock(void *p);
+extern int   ocamlcc_c_mutex_trylock(void *p);
+extern int   ocamlcc_c_mutex_unlock(void *p);
+extern void *ocamlcc_c_cond_new(void);
+extern int   ocamlcc_c_cond_wait(void *c, void *m);
+extern int   ocamlcc_c_cond_signal(void *c);
+extern int   ocamlcc_c_cond_broadcast(void *c);
+
+extern void  ocamlcc_c_md5(const uint8_t *data, size_t len, uint8_t out[16]);
+extern void *ocamlcc_c_blake2_new(size_t outlen, const uint8_t *key, size_t keylen);
+extern void  ocamlcc_c_blake2_update(void *p, const uint8_t *in, size_t inlen);
+extern void  ocamlcc_c_blake2_final(void *p, size_t outlen, uint8_t *out);
+
+static int64_t alloc_cstr_z(const char *s)
+{
+    size_t n = 0u;
+    if (s != NULL) {
+        while (s[n] != '\0') n++;
+    }
+    char *out = (char *)arc_alloc_bytes((uint64_t)n);
+    if (n > 0u)
+        pal_memcpy(out, s, n);
+    return (int64_t)(uintptr_t)out;
+}
+
+/* ---- Obj / String Hash / Hexfloat / Atomic contended ---- */
+
+int64_t caml_obj_tag(int64_t v)
+{
+    if (!is_heap_ptr(v))
+        return tag_int(1000); /* Int_tag */
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)v - 1;
+    uint16_t t = hdr->tag;
+    if (t == (uint16_t)ARC_TAG_ARRAY)
+        return tag_int(0);
+    if (t == (uint16_t)ARC_TAG_CLOSURE || t == (uint16_t)ARC_TAG_PAP)
+        return tag_int(247);
+    if (t == (uint16_t)ARC_TAG_STRING)
+        return tag_int(252);
+    if (t == (uint16_t)ARC_TAG_FLOAT)
+        return tag_int(253);
+    if (t == (uint16_t)ARC_TAG_FLOAT_ARRAY)
+        return tag_int(254);
+    if (t == (uint16_t)ARC_TAG_CUSTOM)
+        return tag_int(255);
+    if (t == (uint16_t)ARC_TAG_LAZY)
+        return tag_int(246);
+    if (t == (uint16_t)ARC_TAG_FORCING)
+        return tag_int(249);
+    if (t == (uint16_t)ARC_TAG_FORWARD)
+        return tag_int(250);
+    return tag_int((int64_t)t);
+}
+
+int64_t caml_string_hash(int64_t seed_val, int64_t s_val)
+{
+    uint32_t h = (uint32_t)(seed_val >> 1);
+    h = hash_mix_string(h, s_val);
+    h = hash_final_mix(h);
+    return tag_int((int64_t)(h & 0x3fffffffu));
+}
+
+int64_t caml_hexstring_of_float(int64_t f_val, int64_t prec_val, int64_t sign_val)
+{
+    char buf[128];
+    int n = ocamlcc_c_hexstring_of_float(
+        buf, sizeof(buf), unbox_float(f_val), prec_val >> 1, (char)(sign_val >> 1));
+    return alloc_c_string_buf(buf, n);
+}
+
+int64_t caml_atomic_make_contended(int64_t v)
+{
+    int64_t *blk = (int64_t *)arc_alloc(0u, 1u, 8u);
+    arc_retain_val(v);
+    blk[0] = v;
+    return (int64_t)(uintptr_t)blk;
+}
+
+/* ---- Backtraces (empty stubs) ---- */
+
+static int g_backtrace_enabled = 0;
+
+int64_t caml_restore_raw_backtrace(int64_t exn, int64_t bt)
+{
+    (void)exn; (void)bt;
+    return 1;
+}
+
+int64_t caml_get_exception_raw_backtrace(int64_t ignored)
+{
+    (void)ignored;
+    return (int64_t)(uintptr_t)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 0u);
+}
+
+int64_t caml_record_backtrace(int64_t b)
+{
+    g_backtrace_enabled = ((b >> 1) != 0) ? 1 : 0;
+    return 1;
+}
+
+int64_t caml_backtrace_status(int64_t ignored)
+{
+    (void)ignored;
+    return g_backtrace_enabled ? 3 : 1;
+}
+
+int64_t caml_get_current_callstack(int64_t max_frames)
+{
+    (void)max_frames;
+    return (int64_t)(uintptr_t)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 0u);
+}
+
+int64_t caml_ml_debug_info_status(int64_t ignored)
+{
+    (void)ignored;
+    return tag_int(0);
+}
+
+int64_t caml_raw_backtrace_slot(int64_t bt, int64_t i)
+{
+    (void)bt; (void)i;
+    ocamlcc_raise_invalid_arg_oob();
+    return 1;
+}
+
+int64_t caml_raw_backtrace_next_slot(int64_t slot)
+{
+    (void)slot;
+    return 1; /* None */
+}
+
+int64_t caml_convert_raw_backtrace(int64_t bt)
+{
+    (void)bt;
+    return (int64_t)(uintptr_t)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 0u);
+}
+
+int64_t caml_convert_raw_backtrace_slot(int64_t slot)
+{
+    (void)slot;
+    raise_failure_cstr("convert_raw_backtrace_slot: unsupported", 39u);
+    return 1;
+}
+
+/* ---- Sys / Env / FS / Runtime ---- */
+
+static int    g_argc = 0;
+static char **g_argv = NULL;
+static int    g_runtime_warnings = 0;
+
+void ocamlcc_set_argv(int argc, char **argv)
+{
+    g_argc = argc;
+    g_argv = argv;
+}
+
+int64_t caml_sys_argv(int64_t ignored)
+{
+    (void)ignored;
+    int n = (g_argc > 0 && g_argv != NULL) ? g_argc : 1;
+    int64_t *arr = (int64_t *)arc_alloc(
+        (uint16_t)ARC_TAG_ARRAY, 0u, (uint32_t)((uint64_t)n * 8u));
+    if (g_argc > 0 && g_argv != NULL) {
+        for (int i = 0; i < n; i++)
+            arr[i] = alloc_cstr_z(g_argv[i]);
+    } else {
+        arr[0] = alloc_cstr_z("");
+    }
+    return (int64_t)(uintptr_t)arr;
+}
+
+int64_t caml_sys_executable_name(int64_t ignored)
+{
+    (void)ignored;
+    const char *s = (g_argc > 0 && g_argv != NULL && g_argv[0] != NULL) ? g_argv[0] : "";
+    return alloc_cstr_z(s);
+}
+
+int64_t caml_sys_proc_self_exe(int64_t ignored)
+{
+    (void)ignored;
+    return 1; /* None */
+}
+
+int64_t caml_sys_get_config(int64_t ignored)
+{
+    (void)ignored;
+    int64_t *blk = (int64_t *)arc_alloc(0u, 3u, 24u);
+    blk[0] = alloc_cstr_z("Unix");
+    blk[1] = tag_int(64);
+    blk[2] = 1; /* big_endian = false */
+    return (int64_t)(uintptr_t)blk;
+}
+
+int64_t caml_sys_getenv(int64_t name_val)
+{
+    const char *v = ocamlcc_c_getenv((const char *)(uintptr_t)name_val);
+    if (v == NULL) {
+        ocamlcc_set_exn((int64_t)(uintptr_t)ocamlcc_global_Not_found);
+        return 1;
+    }
+    return alloc_cstr_z(v);
+}
+
+int64_t caml_sys_getenv_opt(int64_t name_val)
+{
+    const char *v = ocamlcc_c_getenv((const char *)(uintptr_t)name_val);
+    if (v == NULL)
+        return 1; /* None */
+    int64_t *some = (int64_t *)arc_alloc(0u, 1u, 8u);
+    some[0] = alloc_cstr_z(v);
+    return (int64_t)(uintptr_t)some;
+}
+
+int64_t caml_sys_file_exists(int64_t path_val)
+{
+    return ocamlcc_c_file_exists((const char *)(uintptr_t)path_val) ? 3 : 1;
+}
+
+int64_t caml_sys_is_directory(int64_t path_val)
+{
+    int is_dir = 0, is_reg = 0, err = 0;
+    if (ocamlcc_c_stat_kind((const char *)(uintptr_t)path_val, &is_dir, &is_reg, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    return is_dir ? 3 : 1;
+}
+
+int64_t caml_sys_is_regular_file(int64_t path_val)
+{
+    int is_dir = 0, is_reg = 0, err = 0;
+    if (ocamlcc_c_stat_kind((const char *)(uintptr_t)path_val, &is_dir, &is_reg, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    return is_reg ? 3 : 1;
+}
+
+int64_t caml_sys_remove(int64_t path_val)
+{
+    int err = 0;
+    if (ocamlcc_c_unlink((const char *)(uintptr_t)path_val, &err) != 0)
+        raise_sys_error_errno(err);
+    return 1;
+}
+
+int64_t caml_sys_rename(int64_t old_val, int64_t new_val)
+{
+    int err = 0;
+    if (ocamlcc_c_rename((const char *)(uintptr_t)old_val,
+                         (const char *)(uintptr_t)new_val, &err) != 0)
+        raise_sys_error_errno(err);
+    return 1;
+}
+
+int64_t caml_sys_chdir(int64_t path_val)
+{
+    int err = 0;
+    if (ocamlcc_c_chdir((const char *)(uintptr_t)path_val, &err) != 0)
+        raise_sys_error_errno(err);
+    return 1;
+}
+
+int64_t caml_sys_mkdir(int64_t path_val, int64_t mode_val)
+{
+    int err = 0;
+    if (ocamlcc_c_mkdir((const char *)(uintptr_t)path_val, (int)(mode_val >> 1), &err) != 0)
+        raise_sys_error_errno(err);
+    return 1;
+}
+
+int64_t caml_sys_rmdir(int64_t path_val)
+{
+    int err = 0;
+    if (ocamlcc_c_rmdir((const char *)(uintptr_t)path_val, &err) != 0)
+        raise_sys_error_errno(err);
+    return 1;
+}
+
+int64_t caml_sys_getcwd(int64_t ignored)
+{
+    (void)ignored;
+    int err = 0;
+    char *p = ocamlcc_c_getcwd(&err);
+    if (p == NULL) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    int64_t s = alloc_cstr_z(p);
+    ocamlcc_c_free(p);
+    return s;
+}
+
+int64_t caml_sys_read_directory(int64_t path_val)
+{
+    char **names = NULL;
+    size_t cnt = 0u;
+    int err = 0;
+    if (ocamlcc_c_readdir_alloc((const char *)(uintptr_t)path_val, &names, &cnt, &err) != 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    if (cnt == 0u) {
+        ocamlcc_c_readdir_free(names, cnt);
+        return (int64_t)(uintptr_t)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 0u);
+    }
+    int64_t *arr = (int64_t *)arc_alloc(
+        (uint16_t)ARC_TAG_ARRAY, 0u, (uint32_t)((uint64_t)cnt * 8u));
+    for (size_t i = 0u; i < cnt; i++)
+        arr[i] = alloc_cstr_z(names[i]);
+    ocamlcc_c_readdir_free(names, cnt);
+    return (int64_t)(uintptr_t)arr;
+}
+
+int64_t caml_sys_system_command(int64_t cmd_val)
+{
+    int err = 0;
+    int rc = ocamlcc_c_system((const char *)(uintptr_t)cmd_val, &err);
+    if (rc < 0) {
+        raise_sys_error_errno(err);
+        return 1;
+    }
+    return tag_int((int64_t)rc);
+}
+
+int64_t caml_sys_time(int64_t ignored)
+{
+    (void)ignored;
+    return ocamlcc_alloc_float(ocamlcc_c_sys_time());
+}
+
+int64_t caml_sys_io_buffer_size(int64_t ignored)
+{
+    (void)ignored;
+    return tag_int(65536);
+}
+
+int64_t caml_sys_temp_dir_name(int64_t ignored)
+{
+    (void)ignored;
+    const char *t = ocamlcc_c_getenv("TMPDIR");
+    if (t == NULL || t[0] == '\0')
+        t = "/tmp";
+    return alloc_cstr_z(t);
+}
+
+int64_t caml_sys_close(int64_t fd_val)
+{
+    int err = 0;
+    if (ocamlcc_c_fd_close_raw((int)(fd_val >> 1), &err) != 0)
+        raise_sys_error_errno(err);
+    return 1;
+}
+
+int64_t caml_sys_isatty(int64_t chan_val)
+{
+    const OcamlccChannel *ch = (const OcamlccChannel *)(uintptr_t)chan_val;
+    if (ch->closed)
+        return 1;
+    return ocamlcc_c_isatty(ch->fd) ? 3 : 1;
+}
+
+int64_t caml_runtime_variant(int64_t ignored)
+{
+    (void)ignored;
+    return alloc_cstr_z("");
+}
+
+int64_t caml_runtime_parameters(int64_t ignored)
+{
+    (void)ignored;
+    return alloc_cstr_z("");
+}
+
+int64_t caml_install_signal_handler(int64_t sig, int64_t beh)
+{
+    (void)sig; (void)beh;
+    return tag_int(0); /* Signal_default */
+}
+
+int64_t caml_sys_convert_signal_number(int64_t s) { return s; }
+int64_t caml_sys_rev_convert_signal_number(int64_t s) { return s; }
+
+int64_t caml_ml_enable_runtime_warnings(int64_t b)
+{
+    g_runtime_warnings = ((b >> 1) != 0) ? 1 : 0;
+    return 1;
+}
+
+int64_t caml_ml_runtime_warnings_enabled(int64_t ignored)
+{
+    (void)ignored;
+    return g_runtime_warnings ? 3 : 1;
+}
+
+int64_t caml_sys_random_seed(int64_t ignored)
+{
+    (void)ignored;
+    uint64_t ns = pal_monotonic_ns();
+    int64_t *arr = (int64_t *)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 32u);
+    arr[0] = tag_int((int64_t)(ns & 0x3fffffffULL));
+    arr[1] = tag_int((int64_t)((ns >> 16) & 0x3fffffffULL));
+    arr[2] = tag_int((int64_t)((ns * 6364136223846793005ULL) & 0x3fffffffULL));
+    arr[3] = tag_int((int64_t)(((ns >> 32) ^ 0x9e3779b9ULL) & 0x3fffffffULL));
+    return (int64_t)(uintptr_t)arr;
+}
+
+/* ---- Floatarray & libm math ---- */
+
+int64_t caml_floatarray_sub(int64_t a, int64_t o, int64_t l) { return caml_array_sub(a, o, l); }
+int64_t caml_floatarray_append(int64_t a, int64_t b) { return caml_array_append(a, b); }
+int64_t caml_floatarray_concat(int64_t lst) { return caml_array_concat(lst); }
+int64_t caml_floatarray_blit(int64_t s, int64_t so, int64_t d, int64_t dofs, int64_t l) { return caml_array_blit(s, so, d, dofs, l); }
+int64_t caml_floatarray_fill(int64_t d, int64_t o, int64_t l, int64_t v) { return caml_array_fill(d, o, l, v); }
+
+int64_t caml_floatarray_make(int64_t len_val, int64_t init_val)
+{
+    int64_t n = len_val >> 1;
+    if (n < 0 || (uint64_t)n > ((uint64_t)UINT32_MAX - 16u) / 8u) {
+        raise_invalid_arg_imm(g_inv_arg_array_str.str);
+        return 1;
+    }
+    double d = unbox_float(init_val);
+    double *p = (double *)arc_alloc(
+        (uint16_t)ARC_TAG_FLOAT_ARRAY, 0u, (uint32_t)((uint64_t)n * 8u));
+    for (int64_t i = 0; i < n; i++)
+        p[i] = d;
+    return (int64_t)(uintptr_t)p;
+}
+
+#define DEF_FLOAT_UNOP(caml_name, c_fn) \
+    int64_t caml_name(int64_t v) { return ocamlcc_alloc_float(c_fn(unbox_float(v))); }
+#define DEF_FLOAT_BINOP(caml_name, c_fn) \
+    int64_t caml_name(int64_t a, int64_t b) { return ocamlcc_alloc_float(c_fn(unbox_float(a), unbox_float(b))); }
+
+DEF_FLOAT_UNOP(caml_exp_float, ocamlcc_c_exp)
+DEF_FLOAT_UNOP(caml_exp2_float, ocamlcc_c_exp2)
+DEF_FLOAT_UNOP(caml_expm1_float, ocamlcc_c_expm1)
+DEF_FLOAT_UNOP(caml_log_float, ocamlcc_c_log)
+DEF_FLOAT_UNOP(caml_log10_float, ocamlcc_c_log10)
+DEF_FLOAT_UNOP(caml_log2_float, ocamlcc_c_log2)
+DEF_FLOAT_UNOP(caml_log1p_float, ocamlcc_c_log1p)
+DEF_FLOAT_BINOP(caml_power_float, ocamlcc_c_pow)
+DEF_FLOAT_UNOP(caml_sin_float, ocamlcc_c_sin)
+DEF_FLOAT_UNOP(caml_cos_float, ocamlcc_c_cos)
+DEF_FLOAT_UNOP(caml_tan_float, ocamlcc_c_tan)
+DEF_FLOAT_UNOP(caml_asin_float, ocamlcc_c_asin)
+DEF_FLOAT_UNOP(caml_acos_float, ocamlcc_c_acos)
+DEF_FLOAT_UNOP(caml_atan_float, ocamlcc_c_atan)
+DEF_FLOAT_BINOP(caml_atan2_float, ocamlcc_c_atan2)
+DEF_FLOAT_UNOP(caml_sinh_float, ocamlcc_c_sinh)
+DEF_FLOAT_UNOP(caml_cosh_float, ocamlcc_c_cosh)
+DEF_FLOAT_UNOP(caml_tanh_float, ocamlcc_c_tanh)
+DEF_FLOAT_UNOP(caml_asinh_float, ocamlcc_c_asinh)
+DEF_FLOAT_UNOP(caml_acosh_float, ocamlcc_c_acosh)
+DEF_FLOAT_UNOP(caml_atanh_float, ocamlcc_c_atanh)
+DEF_FLOAT_UNOP(caml_cbrt_float, ocamlcc_c_cbrt)
+DEF_FLOAT_BINOP(caml_hypot_float, ocamlcc_c_hypot)
+DEF_FLOAT_UNOP(caml_erf_float, ocamlcc_c_erf)
+DEF_FLOAT_UNOP(caml_erfc_float, ocamlcc_c_erfc)
+DEF_FLOAT_UNOP(caml_trunc_float, ocamlcc_c_trunc)
+DEF_FLOAT_UNOP(caml_round_float, ocamlcc_c_round)
+DEF_FLOAT_BINOP(caml_nextafter_float, ocamlcc_c_nextafter)
+
+int64_t caml_fma_float(int64_t a, int64_t b, int64_t c)
+{
+    return ocamlcc_alloc_float(ocamlcc_c_fma(unbox_float(a), unbox_float(b), unbox_float(c)));
+}
+
+int64_t caml_signbit_float(int64_t v)
+{
+    return ocamlcc_c_signbit(unbox_float(v)) ? 3 : 1;
+}
+
+int64_t caml_frexp_float(int64_t v)
+{
+    int e = 0;
+    double m = ocamlcc_c_frexp(unbox_float(v), &e);
+    int64_t *pair = (int64_t *)arc_alloc(0u, 2u, 16u);
+    pair[0] = ocamlcc_alloc_float(m);
+    pair[1] = tag_int((int64_t)e);
+    return (int64_t)(uintptr_t)pair;
+}
+
+int64_t caml_ldexp_float(int64_t v, int64_t e_val)
+{
+    return ocamlcc_alloc_float(ocamlcc_c_ldexp(unbox_float(v), (int)(e_val >> 1)));
+}
+
+int64_t caml_modf_float(int64_t v)
+{
+    double ip = 0.0;
+    double fp = ocamlcc_c_modf(unbox_float(v), &ip);
+    int64_t *pair = (int64_t *)arc_alloc(0u, 2u, 16u);
+    pair[0] = ocamlcc_alloc_float(fp);
+    pair[1] = ocamlcc_alloc_float(ip);
+    return (int64_t)(uintptr_t)pair;
+}
+
+/* ---- Sync: Mutex & Condition ---- */
+
+int64_t caml_ml_mutex_new(int64_t ignored)
+{
+    (void)ignored;
+    void *m = ocamlcc_c_mutex_new();
+    if (m == NULL) pal_abort();
+    return ocamlcc_alloc_custom(ARC_CUSTOM_MUTEX, (uint64_t)(uintptr_t)m);
+}
+
+int64_t caml_ml_mutex_lock(int64_t m_val)
+{
+    void *m = (void *)(uintptr_t)unbox_custom_i64(m_val);
+    int entered = 0;
+    if (tls_os_mutator_active) {
+        tls_os_mutator_active = 0;
+        atomic_fetch_sub_explicit(&g_active_mutators, 1, memory_order_release);
+        entered = 1;
+    }
+    int rc = ocamlcc_c_mutex_lock(m);
+    if (entered) {
+        while (atomic_load_explicit(&g_cc_waiting, memory_order_acquire) != 0)
+            cpu_relax();
+        atomic_fetch_add_explicit(&g_active_mutators, 1, memory_order_acq_rel);
+        tls_os_mutator_active = 1;
+    }
+    if (rc != 0)
+        raise_sys_error_errno(rc);
+    return 1;
+}
+
+int64_t caml_ml_mutex_try_lock(int64_t m_val)
+{
+    void *m = (void *)(uintptr_t)unbox_custom_i64(m_val);
+    return (ocamlcc_c_mutex_trylock(m) == 0) ? 3 : 1;
+}
+
+int64_t caml_ml_mutex_unlock(int64_t m_val)
+{
+    void *m = (void *)(uintptr_t)unbox_custom_i64(m_val);
+    int rc = ocamlcc_c_mutex_unlock(m);
+    if (rc != 0)
+        raise_sys_error_errno(rc);
+    return 1;
+}
+
+int64_t caml_ml_condition_new(int64_t ignored)
+{
+    (void)ignored;
+    void *c = ocamlcc_c_cond_new();
+    if (c == NULL) pal_abort();
+    return ocamlcc_alloc_custom(ARC_CUSTOM_COND, (uint64_t)(uintptr_t)c);
+}
+
+int64_t caml_ml_condition_wait(int64_t c_val, int64_t m_val)
+{
+    void *c = (void *)(uintptr_t)unbox_custom_i64(c_val);
+    void *m = (void *)(uintptr_t)unbox_custom_i64(m_val);
+    int entered = 0;
+    if (tls_os_mutator_active) {
+        tls_os_mutator_active = 0;
+        atomic_fetch_sub_explicit(&g_active_mutators, 1, memory_order_release);
+        entered = 1;
+    }
+    int rc = ocamlcc_c_cond_wait(c, m);
+    if (entered) {
+        while (atomic_load_explicit(&g_cc_waiting, memory_order_acquire) != 0)
+            cpu_relax();
+        atomic_fetch_add_explicit(&g_active_mutators, 1, memory_order_acq_rel);
+        tls_os_mutator_active = 1;
+    }
+    if (rc != 0)
+        raise_sys_error_errno(rc);
+    return 1;
+}
+
+int64_t caml_ml_condition_signal(int64_t c_val)
+{
+    void *c = (void *)(uintptr_t)unbox_custom_i64(c_val);
+    (void)ocamlcc_c_cond_signal(c);
+    return 1;
+}
+
+int64_t caml_ml_condition_broadcast(int64_t c_val)
+{
+    void *c = (void *)(uintptr_t)unbox_custom_i64(c_val);
+    (void)ocamlcc_c_cond_broadcast(c);
+    return 1;
+}
+
+/* ---- Digest: MD5 & BLAKE2b ---- */
+
+int64_t caml_md5_bytes(int64_t b_val, int64_t ofs_val, int64_t len_val)
+{
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)b_val - 1;
+    int64_t ofs = ofs_val >> 1;
+    int64_t len = len_val >> 1;
+    if (ofs < 0 || len < 0 || ofs > (int64_t)hdr->reserved - len) {
+        ocamlcc_raise_invalid_arg_oob();
+        return 1;
+    }
+    uint8_t dig[16];
+    ocamlcc_c_md5((const uint8_t *)(uintptr_t)b_val + ofs, (size_t)len, dig);
+    char *out = (char *)arc_alloc_bytes(16u);
+    pal_memcpy(out, dig, 16u);
+    return (int64_t)(uintptr_t)out;
+}
+
+int64_t caml_md5_string(int64_t s_val, int64_t ofs_val, int64_t len_val)
+{
+    return caml_md5_bytes(s_val, ofs_val, len_val);
+}
+
+int64_t caml_md5_chan(int64_t chan_val, int64_t len_val)
+{
+    int64_t req = len_val >> 1;
+    uint8_t *tmp = NULL;
+    size_t cap = (req >= 0) ? (size_t)req : 4096u;
+    if (cap == 0u) cap = 1u;
+    char *buf_s = (char *)arc_alloc_bytes((uint64_t)cap);
+    size_t total = 0u;
+    if (req >= 0) {
+        while (total < (size_t)req) {
+            int64_t got = caml_ml_input(
+                chan_val, (int64_t)(uintptr_t)buf_s,
+                tag_int((int64_t)total), tag_int((int64_t)((size_t)req - total)));
+            if (ocamlcc_get_exn() != 0) {
+                arc_release(buf_s);
+                return 1;
+            }
+            int64_t n = got >> 1;
+            if (n == 0) {
+                arc_release(buf_s);
+                raise_end_of_file();
+                return 1;
+            }
+            total += (size_t)n;
+        }
+        uint8_t dig[16];
+        ocamlcc_c_md5((const uint8_t *)buf_s, total, dig);
+        arc_release(buf_s);
+        char *out = (char *)arc_alloc_bytes(16u);
+        pal_memcpy(out, dig, 16u);
+        return (int64_t)(uintptr_t)out;
+    }
+    /* Read until EOF dynamically */
+    (void)tmp;
+    size_t dyn_cap = 4096u;
+    char *acc = (char *)arc_alloc_bytes((uint64_t)dyn_cap);
+    for (;;) {
+        if (total == dyn_cap) {
+            size_t nc = dyn_cap * 2u;
+            char *nacc = (char *)arc_alloc_bytes((uint64_t)nc);
+            pal_memcpy(nacc, acc, total);
+            arc_release(acc);
+            acc = nacc;
+            dyn_cap = nc;
+        }
+        int64_t got = caml_ml_input(
+            chan_val, (int64_t)(uintptr_t)acc,
+            tag_int((int64_t)total), tag_int((int64_t)(dyn_cap - total)));
+        if (ocamlcc_get_exn() != 0) {
+            arc_release(buf_s);
+            arc_release(acc);
+            return 1;
+        }
+        int64_t n = got >> 1;
+        if (n == 0)
+            break;
+        total += (size_t)n;
+    }
+    uint8_t dig[16];
+    ocamlcc_c_md5((const uint8_t *)acc, total, dig);
+    arc_release(buf_s);
+    arc_release(acc);
+    char *out = (char *)arc_alloc_bytes(16u);
+    pal_memcpy(out, dig, 16u);
+    return (int64_t)(uintptr_t)out;
+}
+
+int64_t caml_blake2_create(int64_t outlen_val, int64_t key_val)
+{
+    int64_t outlen = outlen_val >> 1;
+    const ArcHeader *kh = (const ArcHeader *)(uintptr_t)key_val - 1;
+    if (outlen < 1 || outlen > 64 || kh->reserved > 64u) {
+        ocamlcc_raise_invalid_arg_oob();
+        return 1;
+    }
+    void *s = ocamlcc_c_blake2_new((size_t)outlen, (const uint8_t *)(uintptr_t)key_val, (size_t)kh->reserved);
+    if (s == NULL) pal_abort();
+    return ocamlcc_alloc_custom(ARC_CUSTOM_BLAKE2, (uint64_t)(uintptr_t)s);
+}
+
+int64_t caml_blake2_update(int64_t state_val, int64_t b_val, int64_t ofs_val, int64_t len_val)
+{
+    void *s = (void *)(uintptr_t)unbox_custom_i64(state_val);
+    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)b_val - 1;
+    int64_t ofs = ofs_val >> 1;
+    int64_t len = len_val >> 1;
+    if (ofs < 0 || len < 0 || ofs > (int64_t)bh->reserved - len) {
+        ocamlcc_raise_invalid_arg_oob();
+        return 1;
+    }
+    ocamlcc_c_blake2_update(s, (const uint8_t *)(uintptr_t)b_val + ofs, (size_t)len);
+    return 1;
+}
+
+int64_t caml_blake2_final(int64_t state_val, int64_t outlen_val)
+{
+    void *s = (void *)(uintptr_t)unbox_custom_i64(state_val);
+    int64_t outlen = outlen_val >> 1;
+    if (outlen < 1 || outlen > 64) {
+        ocamlcc_raise_invalid_arg_oob();
+        return 1;
+    }
+    char *out = (char *)arc_alloc_bytes((uint64_t)outlen);
+    ocamlcc_c_blake2_final(s, (size_t)outlen, (uint8_t *)out);
+    return (int64_t)(uintptr_t)out;
+}
+
+int64_t caml_blake2_bytes(int64_t outlen_val, int64_t key_val,
+                          int64_t b_val, int64_t ofs_val, int64_t len_val)
+{
+    int64_t outlen = outlen_val >> 1;
+    const ArcHeader *kh = (const ArcHeader *)(uintptr_t)key_val - 1;
+    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)b_val - 1;
+    int64_t ofs = ofs_val >> 1;
+    int64_t len = len_val >> 1;
+    if (outlen < 1 || outlen > 64 || kh->reserved > 64u ||
+        ofs < 0 || len < 0 || ofs > (int64_t)bh->reserved - len) {
+        ocamlcc_raise_invalid_arg_oob();
+        return 1;
+    }
+    void *s = ocamlcc_c_blake2_new((size_t)outlen, (const uint8_t *)(uintptr_t)key_val, (size_t)kh->reserved);
+    if (s == NULL) pal_abort();
+    ocamlcc_c_blake2_update(s, (const uint8_t *)(uintptr_t)b_val + ofs, (size_t)len);
+    char *out = (char *)arc_alloc_bytes((uint64_t)outlen);
+    ocamlcc_c_blake2_final(s, (size_t)outlen, (uint8_t *)out);
+    ocamlcc_c_blake2_free(s);
+    return (int64_t)(uintptr_t)out;
+}
+
+int64_t caml_blake2_string(int64_t outlen_val, int64_t key_val,
+                           int64_t s_val, int64_t ofs_val, int64_t len_val)
+{
+    return caml_blake2_bytes(outlen_val, key_val, s_val, ofs_val, len_val);
+}
+
+/* ---- Computed field ops & channel/bigarray helpers ---- */
+
+int64_t caml_obj_field(int64_t obj_val, int64_t idx_val)
+{
+    int64_t idx = idx_val >> 1;
+    const int64_t *fields = (const int64_t *)(uintptr_t)obj_val;
+    int64_t v = fields[idx];
+    arc_retain_val(v);
+    return v;
+}
+
+int64_t caml_obj_set_field(int64_t obj_val, int64_t idx_val, int64_t new_val)
+{
+    int64_t idx = idx_val >> 1;
+    int64_t *fields = (int64_t *)(uintptr_t)obj_val;
+    int64_t old_v = fields[idx];
+    arc_retain_val(new_val);
+    fields[idx] = new_val;
+    arc_release_val(old_v);
+    return 1;
+}
+
+int64_t caml_ml_is_binary_mode(int64_t chan_val)
+{
+    (void)chan_val;
+    return 3; /* true */
+}
+
+int64_t caml_ml_set_buffered(int64_t chan_val, int64_t mode_val)
+{
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    int buffered = (mode_val != 1);
+    ch->unbuffered = buffered ? 0 : 1;
+    if (!buffered && ch->is_out && !ch->closed) {
+        int err = 0;
+        if (chan_flush_internal(ch, &err) != 0)
+            raise_sys_error_errno(err);
+    }
+    return 1;
+}
+
+int64_t caml_ml_is_buffered(int64_t chan_val)
+{
+    const OcamlccChannel *ch = (const OcamlccChannel *)(uintptr_t)chan_val;
+    return ch->unbuffered ? 1 : 3;
+}
+
+int64_t caml_ml_input_bigarray(int64_t c, int64_t ba, int64_t o, int64_t l)
+{
+    (void)c; (void)ba; (void)o; (void)l;
+    raise_failure_cstr("input_bigarray: unsupported", 27u);
+    return 1;
+}
+
+int64_t caml_ml_output_bigarray(int64_t c, int64_t ba, int64_t o, int64_t l)
+{
+    (void)c; (void)ba; (void)o; (void)l;
+    raise_failure_cstr("output_bigarray: unsupported", 28u);
+    return 1;
+}
+
+int64_t caml_ba_dim(int64_t ba, int64_t d)
+{
+    (void)ba; (void)d;
+    raise_failure_cstr("Bigarray.dim: unsupported", 25u);
+    return 1;
+}
+
+/* ---- Lazy & Obj primitives ---- */
+
+static inline uint16_t map_ocaml_tag_to_arc(int64_t ocaml_tag)
+{
+    if (ocaml_tag == 246) return (uint16_t)ARC_TAG_LAZY;
+    if (ocaml_tag == 249) return (uint16_t)ARC_TAG_FORCING;
+    if (ocaml_tag == 250) return (uint16_t)ARC_TAG_FORWARD;
+    return (uint16_t)ocaml_tag;
+}
+
+int64_t caml_lazy_make_block(int64_t fn_val)
+{
+    int64_t *blk = (int64_t *)arc_alloc((uint16_t)ARC_TAG_LAZY, 1u, 8u);
+    arc_retain_val(fn_val);
+    blk[0] = fn_val;
+    return (int64_t)(uintptr_t)blk;
+}
+
+int64_t caml_lazy_make_forward(int64_t v_val)
+{
+    int64_t *blk = (int64_t *)arc_alloc((uint16_t)ARC_TAG_FORWARD, 1u, 8u);
+    arc_retain_val(v_val);
+    blk[0] = v_val;
+    return (int64_t)(uintptr_t)blk;
+}
+
+int64_t caml_lazy_update_to_forcing(int64_t blk_val)
+{
+    if (!is_heap_ptr(blk_val))
+        return tag_int(1);
+    ArcHeader *hdr = (ArcHeader *)(uintptr_t)blk_val - 1;
+    if (hdr->tag != (uint16_t)ARC_TAG_LAZY)
+        return tag_int(1);
+    hdr->tag = (uint16_t)ARC_TAG_FORCING;
+    return tag_int(0);
+}
+
+int64_t caml_lazy_reset_to_lazy(int64_t blk_val)
+{
+    if (is_heap_ptr(blk_val)) {
+        ArcHeader *hdr = (ArcHeader *)(uintptr_t)blk_val - 1;
+        hdr->tag = (uint16_t)ARC_TAG_LAZY;
+    }
+    return 1;
+}
+
+int64_t caml_lazy_update_to_forward(int64_t blk_val)
+{
+    if (is_heap_ptr(blk_val)) {
+        ArcHeader *hdr = (ArcHeader *)(uintptr_t)blk_val - 1;
+        hdr->tag = (uint16_t)ARC_TAG_FORWARD;
+    }
+    return 1;
+}
+
+int64_t caml_obj_block(int64_t tag_val, int64_t size_val)
+{
+    int64_t t = tag_val >> 1;
+    int64_t sz = size_val >> 1;
+    if (sz < 0 || sz > 0xffff || t < 0 || t > 255 ||
+        t == 247 /* Closure_tag */ || t == 249 /* Infix_tag */ ||
+        t == 255 /* Custom_tag */ || (t == 252 /* String_tag */ && sz == 0)) {
+        ocamlcc_raise_invalid_arg_oob();
+        return 1;
+    }
+    uint16_t atag = map_ocaml_tag_to_arc(t);
+    if (sz == 0)
+        return (int64_t)(uintptr_t)arc_alloc(atag, 0u, 0u);
+    if (atag == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+        double *p = (double *)arc_alloc(atag, 0u, (uint32_t)((uint64_t)sz * 8u));
+        pal_memset(p, 0, (size_t)sz * 8u);
+        return (int64_t)(uintptr_t)p;
+    }
+    uint16_t scan = (atag == (uint16_t)ARC_TAG_ARRAY || is_unscanned_leaf_tag(atag))
+                        ? 0u
+                        : (uint16_t)sz;
+    int64_t *p = (int64_t *)arc_alloc(atag, scan, (uint32_t)((uint64_t)sz * 8u));
+    for (int64_t i = 0; i < sz; i++)
+        p[i] = 1;
+    return (int64_t)(uintptr_t)p;
+}
+
+static int64_t dup_with_tag(int64_t v, int override_tag, uint16_t new_atag)
+{
+    if (!is_heap_ptr(v))
+        return v;
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)v - 1;
+    uint16_t tag = override_tag ? new_atag : hdr->tag;
+    if (hdr->tag == (uint16_t)ARC_TAG_STRING) {
+        char *s = (char *)arc_alloc_bytes((uint64_t)hdr->reserved);
+        if (hdr->reserved > 0u)
+            pal_memcpy(s, (const void *)(uintptr_t)v, (size_t)hdr->reserved);
+        return (int64_t)(uintptr_t)s;
+    }
+    if (hdr->tag == (uint16_t)ARC_TAG_FLOAT)
+        return ocamlcc_alloc_float(unbox_float(v));
+    if (hdr->tag == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+        double *p = (double *)arc_alloc(tag, 0u, hdr->byte_size);
+        if (hdr->byte_size > 0u)
+            pal_memcpy(p, (const void *)(uintptr_t)v, hdr->byte_size);
+        return (int64_t)(uintptr_t)p;
+    }
+    uint16_t scan = (tag == (uint16_t)ARC_TAG_ARRAY) ? 0u : hdr->scan_fields;
+    int64_t *dst = (int64_t *)arc_alloc(tag, scan, hdr->byte_size);
+    if (hdr->byte_size > 0u)
+        pal_memcpy(dst, (const void *)(uintptr_t)v, hdr->byte_size);
+    uint32_t nf = (hdr->tag == (uint16_t)ARC_TAG_ARRAY)
+                      ? (hdr->byte_size / 8u)
+                      : (uint32_t)hdr->scan_fields;
+    for (uint32_t i = 0u; i < nf; i++)
+        arc_retain_val(dst[i]);
+    return (int64_t)(uintptr_t)dst;
+}
+
+int64_t caml_obj_dup(int64_t v)
+{
+    return dup_with_tag(v, 0, 0u);
+}
+
+int64_t caml_obj_with_tag(int64_t tag_val, int64_t v)
+{
+    return dup_with_tag(v, 1, map_ocaml_tag_to_arc(tag_val >> 1));
+}
+
+int64_t caml_floatarray_get(int64_t fa, int64_t idx_val)
+{
+    return ocamlcc_gen_array_get(3, fa, idx_val);
+}
+
+int64_t caml_floatarray_set(int64_t fa, int64_t idx_val, int64_t v)
+{
+    return ocamlcc_gen_array_set(3, fa, idx_val, v);
+}
+
+int64_t caml_obj_add_offset(int64_t v, int64_t off_val)
+{
+    int32_t off = (int32_t)unbox_custom_i64(off_val);
+    return (int64_t)((uintptr_t)v + (intptr_t)off);
+}
+
+int64_t caml_obj_reachable_words(int64_t v)
+{
+    if (!is_heap_ptr(v))
+        return tag_int(0);
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)v - 1;
+    return tag_int((int64_t)((hdr->byte_size + 7u) / 8u + 2u));
+}
+
+int64_t caml_obj_raw_field(int64_t obj_val, int64_t idx_val)
+{
+    int64_t idx = idx_val >> 1;
+    const int64_t *fields = (const int64_t *)(uintptr_t)obj_val;
+    return ocamlcc_alloc_custom(ARC_CUSTOM_NATIVEINT, (uint64_t)fields[idx]);
+}
+
+int64_t caml_obj_set_raw_field(int64_t obj_val, int64_t idx_val, int64_t raw_val)
+{
+    int64_t idx = idx_val >> 1;
+    int64_t *fields = (int64_t *)(uintptr_t)obj_val;
+    fields[idx] = unbox_custom_i64(raw_val);
+    return 1;
+}
+
+int64_t caml_weak_blit(int64_t src_val, int64_t src_ofs_val,
+                       int64_t dst_val, int64_t dst_ofs_val, int64_t len_val)
+{
+    ArcWeakArray *src = (ArcWeakArray *)(uintptr_t)src_val;
+    ArcWeakArray *dst = (ArcWeakArray *)(uintptr_t)dst_val;
+    int64_t so = src_ofs_val >> 1;
+    int64_t dofs = dst_ofs_val >> 1;
+    int64_t len = len_val >> 1;
+    if (len < 0 || so < 0 || dofs < 0 ||
+        (uint64_t)so + (uint64_t)len > src->len ||
+        (uint64_t)dofs + (uint64_t)len > dst->len) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return 1;
+    }
+    if (len == 0)
+        return 1;
+    arc_lock(&g_weak_lock);
+    if (src == dst && dofs > so) {
+        for (int64_t i = len - 1; i >= 0; i--)
+            dst->slots[dofs + i] = src->slots[so + i];
+    } else {
+        for (int64_t i = 0; i < len; i++)
+            dst->slots[dofs + i] = src->slots[so + i];
+    }
+    arc_unlock(&g_weak_lock);
+    return 1;
+}
+
+static ArcSpinLock g_gc_ctrl_lock = { 0u };
+static int64_t g_gc_ctrl[11] = {
+    262144, 0, 120, 0, 500, 134217728, 0, 0, 44, 100, 70000
+};
+
+int64_t caml_gc_minor_words(int64_t ignored)
+{
+    (void)ignored;
+    uint64_t w = atomic_load_explicit(&g_alloc_words, memory_order_relaxed);
+    return ocamlcc_alloc_float((double)w);
+}
+
+int64_t caml_gc_counters(int64_t ignored)
+{
+    (void)ignored;
+    double w = (double)atomic_load_explicit(&g_alloc_words, memory_order_relaxed);
+    int64_t *tup = (int64_t *)arc_alloc(0u, 3u, 24u);
+    tup[0] = ocamlcc_alloc_float(w);
+    tup[1] = ocamlcc_alloc_float(0.0);
+    tup[2] = ocamlcc_alloc_float(0.0);
+    return (int64_t)(uintptr_t)tup;
+}
+
+int64_t caml_gc_quick_stat(int64_t ignored)
+{
+    (void)ignored;
+    double words = (double)atomic_load_explicit(&g_alloc_words, memory_order_relaxed);
+    int64_t cols = atomic_load_explicit(&g_gc_collections, memory_order_relaxed);
+    int64_t live = atomic_load_explicit(&g_live_objects, memory_order_relaxed);
+    int64_t slabs = atomic_load_explicit(&g_active_slabs, memory_order_relaxed);
+    int64_t heap_w = slabs * (int64_t)(SLAB_SIZE / 8u);
+    int64_t *st = (int64_t *)arc_alloc(0u, 18u, 18u * 8u);
+    st[0] = ocamlcc_alloc_float(words); /* minor_words */
+    st[1] = ocamlcc_alloc_float(0.0);   /* promoted_words */
+    st[2] = ocamlcc_alloc_float(0.0);   /* major_words */
+    st[3] = tag_int(cols);              /* minor_collections */
+    st[4] = tag_int(cols);              /* major_collections */
+    st[5] = tag_int(heap_w);            /* heap_words */
+    st[6] = tag_int(0);                 /* heap_chunks */
+    st[7] = tag_int(live * 2);          /* live_words */
+    st[8] = tag_int(live);              /* live_blocks */
+    st[9] = tag_int(0);                 /* free_words */
+    st[10] = tag_int(0);                /* free_blocks */
+    st[11] = tag_int(0);                /* largest_free */
+    st[12] = tag_int(0);                /* fragments */
+    st[13] = tag_int(cols);             /* compactions */
+    st[14] = tag_int(heap_w);           /* top_heap_words */
+    st[15] = tag_int(0);                /* stack_size */
+    st[16] = tag_int(cols);             /* forced_major_collections */
+    st[17] = tag_int(0);                /* live_stacks_words */
+    return (int64_t)(uintptr_t)st;
+}
+
+int64_t caml_gc_stat(int64_t ignored)
+{
+    (void)ignored;
+    (void)ocamlcc_arc_collect(1);
+    atomic_fetch_add_explicit(&g_gc_collections, 1, memory_order_relaxed);
+    return caml_gc_quick_stat(1);
+}
+
+int64_t caml_gc_get(int64_t ignored)
+{
+    (void)ignored;
+    int64_t *c = (int64_t *)arc_alloc(0u, 11u, 11u * 8u);
+    arc_lock(&g_gc_ctrl_lock);
+    for (int i = 0; i < 11; i++)
+        c[i] = tag_int(g_gc_ctrl[i]);
+    arc_unlock(&g_gc_ctrl_lock);
+    return (int64_t)(uintptr_t)c;
+}
+
+int64_t caml_gc_set(int64_t ctrl_val)
+{
+    const int64_t *c = (const int64_t *)(uintptr_t)ctrl_val;
+    arc_lock(&g_gc_ctrl_lock);
+    for (int i = 0; i < 11; i++)
+        g_gc_ctrl[i] = c[i] >> 1;
+    arc_unlock(&g_gc_ctrl_lock);
+    return 1;
+}
+
+int64_t caml_gc_minor(int64_t ignored)
+{
+    (void)ignored;
+    (void)ocamlcc_arc_collect(1);
+    atomic_fetch_add_explicit(&g_gc_collections, 1, memory_order_relaxed);
+    return 1;
+}
+
+int64_t caml_gc_major_slice(int64_t n_val)
+{
+    (void)n_val;
+    (void)ocamlcc_arc_collect(1);
+    return tag_int(0);
+}
+
+int64_t caml_gc_major(int64_t ignored)
+{
+    return caml_gc_minor(ignored);
+}
+
+int64_t caml_gc_full_major(int64_t ignored)
+{
+    return caml_gc_minor(ignored);
+}
+
+int64_t caml_gc_compaction(int64_t ignored)
+{
+    return caml_gc_minor(ignored);
+}
+
+int64_t caml_get_minor_free(int64_t ignored)
+{
+    (void)ignored;
+    return tag_int(262144);
+}
+
+int64_t caml_final_register(int64_t fn, int64_t v)
+{
+    (void)fn; (void)v;
+    return 1;
+}
+
+int64_t caml_final_register_called_without_value(int64_t fn, int64_t v)
+{
+    (void)fn; (void)v;
+    return 1;
+}
+
+int64_t caml_final_release(int64_t ignored)
+{
+    (void)ignored;
+    return 1;
+}
+
+int64_t caml_memprof_start(int64_t rate, int64_t sz, int64_t tracker)
+{
+    (void)rate; (void)sz; (void)tracker;
+    raise_failure_cstr("Gc.Memprof: unsupported", 23u);
+    return 1;
+}
+
+int64_t caml_memprof_is_sampling(int64_t ignored)
+{
+    (void)ignored;
+    return 1;
+}
+
+int64_t caml_memprof_stop(int64_t ignored)
+{
+    (void)ignored;
+    return 1;
+}
+
+int64_t caml_memprof_discard(int64_t t)
+{
+    (void)t;
+    return 1;
+}
+
+int64_t caml_ml_gc_ramp_up(int64_t fn)
+{
+    int64_t res = ocamlcc_apply1_raw(fn, 1);
+    if (ocamlcc_get_exn() != 0)
+        return 1;
+    int64_t *pair = (int64_t *)arc_alloc(0u, 2u, 16u);
+    pair[0] = res;
+    pair[1] = tag_int(0);
+    return (int64_t)(uintptr_t)pair;
+}
+
+int64_t caml_ml_gc_ramp_down(int64_t w)
+{
+    (void)w;
+    return 1;
+}
+
+int64_t caml_gc_tweak_set(int64_t k, int64_t v)
+{
+    (void)k; (void)v;
+    return 1;
+}
+
+int64_t caml_gc_tweak_get(int64_t k)
+{
+    (void)k;
+    return tag_int(0);
+}
+
+int64_t caml_gc_tweak_list_active(int64_t ignored)
+{
+    (void)ignored;
+    return 1;
+}
+
+int64_t caml_ephe_create(int64_t n) { (void)n; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_get_key(int64_t e, int64_t i) { (void)e; (void)i; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_get_key_copy(int64_t e, int64_t i) { (void)e; (void)i; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_set_key(int64_t e, int64_t i, int64_t k) { (void)e; (void)i; (void)k; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_unset_key(int64_t e, int64_t i) { (void)e; (void)i; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_check_key(int64_t e, int64_t i) { (void)e; (void)i; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_blit_key(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e) { (void)a; (void)b; (void)c; (void)d; (void)e; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_get_data(int64_t e) { (void)e; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_get_data_copy(int64_t e) { (void)e; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_set_data(int64_t e, int64_t d) { (void)e; (void)d; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_unset_data(int64_t e) { (void)e; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_check_data(int64_t e) { (void)e; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+int64_t caml_ephe_blit_data(int64_t a, int64_t b) { (void)a; (void)b; raise_failure_cstr("Ephemeron: unsupported", 22u); return 1; }
+
+int64_t caml_get_public_method(int64_t obj, int64_t tag)
+{
+    (void)obj; (void)tag;
+    raise_failure_cstr("CamlinternalOO: method dispatch unsupported", 43u);
+    return 1;
+}
+
+int64_t caml_get_continuation_callstack(int64_t cont, int64_t n)
+{
+    (void)cont; (void)n;
+    return caml_get_current_callstack(tag_int(0));
+}
