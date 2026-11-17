@@ -218,3 +218,20 @@
  (deps c_bindgen_test.actual c_bindgen_test.expected)
  (action
   (diff c_bindgen_test.expected c_bindgen_test.actual)))
+
+(executable
+ (name driver_test)
+ (libraries ocamlcc unix))
+
+(rule
+ (alias runtest)
+ (deps driver_test.exe driver_test.expected)
+ (action
+  (with-stdout-to driver_test.actual
+   (run ./driver_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps driver_test.actual driver_test.expected)
+ (action
+  (diff driver_test.expected driver_test.actual)))

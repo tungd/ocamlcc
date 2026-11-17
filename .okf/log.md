@@ -1,5 +1,26 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Add single-binary driver `ocamlcc build --target <t>` (TDD) —
+  implemented `lib/driver.ml`/`lib/driver.mli` and wired `ocamlcc build` in
+  `bin/main.ml` (plus `unix` in `lib/dune`). Parses `.mli`/`.ml` module
+  dependencies via compiler-libs `Depend`, topologically sorts compilation
+  units (ensuring `.mli` `.cmi` precedes `.ml` and runtime dependency `.ml`
+  precedes dependents), compiles units, optionally invokes `C_bindgen` via
+  `--emit-header`, invokes `qbe -t <target>` (`arm64_apple`, `arm64`,
+  `amd64_sysv`, `rv64`, `amd64_apple`, `amd64_win`, plus platform aliases
+  `ios-arm64`, `ios-sim-arm64`, `ios-xcframework`, `android-arm64`,
+  `android-x86_64`, `linux-*`, `macos-*`), compiles/links runtime + stdlib
+  with `cc`/`xcrun`/NDK/`ar` (omitting `main_entry.o` for `--shared`,
+  `--static`, `--no-main`, and `ios-xcframework`). Added `test/driver_test.ml`
+  (Red: unbound `Driver`; Green: dependency order, out-of-order exe, shared
+  lib + generated header + C host with no `main`, static lib with no `main`,
+  and cross-target QBE asm for `arm64_apple`/`arm64`/`amd64_sysv`/`rv64`).
+  Also verified CLI `ocamlcc build --target ios-xcframework` producing
+  `ios-arm64` + `ios-arm64-simulator` `.xcframework`. `dune runtest` (14/14),
+  `ninja test` (25/25), `ninja asan_test` (15/15). Documented in
+  [roadmap](/concepts/roadmap.md), [build-pipeline](/concepts/build-pipeline.md),
+  and [getting-started](/concepts/getting-started.md).
+
 - 2026-11-17 (autoagent/1): Add `.mli -> .h` C99 header & FFI shim generator (`C_bindgen`, `ocamlcc bindgen`) (TDD) —
   implemented `lib/c_bindgen.ml`/`lib/c_bindgen.mli` walking typed `.mli`
   signatures via `Frontend.with_typed_interface` (`Typemod.type_interface` +

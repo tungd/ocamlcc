@@ -59,6 +59,11 @@ or `_build` by ninja itself.
 - **Vendored tarballs restore old mtimes** — after re-vendoring QBE, run
   `ninja -t clean` or ninja will happily link stale objects.
 
-When the compiler grows (see [roadmap](/concepts/roadmap.md)), embedding QBE
-into the `ocamlcc` executable (design goal "single binary") will replace the
-subprocess step; the ninja structure above stays otherwise unchanged.
+When compiling user projects without `build.ninja`, `ocamlcc build`
+(`lib/driver.ml`) orchestrates the full pipeline in one command:
+topological dependency ordering over `.mli`/`.ml` units via compiler-libs
+`Depend`, `.cmi`/`.ssa` compilation, optional `.mli -> .h` + `_shim.c`
+generation (`lib/c_bindgen.ml`), `qbe -t <target>` assembly, target C/xcrun/NDK
+toolchain compilation of `runtime/` and `stdlib/` (excluding `main_entry.o`
+for library targets), and executable, shared, static, or `.xcframework`
+packaging.

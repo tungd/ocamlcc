@@ -1,0 +1,6 @@
+target resolution: PASS
+dependency ordering: PASS
+exe build: PASS
+shared library + header: PASS
+static library no main: PASS
+cross-target asm emission: PASS

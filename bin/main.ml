@@ -1,13 +1,17 @@
 (* ocamlcc CLI.
 
    Subcommands:
-     ocamlcc compile [flags] <file.ml> [-o <out.ssa>]   emit QBE IL
-     ocamlcc compile-mli [flags] <file.mli> [-o <out.cmi>]  emit .cmi
+     ocamlcc build [flags] <files...> -o <out>             full driver build
+     ocamlcc compile [flags] <file.ml> [-o <out.ssa>]      emit QBE IL
+     ocamlcc compile-mli [flags] <file.mli> [-o <out.cmi>] emit .cmi
      ocamlcc bindgen [flags] <file.mli> [-o <out.h>] [--shim <out.c>]  emit C header + shim
-     ocamlcc dump-lambda [flags] <file.ml>              print the Lambda IR *)
+     ocamlcc dump-lambda [flags] <file.ml>                 print the Lambda IR *)
 
 let usage =
-  "usage: ocamlcc compile [-I dir] [--nostdlib] [--nopervasives] [--emit-cmi] \
+  "usage: ocamlcc build [--target t] [--shared|--static|--exe|-c|-S] \
+   [--emit-header h] [-I dir] [--nostdlib] [--nopervasives] [--no-main] \
+   [--qbe path] [--cc path] [--sysroot path] [-v] <files...> -o <out>\n\
+   \       ocamlcc compile [-I dir] [--nostdlib] [--nopervasives] [--emit-cmi] \
    [--cmi-prefix p] [--mod] <file.ml> [-o <out.ssa>]\n\
    \       ocamlcc compile-mli [-I dir] [--nostdlib] [--nopervasives] \
    <file.mli> [-o <out.cmi>]\n\
@@ -24,7 +28,21 @@ type cli_opts = {
   is_mod : bool;
   shim_out : string option;
   out : string option;
-  input : string option;
+  inputs : string list;
+  target : string option;
+  kind : Driver.output_kind option;
+  no_main : bool;
+  emit_header : string option;
+  qbe_path : string option;
+  cc_path : string option;
+  ar_path : string option;
+  sysroot : string option;
+  runtime_dir : string option;
+  stdlib_dir : string option;
+  work_dir : string option;
+  extra_cflags : string list;
+  extra_ldflags : string list;
+  verbose : bool;
 }
 
 let default_opts =
@@ -36,11 +54,31 @@ let default_opts =
     is_mod = false;
     shim_out = None;
     out = None;
-    input = None }
+    inputs = [];
+    target = None;
+    kind = None;
+    no_main = false;
+    emit_header = None;
+    qbe_path = None;
+    cc_path = None;
+    ar_path = None;
+    sysroot = None;
+    runtime_dir = None;
+    stdlib_dir = None;
+    work_dir = None;
+    extra_cflags = [];
+    extra_ldflags = [];
+    verbose = false }
 
 let parse_opts args =
   let rec go opts = function
-    | [] -> Ok { opts with include_dirs = List.rev opts.include_dirs }
+    | [] ->
+        Ok
+          { opts with
+            include_dirs = List.rev opts.include_dirs;
+            inputs = List.rev opts.inputs;
+            extra_cflags = List.rev opts.extra_cflags;
+            extra_ldflags = List.rev opts.extra_ldflags }
     | "-I" :: dir :: rest ->
         go { opts with include_dirs = dir :: opts.include_dirs } rest
     | "--nostdlib" :: rest -> go { opts with nostdlib = true } rest
@@ -50,13 +88,36 @@ let parse_opts args =
         go { opts with cmi_prefix = Some p; emit_cmi = true } rest
     | "--mod" :: rest -> go { opts with is_mod = true } rest
     | "--shim" :: path :: rest -> go { opts with shim_out = Some path } rest
+    | "--target" :: t :: rest -> go { opts with target = Some t } rest
+    | "--shared" :: rest ->
+        go { opts with kind = Some Driver.Kind_shared } rest
+    | "--static" :: rest ->
+        go { opts with kind = Some Driver.Kind_static } rest
+    | "--exe" :: rest -> go { opts with kind = Some Driver.Kind_exe } rest
+    | "-c" :: rest -> go { opts with kind = Some Driver.Kind_obj } rest
+    | ("-S" | "--emit-asm") :: rest ->
+        go { opts with kind = Some Driver.Kind_asm } rest
+    | "--no-main" :: rest -> go { opts with no_main = true } rest
+    | "--emit-header" :: p :: rest ->
+        go { opts with emit_header = Some p } rest
+    | "--qbe" :: p :: rest -> go { opts with qbe_path = Some p } rest
+    | "--cc" :: p :: rest -> go { opts with cc_path = Some p } rest
+    | "--ar" :: p :: rest -> go { opts with ar_path = Some p } rest
+    | "--sysroot" :: p :: rest -> go { opts with sysroot = Some p } rest
+    | "--runtime-dir" :: p :: rest ->
+        go { opts with runtime_dir = Some p } rest
+    | "--stdlib-dir" :: p :: rest ->
+        go { opts with stdlib_dir = Some p } rest
+    | "--work-dir" :: p :: rest -> go { opts with work_dir = Some p } rest
+    | "--cflags" :: f :: rest ->
+        go { opts with extra_cflags = f :: opts.extra_cflags } rest
+    | "--ldflags" :: f :: rest ->
+        go { opts with extra_ldflags = f :: opts.extra_ldflags } rest
+    | ("-v" | "--verbose") :: rest -> go { opts with verbose = true } rest
     | "-o" :: path :: rest -> go { opts with out = Some path } rest
     | arg :: _ when String.length arg > 0 && arg.[0] = '-' ->
         Error (Printf.sprintf "unknown flag: %s" arg)
-    | file :: rest -> (
-        match opts.input with
-        | None -> go { opts with input = Some file } rest
-        | Some _ -> Error (Printf.sprintf "unexpected argument: %s" file))
+    | file :: rest -> go { opts with inputs = file :: opts.inputs } rest
   in
   go default_opts args
 
@@ -73,8 +134,13 @@ let write_out out ssa =
           output_string oc ssa)
   | None -> print_string ssa
 
+let single_input opts =
+  match opts.inputs with
+  | [ f ] -> Some f
+  | _ -> None
+
 let compile opts =
-  match opts.input with
+  match single_input opts with
   | None ->
       prerr_endline usage;
       2
@@ -100,7 +166,7 @@ let compile opts =
           2)
 
 let compile_mli opts =
-  match opts.input with
+  match single_input opts with
   | None ->
       prerr_endline usage;
       2
@@ -127,7 +193,7 @@ let compile_mli opts =
           2)
 
 let dump_lambda opts =
-  match opts.input with
+  match single_input opts with
   | None ->
       prerr_endline usage;
       2
@@ -148,7 +214,7 @@ let dump_lambda opts =
           0)
 
 let bindgen opts =
-  match opts.input with
+  match single_input opts with
   | None ->
       prerr_endline usage;
       2
@@ -181,6 +247,40 @@ let bindgen opts =
            | None -> ());
           0)
 
+let build opts =
+  if opts.inputs = [] then begin
+    prerr_endline usage;
+    2
+  end
+  else
+    let cfg =
+      { (Driver.default_config ()) with
+        inputs = opts.inputs;
+        output = opts.out;
+        target = opts.target;
+        kind = opts.kind;
+        include_dirs = opts.include_dirs;
+        nostdlib = opts.nostdlib;
+        nopervasives = opts.nopervasives;
+        no_main = opts.no_main;
+        emit_header = opts.emit_header;
+        qbe_path = opts.qbe_path;
+        cc_path = opts.cc_path;
+        ar_path = opts.ar_path;
+        sysroot = opts.sysroot;
+        runtime_dir = opts.runtime_dir;
+        prebuilt_stdlib_dir = opts.stdlib_dir;
+        work_dir = opts.work_dir;
+        extra_cflags = opts.extra_cflags;
+        extra_ldflags = opts.extra_ldflags;
+        verbose = opts.verbose }
+    in
+    match Driver.build cfg with
+    | Ok _ -> 0
+    | Error msg ->
+        prerr_endline ("ocamlcc: error: " ^ msg);
+        2
+
 let () =
   let rest =
     if Array.length Sys.argv > 2 then
@@ -199,6 +299,7 @@ let () =
           2
       | Ok opts -> (
           match Sys.argv.(1) with
+          | "build" -> build opts
           | "compile" -> compile opts
           | "compile-mli" -> compile_mli opts
           | "bindgen" -> bindgen opts

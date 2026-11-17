@@ -49,6 +49,9 @@ QBE IL → arm64/AMD64 assembly → linked executable.
 ## CLI
 
 ```sh
+build/bin/ocamlcc build examples/mod_main.ml examples/mod_lib.ml examples/mod_lib.mli -o build/mod_app
+build/bin/ocamlcc build --shared --emit-header build/mod_lib.h examples/mod_lib.mli examples/mod_lib.ml -o build/libmod_lib.dylib
+build/bin/ocamlcc bindgen examples/bindgen_lib.mli -o build/bindgen_lib.h --shim build/bindgen_lib_shim.c
 build/bin/ocamlcc compile examples/hello.ml -o build/hello.ssa  # emit QBE IL
 build/bin/ocamlcc dump-lambda examples/hello.ml                 # dump Lambda IR
 ```
@@ -57,8 +60,8 @@ build/bin/ocamlcc dump-lambda examples/hello.ml                 # dump Lambda IR
 
 | Path | Contents |
 |------|----------|
-| `bin/` | CLI entry point (`compile`, `dump-lambda`) |
-| `lib/` | `Qbe_il` (IL model + printer), `Frontend`, `Codegen`, `Builtins`, `Pipeline` |
+| `bin/` | CLI entry point (`build`, `compile`, `compile-mli`, `bindgen`, `dump-lambda`) |
+| `lib/` | `Qbe_il`, `Frontend`, `Anf`, `Arc_pass`, `Ccalls`, `C_bindgen`, `Driver`, `Codegen`, `Builtins`, `Pipeline` |
 | `runtime/` | `pal.h/.c`, `arc.h/.c`, `fiber.h/.c`, `builtins.c` |
 | `vendor/qbe/` | vendored QBE source (see [vendored-qbe]) |
 | `examples/` | example programs |

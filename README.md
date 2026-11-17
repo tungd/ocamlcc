@@ -18,24 +18,27 @@ full design and roadmap.
 
 ## Status
 
-Phases 1, 2, 3, and 5 complete (`ninja test`: 24/24, `ninja asan_test`: 14/14,
-`dune runtest`: 12/12 passing).
+Phases 1–5 complete (`ninja test`: 25/25, `ninja asan_test`: 15/15,
+`dune runtest`: 14/14 passing).
 
 `ocamlcc` compiles multi-module OCaml programs (`.mli` interfaces and `.ml`
-implementations) to native binaries and PIC shared libraries via vendored QBE
-1.3 with Perceus-style Automatic Reference Counting, a freestanding 12-class
-slab allocator (returning empty 64 KB slabs to `pal_page_free`) + opt-in
-trial-deletion cycle collector (`ocamlcc_arc_collect` in `runtime/arc.c`,
-synchronized with FFI mutator gates), Wren-style stackful fibers +
-cooperative `kqueue`/`epoll` async I/O poller with yield-effect shadow-stack
-lowering (`runtime/fiber.c`, `runtime/pal_ctx.S`, `Stdlib.Fiber`), error-return
-exceptions (`try ... with`), `Weak.t`, unboxed `float`/`float array` and boxed
-`Int32`/`Int64`/`Nativeint`, compiler warnings on cyclic non-pure mutual `let
-rec` closures, and an ARC-native core standard library (`stdlib/` →
-`build/stdlib/libocamlstdlib.a`: `Option`, `Result`, `List`, `Array`, `Bytes`,
-`String`, `Buffer`, `Hashtbl`, `Int32`, `Int64`, `Nativeint`, `Printf`, `Weak`,
-`Fiber`, `CamlinternalFormatBasics`, `Stdlib`). `runtime/builtins.c` and
-`runtime/main_entry.c` stay minimal.
+implementations) to native binaries, shared/static libraries, and iOS
+`.xcframework`s via a single CLI driver (`ocamlcc build --target <t>`) backed
+by vendored QBE 1.3 with Perceus-style Automatic Reference Counting, a
+freestanding 12-class slab allocator (returning empty 64 KB slabs to
+`pal_page_free`) + opt-in trial-deletion cycle collector
+(`ocamlcc_arc_collect` in `runtime/arc.c`, synchronized with FFI mutator
+gates), `.mli -> .h` C99 header & FFI shim generation (`ocamlcc bindgen`,
+surfacing OCaml exceptions via `ocamlcc_error_t *`), Wren-style stackful
+fibers + cooperative `kqueue`/`epoll` async I/O poller with yield-effect
+shadow-stack lowering (`runtime/fiber.c`, `runtime/pal_ctx.S`, `Stdlib.Fiber`),
+error-return exceptions (`try ... with`), `Weak.t`, unboxed `float`/`float
+array` and boxed `Int32`/`Int64`/`Nativeint`, compiler warnings on cyclic
+non-pure mutual `let rec` closures, and an ARC-native core standard library
+(`stdlib/` → `build/stdlib/libocamlstdlib.a`: `Option`, `Result`, `List`,
+`Array`, `Bytes`, `String`, `Buffer`, `Hashtbl`, `Int32`, `Int64`,
+`Nativeint`, `Printf`, `Weak`, `Fiber`, `CamlinternalFormatBasics`, `Stdlib`).
+`runtime/builtins.c` and `runtime/main_entry.c` stay minimal.
 
 ## Build
 
@@ -44,13 +47,13 @@ The whole project is driven by [ninja](https://ninja-build.org):
 ```sh
 ninja            # vendored QBE 1.3 + ARC/fiber runtime + ocamlcc compiler + examples
 ninja smoke      # compile examples/hello.ml end-to-end and run it
-ninja test       # run all 24 ninja checks (examples, PIC/DSO, multi-threaded FFI)
-ninja asan_test  # run 14 ASan+UBSan runtime checks
-dune runtest     # run 12 compiler unit/IR/negative test suites
+ninja test       # run all 25 ninja checks (examples, PIC/DSO, bindgen, multi-threaded FFI)
+ninja asan_test  # run 15 ASan+UBSan runtime checks
+dune runtest     # run 14 compiler unit/IR/negative/driver/bindgen test suites
 ninja -t clean   # remove build/
 ```
 
-Currently passing (`ninja test`, 24/24): `hello`, `fib`, `tail`, `bools`,
+Currently passing (`ninja test`, 25/25): `hello`, `fib`, `tail`, `bools`,
 `strings`, `match`, `mutual`, `adt`, `closures`, `loops`, `arrays_bytes`,
 `arc_test`, `exn`, `weak_cycle`, `cycle_collect` (trial-deletion cycle
 collector), `mod_main` (multi-module `.mli`/`.ml` linking), `stdlib_test`
@@ -59,8 +62,9 @@ cooperative scheduler, abandoned-fiber shadow-stack cleanup, fiber exceptions),
 `fiber_io` (non-blocking pipe async I/O via `kqueue`/`epoll`), `qbe_pic_check`
 (ARM64/AMD64 PIC GOT/PLT output), `pic_so` (shared library + C host),
 `mt_ffi` (8-thread FFI + concurrent cycle collector stress), `tupled_letrec`
-(`Tupled` functions and `value let rec`), and `primitives_test` (`float`,
-`float array`, `Int32`/`Int64`/`Nativeint`, `Printf` numeric formatters).
+(`Tupled` functions and `value let rec`), `primitives_test` (`float`,
+`float array`, `Int32`/`Int64`/`Nativeint`, `Printf` numeric formatters),
+and `bindgen` (`.mli -> .h` C99 shim + `ocamlcc_error_t` host verification).
 
 The pipeline:
 
@@ -90,6 +94,10 @@ tools/        build helpers
 ## Usage
 
 ```sh
+build/bin/ocamlcc build examples/mod_main.ml examples/mod_lib.ml examples/mod_lib.mli -o build/mod_app
+build/bin/ocamlcc build --shared --emit-header build/mod_lib.h examples/mod_lib.mli examples/mod_lib.ml -o build/libmod_lib.dylib
+build/bin/ocamlcc build --target ios-xcframework --nostdlib -I build/stdlib examples/bindgen_lib.mli examples/bindgen_lib.ml -o build/BindgenLib.xcframework
+build/bin/ocamlcc bindgen examples/bindgen_lib.mli -o build/bindgen_lib.h --shim build/bindgen_lib_shim.c
 build/bin/ocamlcc compile examples/hello.ml -o build/hello.ssa
 build/bin/ocamlcc compile --nostdlib -I build/stdlib examples/stdlib_test.ml -o build/stdlib_test.ssa
 build/bin/ocamlcc compile-mli examples/mod_lib.mli -o build/mod_lib.cmi
