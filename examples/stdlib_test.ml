@@ -247,6 +247,42 @@ let run () =
     let _freed = arc_collect () in
     r
   in
+  let eq_cyc =
+    let probe () =
+      let mk_cyc () =
+        let c = { cnxt = None; cv = 1 } in
+        c.cnxt <- Some c;
+        c
+      in
+      let c1 = mk_cyc () in
+      let c2 = mk_cyc () in
+      let live = (10, 20) in
+      try
+        if c1 = c2 then fst live else 0
+      with Invalid_argument _ -> 1
+    in
+    let r = probe () in
+    let _freed = arc_collect () in
+    r
+  in
+  let neq_cyc =
+    let probe () =
+      let mk_cyc () =
+        let c = { cnxt = None; cv = 1 } in
+        c.cnxt <- Some c;
+        c
+      in
+      let c1 = mk_cyc () in
+      let c2 = mk_cyc () in
+      let live = (10, 20) in
+      try
+        if c1 <> c2 then fst live else 0
+      with Invalid_argument _ -> 1
+    in
+    let r = probe () in
+    let _freed = arc_collect () in
+    r
+  in
   let cmp_exn =
     if compare (Invalid_argument "x") (Failure "x") > 0 then 1 else 0
   in
@@ -256,7 +292,7 @@ let run () =
     try (ignore (ocamlcc_fd_read rfd b 2 8); 0)
     with Invalid_argument _ -> 1
   in
-  Printf.printf "cmp=%d,%d,%d\n" cmp_cyc cmp_exn fd_oob;
+  Printf.printf "cmp=%d,%d,%d,%d,%d\n" cmp_cyc eq_cyc neq_cyc cmp_exn fd_oob;
   Printf.printf "fmt=%d,%i,%d,%u,%u,%x,%X,%o\n"
     min_int min_int max_int (-1) min_int (-1) (-1) (-1);
   Printf.printf "fmtpad=[%05d],[%+05d],[% 05d],[%#05x],[%.3d],[%.3d],[%5.3d],[%-5.3d],[%*.*d],[%0*d]\n"

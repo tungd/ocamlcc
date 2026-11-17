@@ -68,8 +68,8 @@ let table =
     ("ocamlcc_fiber_run_all", abi 0 false true);
     (* structural comparison / hashing *)
     ("caml_fresh_oo_id", abi 1 false false);
-    ("caml_equal", abi 2 false false);
-    ("caml_notequal", abi 2 false false);
+    ("caml_equal", abi 2 true false);
+    ("caml_notequal", abi 2 true false);
     ("caml_compare", abi 2 true false);
     ("caml_lessthan", abi 2 true false);
     ("caml_lessequal", abi 2 true false);

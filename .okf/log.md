@@ -1,5 +1,17 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Mark `caml_equal` and `caml_notequal` as `raises = true` in `Ccalls` (TDD) —
+  `val_compare_raw` (`runtime/arc.c`) raises `Invalid_argument "compare: cyclic structure"`
+  when `*steps <= 0` or `depth >= COMPARE_MAX_DEPTH` even when `total == 0`
+  (`caml_equal` / `caml_notequal`), but `lib/ccalls.ml` registered both as
+  `abi 2 false false`, causing `arc_pass` to omit `CheckExn` around `=`/`<>`
+  inside `try ... with`. Updated `test/ccalls_test.ml` and added `eq_cyc`/
+  `neq_cyc` probes with live locals inside `try ... with Invalid_argument _`
+  in `examples/stdlib_test.ml` (Red: `ccalls_test` failed `raises=false`,
+  `stdlib_test` aborted with `SIGABRT`/134; Green: `cmp=1,1,1,1,1` and
+  `arc_delta=0`). `dune runtest` (11/11), `ninja test` (24/24),
+  `ninja asan_test` (14/14). Documented in [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-17 (autoagent/1): Fix `Anf.pure_defs` dropping `known'` across sequential `Let (id, Fun lf, body)` (TDD) —
   in `lib/anf.ml`, the `Let (id, Fun lf, body)` arm added `id` to `known'`
   when recursing into `lf.body`, but passed the stale `known` when recursing

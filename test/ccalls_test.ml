@@ -57,8 +57,8 @@ let stdlib_abis =
     ("ocamlcc_fiber_await", 1, true, true);
     ("ocamlcc_fiber_run_all", 0, false, true);
     ("caml_fresh_oo_id", 1, false, false);
-    ("caml_equal", 2, false, false);
-    ("caml_notequal", 2, false, false);
+    ("caml_equal", 2, true, false);
+    ("caml_notequal", 2, true, false);
     ("caml_compare", 2, true, false);
     ("caml_lessthan", 2, true, false);
     ("caml_lessequal", 2, true, false);
