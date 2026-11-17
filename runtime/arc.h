@@ -2,12 +2,13 @@
  * arc.h — Perceus-style Automatic Reference Counting (design doc §4.2).
  *
  * Object layout: the header precedes the user data pointer. Reference
- * counts are non-atomic in this phase (single-threaded scheduler); the
+ * counts use C11 atomics for thread-safe multi-queue Mobile FFI; the
  * 0xFFFFFFFF sentinel marks immortal/static objects.
  */
 #ifndef OCAMLCC_ARC_H
 #define OCAMLCC_ARC_H
 
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -23,12 +24,14 @@
 #define ARC_TAG_STRING  252u
 
 typedef struct ArcHeader {
-    uint32_t refcount;   /* 0xFFFFFFFF = immortal/static */
-    uint16_t tag;        /* constructor tag / object kind */
-    uint16_t scan_fields;/* pointer fields to dec_ref on drop */
-    uint32_t byte_size;  /* total size, for slab reuse */
-    uint32_t reserved;
+    _Atomic uint32_t refcount;    /* 0xFFFFFFFF = immortal/static */
+    uint16_t         tag;         /* constructor tag / object kind */
+    uint16_t         scan_fields; /* pointer fields to dec_ref on drop */
+    uint32_t         byte_size;   /* total size, for slab reuse */
+    uint32_t         reserved;
 } ArcHeader;
+
+_Static_assert(sizeof(ArcHeader) == 16u, "ArcHeader must remain 16 bytes");
 
 typedef struct ArcClosure {
     void    *code;   /* entry point (clos, arg0, ..., arg_{arity-1}) */
@@ -59,8 +62,9 @@ int64_t ocamlcc_arc_live(int64_t unit);
 int64_t ocamlcc_arc_reuse(int64_t unit);
 int64_t ocamlcc_arc_collect(int64_t unit);
 
-extern int64_t ocamlcc_exn_slot;
-void ocamlcc_raise_invalid_arg_oob(void);
+int64_t ocamlcc_get_exn(void);
+void    ocamlcc_set_exn(int64_t exn);
+void    ocamlcc_raise_invalid_arg_oob(void);
 
 /* Raise Invalid_argument for a coroutine/scheduler cross-call (e.g.
    Fiber.suspend inside a spawned fiber, Fiber.yield inside a coroutine). */

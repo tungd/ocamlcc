@@ -117,7 +117,7 @@ int64_t ocamlcc_apply_n(int64_t clos_val, int64_t argc, int64_t *argv)
             return invoke_closure(c, c->arity, argv);
         if (c->arity < n) {
             int64_t res = invoke_closure(c, c->arity, argv);
-            if (ocamlcc_exn_slot != 0) {
+            if (ocamlcc_get_exn() != 0) {
                 for (uint64_t i = c->arity; i < n; i++)
                     arc_release_val(argv[i]);
                 return 1;
@@ -146,7 +146,7 @@ int64_t ocamlcc_apply_n(int64_t clos_val, int64_t argc, int64_t *argv)
             int64_t res = invoke_closure(p->orig, p->total_arity, buf);
             if (n == rem)
                 return res;
-            if (ocamlcc_exn_slot != 0) {
+            if (ocamlcc_get_exn() != 0) {
                 for (uint64_t i = rem; i < n; i++)
                     arc_release_val(argv[i]);
                 return 1;

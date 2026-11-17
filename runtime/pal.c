@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -34,6 +35,18 @@ typedef struct PalWatch {
 #define PAL_WATCH_MAX 1024
 static PalWatch g_watches[PAL_WATCH_MAX];
 static int g_watch_count = 0;
+static _Atomic uint32_t g_watch_lock = 0u;
+
+static inline void watch_lock(void)
+{
+    while (atomic_exchange_explicit(&g_watch_lock, 1u, memory_order_acquire) != 0u)
+        ;
+}
+
+static inline void watch_unlock(void)
+{
+    atomic_store_explicit(&g_watch_lock, 0u, memory_order_release);
+}
 
 static PalWatch *watch_find(int pfd, int fd)
 {
@@ -126,6 +139,7 @@ void pal_poller_close(int pfd)
     if (pfd >= 0)
         close(pfd);
 #if defined(PAL_USE_EPOLL)
+    watch_lock();
     /* Drop this poller's watch-registry entries. */
     int i = 0;
     while (i < g_watch_count) {
@@ -136,6 +150,7 @@ void pal_poller_close(int pfd)
             i++;
         }
     }
+    watch_unlock();
 #endif
 }
 
@@ -158,11 +173,14 @@ int pal_poller_watch(int pfd, int fd, uint32_t events, void *udata)
         return 0;
     return kevent(pfd, kevs, n, NULL, 0, NULL);
 #elif defined(PAL_USE_EPOLL)
+    watch_lock();
     PalWatch *w = watch_find(pfd, fd);
     if (w == NULL) {
         w = watch_alloc(pfd, fd);
-        if (w == NULL)
+        if (w == NULL) {
+            watch_unlock();
             return -1;
+        }
         if (events & PAL_POLL_READ)
             w->read_udata = udata;
         if (events & PAL_POLL_WRITE)
@@ -172,8 +190,10 @@ int pal_poller_watch(int pfd, int fd, uint32_t events, void *udata)
         ev.data.ptr = w;
         if (epoll_ctl(pfd, EPOLL_CTL_ADD, fd, &ev) < 0) {
             watch_free(w);
+            watch_unlock();
             return -1;
         }
+        watch_unlock();
         return 0;
     }
     /* Existing registration: merge the new interest and re-arm both. */
@@ -184,7 +204,9 @@ int pal_poller_watch(int pfd, int fd, uint32_t events, void *udata)
     struct epoll_event ev;
     ev.events = watch_events_of(w);
     ev.data.ptr = w;
-    return epoll_ctl(pfd, EPOLL_CTL_MOD, fd, &ev);
+    int rc = epoll_ctl(pfd, EPOLL_CTL_MOD, fd, &ev);
+    watch_unlock();
+    return rc;
 #else
     (void)pfd;
     (void)fd;
@@ -211,9 +233,12 @@ int pal_poller_unwatch(int pfd, int fd, uint32_t events)
         return 0;
     return kevent(pfd, kevs, n, NULL, 0, NULL);
 #elif defined(PAL_USE_EPOLL)
+    watch_lock();
     PalWatch *w = watch_find(pfd, fd);
-    if (w == NULL)
+    if (w == NULL) {
+        watch_unlock();
         return -1;
+    }
     if (events & PAL_POLL_READ)
         w->read_udata = NULL;
     if (events & PAL_POLL_WRITE)
@@ -221,12 +246,15 @@ int pal_poller_unwatch(int pfd, int fd, uint32_t events)
     if (w->read_udata == NULL && w->write_udata == NULL) {
         int rc = epoll_ctl(pfd, EPOLL_CTL_DEL, fd, NULL);
         watch_free(w);
+        watch_unlock();
         return rc;
     }
     struct epoll_event ev;
     ev.events = watch_events_of(w);
     ev.data.ptr = w;
-    return epoll_ctl(pfd, EPOLL_CTL_MOD, fd, &ev);
+    int rc = epoll_ctl(pfd, EPOLL_CTL_MOD, fd, &ev);
+    watch_unlock();
+    return rc;
 #else
     (void)pfd;
     (void)fd;
@@ -277,9 +305,20 @@ int pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms)
     if (n <= 0)
         return n;
     int out_n = 0;
+    watch_lock();
     for (int i = 0; i < n && out_n < max_events; i++) {
         PalWatch *w = (PalWatch *)evs[i].data.ptr;
         if (w == NULL)
+            continue;
+        /* Verify entry still belongs to this poller before dereferencing. */
+        int valid = 0;
+        for (int k = 0; k < g_watch_count; k++) {
+            if (&g_watches[k] == w && g_watches[k].pfd == pfd) {
+                valid = 1;
+                break;
+            }
+        }
+        if (!valid)
             continue;
         uint32_t e = evs[i].events;
         int read_fired = (e & (EPOLLIN | EPOLLHUP | EPOLLERR)) != 0u &&
@@ -312,6 +351,7 @@ int pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms)
             epoll_ctl(pfd, EPOLL_CTL_MOD, w->fd, &rev);
         }
     }
+    watch_unlock();
     return out_n;
 #else
     (void)pfd;

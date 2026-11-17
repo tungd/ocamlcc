@@ -34,12 +34,43 @@ typedef struct ArcWeakArray {
     int64_t              slots[];
 } ArcWeakArray;
 
+typedef struct ArcSpinLock {
+    _Atomic uint32_t locked;
+} ArcSpinLock;
+
+static inline void cpu_relax(void)
+{
+#if defined(__aarch64__)
+    __asm__ volatile("yield" ::: "memory");
+#elif defined(__x86_64__)
+    __asm__ volatile("pause" ::: "memory");
+#endif
+}
+
+static inline void arc_lock(ArcSpinLock *l)
+{
+    while (atomic_exchange_explicit(&l->locked, 1u, memory_order_acquire) != 0u) {
+        while (atomic_load_explicit(&l->locked, memory_order_relaxed) != 0u)
+            cpu_relax();
+    }
+}
+
+static inline void arc_unlock(ArcSpinLock *l)
+{
+    atomic_store_explicit(&l->locked, 0u, memory_order_release);
+}
+
+static ArcSpinLock g_alloc_lock = { 0u };
+static ArcSpinLock g_weak_lock = { 0u };
+static ArcSpinLock g_cc_lock = { 0u };
+static _Atomic int g_cc_active = 0;
+
 static FreeSlot *g_free_lists[NUM_SIZE_CLASSES];
 static uint8_t  *g_slab_cur[NUM_SIZE_CLASSES];
 static uint8_t  *g_slab_end[NUM_SIZE_CLASSES];
 
-static ArcWeakArray *g_weak_head = NULL;
-static uint64_t      g_weak_count = 0;
+static ArcWeakArray     *g_weak_head = NULL;
+static _Atomic uint64_t  g_weak_count = 0;
 
 /* Opt-in Bacon-Rajan trial-deletion cycle collector state.
  * For cycle candidates (is_cycle_candidate_obj), ArcHeader.reserved encodes:
@@ -64,19 +95,9 @@ typedef struct CCVec {
 
 static CCVec g_cc_roots = { NULL, 0, 0, 0 };
 
-static inline uint32_t cc_get_color(const ArcHeader *hdr)
-{
-    return hdr->reserved & CC_COLOR_MASK;
-}
-
-static inline void cc_set_color(ArcHeader *hdr, uint32_t color)
-{
-    hdr->reserved = (hdr->reserved & ~CC_COLOR_MASK) | (color & CC_COLOR_MASK);
-}
-
 static inline int is_cycle_candidate_obj(const ArcHeader *hdr)
 {
-    if (hdr->refcount == ARC_IMMORTAL)
+    if (atomic_load_explicit(&hdr->refcount, memory_order_relaxed) == ARC_IMMORTAL)
         return 0;
     uint16_t tag = hdr->tag;
     if (tag == (uint16_t)ARC_TAG_STRING || tag == (uint16_t)ARC_TAG_WEAK)
@@ -124,23 +145,28 @@ static void ccvec_free(CCVec *v)
 
 static inline void cc_roots_add(ArcHeader *hdr)
 {
-    if ((hdr->reserved & CC_BUFFERED) != 0u)
-        return;
     if (!is_cycle_candidate_obj(hdr))
         return;
-    if (g_cc_roots.len >= CC_MAX_ROOTS)
+    arc_lock(&g_cc_lock);
+    if ((hdr->reserved & CC_BUFFERED) != 0u) {
+        arc_unlock(&g_cc_lock);
         return;
+    }
+    if (g_cc_roots.len >= CC_MAX_ROOTS) {
+        arc_unlock(&g_cc_lock);
+        return;
+    }
     uint32_t idx = (uint32_t)g_cc_roots.len;
     ccvec_push(&g_cc_roots, hdr);
     hdr->reserved =
         (hdr->reserved & CC_COLOR_MASK) | CC_BUFFERED | (idx << CC_INDEX_SHIFT);
+    arc_unlock(&g_cc_lock);
 }
 
-static inline void cc_roots_remove(ArcHeader *hdr)
+static inline void cc_roots_remove_locked(ArcHeader *hdr)
 {
     if (hdr->tag == (uint16_t)ARC_TAG_STRING ||
-        hdr->tag == (uint16_t)ARC_TAG_WEAK ||
-        hdr->tag == (uint16_t)ARC_TAG_FIBER)
+        hdr->tag == (uint16_t)ARC_TAG_WEAK)
         return;
     if ((hdr->reserved & CC_BUFFERED) == 0u)
         return;
@@ -206,22 +232,6 @@ static void weak_targets_grow(void)
     g_weak_targets_used = used;
 }
 
-static void weak_targets_insert(int64_t v)
-{
-    /* Keep at least a third of the table empty so linear probing (which
-       terminates on the first empty slot) always terminates, even for
-       lookups of absent keys. */
-    if (g_weak_targets == NULL ||
-        (g_weak_targets_used + 1u) * 3u > (g_weak_targets_mask + 1u) * 2u)
-        weak_targets_grow();
-    uint64_t j = weak_target_hash(v) & g_weak_targets_mask;
-    while (g_weak_targets[j] != 0 && g_weak_targets[j] != WEAK_TARGET_TOMBSTONE)
-        j = (j + 1u) & g_weak_targets_mask;
-    if (g_weak_targets[j] == 0)
-        g_weak_targets_used++;
-    g_weak_targets[j] = v;
-}
-
 static int weak_targets_contains(int64_t v)
 {
     if (g_weak_targets == NULL)
@@ -235,6 +245,24 @@ static int weak_targets_contains(int64_t v)
             return 1;
         j = (j + 1u) & g_weak_targets_mask;
     }
+}
+
+static void weak_targets_insert(int64_t v)
+{
+    if (weak_targets_contains(v))
+        return;
+    /* Keep at least a third of the table empty so linear probing (which
+       terminates on the first empty slot) always terminates, even for
+       lookups of absent keys. */
+    if (g_weak_targets == NULL ||
+        (g_weak_targets_used + 1u) * 3u > (g_weak_targets_mask + 1u) * 2u)
+        weak_targets_grow();
+    uint64_t j = weak_target_hash(v) & g_weak_targets_mask;
+    while (g_weak_targets[j] != 0 && g_weak_targets[j] != WEAK_TARGET_TOMBSTONE)
+        j = (j + 1u) & g_weak_targets_mask;
+    if (g_weak_targets[j] == 0)
+        g_weak_targets_used++;
+    g_weak_targets[j] = v;
 }
 
 static void weak_targets_remove(int64_t v)
@@ -254,7 +282,7 @@ static void weak_targets_remove(int64_t v)
     }
 }
 
-static void weak_clear_target(int64_t dead_obj)
+static void weak_clear_target_locked(int64_t dead_obj)
 {
     if (!weak_targets_contains(dead_obj))
         return;
@@ -267,9 +295,16 @@ static void weak_clear_target(int64_t dead_obj)
     weak_targets_remove(dead_obj);
 }
 
+static void weak_clear_target(int64_t dead_obj)
+{
+    arc_lock(&g_weak_lock);
+    weak_clear_target_locked(dead_obj);
+    arc_unlock(&g_weak_lock);
+}
 
 static void weak_unlink(ArcWeakArray *w)
 {
+    arc_lock(&g_weak_lock);
     if (w->prev != NULL)
         w->prev->next = w->next;
     else
@@ -278,14 +313,18 @@ static void weak_unlink(ArcWeakArray *w)
         w->next->prev = w->prev;
     w->prev = NULL;
     w->next = NULL;
-    g_weak_count--;
+    atomic_fetch_sub_explicit(&g_weak_count, 1u, memory_order_relaxed);
+    arc_unlock(&g_weak_lock);
 }
 
-static int64_t g_live_objects = 0;
-static int64_t g_reuse_hits = 0;
+static _Atomic int64_t g_live_objects = 0;
+static _Atomic int64_t g_reuse_hits = 0;
 
-int64_t ocamlcc_exn_slot = 0;
-static int64_t g_next_oo_id = 0;
+static _Thread_local int64_t tls_exn_slot = 0;
+static _Atomic int64_t g_next_oo_id = 0;
+
+int64_t ocamlcc_get_exn(void) { return tls_exn_slot; }
+void ocamlcc_set_exn(int64_t exn) { tls_exn_slot = exn; }
 
 static inline int64_t tag_int(int64_t n)
 {
@@ -295,7 +334,7 @@ static inline int64_t tag_int(int64_t n)
 int64_t caml_fresh_oo_id(int64_t ignored)
 {
     (void)ignored;
-    int64_t id = g_next_oo_id++;
+    int64_t id = atomic_fetch_add_explicit(&g_next_oo_id, 1, memory_order_relaxed);
     return tag_int(id);
 }
 
@@ -323,22 +362,27 @@ static ArcHeader *slab_alloc(uint32_t total_bytes)
 {
     int cls = size_class_for(total_bytes);
     if (cls >= 0) {
+        arc_lock(&g_alloc_lock);
         if (g_free_lists[cls] != NULL) {
             FreeSlot *slot = g_free_lists[cls];
             g_free_lists[cls] = slot->next;
+            arc_unlock(&g_alloc_lock);
             return (ArcHeader *)slot;
         }
         uint32_t step = k_class_sizes[cls];
         if (g_slab_cur[cls] == NULL ||
             (size_t)(g_slab_end[cls] - g_slab_cur[cls]) < (size_t)step) {
             uint8_t *page = (uint8_t *)pal_page_alloc(SLAB_SIZE);
-            if (page == NULL)
+            if (page == NULL) {
+                arc_unlock(&g_alloc_lock);
                 pal_abort();
+            }
             g_slab_cur[cls] = page;
             g_slab_end[cls] = page + SLAB_SIZE;
         }
         ArcHeader *hdr = (ArcHeader *)g_slab_cur[cls];
         g_slab_cur[cls] += step;
+        arc_unlock(&g_alloc_lock);
         return hdr;
     }
 
@@ -354,9 +398,11 @@ static void slab_free(ArcHeader *hdr)
     uint32_t total_bytes = (uint32_t)sizeof(ArcHeader) + hdr->byte_size;
     int cls = size_class_for(total_bytes);
     if (cls >= 0) {
+        arc_lock(&g_alloc_lock);
         FreeSlot *slot = (FreeSlot *)hdr;
         slot->next = g_free_lists[cls];
         g_free_lists[cls] = slot;
+        arc_unlock(&g_alloc_lock);
     } else {
         pal_page_free(hdr, align_up_large(total_bytes));
     }
@@ -367,12 +413,12 @@ void *arc_alloc(uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
     if ((uint64_t)sizeof(ArcHeader) + (uint64_t)byte_size > (uint64_t)UINT32_MAX)
         pal_abort();
     ArcHeader *hdr = slab_alloc((uint32_t)sizeof(ArcHeader) + byte_size);
-    hdr->refcount = 1;
+    atomic_init(&hdr->refcount, 1u);
     hdr->tag = tag;
     hdr->scan_fields = scan_fields;
     hdr->byte_size = byte_size;
     hdr->reserved = 0;
-    g_live_objects++;
+    atomic_fetch_add_explicit(&g_live_objects, 1, memory_order_relaxed);
     return hdr + 1;
 }
 
@@ -402,7 +448,7 @@ static void raise_invalid_arg_imm(const char *imm_str)
     int64_t *blk = (int64_t *)arc_alloc(0u, 2u, 16u);
     blk[0] = (int64_t)(uintptr_t)ocamlcc_global_Invalid_argument;
     blk[1] = (int64_t)(uintptr_t)imm_str;
-    ocamlcc_exn_slot = (int64_t)(uintptr_t)blk;
+    ocamlcc_set_exn((int64_t)(uintptr_t)blk);
 }
 
 void ocamlcc_raise_invalid_arg_oob(void)
@@ -422,7 +468,7 @@ void ocamlcc_raise_sys_error_pipe(void)
     int64_t *blk = (int64_t *)arc_alloc(0u, 2u, 16u);
     blk[0] = (int64_t)(uintptr_t)ocamlcc_global_Sys_error;
     blk[1] = (int64_t)(uintptr_t)g_sys_err_pipe_str.str;
-    ocamlcc_exn_slot = (int64_t)(uintptr_t)blk;
+    ocamlcc_set_exn((int64_t)(uintptr_t)blk);
 }
 
 void *arc_alloc_bytes(uint64_t len)
@@ -453,11 +499,13 @@ void *arc_alloc_array(uint64_t len, int64_t init)
     }
     if (len > 1 && is_heap_ptr(init)) {
         ArcHeader *ihdr = (ArcHeader *)(uintptr_t)init - 1;
-        if (ihdr->refcount != ARC_IMMORTAL) {
+        uint32_t rc = atomic_load_explicit(&ihdr->refcount, memory_order_relaxed);
+        if (rc != ARC_IMMORTAL) {
             uint64_t extra = len - 1u;
-            if (extra >= (uint64_t)(ARC_IMMORTAL - ihdr->refcount))
+            if (extra >= (uint64_t)(ARC_IMMORTAL - rc))
                 pal_abort();
-            ihdr->refcount += (uint32_t)extra;
+            atomic_fetch_add_explicit(&ihdr->refcount, (uint32_t)extra,
+                                      memory_order_relaxed);
         }
     }
     for (uint64_t i = 0; i < len; i++)
@@ -468,8 +516,23 @@ void *arc_alloc_array(uint64_t len, int64_t init)
 void arc_retain(void *obj)
 {
     ArcHeader *hdr = (ArcHeader *)obj - 1;
-    if (hdr->refcount != ARC_IMMORTAL)
-        hdr->refcount++;
+    uint32_t rc = atomic_load_explicit(&hdr->refcount, memory_order_relaxed);
+    if (rc != ARC_IMMORTAL)
+        atomic_fetch_add_explicit(&hdr->refcount, 1u, memory_order_relaxed);
+}
+
+static int arc_try_retain(ArcHeader *hdr)
+{
+    uint32_t rc = atomic_load_explicit(&hdr->refcount, memory_order_acquire);
+    while (rc != 0u) {
+        if (rc == ARC_IMMORTAL)
+            return 1;
+        if (atomic_compare_exchange_weak_explicit(
+                &hdr->refcount, &rc, rc + 1u,
+                memory_order_acq_rel, memory_order_acquire))
+            return 1;
+    }
+    return 0;
 }
 
 typedef struct DropWorklist {
@@ -518,14 +581,16 @@ static inline void drop_child_val(DropWorklist *w, int64_t val, ArcHeader **tail
     if (!is_heap_ptr(val))
         return;
     ArcHeader *chdr = (ArcHeader *)(uintptr_t)val - 1;
-    if (chdr->refcount == ARC_IMMORTAL)
+    uint32_t rc = atomic_load_explicit(&chdr->refcount, memory_order_relaxed);
+    if (rc == ARC_IMMORTAL)
         return;
-    if (--chdr->refcount == 0) {
+    if (rc > 1u)
+        cc_roots_add(chdr);
+    if (atomic_fetch_sub_explicit(&chdr->refcount, 1u, memory_order_acq_rel) == 1u) {
+        atomic_thread_fence(memory_order_acquire);
         if (*tail != NULL)
             work_push(w, *tail);
         *tail = chdr;
-    } else {
-        cc_roots_add(chdr);
     }
 }
 
@@ -569,17 +634,19 @@ static void release_subtree(ArcHeader *root, int free_root)
                 drop_child_val(&w, fields[i], &tail);
         }
 
-        if (g_weak_count > 0)
+        if (atomic_load_explicit(&g_weak_count, memory_order_acquire) > 0u)
             weak_clear_target((int64_t)(uintptr_t)(cur + 1));
 
-        cc_roots_remove(cur);
-
-        if (cur != root || free_root) {
-            g_live_objects--;
-            slab_free(cur);
-        } else {
-            g_live_objects--;
+        if (is_cycle_candidate_obj(cur) ||
+            atomic_load_explicit(&g_cc_active, memory_order_acquire) != 0) {
+            arc_lock(&g_cc_lock);
+            cc_roots_remove_locked(cur);
+            arc_unlock(&g_cc_lock);
         }
+
+        atomic_fetch_sub_explicit(&g_live_objects, 1, memory_order_relaxed);
+        if (cur != root || free_root)
+            slab_free(cur);
 
         cur = (tail != NULL) ? tail : work_pop(&w);
     }
@@ -588,12 +655,15 @@ static void release_subtree(ArcHeader *root, int free_root)
 void arc_release(void *obj)
 {
     ArcHeader *hdr = (ArcHeader *)obj - 1;
-    if (hdr->refcount == ARC_IMMORTAL)
+    uint32_t rc = atomic_load_explicit(&hdr->refcount, memory_order_relaxed);
+    if (rc == ARC_IMMORTAL)
         return;
-    if (--hdr->refcount == 0)
-        release_subtree(hdr, 1);
-    else
+    if (rc > 1u)
         cc_roots_add(hdr);
+    if (atomic_fetch_sub_explicit(&hdr->refcount, 1u, memory_order_acq_rel) == 1u) {
+        atomic_thread_fence(memory_order_acquire);
+        release_subtree(hdr, 1);
+    }
 }
 
 void arc_retain_val(int64_t val)
@@ -613,16 +683,17 @@ void *arc_drop_reuse(int64_t val)
     if (!is_heap_ptr(val))
         return NULL;
     ArcHeader *hdr = (ArcHeader *)(uintptr_t)val - 1;
-    if (hdr->refcount == ARC_IMMORTAL)
+    uint32_t rc = atomic_load_explicit(&hdr->refcount, memory_order_relaxed);
+    if (rc == ARC_IMMORTAL)
         return NULL;
-    if (hdr->refcount > 1u) {
-        hdr->refcount--;
+    if (rc > 1u)
         cc_roots_add(hdr);
-        return NULL;
+    if (atomic_fetch_sub_explicit(&hdr->refcount, 1u, memory_order_acq_rel) == 1u) {
+        atomic_thread_fence(memory_order_acquire);
+        release_subtree(hdr, 0);
+        return (void *)hdr;
     }
-    hdr->refcount = 0;
-    release_subtree(hdr, 0);
-    return (void *)hdr;
+    return NULL;
 }
 
 void *arc_alloc_reuse(void *reuse_tok, uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
@@ -637,13 +708,13 @@ void *arc_alloc_reuse(void *reuse_tok, uint16_t tag, uint16_t scan_fields, uint3
     int old_cls = size_class_for((uint32_t)sizeof(ArcHeader) + hdr->byte_size);
     int new_cls = size_class_for((uint32_t)sizeof(ArcHeader) + byte_size);
     if (old_cls >= 0 && old_cls == new_cls) {
-        hdr->refcount = 1;
+        atomic_init(&hdr->refcount, 1u);
         hdr->tag = tag;
         hdr->scan_fields = scan_fields;
         hdr->byte_size = byte_size;
         hdr->reserved = 0;
-        g_live_objects++;
-        g_reuse_hits++;
+        atomic_fetch_add_explicit(&g_live_objects, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&g_reuse_hits, 1, memory_order_relaxed);
         return hdr + 1;
     }
 
@@ -659,24 +730,24 @@ void arc_free_reuse(void *reuse_tok)
 
 int64_t arc_live_objects(void)
 {
-    return g_live_objects;
+    return atomic_load_explicit(&g_live_objects, memory_order_relaxed);
 }
 
 int64_t arc_reuse_hits(void)
 {
-    return g_reuse_hits;
+    return atomic_load_explicit(&g_reuse_hits, memory_order_relaxed);
 }
 
 int64_t ocamlcc_arc_live(int64_t unit)
 {
     (void)unit;
-    return tag_int(g_live_objects);
+    return tag_int(arc_live_objects());
 }
 
 int64_t ocamlcc_arc_reuse(int64_t unit)
 {
     (void)unit;
-    return tag_int(g_reuse_hits);
+    return tag_int(arc_reuse_hits());
 }
 
 typedef void (*CcChildFn)(int64_t val, void *ctx);
@@ -734,25 +805,116 @@ static ArcHeader *cc_candidate_child(int64_t val)
     return is_cycle_candidate_obj(chdr) ? chdr : NULL;
 }
 
+typedef struct TrialEntry {
+    ArcHeader *hdr;
+    int64_t    rc;
+    uint32_t   color;
+} TrialEntry;
+
+typedef struct TrialMap {
+    TrialEntry *entries;
+    size_t      cap;
+    size_t      len;
+    size_t      alloc_bytes;
+} TrialMap;
+
+static inline size_t trial_hash(const ArcHeader *h)
+{
+    uint64_t x = (uint64_t)(uintptr_t)h;
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33;
+    return (size_t)x;
+}
+
+static void trial_grow(TrialMap *tm)
+{
+    size_t new_cap = (tm->cap == 0u) ? 256u : (tm->cap * 2u);
+    size_t new_bytes =
+        (new_cap * sizeof(TrialEntry) + (size_t)LARGE_PAGE_ALIGN - 1u) &
+        ~((size_t)LARGE_PAGE_ALIGN - 1u);
+    new_cap = new_bytes / sizeof(TrialEntry);
+    TrialEntry *ne = (TrialEntry *)pal_page_alloc(new_bytes);
+    if (ne == NULL)
+        pal_abort();
+    pal_memset(ne, 0, new_bytes);
+    if (tm->entries != NULL) {
+        for (size_t i = 0; i < tm->cap; i++) {
+            if (tm->entries[i].hdr != NULL) {
+                size_t j = trial_hash(tm->entries[i].hdr) & (new_cap - 1u);
+                while (ne[j].hdr != NULL)
+                    j = (j + 1u) & (new_cap - 1u);
+                ne[j] = tm->entries[i];
+            }
+        }
+        pal_page_free(tm->entries, tm->alloc_bytes);
+    }
+    tm->entries = ne;
+    tm->cap = new_cap;
+    tm->alloc_bytes = new_bytes;
+}
+
+static TrialEntry *trial_get(TrialMap *tm, ArcHeader *h)
+{
+    if (tm->entries == NULL || (tm->len + 1u) * 3u > tm->cap * 2u)
+        trial_grow(tm);
+    /* Keep power-of-2-friendly probing by using modulo when cap is non-pow2,
+       or mask if pow2; trial_grow derives cap from page size / sizeof(TrialEntry)
+       (sizeof(TrialEntry) = 24, so cap may not be a power of 2). */
+    size_t cap = tm->cap;
+    size_t j = trial_hash(h) % cap;
+    while (tm->entries[j].hdr != NULL) {
+        if (tm->entries[j].hdr == h)
+            return &tm->entries[j];
+        j = (j + 1u) % cap;
+    }
+    tm->entries[j].hdr = h;
+    tm->entries[j].rc =
+        (int64_t)atomic_load_explicit(&h->refcount, memory_order_acquire);
+    tm->entries[j].color = CC_COLOR_BLACK;
+    tm->len++;
+    return &tm->entries[j];
+}
+
+static void trial_free(TrialMap *tm)
+{
+    if (tm->entries != NULL) {
+        pal_page_free(tm->entries, tm->alloc_bytes);
+        tm->entries = NULL;
+        tm->cap = 0;
+        tm->len = 0;
+        tm->alloc_bytes = 0;
+    }
+}
+
+typedef struct CCTrialCtx {
+    TrialMap *tm;
+    CCVec    *work;
+} CCTrialCtx;
+
 static void cc_mark_gray_cb(int64_t val, void *ctx)
 {
     ArcHeader *chdr = cc_candidate_child(val);
     if (chdr == NULL)
         return;
-    chdr->refcount--;
-    if (cc_get_color(chdr) != CC_COLOR_GRAY) {
-        cc_set_color(chdr, CC_COLOR_GRAY);
-        ccvec_push((CCVec *)ctx, chdr);
+    CCTrialCtx *tc = (CCTrialCtx *)ctx;
+    TrialEntry *e = trial_get(tc->tm, chdr);
+    e->rc--;
+    if (e->color != CC_COLOR_GRAY) {
+        e->color = CC_COLOR_GRAY;
+        ccvec_push(tc->work, chdr);
     }
 }
 
-static void cc_mark_gray(CCVec *work, ArcHeader *start)
+static void cc_mark_gray(TrialMap *tm, CCVec *work, ArcHeader *start)
 {
-    cc_set_color(start, CC_COLOR_GRAY);
+    TrialEntry *se = trial_get(tm, start);
+    se->color = CC_COLOR_GRAY;
     ccvec_push(work, start);
+    CCTrialCtx tc = { tm, work };
     while (work->len > 0u) {
         ArcHeader *cur = work->data[--work->len];
-        cc_visit_children(cur, cc_mark_gray_cb, work);
+        cc_visit_children(cur, cc_mark_gray_cb, &tc);
     }
 }
 
@@ -761,70 +923,87 @@ static void cc_scan_black_cb(int64_t val, void *ctx)
     ArcHeader *chdr = cc_candidate_child(val);
     if (chdr == NULL)
         return;
-    chdr->refcount++;
-    if (cc_get_color(chdr) != CC_COLOR_BLACK) {
-        cc_set_color(chdr, CC_COLOR_BLACK);
-        ccvec_push((CCVec *)ctx, chdr);
+    CCTrialCtx *tc = (CCTrialCtx *)ctx;
+    TrialEntry *e = trial_get(tc->tm, chdr);
+    e->rc++;
+    if (e->color != CC_COLOR_BLACK) {
+        e->color = CC_COLOR_BLACK;
+        ccvec_push(tc->work, chdr);
     }
 }
 
-static void cc_scan_black(CCVec *work, ArcHeader *start)
+static void cc_scan_black(TrialMap *tm, CCVec *work, ArcHeader *start)
 {
-    cc_set_color(start, CC_COLOR_BLACK);
+    TrialEntry *se = trial_get(tm, start);
+    se->color = CC_COLOR_BLACK;
     ccvec_push(work, start);
+    CCTrialCtx tc = { tm, work };
     while (work->len > 0u) {
         ArcHeader *cur = work->data[--work->len];
-        cc_visit_children(cur, cc_scan_black_cb, work);
+        cc_visit_children(cur, cc_scan_black_cb, &tc);
     }
 }
 
 static void cc_scan_cb(int64_t val, void *ctx)
 {
     ArcHeader *chdr = cc_candidate_child(val);
-    if (chdr != NULL && cc_get_color(chdr) == CC_COLOR_GRAY)
-        ccvec_push((CCVec *)ctx, chdr);
+    if (chdr == NULL)
+        return;
+    CCTrialCtx *tc = (CCTrialCtx *)ctx;
+    TrialEntry *e = trial_get(tc->tm, chdr);
+    if (e->color == CC_COLOR_GRAY)
+        ccvec_push(tc->work, chdr);
 }
 
-static void cc_scan(CCVec *scan_work, CCVec *black_work, ArcHeader *start)
+static void cc_scan(TrialMap *tm, CCVec *scan_work, CCVec *black_work,
+                    ArcHeader *start)
 {
-    if (cc_get_color(start) != CC_COLOR_GRAY)
+    if (trial_get(tm, start)->color != CC_COLOR_GRAY)
         return;
     ccvec_push(scan_work, start);
+    CCTrialCtx tc = { tm, scan_work };
     while (scan_work->len > 0u) {
         ArcHeader *cur = scan_work->data[--scan_work->len];
-        if (cc_get_color(cur) != CC_COLOR_GRAY)
+        TrialEntry *e = trial_get(tm, cur);
+        if (e->color != CC_COLOR_GRAY)
             continue;
-        if (cur->refcount > 0u) {
-            cc_scan_black(black_work, cur);
+        if (e->rc > 0) {
+            cc_scan_black(tm, black_work, cur);
         } else {
-            cc_set_color(cur, CC_COLOR_WHITE);
-            cc_visit_children(cur, cc_scan_cb, scan_work);
+            e->color = CC_COLOR_WHITE;
+            cc_visit_children(cur, cc_scan_cb, &tc);
         }
     }
 }
 
 typedef struct CCWhiteCtx {
-    CCVec *work;
-    CCVec *dead;
+    TrialMap *tm;
+    CCVec    *work;
+    CCVec    *dead;
 } CCWhiteCtx;
 
 static void cc_collect_white_cb(int64_t val, void *ctx)
 {
     ArcHeader *chdr = cc_candidate_child(val);
-    if (chdr != NULL && cc_get_color(chdr) == CC_COLOR_WHITE) {
-        CCWhiteCtx *wc = (CCWhiteCtx *)ctx;
-        cc_set_color(chdr, CC_COLOR_DEAD);
+    if (chdr == NULL)
+        return;
+    CCWhiteCtx *wc = (CCWhiteCtx *)ctx;
+    TrialEntry *e = trial_get(wc->tm, chdr);
+    if (e->color == CC_COLOR_WHITE) {
+        e->color = CC_COLOR_DEAD;
         ccvec_push(wc->work, chdr);
         ccvec_push(wc->dead, chdr);
     }
 }
 
-static void cc_collect_white(CCVec *work, CCVec *dead, ArcHeader *start)
+static void cc_collect_white(TrialMap *tm, CCVec *work, CCVec *dead,
+                             ArcHeader *start)
 {
-    if (cc_get_color(start) != CC_COLOR_WHITE)
+    TrialEntry *se = trial_get(tm, start);
+    if (se->color != CC_COLOR_WHITE)
         return;
-    CCWhiteCtx wc = { work, dead };
-    cc_set_color(start, CC_COLOR_DEAD);
+    CCWhiteCtx wc = { tm, work, dead };
+    se->color = CC_COLOR_DEAD;
     ccvec_push(work, start);
     ccvec_push(dead, start);
     while (work->len > 0u) {
@@ -833,63 +1012,64 @@ static void cc_collect_white(CCVec *work, CCVec *dead, ArcHeader *start)
     }
 }
 
-static void cc_release_leaf_cb(int64_t val, void *ctx)
+static void cc_collect_leaf_cb(int64_t val, void *ctx)
 {
-    (void)ctx;
     if (!is_heap_ptr(val))
         return;
     ArcHeader *chdr = (ArcHeader *)(uintptr_t)val - 1;
-    if (chdr->refcount == ARC_IMMORTAL)
+    if (atomic_load_explicit(&chdr->refcount, memory_order_relaxed) == ARC_IMMORTAL)
         return;
     if (!is_cycle_candidate_obj(chdr))
-        arc_release((void *)(uintptr_t)val);
+        ccvec_push((CCVec *)ctx, (ArcHeader *)(uintptr_t)val);
 }
 
 int64_t ocamlcc_arc_collect(int64_t unit)
 {
     (void)unit;
-    if (g_cc_roots.len == 0u)
+    arc_lock(&g_cc_lock);
+    if (g_cc_roots.len == 0u) {
+        arc_unlock(&g_cc_lock);
         return 1;
+    }
 
+    atomic_store_explicit(&g_cc_active, 1, memory_order_release);
+
+    TrialMap tm = { NULL, 0, 0, 0 };
     CCVec work = { NULL, 0, 0, 0 };
     CCVec black_work = { NULL, 0, 0, 0 };
     CCVec dead = { NULL, 0, 0, 0 };
+    CCVec leaves = { NULL, 0, 0, 0 };
 
     for (size_t i = 0; i < g_cc_roots.len; i++) {
         ArcHeader *r = g_cc_roots.data[i];
-        if (cc_get_color(r) == CC_COLOR_BLACK)
-            cc_mark_gray(&work, r);
+        if (trial_get(&tm, r)->color == CC_COLOR_BLACK)
+            cc_mark_gray(&tm, &work, r);
     }
 
     for (size_t i = 0; i < g_cc_roots.len; i++)
-        cc_scan(&work, &black_work, g_cc_roots.data[i]);
+        cc_scan(&tm, &work, &black_work, g_cc_roots.data[i]);
 
     for (size_t i = 0; i < g_cc_roots.len; i++) {
         ArcHeader *r = g_cc_roots.data[i];
-        if (cc_get_color(r) == CC_COLOR_WHITE)
-            cc_collect_white(&work, &dead, r);
+        if (trial_get(&tm, r)->color == CC_COLOR_WHITE)
+            cc_collect_white(&tm, &work, &dead, r);
         r->reserved &= CC_COLOR_MASK;
     }
     g_cc_roots.len = 0;
 
-    int64_t live_before = g_live_objects;
     for (size_t i = 0; i < dead.len; i++) {
         ArcHeader *w = dead.data[i];
         int is_fiber = (w->tag == (uint16_t)ARC_TAG_FIBER);
         Fiber *f = is_fiber ? (Fiber *)(w + 1) : NULL;
         if (is_fiber) {
-            /* Reuse tokens are not values: release them here. The fiber's
-               value edges (shadow slots, entry closure, payload, exn slots)
-               are released below through [cc_release_leaf_cb] — candidate
-               children are in [dead] and must not be double-released. */
             while (f->reuse_sp > f->reuse_base) {
                 f->reuse_sp--;
                 arc_free_reuse(*f->reuse_sp);
             }
         }
-        if (g_weak_count > 0)
+        if (atomic_load_explicit(&g_weak_count, memory_order_acquire) > 0u)
             weak_clear_target((int64_t)(uintptr_t)(w + 1));
-        cc_visit_children(w, cc_release_leaf_cb, NULL);
+        cc_visit_children(w, cc_collect_leaf_cb, &leaves);
         if (is_fiber) {
             f->entry_closure = 0;
             f->result = 0;
@@ -919,15 +1099,23 @@ int64_t ocamlcc_arc_collect(int64_t unit)
             f->state = FIBER_DONE;
         }
     }
+
+    atomic_store_explicit(&g_cc_active, 0, memory_order_release);
+    arc_unlock(&g_cc_lock);
+
+    for (size_t i = 0; i < leaves.len; i++)
+        arc_release((void *)leaves.data[i]);
     for (size_t i = 0; i < dead.len; i++) {
-        g_live_objects--;
+        atomic_fetch_sub_explicit(&g_live_objects, 1, memory_order_relaxed);
         slab_free(dead.data[i]);
     }
 
-    int64_t reclaimed = live_before - g_live_objects;
+    int64_t reclaimed = (int64_t)dead.len;
+    trial_free(&tm);
     ccvec_free(&work);
     ccvec_free(&black_work);
     ccvec_free(&dead);
+    ccvec_free(&leaves);
     return tag_int(reclaimed);
 }
 
@@ -949,12 +1137,14 @@ int64_t ocamlcc_weak_create(int64_t len_val)
     w->len = len;
     for (uint64_t i = 0; i < len; i++)
         w->slots[i] = 0;
+    arc_lock(&g_weak_lock);
     w->prev = NULL;
     w->next = g_weak_head;
     if (g_weak_head != NULL)
         g_weak_head->prev = w;
     g_weak_head = w;
-    g_weak_count++;
+    atomic_fetch_add_explicit(&g_weak_count, 1u, memory_order_relaxed);
+    arc_unlock(&g_weak_lock);
     return (int64_t)(uintptr_t)w;
 }
 
@@ -972,14 +1162,16 @@ int64_t ocamlcc_weak_set(int64_t weak_val, int64_t idx_val, int64_t opt_val)
         raise_invalid_arg_imm(g_inv_arg_oob_str.str);
         return 1;
     }
-    if (opt_val == 1) {
-        w->slots[idx] = 0;
-    } else {
+    int64_t target = 0;
+    if (opt_val != 1) {
         int64_t *some = (int64_t *)(uintptr_t)opt_val;
-        w->slots[idx] = some[0];
-        if (is_heap_ptr(some[0]))
-            weak_targets_insert(some[0]);
+        target = some[0];
     }
+    arc_lock(&g_weak_lock);
+    w->slots[idx] = target;
+    if (target != 0 && is_heap_ptr(target))
+        weak_targets_insert(target);
+    arc_unlock(&g_weak_lock);
     return 1;
 }
 
@@ -991,10 +1183,18 @@ int64_t ocamlcc_weak_get(int64_t weak_val, int64_t idx_val)
         raise_invalid_arg_imm(g_inv_arg_oob_str.str);
         return 1;
     }
+    arc_lock(&g_weak_lock);
     int64_t val = w->slots[idx];
+    if (val != 0 && is_heap_ptr(val)) {
+        ArcHeader *hdr = (ArcHeader *)(uintptr_t)val - 1;
+        if (!arc_try_retain(hdr)) {
+            w->slots[idx] = 0;
+            val = 0;
+        }
+    }
+    arc_unlock(&g_weak_lock);
     if (val == 0)
         return 1; /* None */
-    arc_retain_val(val);
     int64_t *some = (int64_t *)arc_alloc(0u, 1u, 8u);
     some[0] = val;
     return (int64_t)(uintptr_t)some;
@@ -1008,10 +1208,20 @@ int64_t ocamlcc_weak_get_copy(int64_t weak_val, int64_t idx_val)
         raise_invalid_arg_imm(g_inv_arg_oob_str.str);
         return 1;
     }
+    arc_lock(&g_weak_lock);
     int64_t val = w->slots[idx];
+    if (val != 0 && is_heap_ptr(val)) {
+        ArcHeader *hdr = (ArcHeader *)(uintptr_t)val - 1;
+        if (!arc_try_retain(hdr)) {
+            w->slots[idx] = 0;
+            val = 0;
+        }
+    }
+    arc_unlock(&g_weak_lock);
     if (val == 0)
         return 1; /* None */
-    if ((val & 1) == 0) {
+    int64_t result = val;
+    if (is_heap_ptr(val)) {
         /* Copy the block one level deep (same tag / scan_fields / size), so
          * mutating the copy never reaches the value stored in the slot. */
         ArcHeader *hdr = (ArcHeader *)(uintptr_t)val - 1;
@@ -1023,14 +1233,11 @@ int64_t ocamlcc_weak_get_copy(int64_t weak_val, int64_t idx_val)
             dst[i] = src[i];
         for (uint16_t i = 0; i < hdr->scan_fields; i++)
             arc_retain_val(copy[i]);
-        val = (int64_t)(uintptr_t)copy;
+        arc_release_val(val);
+        result = (int64_t)(uintptr_t)copy;
     }
-    /* No retain here: unlike ocamlcc_weak_get (which must stay rc-neutral for
-     * the slot's uncounted target), a fresh copy starts at refcount 1 and the
-     * caller's field-read retain + Some drop + binding release balance it to
-     * exactly one free. */
     int64_t *some = (int64_t *)arc_alloc(0u, 1u, 8u);
-    some[0] = val;
+    some[0] = result;
     return (int64_t)(uintptr_t)some;
 }
 
@@ -1042,7 +1249,17 @@ int64_t ocamlcc_weak_check(int64_t weak_val, int64_t idx_val)
         raise_invalid_arg_imm(g_inv_arg_oob_str.str);
         return 1;
     }
-    return (w->slots[idx] != 0) ? 3 : 1; /* OCaml bool: true=3, false=1 */
+    arc_lock(&g_weak_lock);
+    int64_t val = w->slots[idx];
+    if (val != 0 && is_heap_ptr(val)) {
+        ArcHeader *hdr = (ArcHeader *)(uintptr_t)val - 1;
+        if (atomic_load_explicit(&hdr->refcount, memory_order_acquire) == 0u) {
+            w->slots[idx] = 0;
+            val = 0;
+        }
+    }
+    arc_unlock(&g_weak_lock);
+    return (val != 0) ? 3 : 1; /* OCaml bool: true=3, false=1 */
 }
 
 /* ------------------------------------------------------------------ */

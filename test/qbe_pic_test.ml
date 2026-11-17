@@ -44,7 +44,7 @@ let () =
       in
       let ok3 =
         check "extern_exn_slot"
-          (has_substr ~sub:"extern $ocamlcc_exn_slot" il)
+          (has_substr ~sub:"call extern $ocamlcc_get_exn()" il)
       in
       let ok4 =
         check "local_str_not_extern"

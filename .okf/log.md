@@ -1,5 +1,28 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Thread-safe runtime for multi-threaded Mobile FFI (TDD) —
+  converted `ArcHeader.refcount` to C11 `_Atomic uint32_t` with atomic
+  retain/release/drop-reuse and CAS-based `arc_try_retain` for weak-ref
+  upgrades (`runtime/arc.h`, `runtime/arc.c`); converted `g_live_objects`,
+  `g_reuse_hits`, `g_next_oo_id`, and `g_weak_count` to atomics; guarded slab
+  allocation (`g_alloc_lock`), weak registry (`g_weak_lock`), cycle-collector
+  roots (`g_cc_lock` + `g_cc_active`), and `PAL_USE_EPOLL` `g_watches`
+  (`g_watch_lock` in `runtime/pal.c`) with freestanding C11 spinlocks. Replaced
+  process-global `ocamlcc_exn_slot` with `_Thread_local` `tls_exn_slot` via
+  `ocamlcc_get_exn()`/`ocamlcc_set_exn()` (`lib/codegen_expr.ml`,
+  `runtime/closure.c`, `runtime/fiber.c`), and made `tls_main_fiber`,
+  `tls_current_fiber`, and `tls_sched` `_Thread_local` in `runtime/fiber.c`.
+  Rewrote `ocamlcc_arc_collect` to compute trial refcounts in a local
+  `TrialMap` without mutating live objects' `refcount` fields, and fixed a
+  dangling `g_cc_roots` double-free where `cc_roots_remove_locked` skipped
+  `ARC_TAG_FIBER` even though `is_cycle_candidate_obj` added fibers to
+  `g_cc_roots` (`delta=-1` caught by the new test). Added 8-thread stress test
+  `examples/mt_ffi_lib.ml` + `tests/mt_ffi_host.c` (`test_mt_ffi` and
+  `asan_mt_ffi`): Red run segfaulted on unpatched runtime; Green passes
+  `all_ok=1 delta=0` across `ninja test` (22/22), `ninja asan_test` (12/12),
+  `dune runtest` (9/9), and `-fsanitize=thread` (0 TSan data races).
+  Documented in [perceus-arc](/concepts/perceus-arc.md) and
+  [wren-fibers](/concepts/wren-fibers.md).
 - 2026-11-17 (autoagent/1): Modularize codegen & eliminate builder save/restore boilerplate (TDD) —
   split the 2,061-line `lib/codegen.ml` into five focused modules:
   `lib/codegen_ctx.ml` (module builder + isolated `fn_state` with

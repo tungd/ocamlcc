@@ -328,7 +328,7 @@ build test_fiber_io: run_test | $builddir/fiber_io
   name = fiber_io
 
 rule qbe_pic_check
-  command = $builddir/qbe/qbe -t arm64 $in > $builddir/mod_lib.arm64.s && grep -q ':got:ocamlcc_exn_slot' $builddir/mod_lib.arm64.s && grep -q ':got_lo12:ocamlcc_exn_slot' $builddir/mod_lib.arm64.s && ! grep -E 'adrp[[:space:]]+[^,]+,[[:space:]]*ocamlcc_exn_slot' $builddir/mod_lib.arm64.s && $builddir/qbe/qbe -t amd64_sysv $in > $builddir/mod_lib.amd64.s && grep -q 'ocamlcc_exn_slot@gotpcrel(%rip)' $builddir/mod_lib.amd64.s && grep -q 'callq arc_alloc@plt' $builddir/mod_lib.amd64.s && printf 'export function w $$win_id(w %%x) {\n@start\n\tret %%x\n}\n' | $builddir/qbe/qbe -t amd64_win > $builddir/win_check.s && echo "PASS qbe_pic_check"
+  command = $builddir/qbe/qbe -t arm64 $in > $builddir/mod_lib.arm64.s && grep -q ':got:ocamlcc_global_Mod_lib' $builddir/mod_lib.arm64.s && grep -q ':got_lo12:ocamlcc_global_Mod_lib' $builddir/mod_lib.arm64.s && ! grep -E 'adrp[[:space:]]+[^,]+,[[:space:]]*ocamlcc_global_Mod_lib' $builddir/mod_lib.arm64.s && $builddir/qbe/qbe -t amd64_sysv $in > $builddir/mod_lib.amd64.s && grep -q 'ocamlcc_global_Mod_lib@gotpcrel(%rip)' $builddir/mod_lib.amd64.s && grep -q 'callq arc_alloc@plt' $builddir/mod_lib.amd64.s && grep -q 'callq ocamlcc_set_exn@plt' $builddir/mod_lib.amd64.s && printf 'export function w $$win_id(w %%x) {\n@start\n\tret %%x\n}\n' | $builddir/qbe/qbe -t amd64_win > $builddir/win_check.s && echo "PASS qbe_pic_check"
   pool = console
   description = PIC-CHECK $in
 
@@ -350,7 +350,24 @@ build $builddir/pic_so_host: cc_pic_host $builddir/libmod_lib.so | tests/pic_so_
 build test_qbe_pic: qbe_pic_check $builddir/mod_lib.ssa | $builddir/qbe/qbe
 build test_pic_so: run_pic_so | $builddir/pic_so_host tests/pic_so.expected
 
-build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so
+rule cc_mt_host
+  command = $cc -O2 -g -pthread tests/mt_ffi_host.c $in -o $out
+  description = LINK(MT) $out
+
+rule run_mt_ffi
+  command = $builddir/mt_ffi_host > $builddir/mt_ffi.out && diff - tests/mt_ffi.expected < $builddir/mt_ffi.out && echo "PASS mt_ffi"
+  pool = console
+  description = TEST mt_ffi
+
+build $builddir/mt_ffi_lib.cmi: ocamlcc_cmi examples/mt_ffi_lib.mli | $builddir/bin/ocamlcc $stdlibdir/stdlib.cmi
+  flags = --nostdlib -I $stdlibdir
+build $builddir/mt_ffi_lib.ssa: ocamlcc_ssa examples/mt_ffi_lib.ml | $builddir/bin/ocamlcc $builddir/mt_ffi_lib.cmi $stdlibdir/stdlib.cmi
+  flags = --nostdlib -I $stdlibdir -I $builddir --cmi-prefix $builddir/mt_ffi_lib --mod
+build $builddir/mt_ffi_lib.s: qbe_ssa $builddir/mt_ffi_lib.ssa | $builddir/qbe/qbe
+build $builddir/mt_ffi_host: cc_mt_host $builddir/mt_ffi_lib.s $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a | tests/mt_ffi_host.c
+build test_mt_ffi: run_mt_ffi | $builddir/mt_ffi_host tests/mt_ffi.expected
+
+build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi
 
 rule cc_rt_asan
   command = $cc $rt_cflags -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iruntime -c $in -o $out
@@ -410,6 +427,15 @@ build asan_fiber_test:    run_asan_test | $builddir/asan/fiber_test
 build asan_fiber_io:      run_asan_test | $builddir/asan/fiber_io
   name = fiber_io
 
-build asan_test: phony asan_adt asan_closures asan_arrays_bytes asan_arc_test asan_exn asan_weak_cycle asan_cycle_collect asan_mod_main asan_stdlib_test asan_fiber_test asan_fiber_io
+build $builddir/asan/mt_ffi_host: cc_link_asan tests/mt_ffi_host.c $builddir/mt_ffi_lib.s $stdlibdir/libocamlstdlib.a $builddir/asan/rt/libocamlrt.a | tests/mt_ffi_host.c
+
+rule run_asan_mt_ffi
+  command = $builddir/asan/mt_ffi_host > $builddir/asan/mt_ffi.out && diff - tests/mt_ffi.expected < $builddir/asan/mt_ffi.out && echo "PASS(ASAN) mt_ffi"
+  pool = console
+  description = TEST(ASAN) mt_ffi
+
+build asan_mt_ffi: run_asan_mt_ffi | $builddir/asan/mt_ffi_host tests/mt_ffi.expected
+
+build asan_test: phony asan_adt asan_closures asan_arrays_bytes asan_arc_test asan_exn asan_weak_cycle asan_cycle_collect asan_mod_main asan_stdlib_test asan_fiber_test asan_fiber_io asan_mt_ffi
 
 default $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a $builddir/bin/ocamlcc $builddir/hello

@@ -77,7 +77,7 @@ let compile_div_mod b qop (av : t) (cv : t) : t =
   start_block b lzero;
   let ex = fresh_temp b "divex" in
   emit b (Load (Loadl, Long, ex, Global "ocamlcc_global_Division_by_zero"));
-  emit b (Store (Storel, ex, Global "ocamlcc_exn_slot"));
+  emit b (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, ex) ] });
   let lzero_end = b.cur_fn.open_label in
   close_block b (Jmp ldone);
   start_block b ldone;
@@ -294,7 +294,7 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
           let clos_res = apply hooks b false fn_atom first_args in
           let rest_vals = List.map (compile_atom hooks b) rest_args in
           let ex = fresh_temp b "oex" in
-          emit b (Load (Loadl, Long, ex, Global "ocamlcc_exn_slot"));
+          emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
           let lerr = fresh_label b "oapp_err" in
           let lok = fresh_label b "oapp_ok" in
           let ljoin = fresh_label b "oapp_join" in
@@ -538,10 +538,11 @@ let emit_unwind b : t =
   | [] ->
       if b.cur_fn.in_init then begin
         let ex = fresh_temp b "unex" in
-        emit b (Load (Loadl, Long, ex, Global "ocamlcc_exn_slot"));
+        emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
         emit b
           (Call_void { fn = Global "arc_release_val"; args = [ (Long, ex) ] });
-        emit b (Store (Storel, Int 0L, Global "ocamlcc_exn_slot"));
+        emit b
+          (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, Int 0L) ] });
         emit b (Call_void { fn = Global "pal_abort"; args = [] });
         close_block b Hlt;
         unit_const
@@ -723,11 +724,11 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   | Unwind -> emit_unwind b
   | Raise a ->
       let v = compile_atom hooks b a in
-      emit b (Store (Storel, v, Global "ocamlcc_exn_slot"));
+      emit b (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, v) ] });
       emit_unwind b
   | CheckExn (on_err, on_ok) ->
       let ex = fresh_temp b "exchk" in
-      emit b (Load (Loadl, Long, ex, Global "ocamlcc_exn_slot"));
+      emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
       let lerr = fresh_label b "exn_err" in
       let lok = fresh_label b "exn_ok" in
       close_block b (Br (ex, lerr, lok));
@@ -750,8 +751,9 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       end;
       start_block b lcatch;
       let ex = fresh_temp b "exn" in
-      emit b (Load (Loadl, Long, ex, Global "ocamlcc_exn_slot"));
-      emit b (Store (Storel, Int 0L, Global "ocamlcc_exn_slot"));
+      emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
+      emit b
+        (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, Int 0L) ] });
       Hashtbl.replace b.vars exn_id ex;
       let hv = compile_aexpr hooks b tail handler in
       Hashtbl.remove b.vars exn_id;
