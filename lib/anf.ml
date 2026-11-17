@@ -211,7 +211,7 @@ let conv_const (c : Lambda.structured_constant) : atom =
 
 let check_array_kind (_k : Lambda.array_kind) = ()
 
-let builtins_enabled = ref true
+let builtins_table : Builtins.table option ref = ref None
 
 let rec conv_tail (lam : Lambda.lambda) : aexpr =
   conv_expr lam (fun a -> Halt a)
@@ -286,7 +286,11 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
   let emit_cexpr ce = Let (id, ce, k ()) in
   match lam with
   | Lapply { ap_func; ap_args; _ } -> (
-      match (if !builtins_enabled then Builtins.resolve ap_func else None) with
+      match
+        match !builtins_table with
+        | Some table -> Builtins.resolve ~table ap_func
+        | None -> None
+      with
       | Some { symbol; arg_kind } -> (
           match ap_args with
           | [ arg ] ->
@@ -786,12 +790,13 @@ let pure_defs (e : aexpr) : (Ident.t * lfunction) list =
   in
   List.rev (go Ident.Set.empty [] e)
 
-let of_lambda ?(use_builtins = true) (program : Lambda.program) :
-    (program, string) result =
-  let saved = !builtins_enabled in
-  builtins_enabled := use_builtins;
+let of_lambda ?(use_builtins = true) ?(include_dirs = [])
+    (program : Lambda.program) : (program, string) result =
+  let saved = !builtins_table in
+  builtins_table :=
+    if use_builtins then Some (Builtins.load ~include_dirs ()) else None;
   Fun.protect
-    ~finally:(fun () -> builtins_enabled := saved)
+    ~finally:(fun () -> builtins_table := saved)
     (fun () ->
       try Ok { module_ident = program.module_ident; code = conv_tail program.code }
       with Unsupported what -> Error what)

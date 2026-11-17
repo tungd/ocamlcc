@@ -17,7 +17,7 @@ let compile_source ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
   with
   | Error { msg } -> Error msg
   | Ok program -> (
-      match Anf.of_lambda ~use_builtins:(not nostdlib) program with
+      match Anf.of_lambda ~use_builtins:(not nostdlib) ~include_dirs program with
       | Error what -> Error (Printf.sprintf "unsupported: %s" what)
       | Ok anf ->
           let anf = Arc_pass.run anf in

@@ -152,6 +152,10 @@ type program = {
   code : aexpr;
 }
 
-val of_lambda : ?use_builtins:bool -> Lambda.program -> (program, string) result
+val of_lambda :
+  ?use_builtins:bool ->
+  ?include_dirs:string list ->
+  Lambda.program ->
+  (program, string) result
 val free_vars : aexpr -> Ident.Set.t
 val pure_defs : aexpr -> (Ident.t * lfunction) list

@@ -129,12 +129,16 @@ from outside the group pass the member's tag as the first argument.
 
 # Builtin resolution
 
-Stdlib entry points surface in Lambda as field loads from the Stdlib module
-block, e.g. `(field_imm 43 (global Stdlib!))`. The field offsets are an
-implementation detail of the linked compiler-libs, so `lib/builtins.ml`
-probes that very compiler with tiny reference programs (`let () = print_int
-1`) and learns the rendered form of each builtin at startup, instead of
-hardcoding offsets that would break across OCaml versions.
+When `--nostdlib` is off, `Stdlib` entry points surface in Lambda as field
+loads from the `Stdlib` module block (`Lprim (Pfield (pos, _, _), [Lprim
+(Pgetglobal id, [], _)], _)`). Instead of hardcoding slot offsets or
+compiling throwaway probe snippets against the host switch's `Stdlib`,
+`lib/builtins.ml` locates the active `stdlib.cmi` along `include_dirs`
+(falling back to `Config.standard_library`), computes each entry point's
+runtime slot index directly from `Cmi_format.read_cmi` (skipping `Val_prim`
+primitives and `Mty_alias` module aliases), and matches the Lambda AST
+directly without invoking the frontend or mutating global compiler-libs
+state. Regression-tested in `test/builtins_test.ml`.
 
 [^design-doc]: Stage structure, goals, and the exception/fiber lowering
   plans are specified in `docs/design.md` §3–§4.

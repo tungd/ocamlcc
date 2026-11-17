@@ -184,3 +184,20 @@
  (deps primitives_ir_test.actual primitives_ir_test.expected)
  (action
   (diff primitives_ir_test.expected primitives_ir_test.actual)))
+
+(executable
+ (name builtins_test)
+ (libraries ocamlcc unix))
+
+(rule
+ (alias runtest)
+ (deps builtins_test.exe builtins_test.expected)
+ (action
+  (with-stdout-to builtins_test.actual
+   (run ./builtins_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps builtins_test.actual builtins_test.expected)
+ (action
+  (diff builtins_test.expected builtins_test.actual)))

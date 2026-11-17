@@ -1,5 +1,21 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Resolve `Builtins` directly from `stdlib.cmi` without host probe-snippet compilation (TDD) —
+  replaced `lib/builtins.ml`'s `Frontend.compile_implementation` probe
+  snippets (`let () = print_int 1`, etc.) and `Printlambda.lambda` string
+  matching with direct `Cmi_format.read_cmi` slot-offset scanning over the
+  active `stdlib.cmi` along `include_dirs` (falling back to
+  `Config.standard_library`) and direct `Lambda.Lprim (Pfield _, [Lprim
+  (Pgetglobal id, ...)])` AST matching. Added `?include_dirs` to
+  `Anf.of_lambda` (`lib/anf.ml`/`lib/anf.mli`, passed by `lib/pipeline.ml`),
+  so compiling with `-I dir` and `--nostdlib` off resolves `dir/stdlib.cmi`
+  instead of always probing the host switch's `Stdlib` or mutating global
+  compiler-libs state inside `Anf.of_lambda`. Added `test/builtins_test.ml`
+  to `test/dune` (Red: `custom stdlib builtins: FAIL` with `print_int` at
+  slot 0; Green: both custom `-I` and host `Stdlib` pass). `dune runtest`
+  (12/12), `ninja test` (24/24), `ninja asan_test` (14/14). Documented in
+  [compiler-pipeline](/concepts/compiler-pipeline.md).
+
 - 2026-11-17 (autoagent/1): Reclaim empty 64 KB slabs and rehash sparse weak-target tables without doubling (TDD) —
   replaced the bump-only slab freelist in `runtime/arc.c` with per-slab
   metadata (`SlabPage` at offset 0 of each 64 KB slab, sorted `g_slab_dir`
