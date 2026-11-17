@@ -1,5 +1,11 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Sync `README.md` with current test suites and QBE 1.3 —
+  updated `README.md` from stale 19 checked examples / QBE 1.2 to reflect
+  `ninja test` (24/24), `ninja asan_test` (14/14), `dune runtest` (12/12),
+  vendored QBE 1.3, `test/`, `runtime/` (`closure.c`, `main_entry.c`), and
+  `Int32`/`Int64`/`Nativeint` stdlib modules.
+
 - 2026-11-17 (autoagent/1): Resolve `Builtins` directly from `stdlib.cmi` without host probe-snippet compilation (TDD) —
   replaced `lib/builtins.ml`'s `Frontend.compile_implementation` probe
   snippets (`let () = print_int 1`, etc.) and `Printlambda.lambda` string
