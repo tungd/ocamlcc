@@ -10,7 +10,7 @@ cc = cc
 qbe_dir = vendor/qbe
 
 qbe_cflags = -std=c99 -O2 -g -Wall -Wextra -Wpedantic
-rt_cflags = -std=c11 -O2 -g -Wall -Wextra
+rt_cflags = -std=c11 -O2 -g -fPIC -Wall -Wextra
 
 rule cc_qbe
   command = $cc $qbe_cflags -c $in -o $out -I$builddir/qbe
@@ -64,7 +64,7 @@ rule run
 
 # ---------------------------------------------------------------- QBE ----
 
-qbe_common = main util parse abi cfg mem ssa alias load copy fold simpl live spill rega emit
+qbe_common = main util parse abi cfg mem ssa alias load copy fold gvn gcm simpl ifopt live spill rega emit
 
 build $builddir/qbe/config.h: gen_config
 
@@ -79,16 +79,20 @@ build $builddir/qbe/alias.o:   cc_qbe $qbe_dir/alias.c   | $qbe_dir/all.h $qbe_d
 build $builddir/qbe/load.o:    cc_qbe $qbe_dir/load.c    | $qbe_dir/all.h $qbe_dir/ops.h
 build $builddir/qbe/copy.o:    cc_qbe $qbe_dir/copy.c    | $qbe_dir/all.h $qbe_dir/ops.h
 build $builddir/qbe/fold.o:    cc_qbe $qbe_dir/fold.c    | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/gvn.o:     cc_qbe $qbe_dir/gvn.c     | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/gcm.o:     cc_qbe $qbe_dir/gcm.c     | $qbe_dir/all.h $qbe_dir/ops.h
 build $builddir/qbe/simpl.o:   cc_qbe $qbe_dir/simpl.c   | $qbe_dir/all.h $qbe_dir/ops.h
+build $builddir/qbe/ifopt.o:   cc_qbe $qbe_dir/ifopt.c   | $qbe_dir/all.h $qbe_dir/ops.h
 build $builddir/qbe/live.o:    cc_qbe $qbe_dir/live.c    | $qbe_dir/all.h $qbe_dir/ops.h
 build $builddir/qbe/spill.o:   cc_qbe $qbe_dir/spill.c   | $qbe_dir/all.h $qbe_dir/ops.h
 build $builddir/qbe/rega.o:    cc_qbe $qbe_dir/rega.c    | $qbe_dir/all.h $qbe_dir/ops.h
 build $builddir/qbe/emit.o:    cc_qbe $qbe_dir/emit.c    | $qbe_dir/all.h $qbe_dir/ops.h
 
-build $builddir/qbe/amd64/targ.o: cc_qbe $qbe_dir/amd64/targ.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
-build $builddir/qbe/amd64/sysv.o: cc_qbe $qbe_dir/amd64/sysv.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
-build $builddir/qbe/amd64/isel.o: cc_qbe $qbe_dir/amd64/isel.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
-build $builddir/qbe/amd64/emit.o: cc_qbe $qbe_dir/amd64/emit.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
+build $builddir/qbe/amd64/targ.o:   cc_qbe $qbe_dir/amd64/targ.c   | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
+build $builddir/qbe/amd64/sysv.o:   cc_qbe $qbe_dir/amd64/sysv.c   | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
+build $builddir/qbe/amd64/isel.o:   cc_qbe $qbe_dir/amd64/isel.c   | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
+build $builddir/qbe/amd64/emit.o:   cc_qbe $qbe_dir/amd64/emit.c   | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
+build $builddir/qbe/amd64/winabi.o: cc_qbe $qbe_dir/amd64/winabi.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/amd64/all.h
 
 build $builddir/qbe/arm64/targ.o: cc_qbe $qbe_dir/arm64/targ.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/arm64/all.h
 build $builddir/qbe/arm64/abi.o:  cc_qbe $qbe_dir/arm64/abi.c  | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/arm64/all.h
@@ -100,7 +104,7 @@ build $builddir/qbe/rv64/abi.o:  cc_qbe $qbe_dir/rv64/abi.c  | $qbe_dir/all.h $q
 build $builddir/qbe/rv64/isel.o: cc_qbe $qbe_dir/rv64/isel.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/rv64/all.h
 build $builddir/qbe/rv64/emit.o: cc_qbe $qbe_dir/rv64/emit.c | $qbe_dir/all.h $qbe_dir/ops.h $qbe_dir/rv64/all.h
 
-build $builddir/qbe/qbe: link_qbe $builddir/qbe/main.o $builddir/qbe/util.o $builddir/qbe/parse.o $builddir/qbe/abi.o $builddir/qbe/cfg.o $builddir/qbe/mem.o $builddir/qbe/ssa.o $builddir/qbe/alias.o $builddir/qbe/load.o $builddir/qbe/copy.o $builddir/qbe/fold.o $builddir/qbe/simpl.o $builddir/qbe/live.o $builddir/qbe/spill.o $builddir/qbe/rega.o $builddir/qbe/emit.o $builddir/qbe/amd64/targ.o $builddir/qbe/amd64/sysv.o $builddir/qbe/amd64/isel.o $builddir/qbe/amd64/emit.o $builddir/qbe/arm64/targ.o $builddir/qbe/arm64/abi.o $builddir/qbe/arm64/isel.o $builddir/qbe/arm64/emit.o $builddir/qbe/rv64/targ.o $builddir/qbe/rv64/abi.o $builddir/qbe/rv64/isel.o $builddir/qbe/rv64/emit.o
+build $builddir/qbe/qbe: link_qbe $builddir/qbe/main.o $builddir/qbe/util.o $builddir/qbe/parse.o $builddir/qbe/abi.o $builddir/qbe/cfg.o $builddir/qbe/mem.o $builddir/qbe/ssa.o $builddir/qbe/alias.o $builddir/qbe/load.o $builddir/qbe/copy.o $builddir/qbe/fold.o $builddir/qbe/gvn.o $builddir/qbe/gcm.o $builddir/qbe/simpl.o $builddir/qbe/ifopt.o $builddir/qbe/live.o $builddir/qbe/spill.o $builddir/qbe/rega.o $builddir/qbe/emit.o $builddir/qbe/amd64/targ.o $builddir/qbe/amd64/sysv.o $builddir/qbe/amd64/isel.o $builddir/qbe/amd64/emit.o $builddir/qbe/amd64/winabi.o $builddir/qbe/arm64/targ.o $builddir/qbe/arm64/abi.o $builddir/qbe/arm64/isel.o $builddir/qbe/arm64/emit.o $builddir/qbe/rv64/targ.o $builddir/qbe/rv64/abi.o $builddir/qbe/rv64/isel.o $builddir/qbe/rv64/emit.o
 
 # ------------------------------------------------------------ runtime ----
 
@@ -109,9 +113,10 @@ build $builddir/rt/pal_ctx.o:  as_obj runtime/pal_ctx.S
 build $builddir/rt/arc.o:      cc_rt runtime/arc.c      | runtime/arc.h runtime/pal.h runtime/fiber.h
 build $builddir/rt/closure.o:  cc_rt runtime/closure.c  | runtime/arc.h runtime/pal.h
 build $builddir/rt/fiber.o:    cc_rt runtime/fiber.c    | runtime/fiber.h runtime/arc.h runtime/pal.h
-build $builddir/rt/builtins.o: cc_rt runtime/builtins.c
+build $builddir/rt/builtins.o:   cc_rt runtime/builtins.c
+build $builddir/rt/main_entry.o: cc_rt runtime/main_entry.c
 
-build $builddir/rt/libocamlrt.a: ar $builddir/rt/pal.o $builddir/rt/pal_ctx.o $builddir/rt/arc.o $builddir/rt/closure.o $builddir/rt/fiber.o $builddir/rt/builtins.o
+build $builddir/rt/libocamlrt.a: ar $builddir/rt/pal.o $builddir/rt/pal_ctx.o $builddir/rt/arc.o $builddir/rt/closure.o $builddir/rt/fiber.o $builddir/rt/builtins.o $builddir/rt/main_entry.o
 
 # ------------------------------------------------------------- ocamlcc ----
 
@@ -322,7 +327,30 @@ build test_fiber_test: run_test | $builddir/fiber_test
 build test_fiber_io: run_test | $builddir/fiber_io
   name = fiber_io
 
-build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io
+rule qbe_pic_check
+  command = $builddir/qbe/qbe -t arm64 $in > $builddir/mod_lib.arm64.s && grep -q ':got:ocamlcc_exn_slot' $builddir/mod_lib.arm64.s && grep -q ':got_lo12:ocamlcc_exn_slot' $builddir/mod_lib.arm64.s && ! grep -E 'adrp[[:space:]]+[^,]+,[[:space:]]*ocamlcc_exn_slot' $builddir/mod_lib.arm64.s && $builddir/qbe/qbe -t amd64_sysv $in > $builddir/mod_lib.amd64.s && grep -q 'ocamlcc_exn_slot@gotpcrel(%rip)' $builddir/mod_lib.amd64.s && grep -q 'callq arc_alloc@plt' $builddir/mod_lib.amd64.s && printf 'export function w $$win_id(w %%x) {\n@start\n\tret %%x\n}\n' | $builddir/qbe/qbe -t amd64_win > $builddir/win_check.s && echo "PASS qbe_pic_check"
+  pool = console
+  description = PIC-CHECK $in
+
+rule cc_shared
+  command = $cc -shared -fPIC $in -o $out
+  description = SHARED $out
+
+rule cc_pic_host
+  command = $cc -fPIC tests/pic_so_host.c $in -Wl,-rpath,$builddir -o $out
+  description = HOST $out
+
+rule run_pic_so
+  command = env LD_LIBRARY_PATH=$builddir DYLD_LIBRARY_PATH=$builddir $builddir/pic_so_host > $builddir/pic_so.out && diff - tests/pic_so.expected < $builddir/pic_so.out && echo "PASS pic_so"
+  pool = console
+  description = TEST pic_so
+
+build $builddir/libmod_lib.so: cc_shared $builddir/mod_lib.s $builddir/rt/libocamlrt.a
+build $builddir/pic_so_host: cc_pic_host $builddir/libmod_lib.so | tests/pic_so_host.c
+build test_qbe_pic: qbe_pic_check $builddir/mod_lib.ssa | $builddir/qbe/qbe
+build test_pic_so: run_pic_so | $builddir/pic_so_host tests/pic_so.expected
+
+build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so
 
 rule cc_rt_asan
   command = $cc $rt_cflags -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iruntime -c $in -o $out
@@ -342,9 +370,10 @@ build $builddir/asan/rt/pal_ctx.o:  as_obj     runtime/pal_ctx.S
 build $builddir/asan/rt/arc.o:      cc_rt_asan runtime/arc.c      | runtime/arc.h runtime/pal.h runtime/fiber.h
 build $builddir/asan/rt/closure.o:  cc_rt_asan runtime/closure.c  | runtime/arc.h runtime/pal.h
 build $builddir/asan/rt/fiber.o:    cc_rt_asan runtime/fiber.c    | runtime/fiber.h runtime/arc.h runtime/pal.h
-build $builddir/asan/rt/builtins.o: cc_rt_asan runtime/builtins.c
+build $builddir/asan/rt/builtins.o:   cc_rt_asan runtime/builtins.c
+build $builddir/asan/rt/main_entry.o: cc_rt_asan runtime/main_entry.c
 
-build $builddir/asan/rt/libocamlrt.a: ar $builddir/asan/rt/pal.o $builddir/asan/rt/pal_ctx.o $builddir/asan/rt/arc.o $builddir/asan/rt/closure.o $builddir/asan/rt/fiber.o $builddir/asan/rt/builtins.o
+build $builddir/asan/rt/libocamlrt.a: ar $builddir/asan/rt/pal.o $builddir/asan/rt/pal_ctx.o $builddir/asan/rt/arc.o $builddir/asan/rt/closure.o $builddir/asan/rt/fiber.o $builddir/asan/rt/builtins.o $builddir/asan/rt/main_entry.o
 
 build $builddir/asan/adt:           cc_link_asan $builddir/adt.s           $builddir/asan/rt/libocamlrt.a
 build $builddir/asan/closures:      cc_link_asan $builddir/closures.s      $builddir/asan/rt/libocamlrt.a

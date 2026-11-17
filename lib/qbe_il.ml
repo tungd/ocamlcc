@@ -7,6 +7,7 @@ type ty =
 type t =
   | Temp of string
   | Global of string
+  | Extern of string
   | Int of int64
 
 module Binop = struct
@@ -114,18 +115,21 @@ type data = {
 
 type module_ = { funcs : func list; datas : data list }
 
-let string_of_t = function
+let string_of_t ?(is_local = fun _ -> true) ?(pic = false) = function
   | Temp s -> "%" ^ s
-  | Global s -> "$" ^ s
+  | Global s ->
+      if pic && not (is_local s) then "extern $" ^ s else "$" ^ s
+  | Extern s -> if pic then "extern $" ^ s else "$" ^ s
   | Int n -> Int64.to_string n
 
 let string_of_ty = function
   | Word -> "w"
   | Long -> "l"
 
-let string_of_args args =
+let string_of_args ~is_local ~pic args =
   args
-  |> List.map (fun (ty, v) -> string_of_ty ty ^ " " ^ string_of_t v)
+  |> List.map (fun (ty, v) ->
+         string_of_ty ty ^ " " ^ string_of_t ~is_local ~pic v)
   |> String.concat ", "
 
 (* Binders (block/function parameters) are named, unlike call arguments. *)
@@ -134,55 +138,54 @@ let string_of_binders binders =
   |> List.map (fun (ty, n) -> string_of_ty ty ^ " %" ^ n)
   |> String.concat ", "
 
-let string_of_inst inst =
+let string_of_inst ~is_local ~pic inst =
+  let st = string_of_t ~is_local ~pic in
   match inst with
   | Binop (op, ty, dst, a, b) ->
-      Printf.sprintf "%s =%s %s %s, %s" (string_of_t dst) (ty_char ty)
-        (Binop.to_string op) (string_of_t a) (string_of_t b)
+      Printf.sprintf "%s =%s %s %s, %s" (st dst) (ty_char ty)
+        (Binop.to_string op) (st a) (st b)
   | Cmp (c, ty, dst, a, b) ->
-      Printf.sprintf "%s =%s %s%s %s, %s" (string_of_t dst) (ty_char ty)
-        (Cmp.prefix c) (ty_char ty) (string_of_t a) (string_of_t b)
+      Printf.sprintf "%s =%s %s%s %s, %s" (st dst) (ty_char ty)
+        (Cmp.prefix c) (ty_char ty) (st a) (st b)
   | Phi (ty, dst, args) ->
-      Printf.sprintf "%s =%s phi %s" (string_of_t dst) (ty_char ty)
+      Printf.sprintf "%s =%s phi %s" (st dst) (ty_char ty)
         (args
-        |> List.map (fun (lbl, v) -> "@" ^ lbl ^ " " ^ string_of_t v)
+        |> List.map (fun (lbl, v) -> "@" ^ lbl ^ " " ^ st v)
         |> String.concat ", ")
   | Copy (ty, dst, src) ->
-      Printf.sprintf "%s =%s copy %s" (string_of_t dst) (ty_char ty)
-        (string_of_t src)
+      Printf.sprintf "%s =%s copy %s" (st dst) (ty_char ty) (st src)
   | Load (op, ty, dst, addr) ->
-      Printf.sprintf "%s =%s %s %s" (string_of_t dst) (ty_char ty)
-        (string_of_load_op op) (string_of_t addr)
+      Printf.sprintf "%s =%s %s %s" (st dst) (ty_char ty)
+        (string_of_load_op op) (st addr)
   | Store (op, v, addr) ->
-      Printf.sprintf "%s %s, %s" (string_of_store_op op) (string_of_t v)
-        (string_of_t addr)
+      Printf.sprintf "%s %s, %s" (string_of_store_op op) (st v) (st addr)
   | Alloc8 (dst, sz) ->
-      Printf.sprintf "%s =l alloc8 %s" (string_of_t dst) (string_of_t sz)
+      Printf.sprintf "%s =l alloc8 %s" (st dst) (st sz)
   | Call (ty, dst, { fn; args }) ->
-      Printf.sprintf "%s =%s call %s(%s)" (string_of_t dst) (ty_char ty)
-        (string_of_t fn) (string_of_args args)
+      Printf.sprintf "%s =%s call %s(%s)" (st dst) (ty_char ty) (st fn)
+        (string_of_args ~is_local ~pic args)
   | Call_void { fn; args } ->
-      Printf.sprintf "call %s(%s)" (string_of_t fn) (string_of_args args)
+      Printf.sprintf "call %s(%s)" (st fn) (string_of_args ~is_local ~pic args)
 
-let string_of_term term =
+let string_of_term ~is_local ~pic term =
+  let st = string_of_t ~is_local ~pic in
   match term with
   | Ret None -> "ret"
-  | Ret (Some v) -> Printf.sprintf "ret %s" (string_of_t v)
+  | Ret (Some v) -> Printf.sprintf "ret %s" (st v)
   | Jmp l -> Printf.sprintf "jmp @%s" l
-  | Br (c, t, f) ->
-      Printf.sprintf "jnz %s, @%s, @%s" (string_of_t c) t f
+  | Br (c, t, f) -> Printf.sprintf "jnz %s, @%s, @%s" (st c) t f
   | Hlt -> "hlt"
 
-let string_of_block (b : block) =
+let string_of_block ~is_local ~pic (b : block) =
   let buf = Buffer.create 256 in
   Buffer.add_string buf (Printf.sprintf "@%s\n" b.label);
   List.iter
-    (fun inst -> Buffer.add_string buf (string_of_inst inst ^ "\n"))
+    (fun inst -> Buffer.add_string buf (string_of_inst ~is_local ~pic inst ^ "\n"))
     b.insts;
-  Buffer.add_string buf (string_of_term b.term ^ "\n");
+  Buffer.add_string buf (string_of_term ~is_local ~pic b.term ^ "\n");
   Buffer.contents buf
 
-let string_of_func f =
+let string_of_func ~is_local ~pic f =
   let params = string_of_binders f.params in
   let export = if f.export then "export " else "" in
   let retty =
@@ -191,7 +194,9 @@ let string_of_func f =
   let buf = Buffer.create 1024 in
   Buffer.add_string buf
     (Printf.sprintf "%sfunction %s$%s(%s) {\n" export retty f.name params);
-  List.iter (fun b -> Buffer.add_string buf (string_of_block b)) f.blocks;
+  List.iter
+    (fun b -> Buffer.add_string buf (string_of_block ~is_local ~pic b))
+    f.blocks;
   Buffer.add_string buf "}\n\n";
   Buffer.contents buf
 
@@ -219,6 +224,15 @@ let string_of_data d =
   Buffer.add_string buf " }\n\n";
   Buffer.contents buf
 
-let to_string m =
+let to_string ?(pic = true) m =
+  let locals = Hashtbl.create 32 in
+  List.iter
+    (fun (d : data) -> if not d.export then Hashtbl.replace locals d.name ())
+    m.datas;
+  List.iter
+    (fun (f : func) -> if not f.export then Hashtbl.replace locals f.name ())
+    m.funcs;
+  let is_local s = Hashtbl.mem locals s in
   String.concat ""
-    (List.map string_of_data m.datas @ List.map string_of_func m.funcs)
+    (List.map string_of_data m.datas
+    @ List.map (string_of_func ~is_local ~pic) m.funcs)

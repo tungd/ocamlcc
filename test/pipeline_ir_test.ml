@@ -70,8 +70,8 @@ let () =
        let make_adder x = fun y -> x + y\n\
        let f = make_adder 5\n\
        let v = try raise (Boom 1) with Boom n -> f n"
-      [ "call $arc_alloc(";
-        "call $arc_release_val(";
-        "call $ocamlcc_apply1(" ]
+      [ "call extern $arc_alloc(";
+        "call extern $arc_release_val(";
+        "call extern $ocamlcc_apply1(" ]
   in
   exit (if ok1 && ok2 && ok2_no_main && ok3 then 0 else 1)

@@ -1,5 +1,20 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Upgrade vendored QBE to 1.3 + PIC `extern` emission (TDD) —
+  replaced `vendor/qbe/` (1.2) with the official QBE 1.3 release (`gvn.c`,
+  `gcm.c`, `ifopt.c`, `amd64/winabi.c`, `extern` GOT/PLT support, upstream
+  Darwin `R18`/`IP1` fix); updated `build.ninja` (`-fPIC` on `rt_cflags`,
+  QBE 1.3 objects). Added `Extern` and `?pic` (`true` by default) to
+  `Qbe_il.to_string` so function bodies emit `extern $sym` for all external
+  and exported symbols while keeping local non-exported symbols PC-relative.
+  Separated `main()` from `runtime/builtins.c` into `runtime/main_entry.c` so
+  shared libraries linking `libocamlrt.a` do not pull an undefined
+  `ocamlcc_module_init` symbol. Verified with `test/qbe_pic_test.ml`,
+  `test_qbe_pic` (`-t arm64` `:got:`/`:got_lo12:`, `-t amd64_sysv`
+  `@gotpcrel`/`@plt`, `-t amd64_win`), and `test_pic_so` (`-shared -fPIC`
+  DSO + C host). `dune runtest` (8/8), `ninja test` (21/21), `ninja asan_test`
+  (11/11). Documented in [vendored-qbe](/concepts/vendored-qbe.md) and
+  [build-pipeline](/concepts/build-pipeline.md).
 - 2026-11-17 (autoagent/1): Repo hygiene, unit/IR/negative tests, ASan/UBSan & CI (TDD) —
   removed tracked `examples/hello.cmi` (`*.cmi` ignored in `.gitignore`), added
   `Pipeline.compile_source` for in-memory compilation tests, added

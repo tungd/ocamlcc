@@ -13,6 +13,7 @@ type ty =
 type t =
   | Temp of string      (* %temp *)
   | Global of string    (* $global *)
+  | Extern of string    (* extern $global *)
   | Int of int64        (* immediate *)
 
 module Binop : sig
@@ -77,4 +78,4 @@ type data = {
 
 type module_ = { funcs : func list; datas : data list }
 
-val to_string : module_ -> string
+val to_string : ?pic:bool -> module_ -> string

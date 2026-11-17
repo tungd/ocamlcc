@@ -1,0 +1,5 @@
+extern_runtime_call: PASS
+extern_ffi_call: PASS
+extern_exn_slot: PASS
+local_str_not_extern: PASS
+extern_exported_global: PASS

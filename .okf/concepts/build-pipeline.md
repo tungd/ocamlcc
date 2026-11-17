@@ -23,8 +23,8 @@ One checked-in `build.ninja` drives everything[^build-ninja]:
 
 | Artifact | Rule chain |
 |----------|------------|
-| `build/qbe/qbe` | `cc -c` each `vendor/qbe/*.c` (all three targets: amd64, arm64, rv64) → link. `config.h` is generated out-of-tree by `tools/gen-config.sh` (host default target). |
-| `build/rt/libocamlrt.a` | `cc -c` `runtime/*.c` + `runtime/pal_ctx.S` → `ar rcs`. |
+| `build/qbe/qbe` | `cc -c` each `vendor/qbe/*.c` (amd64 sysv/winabi, arm64/_apple, rv64, plus `gvn`/`gcm`/`ifopt`) → link. `config.h` is generated out-of-tree by `tools/gen-config.sh` (host default target). |
+| `build/rt/libocamlrt.a` | `cc -c -fPIC` `runtime/*.c` (with `main_entry.c` separated from `builtins.c` so `.so`/`.dylib` libraries do not pull `main`) + `runtime/pal_ctx.S` → `ar rcs`. |
 | `build/bin/ocamlcc` | `dune build bin/ocamlcc` (with `(public_name ocamlcc)` for `dune build -p ocamlcc`) → copy out of `_build/`. |
 | `build/stdlib/libocamlstdlib.a` | `ocamlcc compile-mli` / `compile --mod` over `stdlib/*.ml` → `qbe` → `cc -c` → `ar rcs`. |
 | `build/<name>` | `ocamlcc compile x.ml -o x.ssa` → `qbe x.ssa > x.s` → `cc x.s libocamlstdlib.a libocamlrt.a`. |

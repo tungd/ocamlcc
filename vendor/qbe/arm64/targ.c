@@ -16,7 +16,7 @@ int arm64_rclob[] = {
 	-1
 };
 
-#define RGLOB (BIT(FP) | BIT(SP) | BIT(R18) | BIT(IP1))
+#define RGLOB (BIT(FP) | BIT(SP) | BIT(IP1) | BIT(R18))
 
 static int
 arm64_memargs(int op)
@@ -40,6 +40,7 @@ arm64_memargs(int op)
 	.isel = arm64_isel, \
 	.abi1 = arm64_abi, \
 	.emitfn = arm64_emitfn, \
+	.cansel = 0, \
 
 Target T_arm64 = {
 	.name = "arm64",

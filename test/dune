@@ -116,3 +116,20 @@
  (deps pipeline_ir_test.actual pipeline_ir_test.expected)
  (action
   (diff pipeline_ir_test.expected pipeline_ir_test.actual)))
+
+(executable
+ (name qbe_pic_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps qbe_pic_test.exe qbe_pic_test.expected)
+ (action
+  (with-stdout-to qbe_pic_test.actual
+   (run ./qbe_pic_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps qbe_pic_test.actual qbe_pic_test.expected)
+ (action
+  (diff qbe_pic_test.expected qbe_pic_test.actual)))
