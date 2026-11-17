@@ -1,5 +1,21 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): epoll watch-registry fix — two bugs in
+  `runtime/pal.c`'s `PAL_USE_EPOLL` branch: (1) `pal_poller_watch` returned
+  0 (success) for any `epoll_ctl(EPOLL_CTL_ADD)` failure other than EEXIST;
+  (2) two fibers watching the same fd (one `PAL_POLL_READ`, one
+  `PAL_POLL_WRITE`) hit EEXIST and the `EPOLL_CTL_MOD` overwrote
+  `ev.data.ptr`, silently losing the first fiber's wakeup (and, with
+  `EPOLLONESHOT`, disarming its interest). Replaced with a per-poller,
+  per-fd `PalWatch` registry: one registration per fd carrying per-direction
+  udata, merged interest masks on re-watch, wait dispatch to the right
+  watcher(s) (one kernel event can wake both directions), re-arm of a
+  surviving interest after a one-shot fire, deregistration when both are
+  done, and registry cleanup in `pal_poller_close` (transient pollers from
+  `pal_poll_wait` no longer leak stale entries). Verified by shim
+  syntax-check only — this macOS host cannot execute the epoll path; the
+  kqueue path is unaffected and `19/19` examples pass. Documented in
+  [wren-fibers](/concepts/wren-fibers.md).
 - 2026-11-16 (autoagent/1): Fiber cross-call guard fix (TDD) — the two
   fiber kinds (coroutines from `Fiber.create` vs scheduler fibers from
   `Fiber.spawn`) had unguarded cross-calling: `Fiber.suspend` inside a

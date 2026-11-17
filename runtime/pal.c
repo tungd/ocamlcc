@@ -17,6 +17,63 @@
 #include <sys/epoll.h>
 #endif
 
+#if defined(PAL_USE_EPOLL)
+/* Per-fd watch registry: epoll keys a registration by fd alone, so two
+   fibers watching the same fd (one READ, one WRITE) must share one
+   registration with both interest bits; a plain EPOLL_CTL_MOD would
+   overwrite ev.data.ptr and silently lose the first fiber's wakeup. The
+   registry keeps one udata per direction; kernel events carry the entry
+   pointer and pal_poller_wait dispatches to the right watcher(s). */
+typedef struct PalWatch {
+    int pfd; /* owning poller */
+    int fd;
+    void *read_udata;
+    void *write_udata;
+} PalWatch;
+
+#define PAL_WATCH_MAX 1024
+static PalWatch g_watches[PAL_WATCH_MAX];
+static int g_watch_count = 0;
+
+static PalWatch *watch_find(int pfd, int fd)
+{
+    for (int i = 0; i < g_watch_count; i++) {
+        if (g_watches[i].pfd == pfd && g_watches[i].fd == fd)
+            return &g_watches[i];
+    }
+    return NULL;
+}
+
+static PalWatch *watch_alloc(int pfd, int fd)
+{
+    if (g_watch_count >= PAL_WATCH_MAX)
+        return NULL;
+    PalWatch *w = &g_watches[g_watch_count++];
+    w->pfd = pfd;
+    w->fd = fd;
+    w->read_udata = NULL;
+    w->write_udata = NULL;
+    return w;
+}
+
+static void watch_free(PalWatch *w)
+{
+    int idx = (int)(w - g_watches);
+    g_watches[idx] = g_watches[g_watch_count - 1];
+    g_watch_count--;
+}
+
+static uint32_t watch_events_of(const PalWatch *w)
+{
+    uint32_t ev = EPOLLONESHOT;
+    if (w->read_udata != NULL)
+        ev |= EPOLLIN;
+    if (w->write_udata != NULL)
+        ev |= EPOLLOUT;
+    return ev;
+}
+#endif /* PAL_USE_EPOLL */
+
 void *pal_page_alloc(size_t size)
 {
     void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE,
@@ -68,6 +125,18 @@ void pal_poller_close(int pfd)
 {
     if (pfd >= 0)
         close(pfd);
+#if defined(PAL_USE_EPOLL)
+    /* Drop this poller's watch-registry entries. */
+    int i = 0;
+    while (i < g_watch_count) {
+        if (g_watches[i].pfd == pfd) {
+            g_watches[i] = g_watches[g_watch_count - 1];
+            g_watch_count--;
+        } else {
+            i++;
+        }
+    }
+#endif
 }
 
 int pal_poller_watch(int pfd, int fd, uint32_t events, void *udata)
@@ -89,16 +158,33 @@ int pal_poller_watch(int pfd, int fd, uint32_t events, void *udata)
         return 0;
     return kevent(pfd, kevs, n, NULL, 0, NULL);
 #elif defined(PAL_USE_EPOLL)
-    struct epoll_event ev;
-    ev.events = EPOLLONESHOT;
+    PalWatch *w = watch_find(pfd, fd);
+    if (w == NULL) {
+        w = watch_alloc(pfd, fd);
+        if (w == NULL)
+            return -1;
+        if (events & PAL_POLL_READ)
+            w->read_udata = udata;
+        if (events & PAL_POLL_WRITE)
+            w->write_udata = udata;
+        struct epoll_event ev;
+        ev.events = watch_events_of(w);
+        ev.data.ptr = w;
+        if (epoll_ctl(pfd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+            watch_free(w);
+            return -1;
+        }
+        return 0;
+    }
+    /* Existing registration: merge the new interest and re-arm both. */
     if (events & PAL_POLL_READ)
-        ev.events |= EPOLLIN;
+        w->read_udata = udata;
     if (events & PAL_POLL_WRITE)
-        ev.events |= EPOLLOUT;
-    ev.data.ptr = udata;
-    if (epoll_ctl(pfd, EPOLL_CTL_ADD, fd, &ev) < 0 && errno == EEXIST)
-        return epoll_ctl(pfd, EPOLL_CTL_MOD, fd, &ev);
-    return 0;
+        w->write_udata = udata;
+    struct epoll_event ev;
+    ev.events = watch_events_of(w);
+    ev.data.ptr = w;
+    return epoll_ctl(pfd, EPOLL_CTL_MOD, fd, &ev);
 #else
     (void)pfd;
     (void)fd;
@@ -125,8 +211,22 @@ int pal_poller_unwatch(int pfd, int fd, uint32_t events)
         return 0;
     return kevent(pfd, kevs, n, NULL, 0, NULL);
 #elif defined(PAL_USE_EPOLL)
-    (void)events;
-    return epoll_ctl(pfd, EPOLL_CTL_DEL, fd, NULL);
+    PalWatch *w = watch_find(pfd, fd);
+    if (w == NULL)
+        return -1;
+    if (events & PAL_POLL_READ)
+        w->read_udata = NULL;
+    if (events & PAL_POLL_WRITE)
+        w->write_udata = NULL;
+    if (w->read_udata == NULL && w->write_udata == NULL) {
+        int rc = epoll_ctl(pfd, EPOLL_CTL_DEL, fd, NULL);
+        watch_free(w);
+        return rc;
+    }
+    struct epoll_event ev;
+    ev.events = watch_events_of(w);
+    ev.data.ptr = w;
+    return epoll_ctl(pfd, EPOLL_CTL_MOD, fd, &ev);
 #else
     (void)pfd;
     (void)fd;
@@ -176,17 +276,43 @@ int pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms)
     } while (n < 0 && errno == EINTR);
     if (n <= 0)
         return n;
-    for (int i = 0; i < n; i++) {
-        uint32_t ev = 0u;
-        if (evs[i].events & (EPOLLIN | EPOLLHUP | EPOLLERR))
-            ev |= PAL_POLL_READ;
-        if (evs[i].events & (EPOLLOUT | EPOLLERR))
-            ev |= PAL_POLL_WRITE;
-        out[i].fd = -1;
-        out[i].events = ev;
-        out[i].udata = evs[i].data.ptr;
+    int out_n = 0;
+    for (int i = 0; i < n && out_n < max_events; i++) {
+        PalWatch *w = (PalWatch *)evs[i].data.ptr;
+        if (w == NULL)
+            continue;
+        uint32_t e = evs[i].events;
+        int read_fired = (e & (EPOLLIN | EPOLLHUP | EPOLLERR)) != 0u &&
+                         w->read_udata != NULL && out_n < max_events;
+        int write_fired = (e & (EPOLLOUT | EPOLLERR)) != 0u &&
+                          w->write_udata != NULL && out_n < max_events;
+        if (read_fired) {
+            out[out_n].fd = w->fd;
+            out[out_n].events = PAL_POLL_READ;
+            out[out_n].udata = w->read_udata;
+            out_n++;
+            w->read_udata = NULL;
+        }
+        if (write_fired) {
+            out[out_n].fd = w->fd;
+            out[out_n].events = PAL_POLL_WRITE;
+            out[out_n].udata = w->write_udata;
+            out_n++;
+            w->write_udata = NULL;
+        }
+        /* EPOLLONESHOT consumed the registration: re-arm any surviving
+           interest, or deregister the fd when both watchers are done. */
+        if (w->read_udata == NULL && w->write_udata == NULL) {
+            epoll_ctl(pfd, EPOLL_CTL_DEL, w->fd, NULL);
+            watch_free(w);
+        } else {
+            struct epoll_event rev;
+            rev.events = watch_events_of(w);
+            rev.data.ptr = w;
+            epoll_ctl(pfd, EPOLL_CTL_MOD, w->fd, &rev);
+        }
     }
-    return n;
+    return out_n;
 #else
     (void)pfd;
     (void)out;
