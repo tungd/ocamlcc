@@ -12,6 +12,16 @@ sources:
     resource: tools/stdlib_compat.py
   - id: upstream
     resource: vendor/ocaml-stdlib/UPSTREAM.txt
+  - id: lexing-overlay
+    resource: stdlib/overlay/lexing.ml
+  - id: parsing-overlay
+    resource: stdlib/overlay/parsing.ml
+  - id: bigarray-runtime
+    resource: runtime/bigarray.inc
+  - id: marshal-runtime
+    resource: runtime/marshal.inc
+  - id: api-regressions
+    resource: tools/stdlib_regressions.py
   - id: runtime
     resource: runtime/arc.c
 ---
@@ -31,7 +41,8 @@ against that archive and our ARC runtime. It does not use the host OCaml runtime
 The Lexing overlay implements both DFA engines in OCaml, including signed
 16-bit transitions, unsigned memory-code offsets, captures, backtracking,
 refill continuations, EOF, and positions. `tests/stdlib/lexing` uses real
-ocamllex output and passes against both stock OCaml and ocamlcc. The Parsing overlay interprets ocamlyacc action/goto tables in OCaml and
+ocamllex output and passes against both stock OCaml and ocamlcc.
+The Parsing overlay interprets ocamlyacc action/goto tables in OCaml and
 preserves token translation, stack growth, reductions, error recovery,
 semantic-action suspension, positions, and trace state. A generated-parser
 fixture checks reductions, deep nesting, parse errors, and subsequent parses.
@@ -50,7 +61,8 @@ registers objects before their fields, retains each backpatch, and owns partial
 nodes until successful return or cleanup. Arrays and ordinary tag-zero blocks
 share OCaml structural comparison/hash semantics despite their ARC tags.
 Functional values raise `Invalid_argument`, including when `Closures` is set;
-there is no portable native code-pointer registry. Bigarray custom payloads use upstream `_bigarr02` descriptors, packed dimensions,
+there is no portable native code-pointer registry.
+Bigarray custom payloads use upstream `_bigarr02` descriptors, packed dimensions,
 layout/kind flags, big-endian element data, and native-int width markers.
 Repository regressions preserve sharing/cycles and distinguish `No_sharing`,
 traverse 50,000-element lists without C recursion, read sequential channel
@@ -64,22 +76,36 @@ Bigarray channel I/O works through existing buffered channel helpers.
 Random retains the upstream Bigarray state representation and the pure OCaml
 LXM algorithm, so upstream testvectors can inspect the state directly.
 
-Eight of nine selected upstream standalone tests pass: change_layout, fftba,
-pr5115, reshape_overflow, specialized, weak_bigarray, channel bigarrays, and
-Random testvectors. After Marshal implementation the large Bigarray test and marshal_bigarray
-pass, along with all three Hashtbl tests and intern_final. Dynarray and Floatarray now pass as well: object blocks compare by their OID,
-unmarshalling freshens nonnegative OIDs, and empty flat/generic arrays share
-the upstream structural semantics;
-the upstream fuzzy test includes closures and fails on the deliberate
-functional-value rejection.
-The C-stub subarray test is explicitly skipped by the native runner.
+# Verified coverage (2026-11-17, macOS arm64 / OCaml 5.5.0)
+
+The compatibility build compiles 72/72 interfaces and implementations.
+The complete native-runner matrix scans 119 upstream files: 68/77 attempted
+standalone tests pass, nine fail, and 42 are skipped (11 expect, 28 directive/
+multifile/C-stub, three helpers). The prior integration report recorded 53/77;
+that is a historical comparison, not a rerun baseline.
+
+Passing requested suites include all seven standalone `lib-bigarray` tests,
+channel bigarrays, Random testvectors, Dynarray (including marshalling),
+Floatarray, all three Hashtbl tests, and Marshal intern_final/marshal_bigarray.
+The upstream Marshal fuzzy test attempts closure serialization and fails on
+functional-value rejection. The other failures are Format domains/mc_pr586_par/
+mc_pr586_par2, Obj reachable_words/reachable_words_bug/with_tag, Sync prodcons,
+and Sys opaque; the report records the exact exit/mismatch for each.
+C-stub subarray and Marshal intext/intext_par/compressed tests are skipped.
+
+All nine repository API fixtures pass on stock OCaml and ocamlcc. The
+lexer fixture also forces buffer growth during capture; the parser checks
+error recovery, semantic-action errors, empty productions, positions, and
+nested parses. Foreign decoder fixtures cover big-model/64-bit block headers
+and big-endian float payloads. `ninja -j1 test` (26 checks),
+`ninja -j1 asan_test` (16 checks), and `dune runtest -j1` all pass.
 
 Use `--tests 'lib-bigarray/*'` to select upstream tests and `--reuse-stdlib`
-after a build. The runner saves module/test JSON receipts and complete per-command
-logs, including timeouts. Tests run in isolated copied working directories so
-test-created files do not modify the vendor tree. A pre-existing report records 53/77 standalone
-tests passing; this count is historical until the runner is executed again.
-Compilation success alone does not establish behavioral compatibility.
+after a build. `build/stdlib_compat/report.md` and `.json` contain the matrix;
+`build/stdlib_compat/logs/` contains full command output and JSON command receipts,
+including timeouts. Tests run in copied working directories and leave vendor
+sources/references unchanged. Compilation success is reported separately from
+behavioral results.
 
 The runner skips toplevel expect tests and tests with C stubs, multiple modules,
 or unsupported ocamltest directives. Those require an adapter rather than being

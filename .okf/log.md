@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-17 (codex/1): Verify all 72 stdlib modules and the full native upstream matrix: 68/77 standalone tests pass, nine fail, 42 files skipped. All repository API fixtures pass on stock OCaml and ocamlcc, including lexer buffer growth, parser recovery/positions/nested parses, and foreign Marshal headers/endianness. Core ninja (26), sanitizer (16), and dune checks pass. Fix fixture discovery to ignore the README.
+
 - 2026-11-17 (codex/1): Add native and ASan/UBSan ownership checks for malformed partial cycles, truncation/mutation, cycle collection, and Bigarray backing lifetime. Both pass with no live-object delta. Document the compatibility build and add the opt-in `ninja -j1 stdlib_compat` target.
 
 - 2026-11-17 (codex/1): Fix object OID comparison/freshening and empty float-array structural equality after stock-passing regressions. Upstream Dynarray and Floatarray tests now pass. Bound decoded block allocation by the remaining payload and preserve channel Sys_error exceptions during reads.

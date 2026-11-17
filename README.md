@@ -47,13 +47,13 @@ The whole project is driven by [ninja](https://ninja-build.org):
 ```sh
 ninja            # vendored QBE 1.3 + ARC/fiber runtime + ocamlcc compiler + examples
 ninja smoke      # compile examples/hello.ml end-to-end and run it
-ninja test       # run all 25 ninja checks (examples, PIC/DSO, bindgen, multi-threaded FFI)
-ninja asan_test  # run 15 ASan+UBSan runtime checks
+ninja test       # run all 26 ninja checks (examples, PIC/DSO, bindgen, multi-threaded FFI)
+ninja asan_test  # run 16 ASan+UBSan runtime checks
 dune runtest     # run 14 compiler unit/IR/negative/driver/bindgen test suites
 ninja -t clean   # remove build/
 ```
 
-Currently passing (`ninja test`, 25/25): `hello`, `fib`, `tail`, `bools`,
+Currently passing (`ninja test`, 26/26): `hello`, `fib`, `tail`, `bools`,
 `strings`, `match`, `mutual`, `adt`, `closures`, `loops`, `arrays_bytes`,
 `arc_test`, `exn`, `weak_cycle`, `cycle_collect` (trial-deletion cycle
 collector), `mod_main` (multi-module `.mli`/`.ml` linking), `stdlib_test`
@@ -64,7 +64,9 @@ cooperative scheduler, abandoned-fiber shadow-stack cleanup, fiber exceptions),
 `mt_ffi` (8-thread FFI + concurrent cycle collector stress), `tupled_letrec`
 (`Tupled` functions and `value let rec`), `primitives_test` (`float`,
 `float array`, `Int32`/`Int64`/`Nativeint`, `Printf` numeric formatters),
-and `bindgen` (`.mli -> .h` C99 shim + `ocamlcc_error_t` host verification).
+`bindgen` (`.mli -> .h` C99 shim + `ocamlcc_error_t` host verification),
+and `stdlib_runtime` (Marshal malformed-input cleanup/cycles and Bigarray
+backing lifetime).
 
 The pipeline:
 
@@ -97,6 +99,11 @@ with full command logs. Its exit code reports whether the matrix completed;
 consult the report for individual failures and skips. It skips toplevel expect
 tests, C-stub tests, and unsupported ocamltest directives. Tests execute in
 copied working directories. Repository API regressions return nonzero on failure.
+
+The verified local matrix passes 68/77 standalone upstream tests, with nine
+failures and 42 explicitly skipped files. All nine repository API fixtures
+pass on both stock OCaml and ocamlcc; module compilation and behavioral
+compatibility are separate results.
 
 Lexing and Parsing use pure OCaml table interpreters. Bigarray views retain a
 shared ARC backing buffer. Marshal reads/writes the standard uncompressed

@@ -65,7 +65,7 @@ def main():
     parser.add_argument('cases', nargs='*')
     parser.add_argument('--stock', action='store_true')
     args = parser.parse_args()
-    cases = [ROOT / 'tests/stdlib' / c for c in args.cases] if args.cases else sorted((ROOT / 'tests/stdlib').iterdir())
+    cases = [ROOT / 'tests/stdlib' / c for c in args.cases] if args.cases else sorted(p for p in (ROOT / 'tests/stdlib').iterdir() if p.is_dir())
     failed = False
     for case in cases:
         try:
