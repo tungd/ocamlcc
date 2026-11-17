@@ -67,8 +67,9 @@ LXM algorithm, so upstream testvectors can inspect the state directly.
 Eight of nine selected upstream standalone tests pass: change_layout, fftba,
 pr5115, reshape_overflow, specialized, weak_bigarray, channel bigarrays, and
 Random testvectors. After Marshal implementation the large Bigarray test and marshal_bigarray
-pass, along with all three Hashtbl tests and intern_final. Dynarray and
-Floatarray expose additional object/empty-array representation differences;
+pass, along with all three Hashtbl tests and intern_final. Dynarray and Floatarray now pass as well: object blocks compare by their OID,
+unmarshalling freshens nonnegative OIDs, and empty flat/generic arrays share
+the upstream structural semantics;
 the upstream fuzzy test includes closures and fails on the deliberate
 functional-value rejection.
 The C-stub subarray test is explicitly skipped by the native runner.

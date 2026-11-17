@@ -2318,8 +2318,8 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
 
         const ArcHeader *ha = (const ArcHeader *)(uintptr_t)a - 1;
         const ArcHeader *hb = (const ArcHeader *)(uintptr_t)b - 1;
-        uint16_t ta = ha->tag == ARC_TAG_ARRAY ? 0 : ha->tag;
-        uint16_t tb = hb->tag == ARC_TAG_ARRAY ? 0 : hb->tag;
+        uint16_t ta = ha->tag == ARC_TAG_ARRAY || (ha->tag == ARC_TAG_FLOAT_ARRAY && ha->byte_size == 0) ? 0 : ha->tag;
+        uint16_t tb = hb->tag == ARC_TAG_ARRAY || (hb->tag == ARC_TAG_FLOAT_ARRAY && hb->byte_size == 0) ? 0 : hb->tag;
         if (ta != tb)
             return (ta < tb) ? -1 : 1;
 
@@ -2350,9 +2350,14 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
             return 1;
         }
 
-        /* Exception-constructor id blocks (tag 248: field 0 = name string,
-         * field 1 = OID) compare structurally, like real OCaml, instead of
-         * by raw heap address. */
+        /* Objects and extension constructors compare by their unique OID,
+           without following method tables or potentially cyclic fields. */
+        if (ta == 248u && ha->byte_size >= 16 && hb->byte_size >= 16) {
+            int64_t x = ((const int64_t *)(uintptr_t)a)[1];
+            int64_t y = ((const int64_t *)(uintptr_t)b)[1];
+            return x < y ? -1 : x > y ? 1 : 0;
+        }
+
         if (ta == (uint16_t)ARC_TAG_ARRAY || ta == 248u || ta < 245u) {
             uint32_t fa = ha->byte_size / 8u;
             uint32_t fb = hb->byte_size / 8u;
@@ -2536,6 +2541,8 @@ int64_t caml_hash(int64_t count_val, int64_t limit_val,
             } else if (tag == (uint16_t)ARC_TAG_FLOAT) {
                 h = hash_mix_f64(h, unbox_float(v));
                 num--;
+            } else if (tag == (uint16_t)ARC_TAG_FLOAT_ARRAY && hdr->byte_size == 0) {
+                h = hash_mix32(h, 0);
             } else if (tag == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
                 uint32_t nf = hdr->byte_size / 8u;
                 const double *fa = (const double *)(uintptr_t)v;

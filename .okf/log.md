@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-17 (codex/1): Fix object OID comparison/freshening and empty float-array structural equality after stock-passing regressions. Upstream Dynarray and Floatarray tests now pass. Bound decoded block allocation by the remaining payload and preserve channel Sys_error exceptions during reads.
+
 - 2026-11-17 (codex/1): Add standard Bigarray Marshal custom payloads after a failing public roundtrip. Verify stock byte-for-byte wire fixtures, sharing/cycles, No_sharing, deep lists, sequential channels/EOF, and Compat_32. Upstream bigarrays, marshal_bigarray, all Hashtbl tests, and intern_final pass.
 
 - 2026-11-17 (codex/1): Add iterative Marshal encoding/decoding, external sharing tables, ARC backpatch ownership, standard scalar/block/string/float/boxed-integer wire formats, buffer/offset/size APIs, and channels. Public core roundtrip fixture fails on missing primitives before implementation and passes after. All 72/72 stdlib modules now compile; normalize array/tag-zero structural comparison and hashing for decoded values.

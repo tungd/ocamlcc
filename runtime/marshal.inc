@@ -149,7 +149,7 @@ static void m_write_value(MWriter *w, int64_t root)
         else if (tag == ARC_TAG_FORCING || tag == ARC_TAG_WEAK || tag == ARC_TAG_FIBER || tag == ARC_TAG_CHANNEL) {
             w->error = "output_value: abstract value"; w->invalid = 1; break;
         }
-        if (h->byte_size == 0) { m_header(w, 0, tag); continue; }
+        if (h->byte_size == 0) { m_header(w, 0, tag == ARC_TAG_FLOAT_ARRAY ? 0 : tag); continue; }
         size_t previous = m_lookup(&w->seen, (uintptr_t)v);
         if (previous != SIZE_MAX) {
             if (w->no_sharing) { w->error = "output_value: cyclic value with No_sharing"; w->invalid = 1; break; }
@@ -390,7 +390,7 @@ static int64_t m_decode(MReader *r)
         if (r->error) break;
         if (block) {
             if (tag >= 245 && tag != 246 && tag != 248 && tag != 250 && !(n == 0 && tag == 254)) { r->error = "input_value: unsupported block tag"; break; }
-            if (n > (UINT32_MAX - sizeof(ArcHeader)) / 8 || (tag != 0 && n > UINT16_MAX)) { r->error = "input_value: block too large"; break; }
+            if ((tag == 248 && n < 2) || n > r->end - r->pos || n > (UINT32_MAX - sizeof(ArcHeader)) / 8 || (tag != 0 && n > UINT16_MAX)) { r->error = "input_value: block too large"; break; }
             if (!n && r->atoms[tag]) value = r->atoms[tag];
             else {
                 uint16_t arc_tag = tag == 246 ? ARC_TAG_LAZY : tag == 250 ? ARC_TAG_FORWARD : tag;
@@ -415,6 +415,15 @@ static int64_t m_decode(MReader *r)
     }
     if (!r->error && (r->pos != r->end || (r->expected && r->count != r->expected)))
         r->error = "input_value: ill-formed message";
+    if (!r->error) {
+        for (size_t j = 0; j < r->owned; j++) {
+            ArcHeader *h = (ArcHeader *)(uintptr_t)r->owners[j] - 1;
+            if (h->tag == 248) {
+                int64_t *p = (void *)(h + 1);
+                if ((p[1] & 1) && p[1] >= 1) p[1] = caml_fresh_oo_id(1);
+            }
+        }
+    }
     if (r->error) {
         /* Owners keep all nodes alive while partial edges (including cycles)
            are severed, then ordinary ARC destruction releases each node. */
@@ -477,7 +486,7 @@ static int m_channel_read(int64_t channel, uint8_t *buffer, size_t n, int initia
     while (read < n) {
         int64_t value = caml_ml_input_char(channel);
         if (ocamlcc_get_exn()) {
-            if (read || !initial) {
+            if ((read || !initial) && ocamlcc_get_exn() == (int64_t)(uintptr_t)ocamlcc_global_End_of_file) {
                 int64_t exn = ocamlcc_get_exn(); ocamlcc_set_exn(0); arc_release_val(exn);
                 m_raise("input_value: truncated object", 0);
             }
