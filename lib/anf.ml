@@ -174,8 +174,15 @@ and conv_atoms (lams : Lambda.lambda list) (k : atom list -> aexpr) : aexpr =
 
 and conv_fun (lf : Lambda.lfunction) : lfunction =
   match lf.kind with
-  | Tupled -> raise (Unsupported "tupled function")
   | Curried -> { params = lf.params; body = conv_tail lf.body }
+  | Tupled ->
+      let tup = Ident.create_local "tup" in
+      let rec bind_fields i = function
+        | [] -> conv_tail lf.body
+        | (p, _) :: rest ->
+            Let (p, Field (i, Var tup), bind_fields (i + 1) rest)
+      in
+      { params = [ (tup, Lambda.Pgenval) ]; body = bind_fields 0 lf.params }
 
 and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   match rhs with

@@ -70,7 +70,12 @@ let stdlib_abis =
     ("caml_string_equal", 2, false, false);
     ("caml_bytes_equal", 2, false, false);
     ("caml_string_compare", 2, false, false);
-    ("caml_bytes_compare", 2, false, false) ]
+    ("caml_bytes_compare", 2, false, false);
+    ("caml_alloc_dummy", 1, false, false);
+    ("caml_alloc_dummy_float", 1, false, false);
+    ("caml_alloc_dummy_lazy", 1, false, false);
+    ("caml_update_dummy", 2, false, false);
+    ("caml_update_dummy_lazy", 2, false, false) ]
 
 let () =
   let failures = ref 0 in

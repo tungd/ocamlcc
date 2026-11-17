@@ -367,7 +367,15 @@ build $builddir/mt_ffi_lib.s: qbe_ssa $builddir/mt_ffi_lib.ssa | $builddir/qbe/q
 build $builddir/mt_ffi_host: cc_mt_host $builddir/mt_ffi_lib.s $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a | tests/mt_ffi_host.c
 build test_mt_ffi: run_mt_ffi | $builddir/mt_ffi_host tests/mt_ffi.expected
 
-build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi
+build $builddir/tupled_letrec.ssa: ocamlcc_ssa examples/tupled_letrec.ml | $builddir/bin/ocamlcc $stdlibdir/stdlib.cmi
+  flags = --nostdlib -I $stdlibdir
+build $builddir/tupled_letrec.s: qbe_ssa $builddir/tupled_letrec.ssa | $builddir/qbe/qbe
+build $builddir/tupled_letrec: cc_link $builddir/tupled_letrec.s $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
+
+build test_tupled_letrec: run_test | $builddir/tupled_letrec
+  name = tupled_letrec
+
+build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec
 
 rule cc_rt_asan
   command = $cc $rt_cflags -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iruntime -c $in -o $out
@@ -436,6 +444,11 @@ rule run_asan_mt_ffi
 
 build asan_mt_ffi: run_asan_mt_ffi | $builddir/asan/mt_ffi_host tests/mt_ffi.expected
 
-build asan_test: phony asan_adt asan_closures asan_arrays_bytes asan_arc_test asan_exn asan_weak_cycle asan_cycle_collect asan_mod_main asan_stdlib_test asan_fiber_test asan_fiber_io asan_mt_ffi
+build $builddir/asan/tupled_letrec: cc_link_asan $builddir/tupled_letrec.s $stdlibdir/libocamlstdlib.a $builddir/asan/rt/libocamlrt.a
+
+build asan_tupled_letrec: run_asan_test | $builddir/asan/tupled_letrec
+  name = tupled_letrec
+
+build asan_test: phony asan_adt asan_closures asan_arrays_bytes asan_arc_test asan_exn asan_weak_cycle asan_cycle_collect asan_mod_main asan_stdlib_test asan_fiber_test asan_fiber_io asan_mt_ffi asan_tupled_letrec
 
 default $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a $builddir/bin/ocamlcc $builddir/hello

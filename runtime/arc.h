@@ -16,12 +16,14 @@
 
 /* Object tags >= 245 are reserved for runtime-managed objects; OCaml
  * algebraic constructors use 0..244. */
-#define ARC_TAG_ARRAY   245u
-#define ARC_TAG_PAP     246u
-#define ARC_TAG_CLOSURE 247u
-#define ARC_TAG_WEAK    249u
-#define ARC_TAG_FIBER   250u
-#define ARC_TAG_STRING  252u
+#define ARC_TAG_ARRAY       245u
+#define ARC_TAG_PAP         246u
+#define ARC_TAG_CLOSURE     247u
+#define ARC_TAG_WEAK        249u
+#define ARC_TAG_FIBER       250u
+#define ARC_TAG_STRING      252u
+#define ARC_TAG_FLOAT       253u
+#define ARC_TAG_FLOAT_ARRAY 254u
 
 typedef struct ArcHeader {
     _Atomic uint32_t refcount;    /* 0xFFFFFFFF = immortal/static */
@@ -73,6 +75,11 @@ void ocamlcc_fiber_raise_invalid(void);
 /* Raise Sys_error when a PAL pipe cannot be created. */
 void ocamlcc_raise_sys_error_pipe(void);
 int64_t caml_fresh_oo_id(int64_t ignored);
+int64_t caml_alloc_dummy(int64_t size_val);
+int64_t caml_alloc_dummy_float(int64_t size_val);
+int64_t caml_alloc_dummy_lazy(int64_t size_val);
+int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val);
+int64_t caml_update_dummy_lazy(int64_t dummy_val, int64_t new_val);
 
 int64_t ocamlcc_weak_create(int64_t len);
 int64_t ocamlcc_weak_length(int64_t weak_val);

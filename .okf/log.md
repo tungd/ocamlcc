@@ -1,5 +1,21 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Add `Tupled` functions and `value let rec` (`caml_alloc_dummy*` / `caml_update_dummy*`) (TDD) —
+  lowered `Lambda.Tupled` functions in `Anf.conv_fun` by unpacking tuple fields
+  via `Field (i, Var tup)` from a single tuple parameter so both direct calls
+  and higher-order closures work uniformly. Registered `caml_alloc_dummy`,
+  `caml_alloc_dummy_float`, `caml_alloc_dummy_lazy`, `caml_update_dummy`, and
+  `caml_update_dummy_lazy` in `lib/ccalls.ml` and implemented them in
+  `runtime/arc.c` (`runtime/arc.h` adds `ARC_TAG_FLOAT = 253` and
+  `ARC_TAG_FLOAT_ARRAY = 254` excluded from scanning/cycle-candidate checks):
+  `caml_update_dummy` releases prior dummy children, copies `newval` payload
+  while preserving `dhdr->byte_size` for slab class accuracy, updates
+  `tag`/`scan_fields`, and retains copied scanned children so cyclic `let rec`
+  values collect cleanly via `ocamlcc_arc_collect`. Added
+  `test/tupled_letrec_test.ml` and end-to-end `examples/tupled_letrec.ml`
+  (`s=4,30,1,5 coll=1 delta=0`). `dune runtest` (10/10), `ninja test`
+  (23/23), `ninja asan_test` (13/13). Documented in
+  [compiler-pipeline](/concepts/compiler-pipeline.md).
 - 2026-11-17 (autoagent/1): Thread-safe runtime for multi-threaded Mobile FFI (TDD) —
   converted `ArcHeader.refcount` to C11 `_Atomic uint32_t` with atomic
   retain/release/drop-reuse and CAS-based `arc_try_retain` for weak-ref

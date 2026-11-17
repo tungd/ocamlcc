@@ -41,5 +41,10 @@ caml_string_equal: registered
 caml_bytes_equal: registered
 caml_string_compare: registered
 caml_bytes_compare: registered
+caml_alloc_dummy: registered
+caml_alloc_dummy_float: registered
+caml_alloc_dummy_lazy: registered
+caml_update_dummy: registered
+caml_update_dummy_lazy: registered
 unknown external default: PASS
 is_known: PASS

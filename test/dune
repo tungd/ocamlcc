@@ -150,3 +150,20 @@
  (deps codegen_ctx_test.actual codegen_ctx_test.expected)
  (action
   (diff codegen_ctx_test.expected codegen_ctx_test.actual)))
+
+(executable
+ (name tupled_letrec_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps tupled_letrec_test.exe tupled_letrec_test.expected)
+ (action
+  (with-stdout-to tupled_letrec_test.actual
+   (run ./tupled_letrec_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps tupled_letrec_test.actual tupled_letrec_test.expected)
+ (action
+  (diff tupled_letrec_test.expected tupled_letrec_test.actual)))

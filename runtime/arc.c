@@ -100,7 +100,10 @@ static inline int is_cycle_candidate_obj(const ArcHeader *hdr)
     if (atomic_load_explicit(&hdr->refcount, memory_order_relaxed) == ARC_IMMORTAL)
         return 0;
     uint16_t tag = hdr->tag;
-    if (tag == (uint16_t)ARC_TAG_STRING || tag == (uint16_t)ARC_TAG_WEAK)
+    if (tag == (uint16_t)ARC_TAG_STRING ||
+        tag == (uint16_t)ARC_TAG_WEAK ||
+        tag == (uint16_t)ARC_TAG_FLOAT ||
+        tag == (uint16_t)ARC_TAG_FLOAT_ARRAY)
         return 0;
     if (tag == (uint16_t)ARC_TAG_FIBER)
         return 1; /* the shadow stack holds owning references (see
@@ -331,6 +334,11 @@ static inline int64_t tag_int(int64_t n)
     return (int64_t)(((uint64_t)n << 1) | 1ull);
 }
 
+static inline int is_heap_ptr(int64_t val)
+{
+    return val != 0 && (val & 1) == 0;
+}
+
 int64_t caml_fresh_oo_id(int64_t ignored)
 {
     (void)ignored;
@@ -338,9 +346,92 @@ int64_t caml_fresh_oo_id(int64_t ignored)
     return tag_int(id);
 }
 
-static inline int is_heap_ptr(int64_t val)
+static int64_t alloc_dummy_common(int64_t size_val, uint16_t tag, uint16_t scan)
 {
-    return val != 0 && (val & 1) == 0;
+    int64_t n = size_val >> 1;
+    if (n < 0 || n > 0xffff)
+        pal_abort();
+    uint32_t bsz = (n == 0) ? 8u : (uint32_t)((uint64_t)n * 8u);
+    int64_t *blk = (int64_t *)arc_alloc(tag, scan, bsz);
+    for (int64_t i = 0; i < n; i++)
+        blk[i] = (tag == (uint16_t)ARC_TAG_FLOAT_ARRAY) ? 0 : 1;
+    return (int64_t)(uintptr_t)blk;
+}
+
+int64_t caml_alloc_dummy(int64_t size_val)
+{
+    int64_t n = size_val >> 1;
+    return alloc_dummy_common(size_val, 0u, (n > 0) ? (uint16_t)n : 0u);
+}
+
+int64_t caml_alloc_dummy_float(int64_t size_val)
+{
+    return alloc_dummy_common(size_val, (uint16_t)ARC_TAG_FLOAT_ARRAY, 0u);
+}
+
+int64_t caml_alloc_dummy_lazy(int64_t size_val)
+{
+    return caml_alloc_dummy(size_val);
+}
+
+int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
+{
+    if (!is_heap_ptr(dummy_val) || !is_heap_ptr(new_val))
+        pal_abort();
+    ArcHeader *dhdr = (ArcHeader *)(uintptr_t)dummy_val - 1;
+    ArcHeader *nhdr = (ArcHeader *)(uintptr_t)new_val - 1;
+    if (nhdr->byte_size > dhdr->byte_size)
+        pal_abort();
+
+    /* Release any previously held scanned children on [dummy]. */
+    if (dhdr->tag == (uint16_t)ARC_TAG_CLOSURE) {
+        ArcClosure *dc = (ArcClosure *)(uintptr_t)dummy_val;
+        for (uint16_t i = 0; i < dhdr->scan_fields; i++)
+            arc_release_val((int64_t)dc->env[i]);
+    } else if (dhdr->tag == (uint16_t)ARC_TAG_ARRAY) {
+        int64_t *da = (int64_t *)(uintptr_t)dummy_val;
+        uint32_t n = dhdr->byte_size / 8u;
+        for (uint32_t i = 0; i < n; i++)
+            arc_release_val(da[i]);
+    } else if (dhdr->tag != (uint16_t)ARC_TAG_STRING &&
+               dhdr->tag != (uint16_t)ARC_TAG_WEAK &&
+               dhdr->tag != (uint16_t)ARC_TAG_FLOAT &&
+               dhdr->tag != (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+        int64_t *df = (int64_t *)(uintptr_t)dummy_val;
+        for (uint16_t i = 0; i < dhdr->scan_fields; i++)
+            arc_release_val(df[i]);
+    }
+
+    pal_memcpy((void *)(uintptr_t)dummy_val, (const void *)(uintptr_t)new_val,
+               nhdr->byte_size);
+    dhdr->tag = nhdr->tag;
+    dhdr->scan_fields = nhdr->scan_fields;
+    /* Preserve dhdr->byte_size so slab_free returns it to its original class. */
+
+    /* Retain newly-copied scanned children because [dummy] now owns a ref. */
+    if (dhdr->tag == (uint16_t)ARC_TAG_CLOSURE) {
+        ArcClosure *dc = (ArcClosure *)(uintptr_t)dummy_val;
+        for (uint16_t i = 0; i < dhdr->scan_fields; i++)
+            arc_retain_val((int64_t)dc->env[i]);
+    } else if (dhdr->tag == (uint16_t)ARC_TAG_ARRAY) {
+        int64_t *da = (int64_t *)(uintptr_t)dummy_val;
+        uint32_t n = nhdr->byte_size / 8u;
+        for (uint32_t i = 0; i < n; i++)
+            arc_retain_val(da[i]);
+    } else if (dhdr->tag != (uint16_t)ARC_TAG_STRING &&
+               dhdr->tag != (uint16_t)ARC_TAG_WEAK &&
+               dhdr->tag != (uint16_t)ARC_TAG_FLOAT &&
+               dhdr->tag != (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+        int64_t *df = (int64_t *)(uintptr_t)dummy_val;
+        for (uint16_t i = 0; i < dhdr->scan_fields; i++)
+            arc_retain_val(df[i]);
+    }
+    return 1;
+}
+
+int64_t caml_update_dummy_lazy(int64_t dummy_val, int64_t new_val)
+{
+    return caml_update_dummy(dummy_val, new_val);
 }
 
 static inline int size_class_for(uint32_t total_bytes)
@@ -627,7 +718,9 @@ static void release_subtree(ArcHeader *root, int free_root)
             weak_unlink((ArcWeakArray *)(cur + 1));
         } else if (tag == ARC_TAG_FIBER) {
             fiber_destroy((Fiber *)(cur + 1));
-        } else if (tag != ARC_TAG_STRING) {
+        } else if (tag != ARC_TAG_STRING &&
+                   tag != ARC_TAG_FLOAT &&
+                   tag != ARC_TAG_FLOAT_ARRAY) {
             int64_t *fields = (int64_t *)(cur + 1);
             uint32_t n = cur->scan_fields;
             for (uint32_t i = 0; i < n; i++)
@@ -789,7 +882,9 @@ static void cc_visit_children(ArcHeader *hdr, CcChildFn fn, void *ctx)
         if (f->pending_exn != 0)
             fn(f->pending_exn, ctx);
     } else if (tag != (uint16_t)ARC_TAG_STRING &&
-               tag != (uint16_t)ARC_TAG_WEAK) {
+               tag != (uint16_t)ARC_TAG_WEAK &&
+               tag != (uint16_t)ARC_TAG_FLOAT &&
+               tag != (uint16_t)ARC_TAG_FLOAT_ARRAY) {
         int64_t *fields = (int64_t *)(hdr + 1);
         uint32_t n = hdr->scan_fields;
         for (uint32_t i = 0; i < n; i++)

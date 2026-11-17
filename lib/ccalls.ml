@@ -82,7 +82,13 @@ let table =
     ("caml_string_equal", abi 2 false false);
     ("caml_bytes_equal", abi 2 false false);
     ("caml_string_compare", abi 2 false false);
-    ("caml_bytes_compare", abi 2 false false) ]
+    ("caml_bytes_compare", abi 2 false false);
+    (* value let rec dummy allocation/backpatch *)
+    ("caml_alloc_dummy", abi 1 false false);
+    ("caml_alloc_dummy_float", abi 1 false false);
+    ("caml_alloc_dummy_lazy", abi 1 false false);
+    ("caml_update_dummy", abi 2 false false);
+    ("caml_update_dummy_lazy", abi 2 false false) ]
 
 let find_opt name = List.assoc_opt name table
 
