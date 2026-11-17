@@ -7,3 +7,4 @@ shared library + header: PASS
 static library no main: PASS
 cross-target asm emission: PASS
 mt bindgen mutator gate: PASS
+mli-mediated mutual deps: PASS

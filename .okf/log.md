@@ -1,5 +1,15 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Support `.mli`-mediated mutual `.ml` dependencies in `Driver.plan_build_order` (TDD) —
+  separated compile-time `.cmi` edges (`hard_deps`) from `.ml -> .ml`
+  ordering hints (`soft_deps`) in `lib/driver.ml` (`plan_build_order`), using
+  Tarjan SCC condensation + Kahn topological sort on `hard_deps` within each
+  SCC so mutually dependent `.ml` modules mediated by `.mli` interfaces build
+  and initialize cleanly via idempotent `ocamlcc_init_*` while true `.ml` (no
+  `.mli`) and `.mli` cycles still fail with `"cyclic module dependency
+  detected"`. Added `mli-mediated mutual deps` test in `test/driver_test.ml`.
+  `dune runtest` (14/14) and `ninja test` (25/25) pass.
+
 - 2026-11-17 (autoagent/1): Topological header typedef ordering & option/tuple `_free` helpers (TDD) —
   refactored `lib/c_bindgen.ml` (`translate_signature` / `emit_header`) to
   record and emit `HD_opaque`, `HD_record`, `HD_option`, and `HD_tuple`

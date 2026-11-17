@@ -399,6 +399,58 @@ int main(void) {
           check "mt bindgen mutator gate" false
       | Ok _ ->
           let code, out = run_capture mt_exe [] in
-          check "mt bindgen mutator gate" (code = 0 && out = "mt_bindgen=ok\n")));
+          check "mt bindgen mutator gate" (code = 0 && out = "mt_bindgen=ok\n"));
+
+      (* 3f. .mli-mediated mutually dependent implementations + true cycle rejection *)
+      let mut_a_mli =
+        write_tmp "mut_a.mli"
+          "val even : int -> bool\nval odd_from_b : int -> bool\n"
+      in
+      let mut_b_mli =
+        write_tmp "mut_b.mli" "val odd : int -> bool\n"
+      in
+      let mut_a_ml =
+        write_tmp "mut_a.ml"
+          "let even n = if n = 0 then true else Mut_b.odd (n - 1)\nlet odd_from_b n = Mut_b.odd n\n"
+      in
+      let mut_b_ml =
+        write_tmp "mut_b.ml"
+          "let odd n = if n = 0 then false else Mut_a.even (n - 1)\n"
+      in
+      let mut_main_ml =
+        write_tmp "mut_main.ml"
+          "let () = print_endline (Printf.sprintf \"e6=%b o7=%b\" (Mut_a.even 6) (Mut_a.odd_from_b 7))\n"
+      in
+      let cyc_a_ml = write_tmp "cyc_a.ml" "let f x = Cyc_b.g x\n" in
+      let cyc_b_ml = write_tmp "cyc_b.ml" "let g x = Cyc_a.f x\n" in
+      let cyc_a_mli = write_tmp "cyc_a.mli" "type t = Cyc_b.t\n" in
+      let cyc_b_mli = write_tmp "cyc_b.mli" "type t = Cyc_a.t\n" in
+      let cyc_rejected =
+        (match Driver.plan_build_order [ cyc_a_ml; cyc_b_ml ] with
+        | Error _ -> true
+        | Ok _ -> false)
+        &&
+        (match Driver.plan_build_order [ cyc_a_mli; cyc_b_mli ] with
+        | Error _ -> true
+        | Ok _ -> false)
+      in
+      let mut_exe = Filename.concat tmp "mut_app" in
+      let mut_ok =
+        match
+          Driver.build
+            { base_cfg with
+              inputs =
+                [ mut_main_ml; mut_a_ml; mut_b_ml; mut_a_mli; mut_b_mli ];
+              output = Some mut_exe;
+              work_dir = Some (Filename.concat tmp "work_mut") }
+        with
+        | Error msg ->
+            Printf.printf "mli-mediated mutual error: %s\n" msg;
+            false
+        | Ok _ ->
+            let code, out = run_capture mut_exe [] in
+            code = 0 && out = "e6=true o7=true\n"
+      in
+      check "mli-mediated mutual deps" (cyc_rejected && mut_ok));
 
   exit (if !failures = 0 then 0 else 1)
