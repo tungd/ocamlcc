@@ -13,7 +13,7 @@ sources:
     title: OCaml-QBE design document
   - id: lib-codegen
     resource: ../lib/codegen.ml
-    title: ANF-to-QBE code generator
+    title: Modular ANF-to-QBE code generator (codegen_ctx, codegen_analysis, codegen_expr, codegen_fn, codegen)
   - id: lib-frontend
     resource: ../lib/frontend.ml
     title: compiler-libs frontend wrapper
@@ -39,7 +39,10 @@ The pipeline has four stages[^design-doc]:
 2. **Middle-end (pure OCaml)** — ANF conversion (`lib/anf.ml`), fixed-point
    yield-effect inference and the [Perceus ARC](/concepts/perceus-arc.md) +
    shadow-stack fiber + error-return exception pass (`lib/arc_pass.ml`).
-3. **Code generation** — `Codegen` lowers ANF to the
+3. **Code generation** — `Codegen` (split across `codegen_ctx.ml`,
+   `codegen_analysis.ml`, `codegen_expr.ml`, `codegen_fn.ml`, and `codegen.ml`,
+   with per-function state isolated via `Codegen_ctx.with_fn_state`) lowers ANF
+   to the
    [QBE IL](/concepts/vendored-qbe.md) model in `Qbe_il`; QBE turns SSA into
    target assembly (including void `arc_retain_val` calls on `GetGlobal`,
    exception/intermediate-closure cleanup on direct over-application,

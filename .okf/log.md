@@ -1,5 +1,19 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Modularize codegen & eliminate builder save/restore boilerplate (TDD) —
+  split the 2,061-line `lib/codegen.ml` into five focused modules:
+  `lib/codegen_ctx.ml` (module builder + isolated `fn_state` with
+  `with_fn_state` and `with_shadowed_vars` replacing duplicated 12-field
+  save/restore boilerplate across `compile_function` and `compile_group`),
+  `lib/codegen_analysis.ml` (pure-defs, tail-call SCCs, free-variable filter,
+  dependency collection), `lib/codegen_expr.ml` (atoms, ops, cexprs, apply,
+  control flow, switches), `lib/codegen_fn.ml` (closures, trampolines,
+  `compile_function`, `compile_group`, `compile_letrec`), and `lib/codegen.ml`
+  (`compile_program`, preserving `lib/codegen.mli`). Added
+  `test/codegen_ctx_test.ml` testing `with_fn_state` exception-safe isolation
+  and SCC grouping. `dune runtest` (9/9), `ninja test` (21/21),
+  `ninja asan_test` (11/11). Documented in
+  [compiler-pipeline](/concepts/compiler-pipeline.md).
 - 2026-11-17 (autoagent/1): Upgrade vendored QBE to 1.3 + PIC `extern` emission (TDD) —
   replaced `vendor/qbe/` (1.2) with the official QBE 1.3 release (`gvn.c`,
   `gcm.c`, `ifopt.c`, `amd64/winabi.c`, `extern` GOT/PLT support, upstream

@@ -133,3 +133,20 @@
  (deps qbe_pic_test.actual qbe_pic_test.expected)
  (action
   (diff qbe_pic_test.expected qbe_pic_test.actual)))
+
+(executable
+ (name codegen_ctx_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps codegen_ctx_test.exe codegen_ctx_test.expected)
+ (action
+  (with-stdout-to codegen_ctx_test.actual
+   (run ./codegen_ctx_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps codegen_ctx_test.actual codegen_ctx_test.expected)
+ (action
+  (diff codegen_ctx_test.expected codegen_ctx_test.actual)))
