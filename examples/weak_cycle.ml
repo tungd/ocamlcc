@@ -1,6 +1,7 @@
 type 'a weak_arr
 
 external arc_live : unit -> int = "ocamlcc_arc_live"
+external weak_table_cap : unit -> int = "ocamlcc_weak_table_cap"
 external weak_create : int -> 'a weak_arr = "ocamlcc_weak_create"
 external weak_length : 'a weak_arr -> int = "ocamlcc_weak_length"
 external weak_set : 'a weak_arr -> int -> 'a option -> unit = "ocamlcc_weak_set"
@@ -64,6 +65,25 @@ let test_weak_of_weak () =
   in
   (alive_and_len, alive_after, got_none)
 
+let test_weak_tombstones () =
+  let w = weak_create 1 in
+  let rec loop i acc =
+    if i <= 0 then acc
+    else
+      let p = (i, i + 1) in
+      weak_set w 0 (Some p);
+      let v =
+        match weak_get w 0 with
+        | Some q -> fst q
+        | None -> 0
+      in
+      let _keep = snd p in
+      loop (i - 1) (acc + v)
+  in
+  let sum = loop 2000 0 in
+  let cap_ok = if weak_table_cap () = 1024 then 1 else 0 in
+  (sum, cap_ok)
+
 let () =
   let l, a, dead_now, alive_p = test_weak_basic 2 in
   let live1 = arc_live () in
@@ -71,6 +91,8 @@ let () =
   let live2 = arc_live () in
   let win, wafter, wnone = test_weak_of_weak () in
   let live3 = arc_live () in
+  let tsum, tcap_ok = test_weak_tombstones () in
+  let live4 = arc_live () in
   print_int l;
   print_endline "";
   print_int a;
@@ -94,4 +116,10 @@ let () =
   print_int wnone;
   print_endline "";
   print_int live3;
+  print_endline "";
+  print_int tsum;
+  print_endline "";
+  print_int tcap_ok;
+  print_endline "";
+  print_int live4;
   print_endline ""

@@ -98,9 +98,27 @@ void arc_mutator_leave(int entered)
     }
 }
 
-static FreeSlot *g_free_lists[NUM_SIZE_CLASSES];
-static uint8_t  *g_slab_cur[NUM_SIZE_CLASSES];
-static uint8_t  *g_slab_end[NUM_SIZE_CLASSES];
+typedef struct SlabPage {
+    struct SlabPage *prev;
+    struct SlabPage *next;
+    FreeSlot        *free_list;
+    uint32_t         cls;
+    uint32_t         used_slots;
+    uint32_t         bump_off;
+    uint32_t         is_full;
+    uint64_t         _pad;
+} SlabPage;
+
+_Static_assert((sizeof(SlabPage) % 16u) == 0u,
+               "SlabPage header must preserve 16-byte slot alignment");
+
+static SlabPage  *g_partial_slabs[NUM_SIZE_CLASSES];
+static SlabPage  *g_full_slabs[NUM_SIZE_CLASSES];
+static uint32_t   g_class_slab_count[NUM_SIZE_CLASSES];
+static SlabPage **g_slab_dir = NULL;
+static size_t     g_slab_dir_len = 0;
+static size_t     g_slab_dir_cap = 0;
+static size_t     g_slab_dir_bytes = 0;
 
 static ArcWeakArray     *g_weak_head = NULL;
 static _Atomic uint64_t  g_weak_count = 0;
@@ -234,6 +252,7 @@ static inline void cc_roots_remove_locked(ArcHeader *hdr)
 static int64_t *g_weak_targets = NULL;  /* open addressing, power-of-2 cap */
 static uint64_t g_weak_targets_mask = 0; /* cap - 1 */
 static uint64_t g_weak_targets_used = 0; /* live entries + tombstones */
+static uint64_t g_weak_targets_live = 0; /* live entries only */
 
 static uint64_t weak_target_hash(int64_t v)
 {
@@ -244,18 +263,26 @@ static uint64_t weak_target_hash(int64_t v)
     return x;
 }
 
-static void weak_targets_grow(void)
+static void weak_targets_rehash(void)
 {
-    uint64_t new_cap = (g_weak_targets_mask + 1) * 2u;
-    if (new_cap == 0u)
+    uint64_t old_cap =
+        (g_weak_targets == NULL) ? 0u : (g_weak_targets_mask + 1u);
+    uint64_t new_cap;
+    if (old_cap == 0u) {
         new_cap = 1024u;
+    } else if ((g_weak_targets_live + 1u) * 2u <= old_cap) {
+        /* Live keys are sparse (<= 50% capacity); rehash at the same capacity
+           to purge tombstones without doubling on repeated churn. */
+        new_cap = old_cap;
+    } else {
+        new_cap = old_cap * 2u;
+    }
     int64_t *nt = (int64_t *)pal_page_alloc((size_t)new_cap * sizeof(int64_t));
     if (nt == NULL)
         pal_abort();
     for (uint64_t i = 0; i < new_cap; i++)
         nt[i] = 0;
-    uint64_t old_cap = g_weak_targets_mask + 1u;
-    uint64_t used = 0;
+    uint64_t live = 0;
     if (g_weak_targets != NULL) {
         for (uint64_t i = 0; i < old_cap; i++) {
             int64_t v = g_weak_targets[i];
@@ -264,14 +291,15 @@ static void weak_targets_grow(void)
                 while (nt[j] != 0)
                     j = (j + 1u) & (new_cap - 1u);
                 nt[j] = v;
-                used++;
+                live++;
             }
         }
         pal_page_free(g_weak_targets, (size_t)old_cap * sizeof(int64_t));
     }
     g_weak_targets = nt;
     g_weak_targets_mask = new_cap - 1u;
-    g_weak_targets_used = used;
+    g_weak_targets_used = live;
+    g_weak_targets_live = live;
 }
 
 static int weak_targets_contains(int64_t v)
@@ -298,13 +326,14 @@ static void weak_targets_insert(int64_t v)
        lookups of absent keys. */
     if (g_weak_targets == NULL ||
         (g_weak_targets_used + 1u) * 3u > (g_weak_targets_mask + 1u) * 2u)
-        weak_targets_grow();
+        weak_targets_rehash();
     uint64_t j = weak_target_hash(v) & g_weak_targets_mask;
     while (g_weak_targets[j] != 0 && g_weak_targets[j] != WEAK_TARGET_TOMBSTONE)
         j = (j + 1u) & g_weak_targets_mask;
     if (g_weak_targets[j] == 0)
         g_weak_targets_used++;
     g_weak_targets[j] = v;
+    g_weak_targets_live++;
 }
 
 static void weak_targets_remove(int64_t v)
@@ -318,6 +347,7 @@ static void weak_targets_remove(int64_t v)
             return;
         if (s == v) {
             g_weak_targets[j] = WEAK_TARGET_TOMBSTONE;
+            g_weak_targets_live--;
             return;
         }
         j = (j + 1u) & g_weak_targets_mask;
@@ -361,6 +391,7 @@ static void weak_unlink(ArcWeakArray *w)
 
 static _Atomic int64_t g_live_objects = 0;
 static _Atomic int64_t g_reuse_hits = 0;
+static _Atomic int64_t g_active_slabs = 0;
 
 static _Thread_local int64_t tls_exn_slot = 0;
 static _Atomic int64_t g_next_oo_id = 0;
@@ -485,30 +516,132 @@ static inline size_t align_up_large(uint32_t total_bytes)
     return ((size_t)total_bytes + mask) & ~mask;
 }
 
+static void slab_list_push(SlabPage **head, SlabPage *s)
+{
+    s->prev = NULL;
+    s->next = *head;
+    if (*head != NULL)
+        (*head)->prev = s;
+    *head = s;
+}
+
+static void slab_list_remove(SlabPage **head, SlabPage *s)
+{
+    if (s->prev != NULL)
+        s->prev->next = s->next;
+    else
+        *head = s->next;
+    if (s->next != NULL)
+        s->next->prev = s->prev;
+    s->prev = NULL;
+    s->next = NULL;
+}
+
+static void slab_dir_insert(SlabPage *s)
+{
+    if (g_slab_dir_len == g_slab_dir_cap) {
+        size_t new_bytes = (g_slab_dir_bytes == 0u) ? (size_t)LARGE_PAGE_ALIGN
+                                                  : (g_slab_dir_bytes * 2u);
+        SlabPage **nd = (SlabPage **)pal_page_alloc(new_bytes);
+        if (nd == NULL)
+            pal_abort();
+        if (g_slab_dir != NULL) {
+            pal_memcpy(nd, g_slab_dir, g_slab_dir_len * sizeof(SlabPage *));
+            pal_page_free(g_slab_dir, g_slab_dir_bytes);
+        }
+        g_slab_dir = nd;
+        g_slab_dir_bytes = new_bytes;
+        g_slab_dir_cap = new_bytes / sizeof(SlabPage *);
+    }
+    size_t lo = 0, hi = g_slab_dir_len;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2u;
+        if ((uintptr_t)g_slab_dir[mid] < (uintptr_t)s)
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    for (size_t i = g_slab_dir_len; i > lo; i--)
+        g_slab_dir[i] = g_slab_dir[i - 1u];
+    g_slab_dir[lo] = s;
+    g_slab_dir_len++;
+}
+
+static SlabPage *slab_dir_find(const void *ptr)
+{
+    size_t lo = 0, hi = g_slab_dir_len;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2u;
+        if ((uintptr_t)g_slab_dir[mid] <= (uintptr_t)ptr)
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    if (lo == 0u)
+        return NULL;
+    SlabPage *s = g_slab_dir[lo - 1u];
+    if ((uintptr_t)ptr < (uintptr_t)s + SLAB_SIZE)
+        return s;
+    return NULL;
+}
+
+static void slab_dir_remove(const SlabPage *s)
+{
+    size_t lo = 0, hi = g_slab_dir_len;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2u;
+        if ((uintptr_t)g_slab_dir[mid] < (uintptr_t)s)
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    if (lo >= g_slab_dir_len || g_slab_dir[lo] != s)
+        pal_abort();
+    for (size_t i = lo + 1u; i < g_slab_dir_len; i++)
+        g_slab_dir[i - 1u] = g_slab_dir[i];
+    g_slab_dir_len--;
+}
+
 static ArcHeader *slab_alloc(uint32_t total_bytes)
 {
     int cls = size_class_for(total_bytes);
     if (cls >= 0) {
         arc_lock(&g_alloc_lock);
-        if (g_free_lists[cls] != NULL) {
-            FreeSlot *slot = g_free_lists[cls];
-            g_free_lists[cls] = slot->next;
-            arc_unlock(&g_alloc_lock);
-            return (ArcHeader *)slot;
-        }
         uint32_t step = k_class_sizes[cls];
-        if (g_slab_cur[cls] == NULL ||
-            (size_t)(g_slab_end[cls] - g_slab_cur[cls]) < (size_t)step) {
-            uint8_t *page = (uint8_t *)pal_page_alloc(SLAB_SIZE);
-            if (page == NULL) {
+        SlabPage *s = g_partial_slabs[cls];
+        if (s == NULL) {
+            s = (SlabPage *)pal_page_alloc(SLAB_SIZE);
+            if (s == NULL) {
                 arc_unlock(&g_alloc_lock);
                 pal_abort();
             }
-            g_slab_cur[cls] = page;
-            g_slab_end[cls] = page + SLAB_SIZE;
+            s->prev = NULL;
+            s->next = NULL;
+            s->free_list = NULL;
+            s->cls = (uint32_t)cls;
+            s->used_slots = 0u;
+            s->bump_off = (uint32_t)sizeof(SlabPage);
+            s->is_full = 0u;
+            slab_dir_insert(s);
+            slab_list_push(&g_partial_slabs[cls], s);
+            g_class_slab_count[cls]++;
+            atomic_fetch_add_explicit(&g_active_slabs, 1, memory_order_relaxed);
         }
-        ArcHeader *hdr = (ArcHeader *)g_slab_cur[cls];
-        g_slab_cur[cls] += step;
+        ArcHeader *hdr;
+        if (s->free_list != NULL) {
+            FreeSlot *slot = s->free_list;
+            s->free_list = slot->next;
+            hdr = (ArcHeader *)slot;
+        } else {
+            hdr = (ArcHeader *)((uint8_t *)s + s->bump_off);
+            s->bump_off += step;
+        }
+        s->used_slots++;
+        if (s->free_list == NULL && s->bump_off + step > SLAB_SIZE) {
+            slab_list_remove(&g_partial_slabs[cls], s);
+            slab_list_push(&g_full_slabs[cls], s);
+            s->is_full = 1u;
+        }
         arc_unlock(&g_alloc_lock);
         return hdr;
     }
@@ -526,9 +659,32 @@ static void slab_free(ArcHeader *hdr)
     int cls = size_class_for(total_bytes);
     if (cls >= 0) {
         arc_lock(&g_alloc_lock);
+        SlabPage *s = slab_dir_find(hdr);
+        if (s == NULL || s->cls != (uint32_t)cls) {
+            arc_unlock(&g_alloc_lock);
+            pal_abort();
+        }
         FreeSlot *slot = (FreeSlot *)hdr;
-        slot->next = g_free_lists[cls];
-        g_free_lists[cls] = slot;
+        slot->next = s->free_list;
+        s->free_list = slot;
+        s->used_slots--;
+        if (s->used_slots == 0u && g_class_slab_count[cls] > 1u) {
+            if (s->is_full)
+                slab_list_remove(&g_full_slabs[cls], s);
+            else
+                slab_list_remove(&g_partial_slabs[cls], s);
+            slab_dir_remove(s);
+            g_class_slab_count[cls]--;
+            atomic_fetch_sub_explicit(&g_active_slabs, 1, memory_order_relaxed);
+            arc_unlock(&g_alloc_lock);
+            pal_page_free(s, SLAB_SIZE);
+            return;
+        }
+        if (s->is_full) {
+            slab_list_remove(&g_full_slabs[cls], s);
+            slab_list_push(&g_partial_slabs[cls], s);
+            s->is_full = 0u;
+        }
         arc_unlock(&g_alloc_lock);
     } else {
         pal_page_free(hdr, align_up_large(total_bytes));
@@ -889,6 +1045,21 @@ int64_t ocamlcc_arc_reuse(int64_t unit)
 {
     (void)unit;
     return tag_int(arc_reuse_hits());
+}
+
+int64_t ocamlcc_arc_slab_count(int64_t unit)
+{
+    (void)unit;
+    return tag_int(atomic_load_explicit(&g_active_slabs, memory_order_relaxed));
+}
+
+int64_t ocamlcc_weak_table_cap(int64_t unit)
+{
+    (void)unit;
+    arc_lock(&g_weak_lock);
+    uint64_t cap = (g_weak_targets == NULL) ? 0u : (g_weak_targets_mask + 1u);
+    arc_unlock(&g_weak_lock);
+    return tag_int((int64_t)cap);
 }
 
 typedef void (*CcChildFn)(int64_t val, void *ctx);

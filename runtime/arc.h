@@ -68,6 +68,8 @@ int64_t arc_reuse_hits(void);
 int64_t ocamlcc_arc_live(int64_t unit);
 int64_t ocamlcc_arc_reuse(int64_t unit);
 int64_t ocamlcc_arc_collect(int64_t unit);
+int64_t ocamlcc_arc_slab_count(int64_t unit);
+int64_t ocamlcc_weak_table_cap(int64_t unit);
 
 int64_t ocamlcc_get_exn(void);
 void    ocamlcc_set_exn(int64_t exn);

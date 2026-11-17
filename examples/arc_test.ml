@@ -1,5 +1,6 @@
 external arc_live : unit -> int = "ocamlcc_arc_live"
 external arc_reuse : unit -> int = "ocamlcc_arc_reuse"
+external arc_slab_count : unit -> int = "ocamlcc_arc_slab_count"
 
 type tree =
   | Empty
@@ -119,4 +120,6 @@ let () =
     + test_pattern_join None None);
   print_endline "";
   print_int (arc_live ());
+  print_endline "";
+  print_int (if arc_slab_count () <= 4 then 1 else 0);
   print_endline ""

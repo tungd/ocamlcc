@@ -1,5 +1,22 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Reclaim empty 64 KB slabs and rehash sparse weak-target tables without doubling (TDD) —
+  replaced the bump-only slab freelist in `runtime/arc.c` with per-slab
+  metadata (`SlabPage` at offset 0 of each 64 KB slab, sorted `g_slab_dir`
+  directory, per-class `g_partial_slabs`/`g_full_slabs` lists); `slab_free`
+  now returns empty 64 KB slabs to `pal_page_free` when
+  `g_class_slab_count[cls] > 1` (retaining at most 1 warm slab per active
+  class). Added `g_weak_targets_live` tracking and replaced
+  `weak_targets_grow` with `weak_targets_rehash`, which purges tombstones at
+  the same capacity instead of doubling whenever `(live + 1) * 2 <= cap`.
+  Added `ocamlcc_arc_slab_count` / `ocamlcc_weak_table_cap` probes to
+  `examples/arc_test.ml` and `examples/weak_cycle.ml` (Red: `arc_test`
+  retained >4 slabs after freeing a 100k-list, `weak_cycle` doubled table
+  cap past 1024 under 2000 insert/clear cycles; Green: `arc_slab_count <= 4`
+  and `weak_table_cap = 1024`, `arc_live = 0`). `dune runtest` (11/11),
+  `ninja test` (24/24), `ninja asan_test` (14/14). Documented in
+  [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-17 (autoagent/1): Synchronize `ocamlcc_arc_collect` across FFI mutator threads via mutator gate (TDD) —
   `ocamlcc_arc_collect` previously traversed `cc_visit_children` and freed
   dead cycles without stopping or draining active mutator threads. Added an
