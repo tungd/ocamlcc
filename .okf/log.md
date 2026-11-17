@@ -1,5 +1,16 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Wrap C_bindgen shims in the ARC mutator gate (TDD) —
+  updated `lib/c_bindgen.ml` (`emit_shim`) to declare `arc_mutator_enter` and
+  `arc_mutator_leave` and enter/leave the mutator gate across `<mod>_init`,
+  opaque `_retain`/`_release`, and every exported `<mod>_<val>` entrypoint
+  body (marshalling, `ocamlcc_apply*`, exception cleanup, unmarshalling, and
+  `arc_release_val(res)` across all return paths). Added `shim mutator gate`
+  structural checks in `test/c_bindgen_test.ml` and concurrent 4-thread
+  worker + collector `mt bindgen mutator gate` stress test in
+  `test/driver_test.ml`. `dune runtest` (14/14), `ninja test` (25/25), and
+  `ninja asan_test` (15/15) pass. Updated [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-17 (autoagent/1): Fix Driver stdlib `.cmi` resolution and pre-user fallback compilation (TDD) —
   `lib/driver.ml` now resolves `ocamlcc`'s own `stdlib.cmi` before user
   compilation when `not cfg.nostdlib`: on host default toolchain it uses

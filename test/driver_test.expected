@@ -6,3 +6,4 @@ stdlib fallback cmi: PASS
 shared library + header: PASS
 static library no main: PASS
 cross-target asm emission: PASS
+mt bindgen mutator gate: PASS

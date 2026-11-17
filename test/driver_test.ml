@@ -306,6 +306,99 @@ let () =
             ("amd64_sysv", "ocamlcc_init_Mod_lib");
             ("rv64", "ocamlcc_init_Mod_lib") ]
       in
-      check "cross-target asm emission" asm_ok);
+      check "cross-target asm emission" asm_ok;
+
+      (* 3e. Multi-threaded C_bindgen shim + concurrent ocamlcc_arc_collect *)
+      let mt_host_c =
+        write_tmp "mt_bindgen_host.c"
+          {|
+#include "bindgen_lib.h"
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdio.h>
+
+extern int64_t ocamlcc_arc_collect(int64_t unit);
+
+typedef struct {
+    int tid;
+    int ok;
+} mt_arg_t;
+
+static void *worker(void *p) {
+    mt_arg_t *arg = (mt_arg_t *)p;
+    int ok = 1;
+    ocamlcc_error_t err = {0};
+    for (int i = 0; i < 150; i++) {
+        int64_t v = (int64_t)(arg->tid * 1000 + i);
+        bindgen_lib_t_t h = bindgen_lib_create(v, &err);
+        if (err.code != 0 || bindgen_lib_get(h, &err) != v) { ok = 0; }
+        bindgen_lib_t_t_retain(h);
+        bindgen_lib_t_t_release(h);
+        bindgen_lib_t_t_release(h);
+        bindgen_lib_user_t u = { "Bob", 20 + (i % 5) };
+        char *g = bindgen_lib_greet(u, &err);
+        if (err.code != 0 || g == NULL) { ok = 0; }
+        ocamlcc_free_string(g);
+        ocamlcc_opt_int64_t o = bindgen_lib_opt_inc((ocamlcc_opt_int64_t){ true, v }, &err);
+        if (err.code != 0 || !o.is_some || o.value != v + 1) { ok = 0; }
+        int64_t ps = bindgen_lib_pair_sum((ocamlcc_tuple_int64_t_int64_t){ v, 5 }, &err);
+        if (err.code != 0 || ps != v + 5) { ok = 0; }
+        if (!ok) break;
+    }
+    arg->ok = ok;
+    return NULL;
+}
+
+static void *collector(void *p) {
+    _Atomic int *stop = (_Atomic int *)p;
+    while (atomic_load_explicit(stop, memory_order_acquire) == 0) {
+        ocamlcc_arc_collect(1);
+    }
+    return NULL;
+}
+
+int main(void) {
+    bindgen_lib_init();
+    _Atomic int stop = 0;
+    pthread_t col;
+    if (pthread_create(&col, NULL, collector, &stop) != 0) return 2;
+    pthread_t th[4];
+    mt_arg_t args[4];
+    for (int i = 0; i < 4; i++) {
+        args[i].tid = i;
+        args[i].ok = 0;
+        if (pthread_create(&th[i], NULL, worker, &args[i]) != 0) return 2;
+    }
+    int ok = 1;
+    for (int i = 0; i < 4; i++) {
+        pthread_join(th[i], NULL);
+        if (!args[i].ok) ok = 0;
+    }
+    atomic_store_explicit(&stop, 1, memory_order_release);
+    pthread_join(col, NULL);
+    printf("mt_bindgen=%s\n", ok ? "ok" : "fail");
+    return ok ? 0 : 1;
+}
+|}
+      in
+      let mt_hdr = Filename.concat tmp "mt_hdr/bindgen_lib.h" in
+      let mt_exe = Filename.concat tmp "mt_bindgen_app" in
+      (match
+         Driver.build
+           { base_cfg with
+             inputs = [ bindgen_mli; bindgen_ml; mt_host_c ];
+             no_main = true;
+             emit_header = Some mt_hdr;
+             extra_cflags = [ "-pthread" ];
+             extra_ldflags = [ "-pthread" ];
+             output = Some mt_exe;
+             work_dir = Some (Filename.concat tmp "work_mt_bindgen") }
+       with
+      | Error msg ->
+          Printf.printf "mt bindgen error: %s\n" msg;
+          check "mt bindgen mutator gate" false
+      | Ok _ ->
+          let code, out = run_capture mt_exe [] in
+          check "mt bindgen mutator gate" (code = 0 && out = "mt_bindgen=ok\n")));
 
   exit (if !failures = 0 then 0 else 1)

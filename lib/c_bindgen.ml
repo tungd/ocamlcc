@@ -394,6 +394,8 @@ let emit_shim ~modname ~mod_prefix ~header_include decls vals =
   p "extern void *arc_alloc_bytes(uint64_t len);\n";
   p "extern void  arc_retain_val(int64_t val);\n";
   p "extern void  arc_release_val(int64_t val);\n";
+  p "extern int   arc_mutator_enter(void);\n";
+  p "extern void  arc_mutator_leave(int entered);\n";
   p "extern int64_t ocamlcc_alloc_float(double d);\n";
   p "extern int64_t ocamlcc_alloc_custom(uint32_t kind, uint64_t bits);\n";
   p "extern int64_t ocamlcc_get_exn(void);\n";
@@ -581,12 +583,24 @@ let emit_shim ~modname ~mod_prefix ~header_include decls vals =
       List.iter ensure_helpers ev.ev_params;
       ensure_helpers ev.ev_ret)
     vals;
-  p "void %s_init(void) {\n    ocamlcc_init_%s();\n}\n\n" mod_prefix mod_sym;
+  p "void %s_init(void) {\n" mod_prefix;
+  p "    int _entered = arc_mutator_enter();\n";
+  p "    ocamlcc_init_%s();\n" mod_sym;
+  p "    arc_mutator_leave(_entered);\n";
+  p "}\n\n";
   List.iter
     (function
       | CT_opaque cname ->
-          p "void %s_retain(%s h) { arc_retain_val(h.raw); }\n" cname cname;
-          p "void %s_release(%s h) { arc_release_val(h.raw); }\n\n" cname cname
+          p "void %s_retain(%s h) {\n" cname cname;
+          p "    int _entered = arc_mutator_enter();\n";
+          p "    arc_retain_val(h.raw);\n";
+          p "    arc_mutator_leave(_entered);\n";
+          p "}\n";
+          p "void %s_release(%s h) {\n" cname cname;
+          p "    int _entered = arc_mutator_enter();\n";
+          p "    arc_release_val(h.raw);\n";
+          p "    arc_mutator_leave(_entered);\n";
+          p "}\n\n"
       | CT_record r when needs_free (CT_record r) ->
           let rec emit_free_field ptr t =
             match t with
@@ -626,14 +640,20 @@ let emit_shim ~modname ~mod_prefix ~header_include decls vals =
       in
       p "%s %s_%s(%s) {\n" (c_type_ret ev.ev_ret) mod_prefix ev.ev_name
         (String.concat ", " args);
+      p "    int _entered = arc_mutator_enter();\n";
       p "    const int64_t *mod = (const int64_t *)(uintptr_t)ocamlcc_global_%s;\n"
         mod_sym;
       if not ev.ev_is_fn then begin
         p "    int64_t res = mod[%d];\n" ev.ev_slot;
         p "    ocamlcc_shim_clear_err(err);\n";
         (match ev.ev_ret with
-        | CT_unit -> p "    (void)res;\n"
-        | t -> p "    return %s;\n" (from_ocaml_expr t "res"))
+        | CT_unit ->
+            p "    (void)res;\n";
+            p "    arc_mutator_leave(_entered);\n"
+        | t ->
+            p "    %s out = %s;\n" (c_type_ret t) (from_ocaml_expr t "res");
+            p "    arc_mutator_leave(_entered);\n";
+            p "    return out;\n")
       end
       else begin
         let clos_expr = Printf.sprintf "mod[%d]" ev.ev_slot in
@@ -665,19 +685,28 @@ let emit_shim ~modname ~mod_prefix ~header_include decls vals =
               Printf.sprintf "ocamlcc_apply_n(%s, %d, argv)" clos_expr n
         in
         p "    int64_t res = %s;\n" call_expr;
-        p "    if (ocamlcc_shim_check_exn(err))\n";
+        p "    if (ocamlcc_shim_check_exn(err)) {\n";
         (match ev.ev_ret with
-        | CT_unit -> p "        return;\n"
+        | CT_unit ->
+            p "        arc_mutator_leave(_entered);\n";
+            p "        return;\n"
         | t ->
+            p "        arc_mutator_leave(_entered);\n";
             p "        return (%s)%s;\n" (c_type_ret t) (zero_expr t));
+        p "    }\n";
         p "    ocamlcc_shim_clear_err(err);\n";
         match ev.ev_ret with
-        | CT_unit -> p "    arc_release_val(res);\n"
+        | CT_unit ->
+            p "    arc_release_val(res);\n";
+            p "    arc_mutator_leave(_entered);\n"
         | CT_opaque cname ->
-            p "    return (%s){ .raw = res };\n" cname
+            p "    %s out = (%s){ .raw = res };\n" cname cname;
+            p "    arc_mutator_leave(_entered);\n";
+            p "    return out;\n"
         | t ->
             p "    %s out = %s;\n" (c_type_ret t) (from_ocaml_expr t "res");
             p "    arc_release_val(res);\n";
+            p "    arc_mutator_leave(_entered);\n";
             p "    return out;\n"
       end;
       p "}\n\n")
