@@ -1,5 +1,26 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Synchronize `ocamlcc_arc_collect` across FFI mutator threads via mutator gate (TDD) —
+  `ocamlcc_arc_collect` previously traversed `cc_visit_children` and freed
+  dead cycles without stopping or draining active mutator threads. Added an
+  OS-thread FFI mutator gate (`arc_mutator_enter` / `arc_mutator_leave` in
+  `runtime/arc.c` / `runtime/arc.h`, tracking `g_active_mutators`,
+  `g_cc_waiting`, and `_Thread_local tls_os_mutator_active`) around
+  `ocamlcc_apply1..4` and `ocamlcc_apply_n` (`runtime/closure.c`), while
+  `fiber_trampoline` (`runtime/fiber.c`) and recursive over-application call
+  `ocamlcc_apply1_raw` / `ocamlcc_apply_n_raw` so fiber stack swaps never
+  leak mutator depth. Serialized collection with `g_cc_collect_lock`:
+  external callers wait for `g_active_mutators == 0` while `g_cc_waiting`
+  blocks new entries; callers already inside `ocamlcc_apply*` use
+  `arc_trylock(&g_cc_collect_lock)` and return `0` when other mutator threads
+  are active, avoiding both AB-BA deadlock and use-after-free. Added
+  concurrent `cycle_iter` + 9th collector thread stress in
+  `examples/mt_ffi_lib.ml` and `tests/mt_ffi_host.c` (Red: `test_mt_ffi`
+  crashed with `SIGBUS`/138; Green: `all_ok=1 delta=0` across `ninja test`
+  24/24, `ninja asan_test` 14/14, `dune runtest` 11/11, and TSan with 0
+  races). Documented the concurrency boundary in
+  [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-17 (autoagent/1): Mark `caml_equal` and `caml_notequal` as `raises = true` in `Ccalls` (TDD) —
   `val_compare_raw` (`runtime/arc.c`) raises `Invalid_argument "compare: cyclic structure"`
   when `*steps <= 0` or `depth >= COMPARE_MAX_DEPTH` even when `total == 0`

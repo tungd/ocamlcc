@@ -71,7 +71,7 @@ static ArcPap *alloc_pap(ArcClosure *orig, uint64_t total_arity,
     return pap;
 }
 
-int64_t ocamlcc_apply1(int64_t clos_val, int64_t a0)
+int64_t ocamlcc_apply1_raw(int64_t clos_val, int64_t a0)
 {
     if (clos_val & 1)
         pal_abort();
@@ -101,7 +101,7 @@ int64_t ocamlcc_apply1(int64_t clos_val, int64_t a0)
     pal_abort();
 }
 
-int64_t ocamlcc_apply_n(int64_t clos_val, int64_t argc, int64_t *argv)
+int64_t ocamlcc_apply_n_raw(int64_t clos_val, int64_t argc, int64_t *argv)
 {
     if (argc <= 0) {
         arc_retain_val(clos_val);
@@ -122,7 +122,7 @@ int64_t ocamlcc_apply_n(int64_t clos_val, int64_t argc, int64_t *argv)
                     arc_release_val(argv[i]);
                 return 1;
             }
-            int64_t final = ocamlcc_apply_n(
+            int64_t final = ocamlcc_apply_n_raw(
                 res, argc - (int64_t)c->arity, argv + c->arity);
             arc_release_val(res);
             return final;
@@ -151,7 +151,7 @@ int64_t ocamlcc_apply_n(int64_t clos_val, int64_t argc, int64_t *argv)
                     arc_release_val(argv[i]);
                 return 1;
             }
-            int64_t final = ocamlcc_apply_n(res, argc - (int64_t)rem, argv + rem);
+            int64_t final = ocamlcc_apply_n_raw(res, argc - (int64_t)rem, argv + rem);
             arc_release_val(res);
             return final;
         }
@@ -159,6 +159,22 @@ int64_t ocamlcc_apply_n(int64_t clos_val, int64_t argc, int64_t *argv)
             p->orig, p->total_arity, p->n_applied, p->args, n, argv);
     }
     pal_abort();
+}
+
+int64_t ocamlcc_apply1(int64_t clos_val, int64_t a0)
+{
+    int entered = arc_mutator_enter();
+    int64_t res = ocamlcc_apply1_raw(clos_val, a0);
+    arc_mutator_leave(entered);
+    return res;
+}
+
+int64_t ocamlcc_apply_n(int64_t clos_val, int64_t argc, int64_t *argv)
+{
+    int entered = arc_mutator_enter();
+    int64_t res = ocamlcc_apply_n_raw(clos_val, argc, argv);
+    arc_mutator_leave(entered);
+    return res;
 }
 
 int64_t ocamlcc_apply2(int64_t clos, int64_t a0, int64_t a1)

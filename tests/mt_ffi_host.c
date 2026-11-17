@@ -2,6 +2,7 @@
  * OCaml functions sharing a closure, allocating/dropping ARC objects,
  * using Weak.t, raising/catching exceptions, and running fibers. */
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdint.h>
 
@@ -23,6 +24,7 @@ typedef struct ThreadArg {
     int64_t work_iter_clos;
     int64_t shared_fn_clos;
     int64_t call_shared_clos;
+    int64_t cycle_iter_clos;
     int ok;
 } ThreadArg;
 
@@ -59,8 +61,22 @@ static void *worker(void *p)
             ok = 0;
             break;
         }
+        int64_t cres = ocamlcc_apply1(arg->cycle_iter_clos, tagged_seed);
+        if ((cres >> 1) != ((int64_t)seed * 2 + 1)) {
+            ok = 0;
+            break;
+        }
     }
     arg->ok = ok;
+    return NULL;
+}
+
+static void *collector_worker(void *p)
+{
+    _Atomic int *stop = (_Atomic int *)p;
+    while (atomic_load_explicit(stop, memory_order_acquire) == 0) {
+        ocamlcc_arc_collect(1);
+    }
     return NULL;
 }
 
@@ -69,13 +85,19 @@ int main(void)
     ocamlcc_init_Stdlib();
     ocamlcc_init_Mt_ffi_lib();
     int64_t *mod = (int64_t *)(uintptr_t)ocamlcc_global_Mt_ffi_lib;
-    /* mod[0] = work_iter, mod[1] = shared_fn, mod[2] = call_shared */
+    /* mod[0] = work_iter, mod[1] = shared_fn, mod[2] = call_shared, mod[3] = cycle_iter */
     int64_t work_iter_clos = mod[0];
     int64_t shared_fn_clos = mod[1];
     int64_t call_shared_clos = mod[2];
+    int64_t cycle_iter_clos = mod[3];
 
     ocamlcc_arc_collect(1);
     int64_t base_live = arc_live_objects();
+
+    _Atomic int stop_collector = 0;
+    pthread_t collector;
+    if (pthread_create(&collector, NULL, collector_worker, &stop_collector) != 0)
+        return 2;
 
     pthread_t threads[NUM_THREADS];
     ThreadArg args[NUM_THREADS];
@@ -84,6 +106,7 @@ int main(void)
         args[t].work_iter_clos = work_iter_clos;
         args[t].shared_fn_clos = shared_fn_clos;
         args[t].call_shared_clos = call_shared_clos;
+        args[t].cycle_iter_clos = cycle_iter_clos;
         args[t].ok = 0;
         if (pthread_create(&threads[t], NULL, worker, &args[t]) != 0)
             return 2;
@@ -94,6 +117,8 @@ int main(void)
         if (!args[t].ok)
             all_ok = 0;
     }
+    atomic_store_explicit(&stop_collector, 1, memory_order_release);
+    pthread_join(collector, NULL);
 
     ocamlcc_arc_collect(1);
     int64_t end_live = arc_live_objects();

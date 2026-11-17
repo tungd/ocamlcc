@@ -159,5 +159,13 @@ int64_t ocamlcc_apply2(int64_t clos, int64_t a0, int64_t a1);
 int64_t ocamlcc_apply3(int64_t clos, int64_t a0, int64_t a1, int64_t a2);
 int64_t ocamlcc_apply4(int64_t clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3);
 int64_t ocamlcc_apply_n(int64_t clos, int64_t argc, int64_t *argv);
+int64_t ocamlcc_apply1_raw(int64_t clos, int64_t a0);
+int64_t ocamlcc_apply_n_raw(int64_t clos, int64_t argc, int64_t *argv);
+
+/* Mutator-gate hooks used at C->OCaml FFI entrypoints so ocamlcc_arc_collect
+   drains active FFI mutators safely. C hosts must not drop/mutate cycle-
+   candidate objects directly outside ocamlcc_apply* during collection. */
+int  arc_mutator_enter(void);
+void arc_mutator_leave(int entered);
 
 #endif /* OCAMLCC_ARC_H */

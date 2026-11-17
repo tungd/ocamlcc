@@ -1,4 +1,23 @@
+external arc_collect : unit -> int = "ocamlcc_arc_collect"
+
 exception Mt_boom of int
+
+type cyc_node = {
+  mutable c_next : cyc_node option;
+  c_val : int;
+}
+
+let cycle_iter seed =
+  let a = { c_next = None; c_val = seed } in
+  let b = { c_next = Some a; c_val = seed + 1 } in
+  a.c_next <- Some b;
+  let sum =
+    match a.c_next with
+    | Some n -> n.c_val + a.c_val
+    | None -> 0
+  in
+  let _ = if seed mod 16 = 0 then arc_collect () else 0 in
+  sum
 
 let shared_fn x = (x * 3) + 1
 

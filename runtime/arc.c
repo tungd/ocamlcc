@@ -60,10 +60,43 @@ static inline void arc_unlock(ArcSpinLock *l)
     atomic_store_explicit(&l->locked, 0u, memory_order_release);
 }
 
+static inline int arc_trylock(ArcSpinLock *l)
+{
+    return atomic_exchange_explicit(&l->locked, 1u, memory_order_acquire) == 0u;
+}
+
 static ArcSpinLock g_alloc_lock = { 0u };
 static ArcSpinLock g_weak_lock = { 0u };
 static ArcSpinLock g_cc_lock = { 0u };
+static ArcSpinLock g_cc_collect_lock = { 0u };
 static _Atomic int g_cc_active = 0;
+static _Atomic int g_cc_waiting = 0;
+static _Atomic int g_active_mutators = 0;
+static _Thread_local int tls_os_mutator_active = 0;
+
+int arc_mutator_enter(void)
+{
+    if (tls_os_mutator_active != 0)
+        return 0;
+    for (;;) {
+        while (atomic_load_explicit(&g_cc_waiting, memory_order_acquire) != 0)
+            cpu_relax();
+        atomic_fetch_add_explicit(&g_active_mutators, 1, memory_order_acq_rel);
+        if (atomic_load_explicit(&g_cc_waiting, memory_order_seq_cst) == 0)
+            break;
+        atomic_fetch_sub_explicit(&g_active_mutators, 1, memory_order_release);
+    }
+    tls_os_mutator_active = 1;
+    return 1;
+}
+
+void arc_mutator_leave(int entered)
+{
+    if (entered) {
+        tls_os_mutator_active = 0;
+        atomic_fetch_sub_explicit(&g_active_mutators, 1, memory_order_release);
+    }
+}
 
 static FreeSlot *g_free_lists[NUM_SIZE_CLASSES];
 static uint8_t  *g_slab_cur[NUM_SIZE_CLASSES];
@@ -1133,10 +1166,34 @@ static void cc_collect_leaf_cb(int64_t val, void *ctx)
 int64_t ocamlcc_arc_collect(int64_t unit)
 {
     (void)unit;
+    if (tls_os_mutator_active != 0) {
+        /* Inside an active FFI mutator call: never block on g_cc_collect_lock
+           (an external collector may hold it waiting for us to exit), and
+           skip if other FFI mutator threads are active. */
+        if (!arc_trylock(&g_cc_collect_lock))
+            return tag_int(0);
+    } else {
+        arc_lock(&g_cc_collect_lock);
+    }
+
+    atomic_store_explicit(&g_cc_waiting, 1, memory_order_seq_cst);
+    if (tls_os_mutator_active != 0) {
+        if (atomic_load_explicit(&g_active_mutators, memory_order_seq_cst) > 1) {
+            atomic_store_explicit(&g_cc_waiting, 0, memory_order_release);
+            arc_unlock(&g_cc_collect_lock);
+            return tag_int(0);
+        }
+    } else {
+        while (atomic_load_explicit(&g_active_mutators, memory_order_seq_cst) > 0)
+            cpu_relax();
+    }
+
     arc_lock(&g_cc_lock);
     if (g_cc_roots.len == 0u) {
         arc_unlock(&g_cc_lock);
-        return 1;
+        atomic_store_explicit(&g_cc_waiting, 0, memory_order_release);
+        arc_unlock(&g_cc_collect_lock);
+        return tag_int(0);
     }
 
     atomic_store_explicit(&g_cc_active, 1, memory_order_release);
@@ -1218,6 +1275,8 @@ int64_t ocamlcc_arc_collect(int64_t unit)
     }
 
     int64_t reclaimed = (int64_t)dead.len;
+    atomic_store_explicit(&g_cc_waiting, 0, memory_order_release);
+    arc_unlock(&g_cc_collect_lock);
     trial_free(&tm);
     ccvec_free(&work);
     ccvec_free(&black_work);

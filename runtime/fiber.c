@@ -338,7 +338,7 @@ static void __attribute__((noreturn)) fiber_trampoline(void)
     int64_t arg = self->result;
     self->result = 0;
 
-    int64_t res = ocamlcc_apply1(clos, arg);
+    int64_t res = ocamlcc_apply1_raw(clos, arg);
 
     self->entry_closure = 0;
     arc_release_val(clos);
