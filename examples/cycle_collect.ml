@@ -62,6 +62,12 @@ let drop_parent_holding_cycle w =
   in
   tag
 
+type ('a, 'b) coro
+
+external fiber_create : ('a -> 'b) -> ('a, 'b) coro = "ocamlcc_fiber_create"
+external fiber_resume : ('a, 'b) coro -> 'a -> 'b = "ocamlcc_fiber_resume"
+external fiber_suspend : 'b -> 'a = "ocamlcc_fiber_suspend"
+
 let test_parent_owning_cycle () =
   let live0 = arc_live () in
   let w = weak_create 1 in
@@ -70,6 +76,37 @@ let test_parent_owning_cycle () =
   let alive_after = if weak_check w 0 then 1 else 0 in
   let live_end = arc_live () - live0 in
   ((if tag = 99 then 1 else 0), (if freed > 0 then 1 else 0), alive_after, live_end)
+
+(* Cycle through a suspended fiber's shadow stack: the option block is kept
+   alive only by the fiber's shadow, and the fiber is kept alive only by the
+   option's field. Trial deletion must treat the fiber as a candidate and
+   traverse its shadow-stack values as owning edges. *)
+let test_fiber_shadow_cycle () =
+  let live0 = arc_live () in
+  let w = weak_create 1 in
+  let make_and_drop () =
+    let holder = ref None in
+    let c =
+      fiber_create (fun seed ->
+          let y1 = fiber_suspend (seed + 1) in
+          (* read after the first resume returns: snap = Some c, and it
+             stays live (in the fiber's shadow stack) across suspend #2 *)
+          let snap = !holder in
+          let y2 = fiber_suspend y1 in
+          (match snap with Some _ -> 1 | None -> 0) + y2)
+    in
+    weak_set w 0 (Some c);
+    let y1 = fiber_resume c 2 in
+    holder := Some c;
+    let y2 = fiber_resume c y1 in
+    let alive_during = if weak_check w 0 then 1 else 0 in
+    (y2, alive_during)
+  in
+  let y, alive_during = make_and_drop () in
+  let freed = arc_collect () in
+  let alive_after = if weak_check w 0 then 1 else 0 in
+  let delta = arc_live () - live0 in
+  (y, alive_during, (if freed > 0 then 1 else 0), alive_after, delta)
 
 let () =
   let cval = run_closure_cycle 3 in
@@ -80,6 +117,9 @@ let () =
     test_dropped_cycles ()
   in
   let (ptag, pfreed, palive, pdelta) = test_parent_owning_cycle () in
+  let (fy, falive_during, ffreed, falive_after, fdelta) =
+    test_fiber_shadow_cycle ()
+  in
   let live_final = arc_live () in
   print_int cval;
   print_endline "";
@@ -108,6 +148,16 @@ let () =
   print_int palive;
   print_endline "";
   print_int pdelta;
+  print_endline "";
+  print_int fy;
+  print_endline "";
+  print_int falive_during;
+  print_endline "";
+  print_int ffreed;
+  print_endline "";
+  print_int falive_after;
+  print_endline "";
+  print_int fdelta;
   print_endline "";
   print_int live_final;
   print_endline ""

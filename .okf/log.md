@@ -1,5 +1,33 @@
 # Change Log
 
+- 2026-11-16 (autoagent/1): Weak-drop O(1) registry + fiber cycle collection
+  (TDD) — two cycle-collector/weak fixes in `runtime/arc.c`:
+  (1) **Weak-target registry** — whenever `g_weak_count > 0`, every dying
+  heap object ran `weak_clear_target`, linearly scanning every `ArcWeakArray`
+  slot even for objects never referenced by a `Weak.t`. `weak_set` now
+  records weakly-referenced values in an open-addressing registry
+  (`g_weak_targets`; load factor ≤ 2/3 with tombstone reuse — the first
+  version allowed a fully-occupied cap-2 table whose probes never terminated
+  and hung `weak_cycle`, red run observed; the growth invariant now always
+  leaves empty slots), and `weak_clear_target` only scans when the dying
+  object is registered, removing the entry afterwards. (2) **Fiber cycles** —
+  `is_cycle_candidate_obj` excluded `ARC_TAG_FIBER`, so cycles through a
+  suspended fiber's shadow stack (`record -> fiber -> record`) were
+  uncollectable. Fibers are now candidates and `cc_visit_children` traverses
+  the fiber's owning edges (shadow slots, entry closure, resume/suspend
+  payload, per-fiber exn slots) — the entry-closure edge was essential
+  (red: with only shadow edges, the trial's `scan_black` cascaded back
+  through the fiber's `entry_closure -> holder -> Some -> fiber`,
+  restoring the cycle to black; observed `dead=0`). Collected fibers get
+  reuse tokens, stacks, and buffers torn down in the dead pass. Red probe:
+  `test_fiber_shadow_cycle` in `examples/cycle_collect.ml` observed
+  `freed=0, weak_alive=1, delta=4`; green: `freed=1, weak_alive=0, delta=0`.
+  Deferred as roadmap decisions (documented in
+  [perceus-arc](/concepts/perceus-arc.md)): automatic collector triggering
+  (opt-in design, re-entrancy hazards) and empty-slab reclamation
+  (`slab_free` still returns slots to per-class free lists without ever
+  unmapping an empty 64 KB slab — needs per-slab occupancy metadata).
+  `19/19` examples pass.
 - 2026-11-16 (autoagent/1): epoll watch-registry fix — two bugs in
   `runtime/pal.c`'s `PAL_USE_EPOLL` branch: (1) `pal_poller_watch` returned
   0 (success) for any `epoll_ctl(EPOLL_CTL_ADD)` failure other than EEXIST;

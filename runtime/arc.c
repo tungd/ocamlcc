@@ -79,9 +79,12 @@ static inline int is_cycle_candidate_obj(const ArcHeader *hdr)
     if (hdr->refcount == ARC_IMMORTAL)
         return 0;
     uint16_t tag = hdr->tag;
-    if (tag == (uint16_t)ARC_TAG_STRING || tag == (uint16_t)ARC_TAG_WEAK ||
-        tag == (uint16_t)ARC_TAG_FIBER)
+    if (tag == (uint16_t)ARC_TAG_STRING || tag == (uint16_t)ARC_TAG_WEAK)
         return 0;
+    if (tag == (uint16_t)ARC_TAG_FIBER)
+        return 1; /* the shadow stack holds owning references (see
+                     cc_visit_children); queued fibers keep the scheduler's
+                     +1 from spawn and survive every trial */
     if (tag == (uint16_t)ARC_TAG_ARRAY)
         return hdr->byte_size >= 8u;
     if (tag == (uint16_t)ARC_TAG_PAP)
@@ -152,15 +155,118 @@ static inline void cc_roots_remove(ArcHeader *hdr)
     hdr->reserved &= CC_COLOR_MASK;
 }
 
+/* Weak-target registry: values currently referenced by any Weak.t slot.
+   [weak_clear_target] walks the weak arrays only for objects in this set,
+   so dropping an object that was never weakly referenced is O(1) even when
+   weak arrays exist. Entries are removed when a target dies, keeping the
+   set proportional to live weak data. Stale entries (a value overwritten
+   out of its slot) are harmless: the next death lookup scans once, finds
+   nothing, and removes the entry. */
+#define WEAK_TARGET_TOMBSTONE ((int64_t)1)
+static int64_t *g_weak_targets = NULL;  /* open addressing, power-of-2 cap */
+static uint64_t g_weak_targets_mask = 0; /* cap - 1 */
+static uint64_t g_weak_targets_used = 0; /* live entries + tombstones */
+
+static uint64_t weak_target_hash(int64_t v)
+{
+    uint64_t x = (uint64_t)v;
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33;
+    return x;
+}
+
+static void weak_targets_grow(void)
+{
+    uint64_t new_cap = (g_weak_targets_mask + 1) * 2u;
+    if (new_cap == 0u)
+        new_cap = 1024u;
+    int64_t *nt = (int64_t *)pal_page_alloc((size_t)new_cap * sizeof(int64_t));
+    if (nt == NULL)
+        pal_abort();
+    for (uint64_t i = 0; i < new_cap; i++)
+        nt[i] = 0;
+    uint64_t old_cap = g_weak_targets_mask + 1u;
+    uint64_t used = 0;
+    if (g_weak_targets != NULL) {
+        for (uint64_t i = 0; i < old_cap; i++) {
+            int64_t v = g_weak_targets[i];
+            if (v != 0 && v != WEAK_TARGET_TOMBSTONE) {
+                uint64_t j = weak_target_hash(v) & (new_cap - 1u);
+                while (nt[j] != 0)
+                    j = (j + 1u) & (new_cap - 1u);
+                nt[j] = v;
+                used++;
+            }
+        }
+        pal_page_free(g_weak_targets, (size_t)old_cap * sizeof(int64_t));
+    }
+    g_weak_targets = nt;
+    g_weak_targets_mask = new_cap - 1u;
+    g_weak_targets_used = used;
+}
+
+static void weak_targets_insert(int64_t v)
+{
+    /* Keep at least a third of the table empty so linear probing (which
+       terminates on the first empty slot) always terminates, even for
+       lookups of absent keys. */
+    if (g_weak_targets == NULL ||
+        (g_weak_targets_used + 1u) * 3u > (g_weak_targets_mask + 1u) * 2u)
+        weak_targets_grow();
+    uint64_t j = weak_target_hash(v) & g_weak_targets_mask;
+    while (g_weak_targets[j] != 0 && g_weak_targets[j] != WEAK_TARGET_TOMBSTONE)
+        j = (j + 1u) & g_weak_targets_mask;
+    if (g_weak_targets[j] == 0)
+        g_weak_targets_used++;
+    g_weak_targets[j] = v;
+}
+
+static int weak_targets_contains(int64_t v)
+{
+    if (g_weak_targets == NULL)
+        return 0;
+    uint64_t j = weak_target_hash(v) & g_weak_targets_mask;
+    for (;;) {
+        int64_t s = g_weak_targets[j];
+        if (s == 0)
+            return 0;
+        if (s == v)
+            return 1;
+        j = (j + 1u) & g_weak_targets_mask;
+    }
+}
+
+static void weak_targets_remove(int64_t v)
+{
+    if (g_weak_targets == NULL)
+        return;
+    uint64_t j = weak_target_hash(v) & g_weak_targets_mask;
+    for (;;) {
+        int64_t s = g_weak_targets[j];
+        if (s == 0)
+            return;
+        if (s == v) {
+            g_weak_targets[j] = WEAK_TARGET_TOMBSTONE;
+            return;
+        }
+        j = (j + 1u) & g_weak_targets_mask;
+    }
+}
+
 static void weak_clear_target(int64_t dead_obj)
 {
+    if (!weak_targets_contains(dead_obj))
+        return;
     for (ArcWeakArray *w = g_weak_head; w != NULL; w = w->next) {
         for (uint64_t i = 0; i < w->len; i++) {
             if (w->slots[i] == dead_obj)
                 w->slots[i] = 0;
         }
     }
+    weak_targets_remove(dead_obj);
 }
+
 
 static void weak_unlink(ArcWeakArray *w)
 {
@@ -578,9 +684,25 @@ static void cc_visit_children(ArcHeader *hdr, CcChildFn fn, void *ctx)
         uint32_t n = hdr->byte_size / 8u;
         for (uint32_t i = 0; i < n; i++)
             fn(arr[i], ctx);
+    } else if (tag == (uint16_t)ARC_TAG_FIBER) {
+        /* The fiber owns its shadow-stack values (live across suspension
+           points), the entry closure, the resume/suspend payload, and its
+           per-fiber exception slots — each is an owning child edge. */
+        const Fiber *f = (const Fiber *)(hdr + 1);
+        if (f->shadow_base != NULL) {
+            for (const uint64_t *p = f->shadow_base; p < f->shadow_sp; p++)
+                fn((int64_t)*p, ctx);
+        }
+        if (f->entry_closure != 0)
+            fn(f->entry_closure, ctx);
+        if (f->result != 0)
+            fn(f->result, ctx);
+        if (f->exn_slot != 0)
+            fn(f->exn_slot, ctx);
+        if (f->pending_exn != 0)
+            fn(f->pending_exn, ctx);
     } else if (tag != (uint16_t)ARC_TAG_STRING &&
-               tag != (uint16_t)ARC_TAG_WEAK &&
-               tag != (uint16_t)ARC_TAG_FIBER) {
+               tag != (uint16_t)ARC_TAG_WEAK) {
         int64_t *fields = (int64_t *)(hdr + 1);
         uint32_t n = hdr->scan_fields;
         for (uint32_t i = 0; i < n; i++)
@@ -737,9 +859,49 @@ int64_t ocamlcc_arc_collect(int64_t unit)
     int64_t live_before = g_live_objects;
     for (size_t i = 0; i < dead.len; i++) {
         ArcHeader *w = dead.data[i];
+        int is_fiber = (w->tag == (uint16_t)ARC_TAG_FIBER);
+        Fiber *f = is_fiber ? (Fiber *)(w + 1) : NULL;
+        if (is_fiber) {
+            /* Reuse tokens are not values: release them here. The fiber's
+               value edges (shadow slots, entry closure, payload, exn slots)
+               are released below through [cc_release_leaf_cb] — candidate
+               children are in [dead] and must not be double-released. */
+            while (f->reuse_sp > f->reuse_base) {
+                f->reuse_sp--;
+                arc_free_reuse(*f->reuse_sp);
+            }
+        }
         if (g_weak_count > 0)
             weak_clear_target((int64_t)(uintptr_t)(w + 1));
         cc_visit_children(w, cc_release_leaf_cb, NULL);
+        if (is_fiber) {
+            f->entry_closure = 0;
+            f->result = 0;
+            f->exn_slot = 0;
+            f->pending_exn = 0;
+            if (f->shadow_base != NULL) {
+                pal_page_free(f->shadow_base,
+                              (size_t)(f->shadow_end - f->shadow_base) *
+                                  sizeof(uint64_t));
+                f->shadow_base = NULL;
+                f->shadow_sp = NULL;
+                f->shadow_end = NULL;
+            }
+            if (f->reuse_base != NULL) {
+                pal_page_free(f->reuse_base,
+                              (size_t)(f->reuse_end - f->reuse_base) *
+                                  sizeof(void *));
+                f->reuse_base = NULL;
+                f->reuse_sp = NULL;
+                f->reuse_end = NULL;
+            }
+            if (f->c_stack != NULL) {
+                pal_page_free(f->c_stack, f->c_stack_bytes);
+                f->c_stack = NULL;
+                f->c_stack_bytes = 0;
+            }
+            f->state = FIBER_DONE;
+        }
     }
     for (size_t i = 0; i < dead.len; i++) {
         g_live_objects--;
@@ -799,6 +961,8 @@ int64_t ocamlcc_weak_set(int64_t weak_val, int64_t idx_val, int64_t opt_val)
     } else {
         int64_t *some = (int64_t *)(uintptr_t)opt_val;
         w->slots[idx] = some[0];
+        if (is_heap_ptr(some[0]))
+            weak_targets_insert(some[0]);
     }
     return 1;
 }
