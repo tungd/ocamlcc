@@ -24,3 +24,15 @@ val compile_interface :
   (string, error) result
 (** Parse, typecheck, and write [.cmi] for an OCaml [.mli] interface file.
     Returns the path to the written [.cmi] file. *)
+
+val with_typed_interface :
+  ?include_dirs:string list ->
+  ?nopervasives:bool ->
+  ?nostdlib:bool ->
+  filename:string ->
+  string ->
+  (Typedtree.signature -> Env.t -> 'a) ->
+  ('a, error) result
+(** Parse and typecheck an [.mli] interface via [Typemod.type_interface] and
+    run a callback over the typed signature and environment while compiler-libs
+    flags are active. *)

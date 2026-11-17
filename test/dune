@@ -201,3 +201,20 @@
  (deps builtins_test.actual builtins_test.expected)
  (action
   (diff builtins_test.expected builtins_test.actual)))
+
+(executable
+ (name c_bindgen_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps c_bindgen_test.exe c_bindgen_test.expected)
+ (action
+  (with-stdout-to c_bindgen_test.actual
+   (run ./c_bindgen_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps c_bindgen_test.actual c_bindgen_test.expected)
+ (action
+  (diff c_bindgen_test.expected c_bindgen_test.actual)))

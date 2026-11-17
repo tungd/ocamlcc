@@ -73,6 +73,7 @@ int64_t ocamlcc_weak_table_cap(int64_t unit);
 
 int64_t ocamlcc_get_exn(void);
 void    ocamlcc_set_exn(int64_t exn);
+void    ocamlcc_format_exn(int64_t ex, char *buf, size_t cap);
 void    ocamlcc_raise_invalid_arg_oob(void);
 
 /* Raise Invalid_argument for a coroutine/scheduler cross-call (e.g.

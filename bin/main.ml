@@ -3,6 +3,7 @@
    Subcommands:
      ocamlcc compile [flags] <file.ml> [-o <out.ssa>]   emit QBE IL
      ocamlcc compile-mli [flags] <file.mli> [-o <out.cmi>]  emit .cmi
+     ocamlcc bindgen [flags] <file.mli> [-o <out.h>] [--shim <out.c>]  emit C header + shim
      ocamlcc dump-lambda [flags] <file.ml>              print the Lambda IR *)
 
 let usage =
@@ -10,6 +11,8 @@ let usage =
    [--cmi-prefix p] [--mod] <file.ml> [-o <out.ssa>]\n\
    \       ocamlcc compile-mli [-I dir] [--nostdlib] [--nopervasives] \
    <file.mli> [-o <out.cmi>]\n\
+   \       ocamlcc bindgen [-I dir] [--nostdlib] [--nopervasives] \
+   [--shim <out.c>] <file.mli> [-o <out.h>]\n\
    \       ocamlcc dump-lambda [-I dir] [--nostdlib] [--nopervasives] <file.ml>"
 
 type cli_opts = {
@@ -19,6 +22,7 @@ type cli_opts = {
   emit_cmi : bool;
   cmi_prefix : string option;
   is_mod : bool;
+  shim_out : string option;
   out : string option;
   input : string option;
 }
@@ -30,6 +34,7 @@ let default_opts =
     emit_cmi = false;
     cmi_prefix = None;
     is_mod = false;
+    shim_out = None;
     out = None;
     input = None }
 
@@ -44,6 +49,7 @@ let parse_opts args =
     | "--cmi-prefix" :: p :: rest ->
         go { opts with cmi_prefix = Some p; emit_cmi = true } rest
     | "--mod" :: rest -> go { opts with is_mod = true } rest
+    | "--shim" :: path :: rest -> go { opts with shim_out = Some path } rest
     | "-o" :: path :: rest -> go { opts with out = Some path } rest
     | arg :: _ when String.length arg > 0 && arg.[0] = '-' ->
         Error (Printf.sprintf "unknown flag: %s" arg)
@@ -141,6 +147,40 @@ let dump_lambda opts =
           Format.pp_print_newline Format.std_formatter ();
           0)
 
+let bindgen opts =
+  match opts.input with
+  | None ->
+      prerr_endline usage;
+      2
+  | Some file -> (
+      let modname = Pipeline.module_name_of_file file in
+      let header_include =
+        match opts.out with
+        | Some h -> Some (Filename.basename h)
+        | None -> None
+      in
+      match
+        C_bindgen.generate_file ~include_dirs:opts.include_dirs
+          ~nopervasives:opts.nopervasives ~nostdlib:opts.nostdlib
+          ?header_include ~filename:file ~modname ()
+      with
+      | Error msg ->
+          prerr_endline ("ocamlcc: error: " ^ msg);
+          2
+      | Ok { header; shim_c } ->
+          write_out opts.out header;
+          (let shim_path =
+             match (opts.shim_out, opts.out) with
+             | Some p, _ -> Some p
+             | None, Some h ->
+                 Some (Filename.remove_extension h ^ "_shim.c")
+             | None, None -> None
+           in
+           match shim_path with
+           | Some p -> write_out (Some p) shim_c
+           | None -> ());
+          0)
+
 let () =
   let rest =
     if Array.length Sys.argv > 2 then
@@ -161,6 +201,7 @@ let () =
           match Sys.argv.(1) with
           | "compile" -> compile opts
           | "compile-mli" -> compile_mli opts
+          | "bindgen" -> bindgen opts
           | "dump-lambda" -> dump_lambda opts
           | _ ->
               prerr_endline usage;

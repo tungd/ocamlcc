@@ -1,5 +1,23 @@
 # Change Log
 
+- 2026-11-17 (autoagent/1): Add `.mli -> .h` C99 header & FFI shim generator (`C_bindgen`, `ocamlcc bindgen`) (TDD) —
+  implemented `lib/c_bindgen.ml`/`lib/c_bindgen.mli` walking typed `.mli`
+  signatures via `Frontend.with_typed_interface` (`Typemod.type_interface` +
+  `sig_final_env`), emitting C99 headers + standalone `_shim.c` wrappers
+  covering `unit`, `int`, `bool`, `char`, `float`, `string`, `int32`,
+  `int64`, `nativeint`, `'a option` (`ocamlcc_opt_*`), tuples
+  (`ocamlcc_tuple_*`), regular and all-float records (`Record_regular` /
+  `Record_float` / `Record_unboxed`), and opaque abstract types (`_retain`/
+  `_release` handles). Added freestanding `ocamlcc_format_exn` in
+  `runtime/arc.c`/`runtime/arc.h` so raised OCaml exceptions are cleared
+  from `tls_exn_slot`, released, and surfaced via an explicit
+  `ocamlcc_error_t *err` out-parameter. Wired `ocamlcc bindgen` in
+  `bin/main.ml`, added `test/c_bindgen_test.ml` (`dune runtest` 13/13), and
+  added end-to-end `-std=c99 -Wall -Wextra -Werror` + ASan/UBSan test
+  `examples/bindgen_lib.{mli,ml}` + `tests/bindgen_host.c` (`test_bindgen`
+  + `asan_bindgen`, `delta=0`). `ninja test` (25/25), `ninja asan_test`
+  (15/15).
+
 - 2026-11-17 (autoagent/1): Sync `README.md` with current test suites and QBE 1.3 —
   updated `README.md` from stale 19 checked examples / QBE 1.2 to reflect
   `ninja test` (24/24), `ninja asan_test` (14/14), `dune runtest` (12/12),

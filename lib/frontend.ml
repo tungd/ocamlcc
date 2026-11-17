@@ -93,3 +93,17 @@ let compile_interface ?(include_dirs = []) ?output_prefix
         Typemod.save_signature unit_info sg env cmi;
         Ok (Unit_info.Artifact.filename cmi_art))
   with exn -> Error { msg = error_msg exn }
+
+let with_typed_interface ?(include_dirs = []) ?(nopervasives = false)
+    ?(nostdlib = false) ~filename source f : ('a, error) result =
+  try
+    with_flags ~include_dirs ~emit_cmi:false ~nopervasives ~nostdlib (fun () ->
+        Location.input_name := filename;
+        let lexbuf = Lexing.from_string source in
+        lexbuf.Lexing.lex_curr_p <-
+          { lexbuf.Lexing.lex_curr_p with pos_fname = filename };
+        let parsetree = Parse.interface lexbuf in
+        let env = Compmisc.initial_env () in
+        let sg = Typemod.type_interface env parsetree in
+        Ok (f sg sg.Typedtree.sig_final_env))
+  with exn -> Error { msg = error_msg exn }

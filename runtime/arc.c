@@ -399,6 +399,98 @@ static _Atomic int64_t g_next_oo_id = 0;
 int64_t ocamlcc_get_exn(void) { return tls_exn_slot; }
 void ocamlcc_set_exn(int64_t exn) { tls_exn_slot = exn; }
 
+static size_t exn_append_bytes(char *buf, size_t cap, size_t pos,
+                               const char *src, size_t len)
+{
+    if (pos + 1u >= cap)
+        return pos;
+    size_t avail = cap - 1u - pos;
+    size_t n = (len < avail) ? len : avail;
+    if (n > 0u)
+        pal_memcpy(buf + pos, src, n);
+    return pos + n;
+}
+
+static size_t exn_append_cstr(char *buf, size_t cap, size_t pos, const char *s)
+{
+    size_t len = 0;
+    while (s[len] != '\0')
+        len++;
+    return exn_append_bytes(buf, cap, pos, s, len);
+}
+
+static size_t exn_append_i64(char *buf, size_t cap, size_t pos, int64_t v)
+{
+    char tmp[32];
+    size_t n = 0;
+    uint64_t u;
+    if (v < 0) {
+        pos = exn_append_bytes(buf, cap, pos, "-", 1u);
+        u = (uint64_t)(-(v + 1)) + 1ull;
+    } else {
+        u = (uint64_t)v;
+    }
+    do {
+        tmp[n++] = (char)('0' + (u % 10ull));
+        u /= 10ull;
+    } while (u > 0ull);
+    for (size_t i = n; i > 0u; i--)
+        pos = exn_append_bytes(buf, cap, pos, &tmp[i - 1u], 1u);
+    return pos;
+}
+
+void ocamlcc_format_exn(int64_t ex, char *buf, size_t cap)
+{
+    if (buf == NULL || cap == 0u)
+        return;
+    if (ex == 0 || (ex & 1) != 0) {
+        size_t pos = exn_append_cstr(buf, cap, 0u, "OCaml exception");
+        buf[pos] = '\0';
+        return;
+    }
+    const ArcHeader *eh = (const ArcHeader *)(uintptr_t)ex - 1;
+    int64_t ctor = 0;
+    if (eh->tag == 248u) {
+        ctor = ex;
+    } else if (eh->tag == 0u && eh->scan_fields >= 1u) {
+        ctor = ((const int64_t *)(uintptr_t)ex)[0];
+    }
+    size_t pos = 0;
+    if (ctor != 0 && (ctor & 1) == 0) {
+        const ArcHeader *ch = (const ArcHeader *)(uintptr_t)ctor - 1;
+        if (ch->tag == 248u && ch->byte_size >= 8u) {
+            int64_t name_v = ((const int64_t *)(uintptr_t)ctor)[0];
+            if (name_v != 0 && (name_v & 1) == 0) {
+                const ArcHeader *nh = (const ArcHeader *)(uintptr_t)name_v - 1;
+                if (nh->tag == (uint16_t)ARC_TAG_STRING) {
+                    pos = exn_append_bytes(buf, cap, pos,
+                                           (const char *)(uintptr_t)name_v,
+                                           (size_t)nh->reserved);
+                }
+            }
+        }
+    }
+    if (pos == 0u)
+        pos = exn_append_cstr(buf, cap, pos, "OCaml exception");
+    if (eh->tag == 0u && eh->scan_fields >= 2u) {
+        int64_t arg = ((const int64_t *)(uintptr_t)ex)[1];
+        if (arg != 0 && (arg & 1) == 0) {
+            const ArcHeader *ah = (const ArcHeader *)(uintptr_t)arg - 1;
+            if (ah->tag == (uint16_t)ARC_TAG_STRING) {
+                pos = exn_append_cstr(buf, cap, pos, ": ");
+                pos = exn_append_bytes(buf, cap, pos,
+                                       (const char *)(uintptr_t)arg,
+                                       (size_t)ah->reserved);
+            }
+        } else if ((arg & 1) != 0) {
+            pos = exn_append_cstr(buf, cap, pos, "(");
+            pos = exn_append_i64(buf, cap, pos, arg >> 1);
+            pos = exn_append_cstr(buf, cap, pos, ")");
+        }
+    }
+    buf[pos] = '\0';
+}
+
 static inline int64_t tag_int(int64_t n)
 {
     return (int64_t)(((uint64_t)n << 1) | 1ull);
