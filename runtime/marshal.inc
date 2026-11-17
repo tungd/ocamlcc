@@ -96,6 +96,39 @@ static void m_float(MWriter *w, const void *p)
     uint64_t bits; pal_memcpy(&bits, p, 8);
     for (int j = 0; j < 8; j++) m_put(w, bits >> (8*j), 1);
 }
+static void m_write_bigarray(MWriter *w, const ArcBigarray *a)
+{
+    m_put(w, 0x18, 1); m_bytes(w, "_bigarr02", 10);
+    m_put(w, (4 + a->ndims) * 4, 4); m_put(w, (4 + a->ndims) * 8, 8);
+    m_put(w, a->ndims, 4); m_put(w, a->kind | (a->layout << 8), 4);
+    for (int i = 0; i < a->ndims; i++) {
+        if (a->dims[i] < 65535) m_put(w, a->dims[i], 2);
+        else { m_put(w, 65535, 2); m_put(w, a->dims[i], 8); }
+    }
+    size_t count = ba_count(a); int width = ba_sizes[a->kind];
+    if (a->kind == 10 || a->kind == 11) { count *= 2; width /= 2; }
+    if (a->kind == 8 || a->kind == 9) {
+        const int64_t *data = (const void *)a->data;
+        int64_t min = a->kind == 8 ? INT32_MIN / 2 : INT32_MIN;
+        int64_t max = a->kind == 8 ? INT32_MAX / 2 : INT32_MAX;
+        width = 4;
+        for (size_t i = 0; i < count; i++) if (data[i] < min || data[i] > max) { width = 8; break; }
+        m_put(w, width == 8, 1);
+        for (size_t i = 0; i < count; i++) m_put(w, data[i], width);
+    } else {
+        for (size_t i = 0; i < count; i++) {
+            uint64_t bits = 0;
+            /* Copy into a same-width unsigned type for host byte order. */
+            const uint8_t *p = a->data + i * width;
+            if (width == 1) bits = *p;
+            else if (width == 2) { uint16_t x; pal_memcpy(&x, p, 2); bits = x; }
+            else if (width == 4) { uint32_t x; pal_memcpy(&x, p, 4); bits = x; }
+            else pal_memcpy(&bits, p, 8);
+            m_put(w, bits, width);
+        }
+    }
+    w->words32 += 6 + a->ndims; w->words64 += 6 + a->ndims;
+}
 static void m_write_value(MWriter *w, int64_t root)
 {
     m_push(w, root, 0);
@@ -139,6 +172,7 @@ static void m_write_value(MWriter *w, int64_t root)
             for (uint64_t i = 0; i < n; i++) m_float(w, (uint8_t *)(uintptr_t)v + 8*i);
             w->words32 += 1 + 2*n; w->words64 += 1 + n;
         } else if (tag == ARC_TAG_CUSTOM) {
+            if (h->reserved == ARC_CUSTOM_BIGARRAY) { m_write_bigarray(w, (void *)(uintptr_t)v); continue; }
             if (h->reserved > ARC_CUSTOM_NATIVEINT) {
                 w->error = "output_value: abstract value (Custom)"; w->invalid = 1; break;
             }
@@ -257,6 +291,46 @@ static int m_read_header(MReader *r, size_t *header, uint64_t *length)
     } else { r->error = "input_value: bad object"; return 0; }
     return !r->error;
 }
+static int64_t m_read_bigarray(MReader *r, uint64_t size32, uint64_t size64)
+{
+    uint64_t n = m_get(r, 4), flags = m_get(r, 4);
+    int kind = flags & 255, layout = (flags >> 8) & 1;
+    if (n > BA_MAX_DIMS || kind >= 14 || flags != (uint64_t)(kind | layout << 8)
+        || size32 != (4 + n) * 4 || size64 != (4 + n) * 8) {
+        r->error = "input_value: invalid bigarray descriptor"; return 1;
+    }
+    int64_t dims[BA_MAX_DIMS]; size_t count = 1;
+    for (uint64_t i = 0; i < n; i++) {
+        uint64_t d = m_get(r, 2); if (d == 65535) d = m_get(r, 8);
+        if (d > (uint64_t)(INT64_MAX >> 1) || (d && count > (SIZE_MAX / ba_sizes[kind]) / d)) {
+            r->error = "input_value: bigarray size overflow"; return 1;
+        }
+        dims[i] = tag_int(d); count *= d;
+    }
+    int width = ba_sizes[kind]; size_t elements = count;
+    if (kind == 10 || kind == 11) { elements *= 2; width /= 2; }
+    if (kind == 8 || kind == 9) {
+        int wide = m_get(r, 1);
+        if (wide != 0 && wide != 1) { r->error = "input_value: invalid bigarray integer size"; return 1; }
+        width = wide ? 8 : 4;
+    }
+    if (r->error || elements > (r->end - r->pos) / width) { r->error = "input_value: truncated object"; return 1; }
+    int64_t dimensions = (int64_t)(uintptr_t)arc_alloc_array(n, 1);
+    pal_memcpy((void *)(uintptr_t)dimensions, dims, n * 8);
+    int64_t value = caml_ba_create(tag_int(kind), tag_int(layout), dimensions);
+    arc_release_val(dimensions);
+    if (ocamlcc_get_exn()) { r->error = "input_value: invalid bigarray"; return 1; }
+    ArcBigarray *a = (void *)(uintptr_t)value;
+    for (size_t i = 0; i < elements; i++) {
+        uint64_t bits = m_get(r, width);
+        if (kind == 8 || kind == 9) ((int64_t *)a->data)[i] = width == 4 ? (int64_t)(int32_t)bits : (int64_t)bits;
+        else if (width == 1) a->data[i] = bits;
+        else if (width == 2) { uint16_t x = bits; pal_memcpy(a->data + i * 2, &x, 2); }
+        else if (width == 4) { uint32_t x = bits; pal_memcpy(a->data + i * 4, &x, 4); }
+        else pal_memcpy(a->data + i * 8, &bits, 8);
+    }
+    m_own(r, value, 1); return value;
+}
 static int64_t m_decode(MReader *r)
 {
     int64_t root = 1; m_slot(r, &root);
@@ -291,7 +365,13 @@ static int64_t m_decode(MReader *r)
             do { id[i] = (char)m_get(r, 1); } while (!r->error && id[i] && ++i < sizeof(id)-1);
             id[sizeof(id)-1] = 0;
             if (r->error) break;
-            if (code == 0x18) { m_get(r, 4); m_get(r, 8); }
+            uint64_t size32 = 0, size64 = 0;
+            if (code == 0x18) { size32 = m_get(r, 4); size64 = m_get(r, 8); }
+            if (id[0] == '_' && id[1] == 'b' && id[2] == 'i' && id[3] == 'g' && id[4] == 'a' && id[5] == 'r' && id[6] == 'r' && id[7] == '0' && id[8] == '2' && id[9] == 0) {
+                if (code != 0x18) { r->error = "input_value: invalid custom block length"; break; }
+                value = m_read_bigarray(r, size32, size64); break;
+            }
+            if (code != 0x19) { r->error = "input_value: invalid custom block length"; break; }
             int kind = id[0] == '_' && id[2] == 0 ? (id[1] == 'i' ? 0 : id[1] == 'j' ? 1 : id[1] == 'n' ? 2 : -1) : -1;
             if (kind < 0) { r->error = "input_value: unknown custom block identifier"; break; }
             int64_t bits;
@@ -309,7 +389,7 @@ static int64_t m_decode(MReader *r)
         }
         if (r->error) break;
         if (block) {
-            if (tag >= 245 && tag != 246 && tag != 250 && !(n == 0 && tag == 254)) { r->error = "input_value: unsupported block tag"; break; }
+            if (tag >= 245 && tag != 246 && tag != 248 && tag != 250 && !(n == 0 && tag == 254)) { r->error = "input_value: unsupported block tag"; break; }
             if (n > (UINT32_MAX - sizeof(ArcHeader)) / 8 || (tag != 0 && n > UINT16_MAX)) { r->error = "input_value: block too large"; break; }
             if (!n && r->atoms[tag]) value = r->atoms[tag];
             else {
@@ -333,7 +413,8 @@ static int64_t m_decode(MReader *r)
         }
         arc_retain_val(value); *slot = value;
     }
-    if (!r->error && r->pos != r->end) r->error = "input_value: trailing data in object";
+    if (!r->error && (r->pos != r->end || (r->expected && r->count != r->expected)))
+        r->error = "input_value: ill-formed message";
     if (r->error) {
         /* Owners keep all nodes alive while partial edges (including cycles)
            are severed, then ordinary ARC destruction releases each node. */

@@ -50,8 +50,13 @@ registers objects before their fields, retains each backpatch, and owns partial
 nodes until successful return or cleanup. Arrays and ordinary tag-zero blocks
 share OCaml structural comparison/hash semantics despite their ARC tags.
 Functional values raise `Invalid_argument`, including when `Closures` is set;
-there is no portable native code-pointer registry. Bigarray Marshal payloads
-are the next interoperability slice.
+there is no portable native code-pointer registry. Bigarray custom payloads use upstream `_bigarr02` descriptors, packed dimensions,
+layout/kind flags, big-endian element data, and native-int width markers.
+Repository regressions preserve sharing/cycles and distinguish `No_sharing`,
+traverse 50,000-element lists without C recursion, read sequential channel
+values/EOF, and check `Compat_32`. A checked-in wire fixture matches stock
+OCaml byte-for-byte for integer boundaries, strings, float arrays, boxed
+integers, sharing flags, and Bigarray payloads.
 The initial public API regression verifies int/float64 access, dimensions,
 bounds, and C/Fortran indexing. Follow-up regressions verify view lifetime,
 structural comparison/hash equality, and complex record representation.
@@ -61,8 +66,11 @@ LXM algorithm, so upstream testvectors can inspect the state directly.
 
 Eight of nine selected upstream standalone tests pass: change_layout, fftba,
 pr5115, reshape_overflow, specialized, weak_bigarray, channel bigarrays, and
-Random testvectors. The large Bigarray test reaches its Marshal I/O section
-with no preceding Bad result lines and fails at the unsupported Marshal stub.
+Random testvectors. After Marshal implementation the large Bigarray test and marshal_bigarray
+pass, along with all three Hashtbl tests and intern_final. Dynarray and
+Floatarray expose additional object/empty-array representation differences;
+the upstream fuzzy test includes closures and fails on the deliberate
+functional-value rejection.
 The C-stub subarray test is explicitly skipped by the native runner.
 
 Use `--tests 'lib-bigarray/*'` to select upstream tests and `--reuse-stdlib`

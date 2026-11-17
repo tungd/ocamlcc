@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-17 (codex/1): Add standard Bigarray Marshal custom payloads after a failing public roundtrip. Verify stock byte-for-byte wire fixtures, sharing/cycles, No_sharing, deep lists, sequential channels/EOF, and Compat_32. Upstream bigarrays, marshal_bigarray, all Hashtbl tests, and intern_final pass.
+
 - 2026-11-17 (codex/1): Add iterative Marshal encoding/decoding, external sharing tables, ARC backpatch ownership, standard scalar/block/string/float/boxed-integer wire formats, buffer/offset/size APIs, and channels. Public core roundtrip fixture fails on missing primitives before implementation and passes after. All 72/72 stdlib modules now compile; normalize array/tag-zero structural comparison and hashing for decoded values.
 
 - 2026-11-17 (codex/1): Complete Bigarray structural comparisons/hashes, complex records, channel I/O, overflow diagnostics, and Bigarray-backed Random state. Eight of nine selected upstream tests pass; the remaining Bigarray test reaches its unsupported Marshal section. Extend native runner with selection, reuse, JSON receipts, logs, and isolated test working directories.
