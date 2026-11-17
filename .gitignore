@@ -11,3 +11,6 @@ build/
 # editor / OS
 *.swp
 .DS_Store
+
+# Python runner bytecode
+__pycache__/

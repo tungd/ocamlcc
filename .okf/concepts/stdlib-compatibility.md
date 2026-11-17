@@ -93,3 +93,15 @@ Generated sources, commands, executables, and outputs stay under
 [^runner]: Native compilation and test orchestration in the compatibility runner.
 [^upstream]: Vendored source identity and test inventory.
 [^runtime]: ARC/PAL implementation of upstream primitives.
+
+# Runtime ownership checks
+
+`tests/stdlib_runtime.c` exercises malformed streams containing a partially
+constructed cycle, every truncation of a valid stream, payload-byte mutations,
+successful cycle collection, and a Bigarray view after its owner is dropped.
+Both native and ASan/UBSan runs pass with the original live-object count restored.
+The test is integrated into `ninja -j1 test` and `ninja -j1 asan_test`.
+`ninja -j1 stdlib_compat` builds the compatibility archive, records the upstream
+matrix, and runs repository API regressions. The default compiler/driver still
+uses the smaller original `stdlib/` archive unless given the compatibility
+CMI/archive paths explicitly; 72/72 describes the compatibility build.

@@ -421,7 +421,11 @@ build $builddir/bindgen_lib.h | $builddir/bindgen_lib_shim.c: ocamlcc_bindgen ex
 build $builddir/bindgen_host: cc_bindgen_host tests/bindgen_host.c $builddir/bindgen_lib_shim.c $builddir/bindgen_lib.s $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a | $builddir/bindgen_lib.h
 build test_bindgen: run_bindgen | $builddir/bindgen_host tests/bindgen_host.expected
 
-build test: phony test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
+build $builddir/stdlib_runtime: cc_link tests/stdlib_runtime.c $builddir/rt/libocamlrt.a
+build test_stdlib_runtime: run_test | $builddir/stdlib_runtime tests/stdlib_runtime.expected
+  name = stdlib_runtime
+
+build test: phony test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
 
 rule cc_rt_asan
   command = $cc $rt_cflags -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iruntime -c $in -o $out
@@ -512,6 +516,17 @@ rule run_asan_bindgen
 
 build asan_bindgen: run_asan_bindgen | $builddir/asan/bindgen_host_bin tests/bindgen_host.expected
 
-build asan_test: phony asan_adt asan_closures asan_arrays_bytes asan_arc_test asan_exn asan_weak_cycle asan_cycle_collect asan_mod_main asan_stdlib_test asan_fiber_test asan_fiber_io asan_mt_ffi asan_tupled_letrec asan_primitives_test asan_bindgen
+build $builddir/asan/stdlib_runtime: cc_link_asan tests/stdlib_runtime.c $builddir/asan/rt/libocamlrt.a
+build asan_stdlib_runtime: run_asan_test | $builddir/asan/stdlib_runtime tests/stdlib_runtime.expected
+  name = stdlib_runtime
+
+build asan_test: phony asan_stdlib_runtime asan_adt asan_closures asan_arrays_bytes asan_arc_test asan_exn asan_weak_cycle asan_cycle_collect asan_mod_main asan_stdlib_test asan_fiber_test asan_fiber_io asan_mt_ffi asan_tupled_letrec asan_primitives_test asan_bindgen
+
+rule run_stdlib_compat
+  command = python3 tools/stdlib_compat.py && python3 tools/stdlib_regressions.py
+  description = TEST upstream stdlib compatibility
+  pool = console
+
+build stdlib_compat: run_stdlib_compat | $builddir/bin/ocamlcc $builddir/qbe/qbe $builddir/rt/libocamlrt.a
 
 default $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a $builddir/bin/ocamlcc $builddir/hello

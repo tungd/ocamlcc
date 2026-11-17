@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-17 (codex/1): Add native and ASan/UBSan ownership checks for malformed partial cycles, truncation/mutation, cycle collection, and Bigarray backing lifetime. Both pass with no live-object delta. Document the compatibility build and add the opt-in `ninja -j1 stdlib_compat` target.
+
 - 2026-11-17 (codex/1): Fix object OID comparison/freshening and empty float-array structural equality after stock-passing regressions. Upstream Dynarray and Floatarray tests now pass. Bound decoded block allocation by the remaining payload and preserve channel Sys_error exceptions during reads.
 
 - 2026-11-17 (codex/1): Add standard Bigarray Marshal custom payloads after a failing public roundtrip. Verify stock byte-for-byte wire fixtures, sharing/cycles, No_sharing, deep lists, sequential channels/EOF, and Compat_32. Upstream bigarrays, marshal_bigarray, all Hashtbl tests, and intern_final pass.

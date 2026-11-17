@@ -76,6 +76,37 @@ The pipeline:
 4. `stdlib/*.ml` → `build/stdlib/libocamlstdlib.a`
 5. `examples/*.ml` → `.ssa` (ocamlcc) → `.s` (qbe) → native executable (cc)
 
+## Upstream standard library
+
+The pinned OCaml 5.5.0 sources and `lib-*` tests live under
+`vendor/ocaml-stdlib/`; `stdlib/overlay/` provides ARC-specific replacements.
+This compatibility build is separate from the smaller default stdlib archive.
+All 72 standard library modules compile with the host OCaml 5.5 frontend.
+
+```sh
+ninja -j1 stdlib_compat                 # build compatibility stdlib, run upstream tests and API regressions
+python3 tools/stdlib_compat.py --skip-tests
+python3 tools/stdlib_regressions.py     # generated lexer/parser and Bigarray/Marshal API tests
+python3 tools/stdlib_regressions.py --stock
+python3 tools/stdlib_compat.py --reuse-stdlib --tests 'lib-bigarray/*' 'lib-marshal/*'
+```
+
+The upstream runner links native tests to our compatibility archive and ARC
+runtime. It records every result in `build/stdlib_compat/report.md` and `.json`,
+with full command logs. Its exit code reports whether the matrix completed;
+consult the report for individual failures and skips. It skips toplevel expect
+tests, C-stub tests, and unsupported ocamltest directives. Tests execute in
+copied working directories. Repository API regressions return nonzero on failure.
+
+Lexing and Parsing use pure OCaml table interpreters. Bigarray views retain a
+shared ARC backing buffer. Marshal reads/writes the standard uncompressed
+format, preserves sharing/cycles, and supports Bigarray payloads; functional
+values raise `Invalid_argument` even with `Marshal.Closures`. Upstream tests
+that require native closure serialization or compression are outside that
+implementation scope. See [.okf/concepts/stdlib-compatibility.md](.okf/concepts/stdlib-compatibility.md)
+for current coverage and [tests/stdlib/README.md](tests/stdlib/README.md)
+for reproducible fixtures.
+
 ## Layout
 
 ```
