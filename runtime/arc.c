@@ -54,6 +54,18 @@ extern void ocamlcc_c_mutex_free(void *p);
 extern void ocamlcc_c_cond_free(void *c);
 extern void ocamlcc_c_blake2_free(void *p);
 
+typedef struct ArcBigarrayBuffer {
+    uint8_t *data;
+    size_t bytes;
+} ArcBigarrayBuffer;
+
+typedef struct ArcBigarray {
+    ArcBigarrayBuffer *backing;
+    uint8_t *data;
+    int ndims, kind, layout;
+    int64_t dims[16];
+} ArcBigarray;
+
 typedef struct ArcSpinLock {
     _Atomic uint32_t locked;
 } ArcSpinLock;
@@ -1052,6 +1064,13 @@ static void release_subtree(ArcHeader *root, int free_root)
                 ocamlcc_c_cond_free(p);
             else if (cur->reserved == ARC_CUSTOM_BLAKE2)
                 ocamlcc_c_blake2_free(p);
+            else if (cur->reserved == ARC_CUSTOM_BIGARRAY) {
+                ArcBigarray *a = (void *)(cur + 1);
+                drop_child_val(&w, (int64_t)(uintptr_t)a->backing, &tail);
+            } else if (cur->reserved == ARC_CUSTOM_BIGARRAY_BUFFER) {
+                ArcBigarrayBuffer *b = (void *)(cur + 1);
+                pal_page_free(b->data, b->bytes);
+            }
         } else if (!is_unscanned_leaf_tag(tag)) {
             int64_t *fields = (int64_t *)(cur + 1);
             uint32_t n = cur->scan_fields;
@@ -4549,12 +4568,7 @@ int64_t caml_ml_output_bigarray(int64_t c, int64_t ba, int64_t o, int64_t l)
     return 1;
 }
 
-int64_t caml_ba_dim(int64_t ba, int64_t d)
-{
-    (void)ba; (void)d;
-    raise_failure_cstr("Bigarray.dim: unsupported", 25u);
-    return 1;
-}
+#include "bigarray.inc"
 
 /* ---- Lazy & Obj primitives ---- */
 

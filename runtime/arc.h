@@ -36,6 +36,8 @@
 #define ARC_CUSTOM_MUTEX     3u
 #define ARC_CUSTOM_COND      4u
 #define ARC_CUSTOM_BLAKE2    5u
+#define ARC_CUSTOM_BIGARRAY  6u
+#define ARC_CUSTOM_BIGARRAY_BUFFER 7u
 
 typedef struct ArcHeader {
     _Atomic uint32_t refcount;    /* 0xFFFFFFFF = immortal/static */

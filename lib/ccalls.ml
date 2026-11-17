@@ -292,6 +292,24 @@ let table =
     ("caml_ml_is_buffered", abi 1 false false);
     ("caml_ml_input_bigarray", abi 4 true false);
     ("caml_ml_output_bigarray", abi 4 true false);
+    ("caml_ba_create", abi 3 true false);
+    ("caml_ba_get_generic", abi 2 true false);
+    ("caml_ba_set_generic", abi 3 true false);
+    ("caml_ba_get_1", abi 2 true false);
+    ("caml_ba_get_2", abi 3 true false);
+    ("caml_ba_get_3", abi 4 true false);
+    ("caml_ba_set_1", abi 3 true false);
+    ("caml_ba_set_2", abi 4 true false);
+    ("caml_ba_set_3", abi 5 true false);
+    ("caml_ba_num_dims", abi 1 true false);
+    ("caml_ba_kind", abi 1 true false);
+    ("caml_ba_layout", abi 1 true false);
+    ("caml_ba_change_layout", abi 2 true false);
+    ("caml_ba_sub", abi 3 true false);
+    ("caml_ba_slice", abi 2 true false);
+    ("caml_ba_blit", abi 2 true false);
+    ("caml_ba_fill", abi 2 true false);
+    ("caml_ba_reshape", abi 2 true false);
     ("caml_ba_dim", abi 2 true false);
     (* lazy & obj *)
     ("caml_lazy_make_block", abi 1 false false);

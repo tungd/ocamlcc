@@ -335,9 +335,15 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
   | Lprim (Psetfield_computed _, [ arg; idx; rhs ], _) ->
       conv_atoms [ arg; idx; rhs ] (fun vs ->
           emit_cexpr (Ccall ("caml_obj_set_field", vs)))
+  | Lprim (Pbigarrayref (_, dimensions, _, _), args, _) ->
+      conv_atoms args (fun vs ->
+          emit_cexpr (Ccall ("caml_ba_get_" ^ string_of_int dimensions, vs)))
+  | Lprim (Pbigarrayset (_, dimensions, _, _), args, _) ->
+      conv_atoms args (fun vs ->
+          emit_cexpr (Ccall ("caml_ba_set_" ^ string_of_int dimensions, vs)))
   | Lprim (Pbigarraydim d, [ arg ], _) ->
       conv_expr arg (fun a ->
-          emit_cexpr (Ccall ("caml_ba_dim", [ a; Int d ])))
+          emit_cexpr (Ccall ("caml_ba_dim", [ a; Int (d - 1) ])))
   | Lprim (Pfloatfield i, [ arg ], _) ->
       conv_expr arg (fun a -> emit_cexpr (FloatField (i, a)))
   | Lprim (Psetfloatfield (i, _), [ arg; rhs ], _) ->

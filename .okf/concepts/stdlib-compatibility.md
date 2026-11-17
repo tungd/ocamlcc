@@ -35,8 +35,16 @@ ocamllex output and passes against both stock OCaml and ocamlcc. The Parsing ove
 preserves token translation, stack growth, reductions, error recovery,
 semantic-action suspension, positions, and trace state. A generated-parser
 fixture checks reductions, deep nesting, parse errors, and subsequent parses.
-The native stdlib build now compiles 70/72 modules; Bigarray and Marshal remain
-unsupported. A pre-existing report records 53/77 standalone
+Bigarray primitive lowering dispatches typed and generic 1/2/3-dimensional
+accesses to ARC runtime helpers. `%caml_ba_dim_N` is translated from its
+one-based primitive number to the zero-based generic dimension API. Views
+retain a backing descriptor, which releases its PAL allocation after the last
+view dies. The core API supports all element kinds, both layouts, checked
+indexing, fill/blit, and shared sub/slice/reshape/layout views. These helpers
+live in `runtime/bigarray.inc`, included by `arc.c`.
+The native stdlib build now compiles 71/72 modules; Marshal remains unsupported.
+The initial public API regression verifies int/float64 access, dimensions,
+bounds, and C/Fortran indexing; further upstream coverage is recorded below. A pre-existing report records 53/77 standalone
 tests passing; this count is historical until the runner is executed again.
 Compilation success alone does not establish behavioral compatibility.
 

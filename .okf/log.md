@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-17 (codex/1): Lower Bigarray refs/sets and correct dimension numbering. Add ARC backing-buffer ownership and core Bigarray runtime API. Public int/float64 layout/bounds fixture fails before lowering and passes after; stdlib compiles 71/72 modules.
+
 - 2026-11-17 (codex/1): Add pure OCaml Parsing LR engine and tracing. Generated ocamlyacc parser failed to link before the overlay and passes afterward, including stock differential checks, stack growth, parse errors, and restoration. Stdlib module build: 70/72.
 
 - 2026-11-17 (codex/1): Add pure OCaml Lexing DFA and capture engines. Real ocamllex fixtures failed to link before the overlay and pass afterward, including stock differential checks. Stdlib module build: 69/72.

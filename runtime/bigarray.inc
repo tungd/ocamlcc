@@ -1,0 +1,232 @@
+/* ARC-native Bigarray. Included by arc.c to share allocation and I/O helpers.
+ * Views own the backing descriptor; descriptors own PAL pages, never views. */
+#define BA_MAX_DIMS 16
+static const uint8_t ba_sizes[] = {4,8,1,1,2,2,4,8,8,8,8,16,1,2};
+
+static int64_t ba_invalid(const char *message)
+{
+    size_t n = 0; while (message[n]) n++;
+    char *s = arc_alloc_bytes(n);
+    pal_memcpy(s, message, n);
+    /* The exception owns the freshly allocated string. */
+    raise_invalid_arg_imm(s);
+    return 1;
+}
+
+static size_t ba_count(const ArcBigarray *a)
+{
+    size_t count = 1;
+    for (int i = 0; i < a->ndims; i++) count *= (size_t)a->dims[i];
+    return count;
+}
+
+static ArcBigarray *ba_view(ArcBigarray *source, int ndims, const int64_t *dims,
+                            size_t offset, int layout)
+{
+    ArcBigarray *a = arc_alloc(ARC_TAG_CUSTOM, 0, sizeof(ArcBigarray));
+    ((ArcHeader *)a - 1)->reserved = ARC_CUSTOM_BIGARRAY;
+    a->backing = source->backing;
+    arc_retain(a->backing);
+    a->data = source->data + offset * ba_sizes[source->kind];
+    a->kind = source->kind; a->layout = layout; a->ndims = ndims;
+    for (int i = 0; i < ndims; i++) a->dims[i] = dims[i];
+    return a;
+}
+
+int64_t caml_ba_create(int64_t kind, int64_t layout, int64_t dimensions)
+{
+    int n = arr_len_of(dimensions), k = kind >> 1, l = layout >> 1;
+    const int64_t *d = (void *)(uintptr_t)dimensions;
+    if (n > BA_MAX_DIMS || k < 0 || k >= 14 || l < 0 || l > 1)
+        return ba_invalid("Bigarray.create: invalid dimensions");
+    size_t count = 1;
+    for (int i = 0; i < n; i++) {
+        int64_t dim = d[i] >> 1;
+        if (dim < 0) return ba_invalid("Bigarray.create: negative dimension");
+        if (dim != 0 && count > (SIZE_MAX / ba_sizes[k]) / (uint64_t)dim)
+            return ba_invalid("Bigarray.create: size overflow");
+        count *= (size_t)dim;
+    }
+    ArcBigarrayBuffer *b = arc_alloc(ARC_TAG_CUSTOM, 0, sizeof(*b));
+    ((ArcHeader *)b - 1)->reserved = ARC_CUSTOM_BIGARRAY_BUFFER;
+    b->bytes = count * ba_sizes[k];
+    if (b->bytes == 0) b->bytes = 1;
+    b->data = pal_page_alloc(b->bytes);
+    if (b->data == NULL) pal_abort();
+    ArcBigarray *a = arc_alloc(ARC_TAG_CUSTOM, 0, sizeof(*a));
+    ((ArcHeader *)a - 1)->reserved = ARC_CUSTOM_BIGARRAY;
+    a->backing = b; a->data = b->data; a->kind = k; a->layout = l; a->ndims = n;
+    for (int i = 0; i < n; i++) a->dims[i] = d[i] >> 1;
+    return (int64_t)(uintptr_t)a;
+}
+
+static int ba_offset(const ArcBigarray *a, int n, const int64_t *indices, size_t *out)
+{
+    if (n != a->ndims) { ba_invalid("Bigarray.get/set: wrong number of indices"); return 0; }
+    size_t offset = 0, stride = 1;
+    for (int step = 0; step < n; step++) {
+        int i = a->layout ? step : n - step - 1;
+        int64_t index = (indices[i] >> 1) - a->layout;
+        if (index < 0 || index >= a->dims[i]) {
+            ocamlcc_raise_invalid_arg_oob(); return 0;
+        }
+        offset += (size_t)index * stride;
+        stride *= (size_t)a->dims[i];
+    }
+    *out = offset; return 1;
+}
+
+static int64_t ba_read(const ArcBigarray *a, size_t offset)
+{
+    const uint8_t *p = a->data + offset * ba_sizes[a->kind];
+    switch (a->kind) {
+    case 0: return ocamlcc_alloc_float(*(const float *)p);
+    case 1: return ocamlcc_alloc_float(*(const double *)p);
+    case 2: return tag_int(*(const int8_t *)p);
+    case 3: case 12: return tag_int(*p);
+    case 4: return tag_int(*(const int16_t *)p);
+    case 5: return tag_int(*(const uint16_t *)p);
+    case 6: return ocamlcc_alloc_custom(ARC_CUSTOM_INT32, (uint64_t)(int64_t)*(const int32_t *)p);
+    case 7: return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, *(const uint64_t *)p);
+    case 8: return tag_int(*(const int64_t *)p);
+    case 9: return ocamlcc_alloc_custom(ARC_CUSTOM_NATIVEINT, *(const uint64_t *)p);
+    case 10: case 11: {
+        double *z = arc_alloc(0, 0, 16);
+        z[0] = a->kind == 10 ? ((const float *)p)[0] : ((const double *)p)[0];
+        z[1] = a->kind == 10 ? ((const float *)p)[1] : ((const double *)p)[1];
+        return (int64_t)(uintptr_t)z;
+    }
+    case 13: return ocamlcc_alloc_float(*(const _Float16 *)p);
+    default: pal_abort();
+    }
+}
+
+static void ba_write(ArcBigarray *a, size_t offset, int64_t value)
+{
+    uint8_t *p = a->data + offset * ba_sizes[a->kind];
+    switch (a->kind) {
+    case 0: *(float *)p = (float)unbox_float(value); break;
+    case 1: *(double *)p = unbox_float(value); break;
+    case 2: case 3: case 12: *p = (uint8_t)(value >> 1); break;
+    case 4: case 5: *(uint16_t *)p = (uint16_t)(value >> 1); break;
+    case 6: *(int32_t *)p = (int32_t)unbox_custom_i64(value); break;
+    case 7: case 9: *(int64_t *)p = unbox_custom_i64(value); break;
+    case 8: *(int64_t *)p = value >> 1; break;
+    case 10: case 11: {
+        const double *z = (const void *)(uintptr_t)value;
+        if (a->kind == 10) { ((float *)p)[0] = (float)z[0]; ((float *)p)[1] = (float)z[1]; }
+        else { ((double *)p)[0] = z[0]; ((double *)p)[1] = z[1]; }
+        break;
+    }
+    case 13: *(_Float16 *)p = (_Float16)unbox_float(value); break;
+    }
+}
+
+static int64_t ba_get(int64_t v, int n, const int64_t *idx)
+{
+    ArcBigarray *a = (void *)(uintptr_t)v; size_t offset;
+    return ba_offset(a, n, idx, &offset) ? ba_read(a, offset) : 1;
+}
+static int64_t ba_set(int64_t v, int n, const int64_t *idx, int64_t value)
+{
+    ArcBigarray *a = (void *)(uintptr_t)v; size_t offset;
+    if (ba_offset(a, n, idx, &offset)) ba_write(a, offset, value);
+    return 1;
+}
+int64_t caml_ba_get_generic(int64_t a, int64_t idx) { return ba_get(a, arr_len_of(idx), (void *)(uintptr_t)idx); }
+int64_t caml_ba_set_generic(int64_t a, int64_t idx, int64_t v) { return ba_set(a, arr_len_of(idx), (void *)(uintptr_t)idx, v); }
+int64_t caml_ba_get_1(int64_t a, int64_t i) { return ba_get(a, 1, &i); }
+int64_t caml_ba_get_2(int64_t a, int64_t i, int64_t j) { int64_t idx[] = {i,j}; return ba_get(a, 2, idx); }
+int64_t caml_ba_get_3(int64_t a, int64_t i, int64_t j, int64_t k) { int64_t idx[] = {i,j,k}; return ba_get(a, 3, idx); }
+int64_t caml_ba_set_1(int64_t a, int64_t i, int64_t v) { return ba_set(a, 1, &i, v); }
+int64_t caml_ba_set_2(int64_t a, int64_t i, int64_t j, int64_t v) { int64_t idx[] = {i,j}; return ba_set(a, 2, idx, v); }
+int64_t caml_ba_set_3(int64_t a, int64_t i, int64_t j, int64_t k, int64_t v) { int64_t idx[] = {i,j,k}; return ba_set(a, 3, idx, v); }
+int64_t caml_ba_num_dims(int64_t v) { return tag_int(((ArcBigarray *)(uintptr_t)v)->ndims); }
+int64_t caml_ba_kind(int64_t v) { return tag_int(((ArcBigarray *)(uintptr_t)v)->kind); }
+int64_t caml_ba_layout(int64_t v) { return tag_int(((ArcBigarray *)(uintptr_t)v)->layout); }
+int64_t caml_ba_dim(int64_t v, int64_t d)
+{
+    ArcBigarray *a = (void *)(uintptr_t)v; int64_t i = d >> 1;
+    if (i < 0 || i >= a->ndims) return ba_invalid("Bigarray.dim");
+    return tag_int(a->dims[i]);
+}
+int64_t caml_ba_change_layout(int64_t v, int64_t l)
+{
+    ArcBigarray *a = (void *)(uintptr_t)v; int layout = l >> 1;
+    if (layout == a->layout) { arc_retain(a); return v; }
+    if (layout != 0 && layout != 1) return ba_invalid("Bigarray.change_layout");
+    int64_t dims[BA_MAX_DIMS];
+    for (int i = 0; i < a->ndims; i++) dims[i] = a->dims[a->ndims - i - 1];
+    return (int64_t)(uintptr_t)ba_view(a, a->ndims, dims, 0, layout);
+}
+int64_t caml_ba_sub(int64_t v, int64_t start, int64_t length)
+{
+    ArcBigarray *a = (void *)(uintptr_t)v;
+    if (a->ndims == 0) return ba_invalid("Bigarray.sub: bad sub-array");
+    int dim = a->layout ? a->ndims - 1 : 0;
+    int64_t offset = (start >> 1) - a->layout, len = length >> 1;
+    if (offset < 0 || len < 0 || offset > a->dims[dim] || len > a->dims[dim] - offset)
+        return ba_invalid("Bigarray.sub: bad sub-array");
+    size_t stride = 1;
+    for (int i = 0; i < a->ndims; i++) if (i != dim) stride *= a->dims[i];
+    ArcBigarray *b = ba_view(a, a->ndims, a->dims, (size_t)offset * stride, a->layout);
+    b->dims[dim] = len;
+    return (int64_t)(uintptr_t)b;
+}
+int64_t caml_ba_slice(int64_t v, int64_t indices)
+{
+    ArcBigarray *a = (void *)(uintptr_t)v;
+    int n = arr_len_of(indices);
+    if (n > a->ndims) return ba_invalid("Bigarray.slice: too many indices");
+    const int64_t *idx = (void *)(uintptr_t)indices;
+    size_t offset = 0, stride = 1;
+    for (int step = 0; step < a->ndims; step++) {
+        int i = a->layout ? step : a->ndims - step - 1;
+        int fixed = a->layout ? i >= a->ndims - n : i < n;
+        if (fixed) {
+            int j = a->layout ? i - (a->ndims - n) : i;
+            int64_t x = (idx[j] >> 1) - a->layout;
+            if (x < 0 || x >= a->dims[i]) { ocamlcc_raise_invalid_arg_oob(); return 1; }
+            offset += (size_t)x * stride;
+        }
+        stride *= a->dims[i];
+    }
+    return (int64_t)(uintptr_t)ba_view(a, a->ndims - n, a->dims + (a->layout ? 0 : n), offset, a->layout);
+}
+int64_t caml_ba_reshape(int64_t v, int64_t dimensions)
+{
+    ArcBigarray *a = (void *)(uintptr_t)v; int n = arr_len_of(dimensions);
+    if (n > BA_MAX_DIMS) return ba_invalid("Bigarray.reshape: bad number of dimensions");
+    int64_t dims[BA_MAX_DIMS]; size_t count = 1;
+    const int64_t *idx = (void *)(uintptr_t)dimensions;
+    for (int i = 0; i < n; i++) {
+        dims[i] = idx[i] >> 1;
+        if (dims[i] < 0 || (dims[i] && count > SIZE_MAX / (uint64_t)dims[i]))
+            return ba_invalid("Bigarray.reshape: size overflow");
+        count *= (size_t)dims[i];
+    }
+    if (count != ba_count(a)) return ba_invalid("Bigarray.reshape: size mismatch");
+    return (int64_t)(uintptr_t)ba_view(a, n, dims, 0, a->layout);
+}
+int64_t caml_ba_fill(int64_t v, int64_t x)
+{
+    ArcBigarray *a = (void *)(uintptr_t)v;
+    size_t n = ba_count(a);
+    for (size_t i = 0; i < n; i++) ba_write(a, i, x);
+    return 1;
+}
+int64_t caml_ba_blit(int64_t src, int64_t dst)
+{
+    ArcBigarray *s = (void *)(uintptr_t)src, *d = (void *)(uintptr_t)dst;
+    if (s->ndims != d->ndims || s->kind != d->kind || s->layout != d->layout)
+        return ba_invalid("Bigarray.blit: dimension mismatch");
+    for (int i = 0; i < s->ndims; i++) if (s->dims[i] != d->dims[i])
+        return ba_invalid("Bigarray.blit: dimension mismatch");
+    size_t n = ba_count(s) * ba_sizes[s->kind];
+    if ((uintptr_t)d->data > (uintptr_t)s->data) {
+        for (size_t i = n; i > 0; i--) d->data[i - 1] = s->data[i - 1];
+    } else {
+        for (size_t i = 0; i < n; i++) d->data[i] = s->data[i];
+    }
+    return 1;
+}
