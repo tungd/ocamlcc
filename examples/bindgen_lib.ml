@@ -26,3 +26,6 @@ let pair_sum (a, b) = a + b
 let check_pos n =
   if n < 0 then raise (Bad_arg (0 - n))
   else n * 10
+
+type labels = { switch : int; ocamlcc_switch : int; x' : int; x_ : int }
+let echo_labels x = x

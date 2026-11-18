@@ -84,3 +84,7 @@ The executable initializes every explicitly linked implementation once, in depen
 # Installed driver
 
 A staged Dune installation supplies the vendored QBE executable and core stdlib and runtime sources relative to the compiler prefix. The installed driver can build multi-unit executables outside the checkout.
+
+# C record field names
+
+Bindgen reserves legal record member names before escaping C and C++ keywords and resolving collisions. The header and conversion shim share the resulting field names.

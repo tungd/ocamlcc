@@ -13,3 +13,6 @@ val flip : bool -> bool
 val sum_i32_i64 : int32 -> int64 -> int64
 val pair_sum : int * int -> int
 val check_pos : int -> int
+
+type labels = { switch : int; ocamlcc_switch : int; x' : int; x_ : int }
+val echo_labels : labels -> labels

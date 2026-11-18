@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Bindgen reserves legal record member names before escaping C and C++ keywords and resolving collisions. The header and conversion shim share the resulting field names.
+
 - 2026-11-18 (codex/1): Gc.finalise and Gc.finalise_last raise a catchable Failure when called on the ARC runtime. Code that needs external resource cleanup can handle the failure at registration time.
 
 - 2026-11-18 (codex/1): A staged Dune installation supplies the vendored QBE executable and core stdlib and runtime sources relative to the compiler prefix. The installed driver can build multi-unit executables outside the checkout.

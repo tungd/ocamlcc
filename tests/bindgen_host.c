@@ -35,6 +35,12 @@ int main(void)
     int err1 = err.code;
     int err_msg_ok = (strstr(err.message, "Bad_arg(13)") != NULL) ? 1 : 0;
 
+    bindgen_lib_labels_t labels = { 11, 22, 33, 44 };
+    bindgen_lib_labels_t result = bindgen_lib_echo_labels(labels, &err);
+    if (err.code || result.ocamlcc_switch_2 != 11 || result.ocamlcc_switch != 22 ||
+        result.x_2 != 33 || result.x_ != 44)
+        return 2;
+
     int64_t end_live = arc_live_objects();
     printf("h=%lld,%lld pt=%.1f,%.1f greet=%s opt=%d:%lld,%d b=%d i64=%lld pair=%lld exn=%d:%lld,%d:%lld:%d delta=%lld\n",
            (long long)hv1, (long long)hv2, p3.x, p3.y, g,

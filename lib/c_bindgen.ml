@@ -56,6 +56,46 @@ let sanitize_c s =
   let r = Buffer.contents b in
   if r = "" then "_" else r
 
+module Names = Set.Make (String)
+
+(* The header can be included from C99 or C++. stdbool.h also defines
+   bool, true and false as macros on C99 hosts. *)
+let reserved_members =
+  Names.of_list
+    [ "alignas"; "alignof"; "and"; "and_eq"; "asm"; "auto"; "bitand"; "bitor";
+      "bool"; "break"; "case"; "catch"; "char"; "char8_t"; "char16_t"; "char32_t";
+      "class"; "compl"; "concept"; "const"; "consteval"; "constexpr"; "constinit";
+      "const_cast"; "continue"; "co_await"; "co_return"; "co_yield"; "decltype";
+      "default"; "delete"; "do"; "double"; "dynamic_cast"; "else"; "enum";
+      "explicit"; "export"; "extern"; "false"; "float"; "for"; "friend"; "goto";
+      "if"; "inline"; "int"; "long"; "mutable"; "namespace"; "new"; "noexcept";
+      "not"; "not_eq"; "nullptr"; "operator"; "or"; "or_eq"; "private";
+      "protected"; "public"; "register"; "reinterpret_cast"; "requires"; "restrict";
+      "return"; "short"; "signed"; "sizeof"; "static"; "static_assert"; "static_cast";
+      "struct"; "switch"; "template"; "this"; "thread_local"; "throw"; "true"; "try";
+      "typedef"; "typeid"; "typename"; "union"; "unsigned"; "using"; "virtual";
+      "void"; "volatile"; "wchar_t"; "while"; "xor"; "xor_eq"; "_Alignas";
+      "_Alignof"; "_Atomic"; "_Bool"; "_Complex"; "_Generic"; "_Imaginary";
+      "_Noreturn"; "_Static_assert"; "_Thread_local" ]
+
+let record_member_names labels =
+  let legal name = sanitize_c name = name && not (Names.mem name reserved_members) in
+  let used = Names.of_list (List.filter legal labels) in
+  let allocate used name =
+    if legal name then used, name
+    else
+      let base = sanitize_c name in
+      let base = if Names.mem base reserved_members then "ocamlcc_" ^ base else base in
+      let suffix = if String.ends_with ~suffix:"_" base then "" else "_" in
+      let rec choose n =
+        let candidate = if n = 1 then base else base ^ suffix ^ string_of_int n in
+        if Names.mem candidate used then choose (n + 1) else candidate
+      in
+      let member = choose 1 in
+      Names.add member used, member
+  in
+  snd (List.fold_left_map allocate used labels)
+
 let read_file filename =
   let ic = open_in_bin filename in
   Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () ->
@@ -262,12 +302,13 @@ let translate_signature ~modname sg env =
                   | _ -> false
                 in
                 let ctx = "type " ^ tname in
+                let members = record_member_names
+                    (List.map (fun (ld : Types.label_declaration) -> Ident.name ld.ld_id) labels) in
                 let rf_fields =
-                  List.map
-                    (fun (ld : Types.label_declaration) ->
-                      let ft = resolve_type ~seen:[ tname ] ~ctx ld.ld_type in
-                      { rf_name = sanitize_c (Ident.name ld.ld_id); rf_type = ft })
-                    labels
+                  List.map2
+                    (fun rf_name (ld : Types.label_declaration) ->
+                      { rf_name; rf_type = resolve_type ~seen:[ tname ] ~ctx ld.ld_type })
+                    members labels
                 in
                 let ri =
                   { ri_cname = cname;
