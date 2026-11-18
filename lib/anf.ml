@@ -213,6 +213,18 @@ let check_array_kind (_k : Lambda.array_kind) = ()
 
 let builtins_table : Builtins.table option ref = ref None
 
+(* Guard the yielding, raising callback path before ARC liveness analysis.
+   Idle polls need neither a shadow-stack frame nor an exception check. *)
+let with_finalizer_poll body =
+  let due = Ident.create_local "finalizers_due" in
+  let ignored = Ident.create_local "poll" in
+  let result = Ident.create_local "poll_result" in
+  Let (due, Ccall ("ocamlcc_finalizers_due", []),
+    LetJoin (ignored,
+      If (Var due, Let (result, Ccall ("ocamlcc_poll_finalizers", []), Halt Unit),
+          Halt Unit),
+      body))
+
 let rec conv_tail (lam : Lambda.lambda) : aexpr =
   conv_expr lam (fun a -> Halt a)
 
@@ -223,7 +235,7 @@ and conv_atoms (lams : Lambda.lambda list) (k : atom list -> aexpr) : aexpr =
 
 and conv_fun (lf : Lambda.lfunction) : lfunction =
   match lf.kind with
-  | Curried -> { params = lf.params; body = conv_tail lf.body }
+  | Curried -> { params = lf.params; body = with_finalizer_poll (conv_tail lf.body) }
   | Tupled ->
       let tup = Ident.create_local "tup" in
       let rec bind_fields i = function
@@ -231,7 +243,7 @@ and conv_fun (lf : Lambda.lfunction) : lfunction =
         | (p, _) :: rest ->
             Let (p, Field (i, Var tup), bind_fields (i + 1) rest)
       in
-      { params = [ (tup, Lambda.Pgenval) ]; body = bind_fields 0 lf.params }
+      { params = [ (tup, Lambda.Pgenval) ]; body = with_finalizer_poll (bind_fields 0 lf.params) }
 
 and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   match rhs with
@@ -543,7 +555,7 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
       emit_cexpr (Atom atom)
   | Lprim (Popaque, [arg], _) ->
       conv_expr arg (fun value -> emit_cexpr (Ccall ("ocamlcc_opaque_identity", [value])))
-  | Lprim (Ppoll, _, _) -> emit_cexpr (Atom Unit)
+  | Lprim (Ppoll, _, _) -> with_finalizer_poll (emit_cexpr (Atom Unit))
   | _ -> raise (Unsupported (describe lam))
 
 and binop op a c emit_cexpr =
@@ -624,11 +636,11 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
       let e = TryWith (conv_tail body, exn_id, conv_tail handler) in
       wrap_or_tail e k
   | Lwhile (cond, body) ->
-      seq_stmt (While (conv_tail cond, conv_tail body)) (k Unit)
+      seq_stmt (While (with_finalizer_poll (conv_tail cond), conv_tail body)) (k Unit)
   | Lfor (id, start_e, stop_e, dir, body) ->
       conv_expr start_e (fun sa ->
           conv_expr stop_e (fun ea ->
-              seq_stmt (For (id, sa, ea, dir, conv_tail body)) (k Unit)))
+              seq_stmt (For (id, sa, ea, dir, with_finalizer_poll (conv_tail body))) (k Unit)))
   | Lapply _ | Lprim _ ->
       let id = Ident.create_local "anf" in
       conv_simple id lam (fun () -> k (Var id))

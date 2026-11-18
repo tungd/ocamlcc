@@ -134,7 +134,7 @@ CMI/archive paths explicitly; 72/72 describes the compatibility build.
 
 # Finalizer registration
 
-`Gc.finalise` delivers ordinary callbacks during explicit major collections. `Gc.finalise_last` receives unit after its target’s weak slots clear. Both paths run at explicit major collection boundaries. The [ARC finalizer design](/concepts/arc-finalizers.md) describes the intended callback lifecycle.
+`Gc.finalise` delivers ordinary callbacks during explicit major collections and at compiler polls once allocations consume the minor-heap budget. `Gc.finalise_last` receives unit after its target’s weak slots clear. Both use the same dispatcher. The [ARC finalizer design](/concepts/arc-finalizers.md) covers ordering, resurrection and exceptions.
 
 # Before finalizer delivery (2026-11-18, macOS arm64 / OCaml 5.5.0)
 
@@ -145,3 +145,7 @@ Compared with the November 17 run, `lib-marshal/intern_final.ml` changed from pa
 # After explicit major-collection finalizer delivery (2026-11-18, macOS arm64 / OCaml 5.5.0)
 
 All 72 interfaces and implementations compile, and all 11 API fixtures pass on stock OCaml and ocamlcc. The upstream run passes 68 of 77 attempted tests, with nine failures and 42 skips. Marshal `intern_final` now passes. Sys `opaque` exits normally and prints the expected `lifetime: false false true`. Its allocation count prints `dead: 4`, while the reference expects `dead: 3`. The other 117 test statuses match the pre-delivery matrix.
+
+# After allocation-driven finalizer delivery
+
+On the same macOS arm64 toolchain, all 72 modules compile and all 119 upstream files retain their previous status. The 11 repository fixtures pass on both compilers. The finalizer fixture runs an alarm from a loop with no explicit collection, suppresses it after deletion, and catches a last-finalizer exception during tail recursion. It also passes linked against the ASan/UBSan runtime.

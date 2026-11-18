@@ -354,6 +354,8 @@ let table =
     ("caml_gc_minor_words", abi 1 false false);
     ("caml_gc_get", abi 1 false false);
     ("caml_gc_set", abi 1 false false);
+    ("ocamlcc_finalizers_due", abi 0 false false);
+    ("ocamlcc_poll_finalizers", abi 0 true true);
     ("caml_gc_minor", abi 1 true false);
     ("caml_gc_major_slice", abi 1 true false);
     ("caml_gc_major", abi 1 true true);

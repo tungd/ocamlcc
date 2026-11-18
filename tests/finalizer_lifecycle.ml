@@ -58,6 +58,21 @@ let check_alarm () =
   collect ();
   check (!calls = stopped) "deleted alarm fired"
 
+let check_allocation_delivery () =
+  let calls = ref 0 in
+  let alarm = Gc.create_alarm (fun () -> incr calls) in
+  let allocate () =
+    for _ = 1 to 20_000 do
+      ignore (Sys.opaque_identity (Bytes.create 2048))
+    done
+  in
+  allocate ();
+  check (!calls > 0) "allocation alone did not deliver an alarm";
+  Gc.delete_alarm alarm;
+  let stopped = !calls in
+  allocate ();
+  check (!calls = stopped) "allocation delivered a deleted alarm"
+
 let check_registered_leaf () =
   let events = ref [] in
   let install () =
@@ -72,6 +87,25 @@ let check_registered_leaf () =
   check (!events = ["parent"; "leaf"]) "registration order across a leaf edge"
 
 exception From_finalizer
+
+let check_allocation_exception () =
+  let live = Bytes.make 1 'x' in
+  let install () =
+    let target = ref 42 in
+    Gc.finalise_last (fun () -> raise From_finalizer) target;
+    ignore (Sys.opaque_identity target)
+  in
+  let rec allocate remaining =
+    if remaining > 0 then begin
+      ignore (Sys.opaque_identity (Bytes.create 2048));
+      allocate (remaining - 1)
+    end
+  in
+  let caught =
+    try install (); allocate 20_000; false
+    with From_finalizer -> Bytes.get live 0 = 'x'
+  in
+  check caught "allocation did not propagate the last finalizer exception with live roots"
 
 let check_exception () =
   let calls = ref 0 in
@@ -101,6 +135,8 @@ let check_many () =
 
 let () =
   try
+    check_allocation_delivery ();
+    check_allocation_exception ();
     check_lifetime false;
     print_endline "acyclic resurrection and final death: ok";
     check_lifetime true;

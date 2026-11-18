@@ -200,7 +200,15 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
   | Anf.StaticCatch (body, _, _, handler) ->
       count_release_mut id body + count_release_mut id handler
   | Anf.StaticRaise (_, args) -> List.fold_left count_atom 0 args
-  | Anf.While (cond, body) | Anf.CheckExn (cond, body) ->
+  | Anf.CheckExn (unwind, ok) ->
+      (* A poll may leave the function early. Check that exit independently
+         of the normal path, where the slot remains live past the loop. *)
+      let releases = count_release_mut id unwind in
+      if releases <> 1 then
+        failwith (Printf.sprintf "expected one mutable release on unwind, got %d: %s"
+                    releases (dump unwind));
+      count_release_mut id ok
+  | Anf.While (cond, body) ->
       count_release_mut id cond + count_release_mut id body
   | Anf.For (_, _, _, _, body) -> count_release_mut id body
   | Anf.TryWith (body, _, handler) ->

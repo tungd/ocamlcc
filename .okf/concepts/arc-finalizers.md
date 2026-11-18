@@ -1,7 +1,7 @@
 ---
 type: Design
 title: OCaml finalizers under ARC
-description: Proposed ownership, discovery and callback delivery for finalise, finalise_last and GC alarms.
+description: Ownership, discovery and callback delivery for finalise, finalise_last and GC alarms.
 tags: [arc, finalizers, weak-references, cycle-collector]
 status: draft
 generated:
@@ -20,6 +20,9 @@ sources:
   - id: contract
     resource: tests/finalizer_lifecycle.ml
     title: Executable reference contract for resurrection, weak slots and alarms
+  - id: compiler
+    resource: lib/anf.ml
+    title: Finalizer polls at function entries and loop boundaries
   - id: abi
     resource: lib/ccalls.ml
     title: Primitive exception and fiber ABI
@@ -27,7 +30,7 @@ sources:
 
 # Decision
 
-Discover unreachable objects in the ARC runtime. Run their OCaml callbacks at a point where generated code can handle an exception and where every live OCaml value has an owner. Ordinary finalizers can publish their argument, so discovery must preserve the object and its outgoing edges. Last finalizers receive unit and become eligible after permanent death. Ordinary finalizers now run at explicit major collections. Last callbacks use a weak slot. After a major collection clears it, the dispatcher calls the closure with unit. Automatic delivery is a later part of this design.[^runtime][^gc-api]
+Discover unreachable objects in the ARC runtime. Run their OCaml callbacks at a point where generated code can handle an exception and where every live OCaml value has an owner. Ordinary finalizers can publish their argument, so discovery must preserve the object and its outgoing edges. Last finalizers receive unit and become eligible after permanent death. Explicit major collections and allocation-driven polls share a dispatcher. It calls each eligible ordinary closure with its target and each eligible last closure with unit.[^runtime][^gc-api]
 
 ## Registration and ownership
 
@@ -61,17 +64,23 @@ Registration retains the target before its caller can release it. Ordinary drops
 
 Queue batches in discovery order. Within each simultaneous discovery, run ordinary callbacks in reverse registration order. Last callbacks for a target wait for all of its ordinary callbacks, including any subsequent registrations and resurrection. By the time a last callback runs, a weak lookup of its target returns `None`. Ephemeron clearing belongs to the same permanent-death phase when that API gains runtime support.[^gc-api][^runtime]
 
-The current delivery points are `Gc.major`, `Gc.full_major`, and `Gc.compact`. A successful trial freezes its eligible ordinary registrations before the dispatcher starts. A callback that re-registers its argument can run again at a later collection. A nested collection leaves the current callback in control. The vendored alarm uses this re-registration behavior and checks its active flag to honor deletion.[^gc-ml]
+Programs can request delivery with `Gc.major`, `Gc.full_major`, or `Gc.compact`. A successful trial freezes its eligible ordinary registrations before the dispatcher starts. A callback that re-registers its argument can run again at a later collection. A nested collection leaves the current callback in control. The vendored alarm uses this re-registration behavior and checks its active flag to honor deletion.[^gc-ml]
 
-One dispatcher enters the mutator context and removes each pending registration before calling its closure. An outstanding exception defers dispatch. If a callback raises, the dispatcher releases its owners, preserves the remaining queue and propagates the exception at the GC call site. All three entry points carry the raising and yielding ABI. Raw collection from a C host can reclaim cycles without entering OCaml code. Process exit has no guaranteed finalizer flush.[^abi]
+One dispatcher enters the mutator context and removes each pending registration before calling its closure. An outstanding exception defers dispatch. If a callback raises, the dispatcher releases its owners, preserves the remaining queue and propagates the exception at the explicit collection or generated poll. Each call into the dispatcher carries the raising and yielding ABI. Raw collection from a C host can reclaim cycles without entering OCaml code. Process exit has no guaranteed finalizer flush.[^abi]
+
+### Allocation-driven delivery
+
+When registrations exist, the runtime compares allocation progress since the last completed dispatch with the minor-heap size from `Gc.get ()`. Each newly allocated word and each successful in-place reuse advance the counter. Reuse leaves the public allocation statistics unchanged. Finishing a dispatch also accounts for work done inside callbacks. A skipped collection leaves the allocation budget due.[^runtime]
+
+Generated code checks at function entry, including self-tail-call backedges, at each `for` iteration, before a `while` condition, and at Lambda polls. A due poll enters the dispatcher with live roots available for suspension and exception unwinding. With an empty registry, the check returns immediately and cycles continue to await explicit collection. Straight-line allocations can cross the budget before execution reaches a poll.[^compiler][^abi]
 
 ### Remaining delivery work
 
-Programs that only allocate currently have no automatic finalizer poll. The proposed allocation-driven path records pending major work and services it at compiler-emitted polls after establishing live roots. Programs without finalizer work keep the existing opt-in collection policy. Domain-affine alarm delivery also needs a registration owner and domain-exit handling. The dispatcher currently runs on the thread performing the explicit collection. `Gc.finalise_release` currently returns unit without handing off dispatch. Supporting handoff requires preserving the current callback’s roots while allowing a later callback to run before it returns.[^gc-api]
+Callbacks run on the thread that wins dispatch. Delivering an alarm on its registering domain requires recording that owner and handling domain exit. `Gc.finalise_release` currently returns unit. Supporting handoff requires preserving the active callback’s roots while another callback runs.[^gc-api]
 
 ## Executable reference
 
-Run the standalone fixture from the repository root. It checks reverse registration order, resurrection with an intact payload and cycle, eventual last-callback delivery after weak clearing, and repeatable alarm delivery followed by deletion. It deliberately fails if registration is unsupported. Stock OCaml 5.5.0 passed each case. The same fixture now passes on ARC for ordinary and last callbacks on acyclic and cyclic targets, and for re-registration and deletion of alarms at explicit major collections.[^contract]
+Run the standalone fixture from the repository root. It checks reverse registration order, resurrection with an intact payload and cycle, eventual last-callback delivery after weak clearing, and repeatable alarm delivery followed by deletion. It deliberately fails if registration is unsupported. Stock OCaml 5.5.0 passed each case. Its allocation-only cases check alarm delivery and deletion in a loop, and propagate a last-finalizer exception through tail recursion while a handler still owns a byte buffer.[^contract]
 
 ```sh
 ocaml tests/finalizer_lifecycle.ml
@@ -85,10 +94,11 @@ build/bin/ocamlcc build --stdlib-dir build/stdlib_compat/out tests/finalizer_lif
 
 The exception regression checks that the caller catches a raised callback exception and an older registration still runs once. The batch regression checks one callback per distinct target across trial-map growth. The repository fixture also exercises a rooted ref, publication by its callback, and weak clearing after the published owner releases it.
 
-The upstream Marshal `intern_final` test now completes. Its final output does not count alarm firings. The separate lifecycle fixture directly observes alarm delivery, re-registration and deletion across explicit collections.
+The upstream Marshal `intern_final` test now completes. Its final output does not count alarm firings. The separate lifecycle fixture directly observes alarm delivery, re-registration and deletion under explicit and allocation-driven collections.
 
 [^gc-api]: Public eligibility, callback ordering, resurrection, weak visibility and alarm guarantees.
 [^gc-ml]: `create_alarm`, `call_alarm` and `delete_alarm` use ordinary finalization and an active flag.
 [^runtime]: `arc_release`, `drop_child_val`, `release_subtree`, `arc_drop_reuse`, `ocamlcc_arc_collect` and the GC primitives are the relevant runtime seams.
 [^contract]: `tests/finalizer_lifecycle.ml` uses the public Gc and Weak APIs.
-[^abi]: The primitive table marks the three major collection entry points that deliver callbacks as raising and yielding.
+[^compiler]: The ANF conversion inserts the check before ARC computes liveness.
+[^abi]: The primitive table distinguishes the cheap eligibility check from the raising and yielding dispatcher.

@@ -1,5 +1,9 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Add the Bigarray memory-view implementation brief: retain ARC/QBE, specialize scalar loops, expose retained C views and foreign backing ownership, and focus on ARM64/AMD64 Linux/macOS. Defer MCU work and record measurement/reporting guidance without performance thresholds.
+
+- 2026-11-18 (codex/1): Deliver allocation-driven finalizers at function and loop polls. Cover alarm deletion, exception propagation and mutable-slot cleanup on the normal and unwinding paths. An empty registry preserves explicit cycle collection.
+
 - 2026-11-18 (codex/1): Verify exception propagation and pending-callback retention on both compilers. Refresh the upstream matrix after finalizer delivery, including the remaining Sys.opaque allocation-count difference.
 
 - 2026-11-18 (codex/1): Preserve pending finalizers when an active FFI mutator prevents a collection. Verify concurrent last-owner release and exactly-once delivery after the gate reopens.

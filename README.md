@@ -108,8 +108,9 @@ copied working directories. Repository API regressions return nonzero on failure
 
 On macOS arm64 with OCaml 5.5.0, 68 of 77 standalone upstream tests pass,
 nine fail, and 42 additional files are skipped. All 11 repository API fixtures
-pass on both stock OCaml and ocamlcc. ARC runs ordinary and last callbacks at explicit major
-collections. An ordinary callback can resurrect the original object. Last
+pass on both stock OCaml and ocamlcc. ARC runs ordinary and last callbacks at
+explicit major collections and at function or loop polls once enough allocation
+has occurred. An ordinary callback can resurrect the original object. Last
 callbacks run after its weak slots clear.
 
 Lexing and Parsing use pure OCaml table interpreters. Bigarray views retain a

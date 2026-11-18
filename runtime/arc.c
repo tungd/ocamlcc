@@ -1497,6 +1497,9 @@ static Finalizer *finalizers; /* newest first, protected by g_cc_lock */
 static Finalizer *last_finalizers; /* protected by g_weak_lock */
 static Finalizer *pending_finalizers; /* owned by the active dispatcher */
 static _Atomic int finalizer_dispatch_active;
+/* Includes registrations already claimed by a dispatcher. */
+static _Atomic uint64_t finalizer_count;
+static _Atomic uint64_t last_finalizer_poll;
 
 static ArcHeader *finalizer_target(Finalizer *f)
 {
@@ -4865,7 +4868,7 @@ int64_t caml_weak_blit(int64_t src_val, int64_t src_ofs_val,
 }
 
 static ArcSpinLock g_gc_ctrl_lock = { 0u };
-static int64_t g_gc_ctrl[11] = {
+static _Atomic int64_t g_gc_ctrl[11] = {
     262144, 0, 120, 0, 500, 134217728, 0, 0, 44, 100, 70000
 };
 
@@ -4931,7 +4934,7 @@ int64_t caml_gc_get(int64_t ignored)
     int64_t *c = (int64_t *)arc_alloc(0u, 11u, 11u * 8u);
     arc_lock(&g_gc_ctrl_lock);
     for (int i = 0; i < 11; i++)
-        c[i] = tag_int(g_gc_ctrl[i]);
+        c[i] = tag_int(atomic_load_explicit(&g_gc_ctrl[i], memory_order_relaxed));
     arc_unlock(&g_gc_ctrl_lock);
     return (int64_t)(uintptr_t)c;
 }
@@ -4941,7 +4944,7 @@ int64_t caml_gc_set(int64_t ctrl_val)
     const int64_t *c = (const int64_t *)(uintptr_t)ctrl_val;
     arc_lock(&g_gc_ctrl_lock);
     for (int i = 0; i < 11; i++)
-        g_gc_ctrl[i] = c[i] >> 1;
+        atomic_store_explicit(&g_gc_ctrl[i], c[i] >> 1, memory_order_relaxed);
     arc_unlock(&g_gc_ctrl_lock);
     return 1;
 }
@@ -4984,12 +4987,38 @@ static void claim_last_finalizers(void)
     append_pending(ready);
 }
 
-int64_t caml_gc_major(int64_t ignored)
+static uint64_t allocation_progress(void)
+{
+    return atomic_load_explicit(&g_alloc_words, memory_order_relaxed) +
+           (uint64_t)atomic_load_explicit(&g_reuse_hits, memory_order_relaxed);
+}
+
+static int finalizers_due(void)
+{
+    if (atomic_load_explicit(&finalizer_count, memory_order_relaxed) == 0)
+        return 0;
+    uint64_t previous = atomic_load_explicit(&last_finalizer_poll, memory_order_acquire);
+    int64_t budget = atomic_load_explicit(&g_gc_ctrl[0], memory_order_relaxed);
+    return allocation_progress() - previous >= (uint64_t)(budget > 0 ? budget : 1);
+}
+
+int64_t ocamlcc_finalizers_due(void)
+{
+    return tag_int(finalizers_due() &&
+                   !atomic_load_explicit(&finalizer_dispatch_active, memory_order_relaxed));
+}
+
+static int64_t run_finalizers(int automatic)
 {
     if (ocamlcc_get_exn() != 0 ||
         atomic_exchange_explicit(&finalizer_dispatch_active, 1, memory_order_acquire))
-        return caml_gc_minor(ignored);
+        return automatic ? 1 : caml_gc_minor(1);
 
+    /* Another poll may have serviced this debt before we won dispatch. */
+    if (automatic && !finalizers_due()) {
+        atomic_store_explicit(&finalizer_dispatch_active, 0, memory_order_release);
+        return 1;
+    }
     if (collect_cycles(1) < 0) {
         atomic_store_explicit(&finalizer_dispatch_active, 0, memory_order_release);
         return 1;
@@ -5008,12 +5037,25 @@ int64_t caml_gc_major(int64_t ignored)
         arc_release_val(result);
         arc_release_val(f->callback);
         arc_release(f);
+        atomic_fetch_sub_explicit(&finalizer_count, 1, memory_order_relaxed);
         if (ocamlcc_get_exn() != 0)
             break;
     }
+    atomic_store_explicit(&last_finalizer_poll, allocation_progress(), memory_order_release);
     arc_mutator_leave(entered);
     atomic_store_explicit(&finalizer_dispatch_active, 0, memory_order_release);
     return 1;
+}
+
+int64_t caml_gc_major(int64_t ignored)
+{
+    (void)ignored;
+    return run_finalizers(0);
+}
+
+int64_t ocamlcc_poll_finalizers(void)
+{
+    return run_finalizers(1);
 }
 
 int64_t caml_gc_full_major(int64_t ignored)
@@ -5045,6 +5087,7 @@ static int64_t register_finalizer(int64_t fn, int64_t v, int last)
     arc_retain_val(fn);
     f->callback = fn;
     f->last = last;
+    atomic_fetch_add_explicit(&finalizer_count, 1, memory_order_relaxed);
     if (last) {
         f->value = ocamlcc_weak_create(tag_int(1));
         ArcWeakArray *weak = (ArcWeakArray *)(uintptr_t)f->value;
