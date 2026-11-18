@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): The Linux PAL and libc bindings request the default glibc interfaces before including headers. Strict C11 builds use these interfaces for the monotonic clock, anonymous mappings and mutex attributes.
+
 - 2026-11-18 (codex/1): Each standalone test executable declares its module explicitly so Dune 3.14 can also build the suite.
 
 - 2026-11-18 (codex/1): The compatibility build compiles 72/72 interfaces and implementations. All 11 repository API fixtures pass on both stock OCaml and ocamlcc, including structural comparison and finalizer registration. Of 119 upstream files, 67 pass, ten fail and 42 are skipped.

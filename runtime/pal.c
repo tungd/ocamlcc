@@ -1,4 +1,8 @@
 /* pal.c — POSIX/kqueue/epoll implementation of the PAL hooks. */
+#if defined(__linux__) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE 1
+#endif
+
 #include "pal.h"
 
 #include <errno.h>

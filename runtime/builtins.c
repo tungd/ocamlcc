@@ -1,4 +1,8 @@
 /* builtins.c — C entry points the code generator emits calls to. */
+#if defined(__linux__) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE 1
+#endif
+
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>

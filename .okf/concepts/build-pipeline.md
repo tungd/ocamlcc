@@ -88,3 +88,7 @@ A staged Dune installation supplies the vendored QBE executable and core stdlib 
 # C record field names
 
 Bindgen reserves legal record member names before escaping C and C++ keywords and resolving collisions. The header and conversion shim share the resulting field names.
+
+# Linux runtime compilation
+
+The Linux PAL and libc bindings request the default glibc interfaces before including headers. Strict C11 builds use these interfaces for the monotonic clock, anonymous mappings and mutex attributes.
