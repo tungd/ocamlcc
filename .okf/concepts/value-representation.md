@@ -5,8 +5,8 @@ description: Tagged 63-bit immediates vs. heap ARC objects, and the tagged-arith
 tags: [value-representation, codegen, arc]
 status: stable
 generated:
-  by: autoagent/1
-  at: 2026-11-16
+  by: codex/1
+  at: 2026-11-18
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -92,3 +92,7 @@ at the first one.
 
 [^design-doc]: The tagging scheme and header layout are specified in
   `docs/design.md` §4.2.
+
+# Function comparison
+
+Structural predicates raise Invalid_argument when they reach a functional value, including two references to the same closure. Physical equality is available through (==).

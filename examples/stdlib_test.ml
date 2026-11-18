@@ -117,7 +117,7 @@ let run () =
   in
   Printf.printf "misc=%d,%d,%b\n" !r cmp (("x" ^ "y") = "xy");
 
-  (* Structural compare on closures: ordered compare raises, ( = ) is physical *)
+  (* Structural comparisons that reach a closure raise Invalid_argument. *)
   let f1 x = x + 1 in
   let f2 x = x + 2 in
   let raises_cmp =
@@ -126,8 +126,9 @@ let run () =
   let raises_lt =
     try let _ = f1 < f2 in false with Invalid_argument _ -> true
   in
-  let eq_fns = f1 = f2 in
-  let eq_self = f1 = f1 in
+  let rejects f = try ignore (f ()); false with Invalid_argument _ -> true in
+  let eq_fns = rejects (fun () -> f1 = f2) in
+  let eq_self = rejects (fun () -> f1 = f1) in
   Printf.printf "fncompare=%b,%b,%b,%b\n" raises_cmp raises_lt eq_fns eq_self;
   Printf.printf "div0=%d,%d,%d,%d,%d,%d,%d\n" d1 m1 d2 d3 m2 m3 un;
 

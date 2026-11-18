@@ -2289,24 +2289,8 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
             return 1;
         }
         (*steps)--;
-        if (a == b) {
-            if (!total && is_heap_ptr(a)) {
-                const ArcHeader *h = (const ArcHeader *)(uintptr_t)a - 1;
-                if (h->tag == (uint16_t)ARC_TAG_FLOAT) {
-                    double da = unbox_float(a);
-                    if (compare_f64_raw(da, da, 0) != 0)
-                        return 1;
-                } else if (h->tag == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
-                    const double *fa = (const double *)(uintptr_t)a;
-                    uint32_t n = h->byte_size / 8u;
-                    for (uint32_t i = 0; i < n; i++) {
-                        if (compare_f64_raw(fa[i], fa[i], 0) != 0)
-                            return 1;
-                    }
-                }
-            }
+        if (a == b && (total || !is_heap_ptr(a)))
             return 0;
-        }
         int ia = (a & 1) != 0;
         int ib = (b & 1) != 0;
         if (ia && ib)
@@ -2320,6 +2304,12 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
         const ArcHeader *hb = (const ArcHeader *)(uintptr_t)b - 1;
         uint16_t ta = ha->tag == ARC_TAG_ARRAY || (ha->tag == ARC_TAG_FLOAT_ARRAY && ha->byte_size == 0) ? 0 : ha->tag;
         uint16_t tb = hb->tag == ARC_TAG_ARRAY || (hb->tag == ARC_TAG_FLOAT_ARRAY && hb->byte_size == 0) ? 0 : hb->tag;
+        /* A partial application also represents an OCaml function. */
+        if ((ta == ARC_TAG_CLOSURE || ta == ARC_TAG_PAP) &&
+            (tb == ARC_TAG_CLOSURE || tb == ARC_TAG_PAP)) {
+            raise_invalid_arg_imm(g_inv_arg_fn_str.str);
+            return 1;
+        }
         if (ta != tb)
             return (ta < tb) ? -1 : 1;
 
@@ -2339,15 +2329,6 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
             int64_t va = unbox_custom_i64(a);
             int64_t vb = unbox_custom_i64(b);
             return (va < vb) ? -1 : (va > vb ? 1 : 0);
-        }
-
-        /* Functional values (closures / partial applications): ordered
-         * comparison is undefined in OCaml and must raise; ( = ) / ( <> )
-         * fall through to physical equality below. */
-        if (total &&
-            (ta == (uint16_t)ARC_TAG_CLOSURE || ta == (uint16_t)ARC_TAG_PAP)) {
-            raise_invalid_arg_imm(g_inv_arg_fn_str.str);
-            return 1;
         }
 
         /* Objects and extension constructors compare by their unique OID,
@@ -2382,11 +2363,10 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
             continue;
         }
 
-        /* Physical comparison: distinct closures under ( = ), weak/fiber
-         * arrays, and partial applications compared by address. */
+        /* Runtime handles compare by identity. */
         uintptr_t ua = (uintptr_t)a;
         uintptr_t ub = (uintptr_t)b;
-        return (ua < ub) ? -1 : 1;
+        return ua < ub ? -1 : ua > ub ? 1 : 0;
     }
 }
 
