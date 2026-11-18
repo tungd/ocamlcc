@@ -100,3 +100,7 @@ The driver returns a diagnostic naming an unavailable external tool, including x
 # Ninja shared-library linkage
 
 The Ninja shared-library rule links libm for the math primitives it includes. Its C host can link the resulting shared library directly on Linux.
+
+# Verified on Linux and macOS (2026-11-18)
+
+The 14 Dune suites, 26 Ninja checks, 16 ASan/UBSan checks and installed core-stdlib driver smoke test pass on Ubuntu 24.04 arm64 with OCaml 5.5.2 and on macOS arm64 with OCaml 5.5.0. The macOS installed driver also passes the three-module Map.Make(String) registration test with the compatibility stdlib.
