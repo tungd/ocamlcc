@@ -96,3 +96,7 @@ The Linux PAL and libc bindings request the default glibc interfaces before incl
 # Missing toolchain executables
 
 The driver returns a diagnostic naming an unavailable external tool, including xcrun when an iOS build runs on a Linux host.
+
+# Ninja shared-library linkage
+
+The Ninja shared-library rule links libm for the math primitives it includes. Its C host can link the resulting shared library directly on Linux.

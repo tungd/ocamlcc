@@ -348,7 +348,7 @@ rule qbe_pic_check
   description = PIC-CHECK $in
 
 rule cc_shared
-  command = $cc -shared -fPIC $in -o $out
+  command = $cc -shared -fPIC $in -lm -o $out
   description = SHARED $out
 
 rule cc_pic_host
