@@ -18,7 +18,7 @@ let scale_with (src : vector) (dst : vector) factor =
   dst.{0} <- product
 
 let scale_and_capture (src : vector) (dst : vector) factor =
-  let product = src.{0} *. factor in
+  let product = if factor > 0. then src.{0} *. factor else src.{0} in
   dst.{0} <- product;
   product, (fun () -> product)
 

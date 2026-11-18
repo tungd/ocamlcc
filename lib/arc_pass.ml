@@ -77,7 +77,7 @@ let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
   | BytesSet _ | ArraySet _ | Builtin _ | Assign _ ->
       true
-  | MakeBlock (_, []) | Float64Load _ | FloatUnbox _ | FloatMul _ | Float64Store _ -> true
+  | MakeBlock (_, []) | Float64Load _ | FloatValue _ | FloatMul _ | Float64Store _ -> true
   | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _
   | BigarrayAccess _ | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _ | Ccall _
   | GetGlobal _ | Fun _ ->
@@ -116,7 +116,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | MakeArrayInit (len, init) -> (atom_vars len, [ init ])
   | App (fn, args) -> (atom_vars fn, args)
   | Builtin (_, _, a) -> (atom_vars a, [])
-  | FloatUnbox a -> (atom_vars a, [])
+  | FloatValue a -> (Anf.float_operand_vars Ident.Set.empty a, [])
   | Float64Load (_, a, i) -> (atoms_vars [a; i], [])
   | Float64Store (_, a, i, v) -> (Anf.float_operand_vars (atoms_vars [a; i]) v, [])
   | FloatMul (a, b) -> (Anf.float_operand_vars (Anf.float_operand_vars Ident.Set.empty a) b, [])
@@ -336,7 +336,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
              | FloatField _ | SetFloatField _ | OffsetRef _
              | StringGet _ | BytesSet _ | ArrayGet _ | ArraySet _
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _
-             | Float64Load _ | Float64Store _ | FloatUnbox _ | FloatMul _
+             | Float64Load _ | Float64Store _ | FloatValue _ | FloatMul _
              | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _ | MakeBlock (_, [])) as ce), body) -> (
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (Let (x, ce, body'))
@@ -670,9 +670,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           no_release_muts = env.muts }
       in
       let rhs' = transform_aexpr env_rhs rhs in
-      let imm = match rhs with
-        | FloatIf _ -> Ident.Set.add id env.imm
-        | _ -> env.imm
+      let imm =
+        if Anf.returns_raw_float rhs then Ident.Set.add id env.imm else env.imm
       in
       let env_body = { env with owned = Ident.Set.add id shared; imm } in
       let body' = transform_aexpr env_body body in

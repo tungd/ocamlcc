@@ -909,7 +909,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let dst = fresh_temp b "fload" in
       emit b (Call (Double, dst, { fn = Global "ocamlcc_ba_get_float64_1"; args }));
       dst
-  | FloatUnbox value -> load_double b (compile_atom hooks b value)
+  | FloatValue value -> compile_float_operand hooks b value
   | FloatMul (lhs, rhs) ->
       let l = compile_float_operand hooks b lhs in
       let r = compile_float_operand hooks b rhs in

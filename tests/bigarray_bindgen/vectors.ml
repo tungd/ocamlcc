@@ -17,7 +17,8 @@ let scale_words (src : vector) (dst : vector) factor n =
 let conditional_scale_words (src : vector) (dst : vector) factor n =
   let before = Gc.minor_words () in
   for i = 0 to n - 1 do
-    dst.{i} <- (if i land 1 = 0 then src.{i} *. factor else src.{i} *. 2.)
+    let product = if i land 1 = 0 then src.{i} *. factor else src.{i} *. 2. in
+    dst.{i} <- product
   done;
   Gc.minor_words () -. before
 let saved : vector option ref = ref None

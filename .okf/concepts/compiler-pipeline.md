@@ -96,7 +96,7 @@ double in the same chain. Captures and other boxed uses keep the existing
 OCaml value. ARC borrows the arrays, checks for exceptions after
 access, and excludes raw temporaries from reference counting and shadow
 frames. QBE emits a double multiply between the typed load and store
-helpers. Inline float conditionals use a double phi and keep the selected
+helpers. Inline and scalar-only named float conditionals use a double phi and keep the selected
 result out of ARC ownership tracking. See [memory views](/concepts/memory-views.md).
 
 # Match lowering

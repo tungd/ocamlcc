@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-19 (codex/1): Keep named conditional results unboxed when all uses accept doubles. A boxed result shared with a closure keeps its identity. See [memory views](/concepts/memory-views.md).
+
 - 2026-11-19 (codex/1): Lower inline float64 conditionals feeding a Bigarray store to a double phi. The 128-element fixture matches its three-word empty-loop control. See [memory views](/concepts/memory-views.md).
 
 - 2026-11-19 (codex/1): Keep named float64 Array1 reads and products unboxed when all their uses accept doubles in the same straight-line chain. The 128-element test again matches its three-word empty-loop control. See [memory views](/concepts/memory-views.md).

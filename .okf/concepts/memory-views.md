@@ -208,12 +208,13 @@ The compiler also follows named `let` bindings backwards within a
 straight-line chain. A load or multiply stays unboxed when all of its uses
 feed scalar operations in that chain. A binding with a boxed use, such as
 returning it or capturing it in a closure, keeps one shared OCaml value.
-An inline `if` feeding the scalar expression selects a branch result through
-a QBE double phi. Only the selected branch runs. If a branch returns a boxed
-float from a call, the compiler loads the double before releasing the box.
-The conditional loop measured 3 ARC words for 128 elements and for zero
-iterations. A conditional assigned to a named binding still uses the boxed
-join path.
+An `if` feeding the scalar expression selects a branch result through a QBE
+double phi. A named conditional result can also use this path when all uses
+accept a double. Only the selected branch runs. If an arm computes a boxed
+OCaml value, the compiler loads the double before releasing the box. A result
+that escapes, including through a closure capture, retains its boxed identity.
+The named conditional loop measured 3 ARC words for 128 elements and for
+zero iterations.
 Raw temporaries stay out of ARC cleanup and the fiber shadow stack.
 The backing owners follow ordinary ARC liveness.[^lowering][^codegen]
 
@@ -290,7 +291,7 @@ Unknown kind/layout or unsupported escape patterns retain the generic path.
    cover rejected transfers, escaping rows and cycle-owned views.
 4. **Typed scalar lowering (float64 Array1 scale implemented).** Direct
    expressions and straight-line local bindings use the scalar path. Further
-   work covers additional operations, named conditional results, and other kinds.
+   work covers additional operations, more control-flow forms, and other kinds.
 5. **Integration and reporting.** Update examples, public C ownership comments,
    [stdlib compatibility](/concepts/stdlib-compatibility.md), and the
    [compiler pipeline](/concepts/compiler-pipeline.md) to describe implemented

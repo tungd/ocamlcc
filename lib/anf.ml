@@ -106,7 +106,7 @@ type cexpr =
   | BigarrayAccess of bigarray_access * atom list
   | Float64Load of bigarray_access * atom * atom
   | Float64Store of bigarray_access * atom * atom * float_operand
-  | FloatUnbox of atom
+  | FloatValue of float_operand
   | FloatMul of float_operand * float_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
@@ -613,7 +613,7 @@ and conv_float_tail lam =
     | Raw_float id -> HaltFloat id
     | Boxed_float value ->
         let id = Ident.create_local "scalar" in
-        Let (id, FloatUnbox value, HaltFloat id))
+        Let (id, FloatValue (Boxed_float value), HaltFloat id))
 
 and binop op a c emit_cexpr =
   conv_expr a (fun av -> conv_expr c (fun cv -> emit_cexpr (Binop (op, av, cv))))
@@ -729,7 +729,7 @@ let float_operand_vars acc = function
   | Raw_float id -> Ident.Set.add id acc
 
 let cexpr_vars free_aexpr acc = function
-  | FloatUnbox a -> atom_vars acc a
+  | FloatValue a -> float_operand_vars acc a
   | Float64Load (_, a, i) -> atom_vars (atom_vars acc a) i
   | Float64Store (_, a, i, v) -> float_operand_vars (atom_vars (atom_vars acc a) i) v
   | FloatMul (a, b) -> float_operand_vars (float_operand_vars acc a) b
@@ -856,36 +856,57 @@ let rec free_vars (e : aexpr) : Ident.Set.t =
       Ident.Set.union s (Ident.Set.of_list rtoks)
   | ShadowPop (_, _, body) -> free_vars body
 
-(* Walk a straight-line chain backwards from its scalar consumers. A binding
-   needs a box if any use needs an OCaml value, including captures and uses in
-   the control-flow expression at the end of the chain. *)
-let specialize_float_chain bindings tail =
+type float_binding = Value of cexpr | Join of aexpr
+
+let rec boxed_conditional = function
+  | Let (_, _, body) -> boxed_conditional body
+  | If _ -> true
+  | _ -> false
+
+(* Conditional tests may bind temporaries before the branch itself. *)
+let rec returns_raw_float = function
+  | Let (_, _, body) -> returns_raw_float body
+  | FloatIf _ -> true
+  | _ -> false
+
+let bind_float_chain id binding body =
+  match binding with
+  | Value ce -> Let (id, ce, body)
+  | Join rhs -> LetJoin (id, rhs, body)
+
+(* Walk backwards from scalar consumers. Uses that cross a control-flow
+   boundary or need an OCaml value keep the binding boxed. *)
+let rec specialize_float_chain bindings tail =
   let demand vars = function
     | Boxed_float (Var id) -> Ident.Set.add id vars
     | Boxed_float _ | Raw_float _ -> vars
   in
-  let select (boxed, scalar, raw, code) (id, ce) =
-    let ce, raw =
+  let select (boxed, scalar, raw, code) (id, binding) =
+    let binding, raw =
       if Ident.Set.mem id scalar && not (Ident.Set.mem id boxed) then
-        match ce with
-        | BigarrayAccess
+        match binding with
+        | Value (BigarrayAccess
             (({ operation = `Get; rank = 1; kind = Pbigarray_float64; layout; _ } as access),
-             [arr; index]) when scalar_layout layout ->
-            Float64Load (access, arr, index), Ident.Set.add id raw
-        | Binop (Fmul, lhs, rhs) ->
-            FloatMul (Boxed_float lhs, Boxed_float rhs), Ident.Set.add id raw
-        | _ -> ce, raw
-      else ce, raw
+             [arr; index])) when scalar_layout layout ->
+            Value (Float64Load (access, arr, index)), Ident.Set.add id raw
+        | Value (Binop (Fmul, lhs, rhs)) ->
+            Value (FloatMul (Boxed_float lhs, Boxed_float rhs)), Ident.Set.add id raw
+        | Join rhs ->
+            Join (specialize_conditional rhs), Ident.Set.add id raw
+        | _ -> binding, raw
+      else binding, raw
     in
     let boxed = Ident.Set.remove id boxed and scalar = Ident.Set.remove id scalar in
     let boxed, scalar =
-      match ce with
-      | Float64Store (_, arr, index, v) ->
+      match binding with
+      | Value (Float64Store (_, arr, index, v)) ->
           atom_vars (atom_vars boxed arr) index, demand scalar v
-      | FloatMul (lhs, rhs) -> boxed, demand (demand scalar lhs) rhs
-      | _ -> cexpr_vars free_vars boxed ce, scalar
+      | Value (FloatMul (lhs, rhs)) -> boxed, demand (demand scalar lhs) rhs
+      | Value (FloatValue value) -> boxed, demand scalar value
+      | Value ce -> cexpr_vars free_vars boxed ce, scalar
+      | Join rhs -> Ident.Set.union boxed (free_vars rhs), scalar
     in
-    boxed, scalar, raw, (id, ce) :: code
+    boxed, scalar, raw, (id, binding) :: code
   in
   let _, _, raw, code =
     List.fold_left select (free_vars tail, Ident.Set.empty, Ident.Set.empty, []) bindings
@@ -894,18 +915,43 @@ let specialize_float_chain bindings tail =
     | Boxed_float (Var id) when Ident.Set.mem id raw -> Raw_float id
     | v -> v
   in
-  List.fold_right (fun (id, ce) body ->
-    let ce =
-      match ce with
-      | Float64Store (access, arr, index, v) ->
-          Float64Store (access, arr, index, operand v)
-      | FloatMul (lhs, rhs) -> FloatMul (operand lhs, operand rhs)
-      | _ -> ce
+  List.fold_right (fun (id, binding) body ->
+    let binding =
+      match binding with
+      | Value (Float64Store (access, arr, index, v)) ->
+          Value (Float64Store (access, arr, index, operand v))
+      | Value (FloatMul (lhs, rhs)) -> Value (FloatMul (operand lhs, operand rhs))
+      | Value (FloatValue v) -> Value (FloatValue (operand v))
+      | _ -> binding
     in
-    Let (id, ce, body)) code tail
+    bind_float_chain id binding body) code tail
+
+and specialize_conditional = function
+  | Let (id, ce, body) -> Let (id, ce, specialize_conditional body)
+  | If (cond, yes, no) ->
+      FloatIf (cond, specialize_float_arm [] yes, specialize_float_arm [] no)
+  | _ -> assert false
+
+and specialize_float_arm bindings = function
+  | Let (id, ce, body) -> specialize_float_arm ((id, Value ce) :: bindings) body
+  | LetJoin (id, rhs, body) when boxed_conditional rhs ->
+      specialize_float_arm ((id, Join rhs) :: bindings) body
+  | Halt value ->
+      let id = Ident.create_local "scalar" in
+      let bindings = (id, Value (FloatValue (Boxed_float value))) :: bindings in
+      specialize_float_chain bindings (HaltFloat id)
+  | expr ->
+      (* A complex arm computes an ordinary OCaml value before unboxing. *)
+      let boxed = Ident.create_local "boxed_arm" in
+      let raw = Ident.create_local "scalar" in
+      let tail = LetJoin (boxed, expr,
+                          Let (raw, FloatValue (Boxed_float (Var boxed)), HaltFloat raw)) in
+      specialize_float_chain bindings tail
 
 let rec specialize_float_bindings = function
   | Let _ as expr -> specialize_let_chain [] expr
+  | LetJoin (_, rhs, _) as expr when boxed_conditional rhs ->
+      specialize_let_chain [] expr
   | MutLet (id, ce, body) ->
       MutLet (id, ce, specialize_float_bindings body)
   | LetJoin (id, rhs, body) ->
@@ -940,12 +986,17 @@ let rec specialize_float_bindings = function
 and specialize_let_chain bindings = function
   | Let (id, ce, body) ->
       let ce = match ce with Fun lf -> Fun (specialize_float_function lf) | _ -> ce in
-      specialize_let_chain ((id, ce) :: bindings) body
+      specialize_let_chain ((id, Value ce) :: bindings) body
+  | LetJoin (id, rhs, body) when boxed_conditional rhs ->
+      let rhs = specialize_float_bindings rhs in
+      specialize_let_chain ((id, Join rhs) :: bindings) body
   | tail ->
       let tail = specialize_float_bindings tail in
-      if List.exists (function _, (Float64Store _ | FloatMul _) -> true | _ -> false) bindings
+      if List.exists (function
+        | _, Value (Float64Store _ | FloatMul _ | FloatValue _) -> true
+        | _ -> false) bindings
       then specialize_float_chain bindings tail
-      else List.fold_left (fun body (id, ce) -> Let (id, ce, body)) tail bindings
+      else List.fold_left (fun body (id, binding) -> bind_float_chain id binding body) tail bindings
 
 and specialize_float_function lf =
   { lf with body = specialize_float_bindings lf.body }

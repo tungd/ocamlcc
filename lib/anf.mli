@@ -111,7 +111,7 @@ type cexpr =
   | BigarrayAccess of bigarray_access * atom list
   | Float64Load of bigarray_access * atom * atom
   | Float64Store of bigarray_access * atom * atom * float_operand
-  | FloatUnbox of atom
+  | FloatValue of float_operand
   | FloatMul of float_operand * float_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
@@ -176,5 +176,6 @@ val of_lambda :
   Lambda.program ->
   (program, string) result
 val float_operand_vars : Ident.Set.t -> float_operand -> Ident.Set.t
+val returns_raw_float : aexpr -> bool
 val free_vars : aexpr -> Ident.Set.t
 val pure_defs : aexpr -> (Ident.t * lfunction) list
