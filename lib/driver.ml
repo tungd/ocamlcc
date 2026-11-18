@@ -918,14 +918,20 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                               Pipeline.compile_file ~include_dirs:inc_dirs
                                 ~output_prefix:prefix ~emit_cmi
                                 ~nopervasives:cfg.nopervasives
-                                ~nostdlib:eff_nostdlib ~emit_entry
+                                ~nostdlib:eff_nostdlib ~emit_entry:false
                                 ~filename:s.path ~modname:s.modname ()
                             with
                             | Error msg -> Error msg
                             | Ok ssa_txt -> (
                                 let ssa = Filename.concat work_dir (lower ^ ".ssa") in
                                 let asm = Filename.concat work_dir (lower ^ ".s") in
-                                write_file ssa ssa_txt;
+                                let startup =
+                                  if emit_entry then
+                                    let names = List.map (fun step -> step.modname) ml_steps in
+                                    Qbe_il.to_string { funcs = [Codegen.entry_point names]; datas = [] }
+                                  else ""
+                                in
+                                write_file ssa (ssa_txt ^ startup);
                                 match
                                   run_cmd ~verbose ~stdout_file:asm qbe
                                     [ "-t"; target.qbe_target; ssa ]

@@ -5,8 +5,8 @@ description: How the top-level build.ninja orchestrates vendored QBE, the C runt
 tags: [build, ninja, dune, qbe]
 status: stable
 generated:
-  by: autoagent/1
-  at: 2026-11-13
+  by: codex/1
+  at: 2026-11-18
 sources:
   - id: build-ninja
     resource: ../build.ninja
@@ -76,3 +76,7 @@ hiding internal runtime/stdlib symbols on `--shared` via Darwin
 / `--exclude-libs,ALL`), and executable, shared, static, or `.xcframework`
 packaging (only emitting/attaching `-headers` for `ios-xcframework` when a `.mli`
 is present or `--emit-header` is explicitly passed).
+
+# Executable startup
+
+The executable initializes every explicitly linked implementation once, in dependency order. This includes units whose only effect is registration at startup.

@@ -153,6 +153,18 @@ let () =
           in
           check "exe build" (code = 0 && out = expected));
 
+      let registry = write_tmp "registry.ml" "let count = ref 0" in
+      let plugin = write_tmp "plugin.ml" "let () = incr Registry.count" in
+      let entry = write_tmp "entry.ml" "let () = print_int !Registry.count" in
+      let registration = Filename.concat tmp "registration" in
+      (match Driver.build
+               { base_cfg with inputs = [registry; plugin; entry];
+                 output = Some registration }
+       with
+       | Error msg -> failwith msg
+       | Ok exe ->
+           check "linked registration runs once" (run_capture exe [] = (0, "1\n")));
+
       (* 3a'. Default nostdlib=false uses ocamlcc stdlib.cmi (List/Array/Option/Printf) *)
       let std_app_ml =
         write_tmp "std_app.ml"

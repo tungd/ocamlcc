@@ -1,6 +1,7 @@
 target resolution: PASS
 dependency ordering: PASS
 exe build: PASS
+linked registration runs once: PASS
 default stdlib cmi: PASS
 stdlib fallback cmi: PASS
 shared library + header: PASS

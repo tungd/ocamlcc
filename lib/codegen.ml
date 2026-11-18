@@ -3,6 +3,13 @@
 open Codegen_ctx
 open Qbe_il
 
+let entry_point modules =
+  let call_init name =
+    Call_void { fn = Global ("ocamlcc_init_" ^ sanitize name); args = [] }
+  in
+  { name = "ocamlcc_module_init"; export = true; retty = None; params = [];
+    blocks = [{ label = "start"; insts = List.map call_init modules; term = Ret None }] }
+
 let compile_program ?(emit_entry = true) (program : Anf.program) :
     Qbe_il.module_ =
   let mod_sym = sanitize (Ident.name program.Anf.module_ident) in
@@ -102,17 +109,7 @@ let compile_program ?(emit_entry = true) (program : Anf.program) :
   in
   let funcs =
     if emit_entry then
-      let entry_func =
-        { name = "ocamlcc_module_init";
-          export = true;
-          retty = None;
-          params = [];
-          blocks =
-            [ { label = "start";
-                insts = [ Call_void { fn = Global init_sym; args = [] } ];
-                term = Ret None } ] }
-      in
-      List.rev (entry_func :: init_func :: b.funcs)
+      List.rev (entry_point [mod_sym] :: init_func :: b.funcs)
     else List.rev (init_func :: b.funcs)
   in
   { funcs; datas = List.rev b.datas }
