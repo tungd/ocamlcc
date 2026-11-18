@@ -1,5 +1,6 @@
 (executable
  (name arc_mutlet_test)
+ (modules arc_mutlet_test)
  (libraries ocamlcc))
 
 (rule
@@ -17,6 +18,7 @@
 
 (executable
  (name anf_staticraise_test)
+ (modules anf_staticraise_test)
  (libraries ocamlcc))
 
 (rule
@@ -34,6 +36,7 @@
 
 (executable
  (name pure_nested_test)
+ (modules pure_nested_test)
  (libraries ocamlcc))
 
 (rule
@@ -51,6 +54,7 @@
 
 (executable
  (name ccalls_test)
+ (modules ccalls_test)
  (libraries ocamlcc))
 
 (rule
@@ -68,6 +72,7 @@
 
 (executable
  (name frontend_negative_test)
+ (modules frontend_negative_test)
  (libraries ocamlcc))
 
 (rule
@@ -85,6 +90,7 @@
 
 (executable
  (name anf_negative_test)
+ (modules anf_negative_test)
  (libraries ocamlcc))
 
 (rule
@@ -102,6 +108,7 @@
 
 (executable
  (name pipeline_ir_test)
+ (modules pipeline_ir_test)
  (libraries ocamlcc))
 
 (rule
@@ -119,6 +126,7 @@
 
 (executable
  (name qbe_pic_test)
+ (modules qbe_pic_test)
  (libraries ocamlcc))
 
 (rule
@@ -136,6 +144,7 @@
 
 (executable
  (name codegen_ctx_test)
+ (modules codegen_ctx_test)
  (libraries ocamlcc))
 
 (rule
@@ -153,6 +162,7 @@
 
 (executable
  (name tupled_letrec_test)
+ (modules tupled_letrec_test)
  (libraries ocamlcc))
 
 (rule
@@ -170,6 +180,7 @@
 
 (executable
  (name primitives_ir_test)
+ (modules primitives_ir_test)
  (libraries ocamlcc))
 
 (rule
@@ -187,6 +198,7 @@
 
 (executable
  (name builtins_test)
+ (modules builtins_test)
  (libraries ocamlcc unix))
 
 (rule
@@ -204,6 +216,7 @@
 
 (executable
  (name c_bindgen_test)
+ (modules c_bindgen_test)
  (libraries ocamlcc unix))
 
 (rule
@@ -221,6 +234,7 @@
 
 (executable
  (name driver_test)
+ (modules driver_test)
  (libraries ocamlcc unix))
 
 (rule

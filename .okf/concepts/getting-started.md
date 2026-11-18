@@ -76,3 +76,7 @@ build/bin/ocamlcc dump-lambda examples/hello.ml                 # dump Lambda IR
 # Clean-checkout tests
 
 Dune builds the vendored QBE needed by the driver integration suite. A fresh OCaml 5.5 checkout can run dune runtest before any Ninja targets.
+
+# Dune test executable ownership
+
+Each standalone test executable declares its module explicitly so Dune 3.14 can also build the suite.
