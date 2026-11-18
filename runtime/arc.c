@@ -2239,6 +2239,8 @@ int64_t caml_bytes_compare(int64_t a, int64_t b)
 
 DEFINE_IMMORTAL_STR(g_inv_arg_cyc_str, "compare: cyclic structure");
 
+enum { CMP_LESS = -1, CMP_EQUAL = 0, CMP_GREATER = 1, CMP_UNORDERED = 2 };
+
 static int is_nan_bits(uint64_t bits)
 {
     return (bits & 0x7fffffffffffffffULL) > 0x7ff0000000000000ULL;
@@ -2251,9 +2253,11 @@ static __attribute__((noinline)) int compare_f64_raw(double da, double db, int t
     pal_memcpy(&bb, &db, sizeof(bb));
     int na = is_nan_bits(ba);
     int nb = is_nan_bits(bb);
+    if (!total && (na || nb))
+        return CMP_UNORDERED;
     if (na) {
         if (nb)
-            return total ? 0 : 1;
+            return CMP_EQUAL;
         return -1;
     }
     if (nb)
@@ -2394,22 +2398,24 @@ int64_t caml_notequal(int64_t a, int64_t b)
 
 int64_t caml_lessthan(int64_t a, int64_t b)
 {
-    return (val_compare(a, b, 1) < 0) ? 3 : 1;
+    return (val_compare(a, b, 0) == CMP_LESS) ? 3 : 1;
 }
 
 int64_t caml_lessequal(int64_t a, int64_t b)
 {
-    return (val_compare(a, b, 1) <= 0) ? 3 : 1;
+    int c = val_compare(a, b, 0);
+    return (c == CMP_LESS || c == CMP_EQUAL) ? 3 : 1;
 }
 
 int64_t caml_greaterthan(int64_t a, int64_t b)
 {
-    return (val_compare(a, b, 1) > 0) ? 3 : 1;
+    return (val_compare(a, b, 0) == CMP_GREATER) ? 3 : 1;
 }
 
 int64_t caml_greaterequal(int64_t a, int64_t b)
 {
-    return (val_compare(a, b, 1) >= 0) ? 3 : 1;
+    int c = val_compare(a, b, 0);
+    return (c == CMP_GREATER || c == CMP_EQUAL) ? 3 : 1;
 }
 
 static uint32_t hash_mix32(uint32_t h, uint32_t d)

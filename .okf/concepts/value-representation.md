@@ -96,3 +96,7 @@ at the first one.
 # Function comparison
 
 Structural predicates raise Invalid_argument when they reach a functional value, including two references to the same closure. Physical equality is available through (==).
+
+# NaN in structural comparisons
+
+Polymorphic predicates propagate unordered floating-point comparisons through lists, records and arrays. Stdlib.compare supplies the total ordering that places NaN before numbers.

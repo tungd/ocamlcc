@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Polymorphic predicates propagate unordered floating-point comparisons through lists, records and arrays. Stdlib.compare supplies the total ordering that places NaN before numbers.
+
 - 2026-11-18 (codex/1): Structural predicates raise Invalid_argument when they reach a functional value, including two references to the same closure. Physical equality is available through (==).
 
 - 2026-11-18 (codex/1): The executable initializes every explicitly linked implementation once, in dependency order. This includes units whose only effect is registration at startup.
