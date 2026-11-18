@@ -6,7 +6,7 @@ tags: [build, ninja, dune, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-18
+  at: 2026-11-18T06:43:07Z
 sources:
   - id: build-ninja
     resource: ../build.ninja
@@ -97,7 +97,9 @@ The Linux PAL and libc bindings request the default glibc interfaces before incl
 
 The driver returns a diagnostic naming an unavailable external tool, including xcrun when an iOS build runs on a Linux host.
 
-Array1 bindings embed the common view type definitions in the generated header.
+# Generated C headers for Bigarray views
+
+Array1 and Array2 bindings embed the common view type definitions in the generated header.
 Their module-prefixed inspection and ownership functions use the producing library’s
 runtime. See [memory views](/concepts/memory-views.md).
 

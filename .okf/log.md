@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Generate C bindings for concrete Bigarray.Array2 arguments and results. The C host releases a matrix and continues reading and writing its zero-copy Array1 row. See [memory views](/concepts/memory-views.md).
+
 - 2026-11-18 (codex/1): Scope generated Bigarray view helpers to each module and reject input handles owned by another ARC heap. A two-library C fixture exercises both plain shared builds and libraries with native stubs.
 
 - 2026-11-18 (codex/1): Generate typed Bigarray.Array1 C arguments and owned results. The C host checks subview aliasing after parent release, metadata errors and exception cleanup through a shared library. See [memory views](/concepts/memory-views.md).

@@ -4,12 +4,40 @@
 
 OcamlccBigarrayView *vectors_native_buffer(unsigned rank);
 
+static void check_matrix_row(void)
+{
+    ocamlcc_error_t err = {0};
+    OcamlccBigarrayView *matrix = vectors_matrix(2, 3, &err);
+    assert(matrix && !err.code);
+    OcamlccBigarrayInfo m = ocamlcc_Vectors_view_info(matrix);
+    assert(m.rank == 2 && m.dims[0] == 2 && m.dims[1] == 3);
+    double *data = m.data;
+    data[4] = 42.0;
+    assert(vectors_row(matrix, 2, &err) == NULL && err.code);
+    OcamlccBigarrayView *row = vectors_row(matrix, 1, &err);
+    assert(row && !err.code);
+    assert(vectors_row(row, 0, &err) == NULL && err.code);
+    OcamlccBigarrayInfo r = ocamlcc_Vectors_view_info(row);
+    assert(r.rank == 1 && r.dims[0] == 3 && r.byte_length == 3 * sizeof(double));
+    assert(r.data == data + 3);
+    ocamlcc_Vectors_view_release(matrix);
+    double *cells = r.data;
+    assert(cells[1] == 42.0);
+    cells[2] = 17.0;
+    OcamlccBigarrayView *cell = vectors_sub(row, 2, 1, &err);
+    assert(cell && !err.code);
+    ocamlcc_Vectors_view_release(row);
+    assert(*(double *)ocamlcc_Vectors_view_info(cell).data == 17.0);
+    ocamlcc_Vectors_view_release(cell);
+}
+
 int main(void)
 {
     ocamlcc_error_t err = {0};
     vectors_init();
     peer_init();
     int64_t baseline = vectors_live(&err);
+    check_matrix_row();
     OcamlccBigarrayView *matrix = vectors_native_buffer(2);
     assert(matrix && vectors_sub(matrix, 0, 1, &err) == NULL && err.code);
     ocamlcc_Vectors_view_release(matrix);

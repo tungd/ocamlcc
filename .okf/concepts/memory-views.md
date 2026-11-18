@@ -6,7 +6,7 @@ tags: [memory, bigarray, ffi, compiler, performance]
 status: draft
 generated:
   by: codex/1
-  at: 2026-11-18T04:57:21Z
+  at: 2026-11-18T06:43:07Z
 sources:
   - id: scope
     resource: Conversation on 2026-11-18 about ARC, Bigarray, memory views, and desktop target scope
@@ -34,7 +34,7 @@ sources:
     title: Native runtime lifetime regressions
   - id: c-host
     resource: ../../tests/bigarray_bindgen/host.c
-    title: Generated Array1 binding ownership across two shared libraries
+    title: Generated Bigarray view ownership across two shared libraries
 ---
 
 # Objective and scope
@@ -55,9 +55,9 @@ language-wide borrowing feature. Reuse `Array1`, `Array2`, `Array3`, and
 `Genarray` APIs and their existing slicing/layout semantics.
 
 The user selected the architecture and platform scope above. The runtime C
-view API and direct, concretely typed Array1 bindings are implemented. Other
-ranks, foreign imports and scalar specialization are follow-up slices. No elapsed-time or speedup threshold
-has been specified.
+view API and direct, concretely typed Array1 and Array2 bindings are
+implemented. Other ranks, foreign imports and scalar specialization are
+follow-up slices. No elapsed-time or speedup threshold has been specified.
 
 # Current behavior
 
@@ -71,7 +71,7 @@ baseline; it does not establish a timing baseline.
 | Scalar reads | `ba_read` boxes floats, `int32`, `int64`, native integers, and complex results; immediate integer kinds remain tagged values. | Preallocating a Bigarray does not currently make its scalar processing loop allocation-free. |
 | Scalar arithmetic | Existing floating arithmetic uses boxed inputs/results around QBE arithmetic. | Optimizing only the Bigarray load leaves allocation in the arithmetic chain. |
 | Primitive lowering | `Pbigarrayref` and `Pbigarrayset` discard kind/layout metadata when lowered to generic C calls. | Preserve useful primitive information before implementing specialized code generation. |
-| C bindings | Bindgen maps direct, fully typed Array1 parameters and results to retained C view handles. | Subviews preserve aliasing across the call and can outlive the input handle. |
+| C bindings | Bindgen maps direct, fully typed Array1 and Array2 parameters and results to retained C view handles. | Subviews preserve aliasing across the call and can outlive the input handle. |
 | Release | Last backing-owner release calls `pal_page_free`; ordinary ARC can synchronously destroy object graphs. | Stable addresses and predictable ownership do not guarantee bounded release time. |
 
 These behaviors are in `runtime/bigarray.inc`, `runtime/arc.c`, `lib/anf.ml`,
@@ -117,7 +117,7 @@ rank-zero Bigarray contains one element.[^bigarray]
 | Give a second C caller ownership | Pass the result of `ocamlcc_bigarray_view_retain(view)`. Each caller releases its own reference. |
 | Start asynchronous work | Hold an owner until completion or cancellation has stopped access. Synchronize writes across aliases. |
 | Release an owner | Call `ocamlcc_bigarray_view_release(view)`. Acquisition, retain and release participate in the runtime mutator gate. |
-| Pass an owned view back into OCaml | The Array1 shim validates rank, kind and layout before acquiring an argument reference for the callee. The caller retains its own reference. |
+| Pass an owned view back into OCaml | The generated shim checks the runtime, declared rank, kind and layout before acquiring an argument reference for the callee. The caller retains its own reference. |
 
 The runtime test exports a subview at a nonzero offset, observes a C write
 through a sibling, then drops all OCaml strong owners and collects. The last C
@@ -130,7 +130,13 @@ The AMD64 macOS fixture cross-linked on the ARM64 host, which could not
 execute x86_64 macOS binaries. A C++17 consumer compiled and linked
 against the installed header on ARM64 macOS.
 
-## Generated Array1 bindings
+## Generated Array1 and Array2 bindings
+
+A C-layout `Array2.slice_left matrix i` fixes the zero-based row index
+and returns an owned `Array1` over the same storage. A C caller can release
+the matrix immediately and read or write the row until it releases the row
+handle. An out-of-bounds index reports an OCaml exception through
+`ocamlcc_error_t` and leaves the caller’s matrix usable.[^c-host]
 
 With the compatibility stdlib, `ocamlcc build --shared --emit-header` emits
 a self-contained header. For a module named `Vectors`, inspect a returned
@@ -224,13 +230,13 @@ Unknown kind/layout or unsupported escape patterns retain the generic path.
 
 1. **Public runtime view ownership (implemented).** The C handle retains the
    exported wrapper and exposes its data and dimensions across collection.
-2. **Generated Bigarray bindings (Array1 implemented).** Concrete element, kind
+2. **Generated Bigarray bindings (Array1 and Array2 implemented).** Concrete element, kind
    and layout types are required. Type aliases resolve through compiler-libs.
    A function or module value returns one owned C handle. Null inputs, metadata
    mismatches and OCaml exceptions use the existing `ocamlcc_error_t` convention.
    The shared-library fixture releases its parent and reads the returned slice,
-   then verifies the original live-object count. Nested view types, Array2,
-   Array3 and Genarray are outside this first slice.[^bindgen]
+   then verifies the original live-object count. Nested view types, Array3
+   and Genarray remain unsupported.[^bindgen]
 3. **Foreign backing ownership.** Add imports with an owner/release policy and
    caller-provided storage, verifying import failure and sibling-view teardown.
 4. **Typed scalar lowering.** Preserve primitive metadata, specialize a complete

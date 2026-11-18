@@ -32,7 +32,7 @@ and c_type =
   | CT_tuple of c_type list
   | CT_record of record_info
   | CT_opaque of string
-  | CT_array1 of string * string (* runtime kind and layout constants *)
+  | CT_bigarray of { rank : int; kind : string; layout : string }
 
 type exported_val = {
   ev_name : string;
@@ -116,7 +116,7 @@ let rec type_key = function
   | CT_tuple ts -> "tup_" ^ String.concat "_" (List.map type_key ts)
   | CT_record r -> "rec_" ^ r.ri_cname
   | CT_opaque s -> "opq_" ^ s
-  | CT_array1 (kind, layout) -> kind ^ "_" ^ layout
+  | CT_bigarray { rank; kind; layout } -> Printf.sprintf "array%d_%s_%s" rank kind layout
 
 let rec c_slug = function
   | CT_unit -> "void"
@@ -132,7 +132,7 @@ let rec c_slug = function
   | CT_tuple ts -> "tuple_" ^ String.concat "_" (List.map c_slug ts)
   | CT_record r -> r.ri_cname
   | CT_opaque s -> s
-  | CT_array1 _ -> "bigarray_view"
+  | CT_bigarray _ -> "bigarray_view"
 
 let ensure_t_suffix s =
   if String.length s >= 2 && String.sub s (String.length s - 2) 2 = "_t" then s
@@ -152,7 +152,7 @@ let c_type_in_struct = function
   | CT_tuple ts -> "ocamlcc_tuple_" ^ String.concat "_" (List.map c_slug ts)
   | CT_record r -> r.ri_cname
   | CT_opaque s -> s
-  | CT_array1 _ -> "OcamlccBigarrayView *"
+  | CT_bigarray _ -> "OcamlccBigarrayView *"
 
 let c_type_param = c_type_in_struct
 
@@ -162,7 +162,7 @@ let c_type_ret = function
   | t -> c_type_in_struct t
 
 let rec needs_free = function
-  | CT_string | CT_opaque _ | CT_array1 _ -> true
+  | CT_string | CT_opaque _ | CT_bigarray _ -> true
   | CT_option t -> needs_free t
   | CT_tuple ts -> List.exists needs_free ts
   | CT_record r -> List.exists (fun rf -> needs_free rf.rf_type) r.ri_fields
@@ -177,7 +177,7 @@ let zero_expr = function
   | CT_bool -> "false"
   | CT_char -> "0"
   | CT_float -> "0.0"
-  | CT_string | CT_array1 _ -> "NULL"
+  | CT_string | CT_bigarray _ -> "NULL"
   | CT_option _ | CT_tuple _ | CT_record _ | CT_opaque _ -> "{0}"
 
 type header_decl =
@@ -192,7 +192,14 @@ let stdlib_type unit_name members =
 
 let bigarray_type members = stdlib_type "Bigarray" members
 
-let array1_type env ctx args =
+let bigarray_rank path =
+  if Path.same path (bigarray_type ["Array1"; "t"]) then Some 1
+  else if Path.same path (bigarray_type ["Array2"; "t"]) then Some 2
+  else None
+
+let resolve_bigarray ~rank ~direct ~ctx env args =
+  let name = Printf.sprintf "Array%d" rank in
+  if not direct then failwith (ctx ^ ": nested " ^ name ^ " views are unsupported in C FFI");
   let path ty =
     match Types.get_desc (Ctype.expand_head env ty) with
     | Types.Tconstr (p, [], _) -> Some (Env.normalize_type_path None env p)
@@ -217,17 +224,17 @@ let array1_type env ctx args =
         else match List.find_opt (fun (name, elt) ->
           matches element elt && matches kind (bigarray_type [name ^ "_elt"])) kinds with
         | Some (name, _) -> name
-        | None -> failwith (ctx ^ ": unsupported Array1 element type or kind")
+        | None -> failwith (ctx ^ ": unsupported " ^ name ^ " element type or kind")
       in
       let layout =
         if matches layout (bigarray_type ["c_layout"]) then "OCAMLCC_BA_C_LAYOUT"
         else if matches layout (bigarray_type ["fortran_layout"]) then "OCAMLCC_BA_FORTRAN_LAYOUT"
-        else failwith (ctx ^ ": Array1 requires a concrete layout")
+        else failwith (ctx ^ ": " ^ name ^ " requires a concrete layout")
       in
-      CT_array1 ("OCAMLCC_BA_" ^ String.uppercase_ascii kind, layout)
-  | _ -> failwith (ctx ^ ": unsupported Array1 type")
+      CT_bigarray { rank; kind = "OCAMLCC_BA_" ^ String.uppercase_ascii kind; layout }
+  | _ -> failwith (ctx ^ ": unsupported " ^ name ^ " type")
 
-let is_array1 = function CT_array1 _ -> true | _ -> false
+let is_bigarray = function CT_bigarray _ -> true | _ -> false
 
 let translate_signature ~modname sg env =
   let mod_prefix = sanitize_c (String.uncapitalize_ascii modname) in
@@ -261,7 +268,7 @@ let translate_signature ~modname sg env =
           Hashtbl.add seen_header_decls sname ();
           header_decls_rev := HD_tuple (sname, ts) :: !header_decls_rev
         end
-    | CT_unit | CT_int | CT_bool | CT_char | CT_float | CT_array1 _
+    | CT_unit | CT_int | CT_bool | CT_char | CT_float | CT_bigarray _
     | CT_string | CT_int32 | CT_int64 | CT_nativeint -> ()
   in
   let rec resolve_type ?(seen = []) ?(direct = false) ~ctx ty =
@@ -277,9 +284,6 @@ let translate_signature ~modname sg env =
         else if Path.same path Predef.path_int32 && args = [] then CT_int32
         else if Path.same path Predef.path_int64 && args = [] then CT_int64
         else if Path.same path Predef.path_nativeint && args = [] then CT_nativeint
-        else if Path.same (Env.normalize_type_path None env path) (bigarray_type ["Array1"; "t"]) then
-          if direct then array1_type env ctx args
-          else failwith (ctx ^ ": nested Array1 views are unsupported in C FFI")
         else if Path.same path Predef.path_option then (
           match args with
           | [ inner ] ->
@@ -288,7 +292,9 @@ let translate_signature ~modname sg env =
                 failwith (ctx ^ ": unit option is unsupported in C FFI");
               CT_option t
           | _ -> failwith (ctx ^ ": invalid option type"))
-        else
+        else (match bigarray_rank (Env.normalize_type_path None env path) with
+        | Some rank -> resolve_bigarray ~rank ~direct ~ctx env args
+        | None ->
           let pname = Path.name path in
           if List.mem pname seen then
             failwith (ctx ^ ": recursive type " ^ pname ^ " is unsupported in C FFI")
@@ -297,7 +303,7 @@ let translate_signature ~modname sg env =
             | Some ct when args = [] -> ct
             | _ ->
                 failwith
-                  (Printf.sprintf "%s: unsupported type %s" ctx pname))
+                  (Printf.sprintf "%s: unsupported type %s" ctx pname)))
     | Types.Ttuple fields ->
         let ts =
           List.map
@@ -594,10 +600,14 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
     p "extern OcamlccBigarrayInfo ocamlcc_bigarray_view_info(const OcamlccBigarrayView *);\n";
     p "OcamlccBigarrayInfo %sinfo(const OcamlccBigarrayView *v) { return ocamlcc_bigarray_view_info(v); }\n" prefix;
     p "OcamlccBigarrayView *%sretain(OcamlccBigarrayView *v) { return ocamlcc_bigarray_view_retain(v); }\n" prefix;
-    p "void %srelease(OcamlccBigarrayView *v) { ocamlcc_bigarray_view_release(v); }\n" prefix;
-    p "OCAMLCC_UNUSED static void shim_view_error(ocamlcc_error_t *err) {\n";
-    p "    if (err) { err->code = 1; strcpy(err->message, \"Array1 view has incompatible runtime, rank, kind or layout\"); }\n}\n\n"
+    p "void %srelease(OcamlccBigarrayView *v) { ocamlcc_bigarray_view_release(v); }\n\n" prefix
   end;
+  let emit_view_error rank =
+    p "        if (err) {\n";
+    p "            err->code = 1;\n";
+    p "            strcpy(err->message, \"Array%d view has incompatible runtime, rank, kind or layout\");\n" rank;
+    p "        }\n"
+  in
   let emitted_helpers = Hashtbl.create 16 in
   let rec ensure_helpers t =
     let k = type_key t in
@@ -709,7 +719,7 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
         Printf.sprintf "ocamlcc_alloc_custom(OCAMLCC_CUSTOM_INT64, (uint64_t)(%s))" expr
     | CT_nativeint ->
         Printf.sprintf "ocamlcc_alloc_custom(OCAMLCC_CUSTOM_NATIVEINT, (uint64_t)(int64_t)(%s))" expr
-    | CT_array1 _ -> Printf.sprintf "ocamlcc_bigarray_view_to_value(%s)" expr
+    | CT_bigarray _ -> Printf.sprintf "ocamlcc_bigarray_view_to_value(%s)" expr
     | CT_opaque _ ->
         Printf.sprintf "(arc_retain_val((%s).raw), (%s).raw)" expr expr
     | CT_option _ | CT_tuple _ | CT_record _ ->
@@ -725,7 +735,7 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
     | CT_int32 -> Printf.sprintf "(int32_t)(*(const int64_t *)(uintptr_t)(%s))" expr
     | CT_int64 -> Printf.sprintf "(*(const int64_t *)(uintptr_t)(%s))" expr
     | CT_nativeint -> Printf.sprintf "(intptr_t)(*(const int64_t *)(uintptr_t)(%s))" expr
-    | CT_array1 _ -> Printf.sprintf "ocamlcc_bigarray_view_acquire(%s)" expr
+    | CT_bigarray _ -> Printf.sprintf "ocamlcc_bigarray_view_acquire(%s)" expr
     | CT_opaque cname ->
         Printf.sprintf "(arc_retain_val(%s), (%s){ .raw = (%s) })" expr cname expr
     | CT_option _ | CT_tuple _ | CT_record _ ->
@@ -790,9 +800,9 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
         | t -> p "        return (%s)%s;\n" (c_type_ret t) (zero_expr t)
       in
       List.iteri (fun i -> function
-        | CT_array1 (kind, layout) ->
-            p "    if (!ocamlcc_bigarray_view_matches(a%d, 1, %s, %s)) {\n" i kind layout;
-            p "        shim_view_error(err);\n";
+        | CT_bigarray { rank; kind; layout } ->
+            p "    if (!ocamlcc_bigarray_view_matches(a%d, %d, %s, %s)) {\n" i rank kind layout;
+            emit_view_error rank;
             return_error ();
             p "    }\n"
         | _ -> ()) ev.ev_params;
@@ -800,10 +810,10 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
         p "    %s out = %s;\n" (c_type_ret t) (from_ocaml_expr t "res");
         if ev.ev_is_fn then p "    arc_release_val(res);\n";
         (match t with
-        | CT_array1 (kind, layout) ->
-            p "    if (!ocamlcc_bigarray_view_matches(out, 1, %s, %s)) {\n" kind layout;
+        | CT_bigarray { rank; kind; layout } ->
+            p "    if (!ocamlcc_bigarray_view_matches(out, %d, %s, %s)) {\n" rank kind layout;
             p "        ocamlcc_bigarray_view_release(out);\n";
-            p "        shim_view_error(err);\n";
+            emit_view_error rank;
             return_error ();
             p "    }\n"
         | _ -> ());
@@ -881,7 +891,7 @@ let generate ?(include_dirs = []) ?(nopervasives = false) ?(nostdlib = false)
             | Some h -> h
             | None -> mod_prefix ^ ".h"
           in
-          let uses_views = List.exists (fun v -> is_array1 v.ev_ret || List.exists is_array1 v.ev_params) vals in
+          let uses_views = List.exists (fun v -> is_bigarray v.ev_ret || List.exists is_bigarray v.ev_params) vals in
           let header =
             emit_header ~uses_views ~modname ~mod_prefix header_decls vals
           in
