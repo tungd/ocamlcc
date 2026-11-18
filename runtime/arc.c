@@ -1309,9 +1309,9 @@ static void trial_grow(TrialMap *tm)
     if (tm->entries != NULL) {
         for (size_t i = 0; i < tm->cap; i++) {
             if (tm->entries[i].hdr != NULL) {
-                size_t j = trial_hash(tm->entries[i].hdr) & (new_cap - 1u);
+                size_t j = trial_hash(tm->entries[i].hdr) % new_cap;
                 while (ne[j].hdr != NULL)
-                    j = (j + 1u) & (new_cap - 1u);
+                    j = (j + 1u) % new_cap;
                 ne[j] = tm->entries[i];
             }
         }
@@ -1326,9 +1326,8 @@ static TrialEntry *trial_get(TrialMap *tm, ArcHeader *h)
 {
     if (tm->entries == NULL || (tm->len + 1u) * 3u > tm->cap * 2u)
         trial_grow(tm);
-    /* Keep power-of-2-friendly probing by using modulo when cap is non-pow2,
-       or mask if pow2; trial_grow derives cap from page size / sizeof(TrialEntry)
-       (sizeof(TrialEntry) = 24, so cap may not be a power of 2). */
+    /* Page-rounded capacity may not be a power of two. Use the same
+       probing rule during lookup and rehash. */
     size_t cap = tm->cap;
     size_t j = trial_hash(h) % cap;
     while (tm->entries[j].hdr != NULL) {

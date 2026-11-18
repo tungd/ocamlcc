@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Fix trial-map rehashing on page-rounded capacities. The 1,500-target finalizer regression now completes with exactly one callback per target.
+
 - 2026-11-18 (codex/1): Deliver last callbacks when the weak registry confirms permanent death. The compatibility suite now runs the full lifecycle and alarm reference fixture.
 
 - 2026-11-18 (codex/1): Implement ordinary callback discovery and resurrection at explicit major collections. Registration pins protect reuse without adding lock traffic to ordinary drops. Preserve the last use of Sys.opaque_identity across collection.

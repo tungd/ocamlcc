@@ -58,12 +58,24 @@ let check_alarm () =
   collect ();
   check (!calls = stopped) "deleted alarm fired"
 
+let check_many () =
+  let count = 1500 in
+  let seen = Array.make count 0 in
+  let install i =
+    let target = ref i in
+    Gc.finalise (fun x -> seen.(!x) <- seen.(!x) + 1) target
+  in
+  for i = 0 to count - 1 do install i done;
+  collect ();
+  Array.iter (fun calls -> check (calls = 1) "batch lost or repeated a callback") seen
+
 let () =
   try
     check_lifetime false;
     print_endline "acyclic resurrection and final death: ok";
     check_lifetime true;
     print_endline "cyclic resurrection and final death: ok";
+    check_many ();
     check_alarm ();
     print_endline "alarm re-registration and deletion: ok"
   with Failure message ->

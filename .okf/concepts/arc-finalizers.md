@@ -79,7 +79,7 @@ build/bin/ocamlcc build --stdlib-dir build/stdlib_compat/out tests/finalizer_lif
 
 ## Ordinary finalizer regression
 
-The repository fixture exercises a rooted ref, publication by its callback, and weak clearing after the published owner releases it.
+The batch regression checks one callback per distinct target across trial-map growth. The repository fixture also exercises a rooted ref, publication by its callback, and weak clearing after the published owner releases it.
 
 ## First implementation slice
 
