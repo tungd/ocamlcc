@@ -238,6 +238,22 @@ static int64_t ba_set(int64_t v, int n, const int64_t *idx, int64_t value)
 }
 int64_t caml_ba_get_generic(int64_t a, int64_t idx) { return ba_get(a, arr_len_of(idx), (void *)(uintptr_t)idx); }
 int64_t caml_ba_set_generic(int64_t a, int64_t idx, int64_t v) { return ba_set(a, arr_len_of(idx), (void *)(uintptr_t)idx, v); }
+/* Internal typed ABI. The compiler proves the element kind. Use the same
+ * index and exception conventions as the boxed get/set primitives. */
+double ocamlcc_ba_get_float64_1(int64_t value, int64_t index)
+{
+    ArcBigarray *a = (void *)(uintptr_t)value;
+    size_t offset;
+    return ba_offset(a, 1, &index, &offset) ? ((const double *)a->data)[offset] : 0.0;
+}
+
+void ocamlcc_ba_set_float64_1(int64_t value, int64_t index, double x)
+{
+    ArcBigarray *a = (void *)(uintptr_t)value;
+    size_t offset;
+    if (ba_offset(a, 1, &index, &offset)) ((double *)a->data)[offset] = x;
+}
+
 int64_t caml_ba_get_1(int64_t a, int64_t i) { return ba_get(a, 1, &i); }
 int64_t caml_ba_get_2(int64_t a, int64_t i, int64_t j) { int64_t idx[] = {i,j}; return ba_get(a, 2, idx); }
 int64_t caml_ba_get_3(int64_t a, int64_t i, int64_t j, int64_t k) { int64_t idx[] = {i,j,k}; return ba_get(a, 3, idx); }

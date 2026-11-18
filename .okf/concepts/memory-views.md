@@ -6,7 +6,7 @@ tags: [memory, bigarray, ffi, compiler, performance]
 status: draft
 generated:
   by: codex/1
-  at: 2026-11-18T07:25:44Z
+  at: 2026-11-18T07:37:52Z
 sources:
   - id: scope
     resource: Conversation on 2026-11-18 about ARC, Bigarray, memory views, and desktop target scope
@@ -59,8 +59,8 @@ language-wide borrowing feature. Reuse `Array1`, `Array2`, `Array3`, and
 
 The user selected the architecture and platform scope above. The runtime C
 view API supports exported views and imports of caller-owned storage. Bindgen
-supports concrete Array1 and Array2 signatures. Other generated ranks and
-scalar specialization are follow-up slices. No elapsed-time or speedup threshold has been specified.
+supports concrete Array1 and Array2 signatures. A typed float64 Array1 store can consume
+an unboxed load and product. Other generated ranks and scalar operations are follow-up slices. No elapsed-time or speedup threshold has been specified.
 
 # Current behavior
 
@@ -71,8 +71,8 @@ baseline; it does not establish a timing baseline.
 |---|---|---|
 | Storage | `ArcBigarray` points to an ARC-owned `ArcBigarrayBuffer` with PAL-allocated or imported contiguous storage. | Numeric elements have no individual ARC headers or counts. |
 | Views | `ba_view` retains the backing and adjusts the data pointer; sub, slice, reshape, and layout changes use shared storage. | A view can outlive its original wrapper without copying the payload. View creation still allocates a descriptor. |
-| Scalar reads | `ba_read` boxes floats, `int32`, `int64`, native integers, and complex results; immediate integer kinds remain tagged values. | Preallocating a Bigarray does not currently make its scalar processing loop allocation-free. |
-| Scalar arithmetic | Existing floating arithmetic uses boxed inputs/results around QBE arithmetic. | Optimizing only the Bigarray load leaves allocation in the arithmetic chain. |
+| Scalar reads | `ba_read` boxes floats, `int32`, `int64`, native integers, and complex results; immediate integer kinds remain tagged values. | A typed float64 Array1 load feeding a specialized store uses a double-returning helper. |
+| Scalar arithmetic | A multiply feeding a concrete float64 Array1 store uses QBE double operands and result. | Ordinary OCaml calls and escaping results use the boxed value ABI. |
 | Primitive lowering | Bigarray reads and writes carry operation, rank, element kind, layout and bounds-check mode through ANF and ARC. | QBE code generation can inspect each access before choosing its runtime helper. |
 | C bindings | Bindgen maps direct, fully typed Array1 and Array2 parameters and results to retained C view handles. | Subviews preserve aliasing across the call and can outlive the input handle. |
 | Release | Last backing-owner release frees PAL storage or schedules the imported owner’s callback on the releasing thread. | Stable addresses and predictable ownership do not guarantee bounded release time. |
@@ -200,29 +200,39 @@ passed under ASan/UBSan on macOS and on emulated AMD64 Linux.[^c-host][^tests]
 
 # Unboxed scalar processing
 
-For a typed float64 Array1 scale loop, ANF preserves checked reads and
-writes with C layout. Kind and layout remain independent. A float32 Array3
-read can retain its element kind even when its layout is polymorphic.
-Unsafe operations and Fortran layout also survive lowering. ARC borrows
-the operands and keeps an exception path for the current runtime helpers.
-The lowering test inspects both the frontend-to-ANF and post-ARC results.
-In the scale loop, the rank-one read helper boxes the loaded float and the
-generated multiplication boxes its result before passing it to the write
-helper.[^lowering-test][^bigarray][^codegen]
+For a float64 Array1 store with known C or Fortran layout, the compiler
+propagates the demand for a double into its value expression. Direct float64
+Array1 reads return doubles and multiplication produces a QBE double.
+Other operands cross the ordinary OCaml value ABI and are unboxed at use.
+This specialization covers nested multiplication expressions. An intermediate
+bound by a separate `let`, returned, or passed to a generic call can still
+allocate a box. Raw temporaries stay out of ARC cleanup and the fiber shadow
+stack. The backing owners follow ordinary ARC liveness.[^lowering][^codegen]
 
-The next step is a scalar representation that keeps
-Bigarray loads, arithmetic, comparisons, and stores unboxed when their uses
-permit it. Address the whole local expression chain, including branch/loop
-joins and scalar accumulators, rather than replacing one allocating helper
-with another allocating operation.
+The read and write helpers share the runtime’s rank, layout and bounds
+checks. The regression exercises overlapping views, partial writes on a
+short destination, Fortran indexing, NaN, signed zero and a callback that
+collects between the load and multiply.[^bigarray][^tests]
+
+Using `Gc.minor_words ()` around the loop on ARM64 macOS, the same test
+measured 771 ARC words before specialization and 3 afterward for 128
+elements. Its zero-iteration control measured 3 words in both builds.
+The first counter read allocates its own three-word result. The views and
+factor are already allocated at entry. The ARM64 Linux fixture also measured
+3 words for both sizes, and the generated scale function produced the
+expected values on emulated AMD64 Linux. These counts cover allocation
+during the loop and measurement, with no elapsed-time measurement.[^c-host]
+
+Kind and layout remain independent in ANF. A float32 Array3 read can retain
+its kind even when its layout is polymorphic. The lowering test inspects both
+the frontend-to-ANF and post-ARC metadata.[^lowering-test]
 
 Start with float64 and immediate-integer loops, then extend to float32 and
 boxed-integer kinds. Keep complex and other unsupported specialized cases on
 the correct generic path until implemented; report coverage by kind instead
 of claiming all Bigarray access is allocation-free.
 
-For example, this existing OCaml expression should use scalar loads,
-arithmetic, and a store inside the loop when its types are known:
+The compiler specializes the load, multiply, and store in this loop:
 
 ```ocaml
 let scale
@@ -266,8 +276,9 @@ Unknown kind/layout or unsupported escape patterns retain the generic path.
 3. **Foreign backing ownership (implemented).** The runtime and generated
    headers accept caller-owned mutable storage with a release callback. Tests
    cover rejected transfers, escaping rows and cycle-owned views.
-4. **Typed scalar lowering (metadata implemented).** Specialize a complete
-   float64 loop, then expand kinds while keeping generic fallback behavior.
+4. **Typed scalar lowering (float64 Array1 scale implemented).** Extend the
+   scalar path to local bindings and additional operations while preserving
+   value identity at escapes. Then expand kinds with generic fallback.
 5. **Integration and reporting.** Update examples, public C ownership comments,
    [stdlib compatibility](/concepts/stdlib-compatibility.md), and the
    [compiler pipeline](/concepts/compiler-pipeline.md) to describe implemented
@@ -348,9 +359,9 @@ policies can be added separately when a concrete integration needs them.
 [^view-api]: Public handle ownership, descriptor fields and element kind constants.
 [^bigarray]: `ba_view`, `caml_ba_create`, `ba_read`, `ba_write`, and shared-view operations in `runtime/bigarray.inc`.
 [^runtime]: `ArcBigarray`, `ArcBigarrayBuffer`, `release_subtree`, and mutator-gate hooks in `runtime/arc.c`.
-[^lowering]: `Pbigarrayref`/`Pbigarrayset` lowering in `lib/anf.ml` emits `BigarrayAccess` with the original kind, layout, rank and access mode.
+[^lowering]: `Pbigarrayref`/`Pbigarrayset` lowering in `lib/anf.ml` preserves kind, layout, rank and access mode in generic and specialized access nodes.
 [^lowering-test]: `test/bigarray_lowering_test.ml` checks typed and polymorphic source programs through `Arc_pass.run`.
-[^codegen]: `lib/codegen_expr.ml` emits scalar boxing and generic word-sized C-call arguments/results.
+[^codegen]: `lib/codegen_expr.ml` emits QBE double operands and helper calls for specialized float64 stores and the boxed value ABI for general operations.
 [^bindgen]: `lib/c_bindgen.ml` defines the supported C types, opaque ownership helpers, and generated exception/mutator handling.
 [^tests]: `tests/stdlib_runtime.c` and `tests/stdlib/bigarray/main.ml` exercise existing shared-backing lifetime and source-level behavior.
-[^c-host]: `tests/bigarray_bindgen/run.sh` builds the two libraries and runs the C assertions in `host.c`.
+[^c-host]: `tests/bigarray_bindgen/run.sh` builds the two libraries and runs the ownership and scale-allocation assertions in `host.c`.

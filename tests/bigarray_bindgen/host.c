@@ -2,6 +2,7 @@
 #include "peer.h"
 #include <assert.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 OcamlccBigarrayView *vectors_native_buffer(unsigned rank);
 
@@ -97,6 +98,23 @@ static void check_matrix_row(void)
     ocamlcc_Vectors_view_release(cell);
 }
 
+static void check_scale_allocations(void)
+{
+    ocamlcc_error_t err = {0};
+    OcamlccBigarrayView *values = vectors_create(128, &err);
+    assert(values && !err.code);
+    double *cells = ocamlcc_Vectors_view_info(values).data;
+    for (int i = 0; i < 128; ++i) cells[i] = (double)i - 2.5;
+    double empty = vectors_scale_words(values, values, 3., 0, &err);
+    assert(!err.code);
+    double full = vectors_scale_words(values, values, 3., 128, &err);
+    assert(!err.code);
+    for (int i = 0; i < 128; ++i) assert(cells[i] == 3. * ((double)i - 2.5));
+    fprintf(stderr, "float64 scale allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
+    assert(full == empty);
+    ocamlcc_Vectors_view_release(values);
+}
+
 int main(void)
 {
     ocamlcc_error_t err = {0};
@@ -106,6 +124,7 @@ int main(void)
     check_import();
     check_collected_import();
     check_matrix_row();
+    check_scale_allocations();
     OcamlccBigarrayView *matrix = vectors_native_buffer(2);
     assert(matrix && vectors_sub(matrix, 0, 1, &err) == NULL && err.code);
     ocamlcc_Vectors_view_release(matrix);

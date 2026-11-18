@@ -84,6 +84,9 @@ type bigarray_access = {
   checked : bool;
 }
 
+(* Raw doubles are compiler temporaries. Only scalar operations can consume them. *)
+type float_operand = Boxed_float of atom | Raw_float of Ident.t
+
 type cexpr =
   | Atom of atom
   | Binop of binop * atom * atom
@@ -101,6 +104,9 @@ type cexpr =
   | ArrayGet of bool * Lambda.array_kind * atom * atom
   | ArraySet of bool * Lambda.array_kind * atom * atom * atom
   | BigarrayAccess of bigarray_access * atom list
+  | Float64Load of bigarray_access * atom * atom
+  | Float64Store of bigarray_access * atom * atom * float_operand
+  | FloatMul of float_operand * float_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
@@ -234,6 +240,10 @@ let with_finalizer_poll body =
           Halt Unit),
       body))
 
+let scalar_layout = function
+  | Lambda.Pbigarray_c_layout | Pbigarray_fortran_layout -> true
+  | Pbigarray_unknown_layout -> false
+
 let rec conv_tail (lam : Lambda.lambda) : aexpr =
   conv_expr lam (fun a -> Halt a)
 
@@ -359,6 +369,12 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
   | Lprim (Pbigarrayref (unsafe, rank, kind, layout), args, _) ->
       let access = { operation = `Get; rank; kind; layout; checked = not unsafe } in
       conv_atoms args (fun vs -> emit_cexpr (BigarrayAccess (access, vs)))
+  | Lprim (Pbigarrayset (unsafe, 1, Pbigarray_float64, layout), [arr; index; value], _)
+    when scalar_layout layout ->
+      let access = { operation = `Set; rank = 1; kind = Pbigarray_float64;
+                     layout; checked = not unsafe } in
+      conv_expr arr (fun a -> conv_expr index (fun i ->
+        conv_float_operand value (fun v -> emit_cexpr (Float64Store (access, a, i, v)))))
   | Lprim (Pbigarrayset (unsafe, rank, kind, layout), args, _) ->
       let access = { operation = `Set; rank; kind; layout; checked = not unsafe } in
       conv_atoms args (fun vs -> emit_cexpr (BigarrayAccess (access, vs)))
@@ -567,6 +583,23 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
   | Lprim (Ppoll, _, _) -> with_finalizer_poll (emit_cexpr (Atom Unit))
   | _ -> raise (Unsupported (describe lam))
 
+(* A typed store demands a double. Propagate that demand only into local
+   scalar expressions. Every other expression uses the ordinary value ABI. *)
+and conv_float_operand lam k =
+  let bind ce =
+    let id = Ident.create_local "scalar" in
+    Let (id, ce, k (Raw_float id))
+  in
+  match lam with
+  | Lambda.Lprim (Pbigarrayref (unsafe, 1, Pbigarray_float64, layout), [arr; index], _)
+    when scalar_layout layout ->
+      let access = { operation = `Get; rank = 1; kind = Pbigarray_float64;
+                     layout; checked = not unsafe } in
+      conv_expr arr (fun a -> conv_expr index (fun i -> bind (Float64Load (access, a, i))))
+  | Lprim (Pmulfloat, [lhs; rhs], _) ->
+      conv_float_operand lhs (fun l -> conv_float_operand rhs (fun r -> bind (FloatMul (l, r))))
+  | _ -> conv_expr lam (fun a -> k (Boxed_float a))
+
 and binop op a c emit_cexpr =
   conv_expr a (fun av -> conv_expr c (fun cv -> emit_cexpr (Binop (op, av, cv))))
 
@@ -676,7 +709,14 @@ let atom_vars acc = function
   | ConstFloatArray _ | ConstBlock _ | Unit ->
       acc
 
+let float_operand_vars acc = function
+  | Boxed_float a -> atom_vars acc a
+  | Raw_float id -> Ident.Set.add id acc
+
 let cexpr_vars free_aexpr acc = function
+  | Float64Load (_, a, i) -> atom_vars (atom_vars acc a) i
+  | Float64Store (_, a, i, v) -> float_operand_vars (atom_vars (atom_vars acc a) i) v
+  | FloatMul (a, b) -> float_operand_vars (float_operand_vars acc a) b
   | Atom a -> atom_vars acc a
   | Binop (_, a, b) -> atom_vars (atom_vars acc a) b
   | Unop (_, a) -> atom_vars acc a

@@ -4,6 +4,13 @@ type vector = (float, float64_elt, c_layout) Array1.t
 let scale (src : vector) (dst : vector) factor =
   for i = 0 to Array1.dim src - 1 do dst.{i} <- src.{i} *. factor done
 
+type column = (float, float64_elt, fortran_layout) Array1.t
+let scale_column (src : column) (dst : column) i j factor =
+  dst.{j} <- src.{i} *. factor
+
+let scale_with (src : vector) (dst : vector) factor =
+  dst.{0} <- src.{0} *. factor ()
+
 let () =
   let values = Array1.of_array float64 c_layout [|1.; 2.; 3.; 4.|] in
   let src = Array1.sub values 0 3 and dst = Array1.sub values 1 3 in
@@ -12,6 +19,15 @@ let () =
   let short = Array1.sub values 0 1 in
   assert (try scale dst short 3.; false with Invalid_argument _ -> true);
   assert (values.{0} = 6. && values.{1} = 2.);
+  scale_with src short (fun () -> Gc.full_major (); 0.5);
+  assert (values.{0} = 3.);
+  let col = Array1.of_array float64 fortran_layout [|-0.; nan; infinity|] in
+  scale_column col col 1 3 2.;
+  assert (Int64.bits_of_float col.{3} = Int64.bits_of_float (-0.));
+  scale_column col col 2 3 1.;
+  assert (Float.is_nan col.{3});
+  assert (try scale_column col col 0 1 1.; false with Invalid_argument _ -> true);
+  assert (Int64.bits_of_float col.{1} = Int64.bits_of_float (-0.));
   let a = Array2.create int c_layout 2 3 in
   assert (Array2.dim1 a = 2 && Array2.dim2 a = 3);
   a.{1,2} <- 42;

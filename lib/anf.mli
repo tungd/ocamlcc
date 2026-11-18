@@ -89,6 +89,9 @@ type bigarray_access = {
   checked : bool;
 }
 
+(* Raw doubles are compiler temporaries. Only scalar operations can consume them. *)
+type float_operand = Boxed_float of atom | Raw_float of Ident.t
+
 type cexpr =
   | Atom of atom
   | Binop of binop * atom * atom
@@ -106,6 +109,9 @@ type cexpr =
   | ArrayGet of bool * Lambda.array_kind * atom * atom
   | ArraySet of bool * Lambda.array_kind * atom * atom * atom
   | BigarrayAccess of bigarray_access * atom list
+  | Float64Load of bigarray_access * atom * atom
+  | Float64Store of bigarray_access * atom * atom * float_operand
+  | FloatMul of float_operand * float_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
@@ -166,5 +172,6 @@ val of_lambda :
   ?include_dirs:string list ->
   Lambda.program ->
   (program, string) result
+val float_operand_vars : Ident.Set.t -> float_operand -> Ident.Set.t
 val free_vars : aexpr -> Ident.Set.t
 val pure_defs : aexpr -> (Ident.t * lfunction) list

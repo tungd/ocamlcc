@@ -4,6 +4,7 @@ val matrix : int -> int -> matrix
 val row : matrix -> int -> vector
 val create : int -> vector
 val sub : vector -> int -> int -> vector
+val scale_words : vector -> vector -> float -> int -> float
 val save : vector -> unit
 val write_saved : float -> unit
 val clear : unit -> unit

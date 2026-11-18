@@ -627,6 +627,10 @@ let compile_ccall hooks b sym args =
   emit b (Call (Long, dst, { fn = Global sym; args = cargs }));
   dst
 
+let compile_float_operand hooks b = function
+  | Anf.Raw_float id -> Hashtbl.find b.vars id
+  | Boxed_float a -> load_double b (compile_atom hooks b a)
+
 let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   match ce with
   | Atom a -> compile_atom hooks b a
@@ -899,6 +903,22 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
         | Builtins.String_arg -> [ (Long, raw); (Long, string_len_raw b v) ]
       in
       emit b (Call_void { fn = Global symbol; args });
+      unit_const
+  | Float64Load (_, arr, index) ->
+      let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
+      let dst = fresh_temp b "fload" in
+      emit b (Call (Double, dst, { fn = Global "ocamlcc_ba_get_float64_1"; args }));
+      dst
+  | FloatMul (lhs, rhs) ->
+      let l = compile_float_operand hooks b lhs in
+      let r = compile_float_operand hooks b rhs in
+      let dst = fresh_temp b "fmul" in
+      emit b (Binop (Mul, Double, dst, l, r));
+      dst
+  | Float64Store (_, arr, index, value) ->
+      let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
+      let v = compile_float_operand hooks b value in
+      emit b (Call_void { fn = Global "ocamlcc_ba_set_float64_1"; args = args @ [Double, v] });
       unit_const
   | BigarrayAccess (access, args) ->
       let op = match access.operation with `Get -> "get" | `Set -> "set" in

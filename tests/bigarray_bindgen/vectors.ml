@@ -5,6 +5,10 @@ let matrix rows cols = Array2.create float64 c_layout rows cols
 let row m i = Array2.slice_left m i
 let create n = Array1.create float64 c_layout n
 let sub a pos len = Array1.sub a pos len
+let scale_words (src : vector) (dst : vector) factor n =
+  let before = Gc.minor_words () in
+  for i = 0 to n - 1 do dst.{i} <- src.{i} *. factor done;
+  Gc.minor_words () -. before
 let saved : vector option ref = ref None
 let save v = saved := Some v
 let write_saved x = match !saved with Some v -> v.{0} <- x | None -> assert false
