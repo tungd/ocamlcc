@@ -109,7 +109,8 @@ static void check_scale_allocations(void)
     assert(!err.code);
     double full = vectors_scale_words(values, values, 3., 128, &err);
     assert(!err.code);
-    for (int i = 0; i < 128; ++i) assert(cells[i] == 3. * ((double)i - 2.5));
+    for (int i = 0; i < 128; ++i)
+        assert(cells[i] == (3. * ((double)i - 2.5) - 1.) / 2.);
     fprintf(stderr, "float64 scale allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
     assert(full == empty);
     for (int i = 0; i < 128; ++i) cells[i] = (double)i - 2.5;

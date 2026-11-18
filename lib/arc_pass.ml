@@ -57,7 +57,7 @@ let is_imm_binop : Anf.binop -> bool = function
   | Compare_ints | Isout | Fcmp _ | Compare_floats | Bint_cmp _
   | Compare_bints _ ->
       true
-  | Fadd | Fsub | Fmul | Fdiv | Bint_add _ | Bint_sub _ | Bint_mul _
+  | Float_arithmetic _ | Bint_add _ | Bint_sub _ | Bint_mul _
   | Bint_div _ | Bint_mod _ | Bint_and _ | Bint_or _ | Bint_xor _
   | Bint_lsl _ | Bint_lsr _ | Bint_asr _ ->
       false
@@ -77,7 +77,7 @@ let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
   | BytesSet _ | ArraySet _ | Builtin _ | Assign _ ->
       true
-  | MakeBlock (_, []) | Float64Load _ | FloatValue _ | FloatMul _ | Float64Store _ -> true
+  | MakeBlock (_, []) | Float64Load _ | FloatValue _ | FloatBinop _ | Float64Store _ -> true
   | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _
   | BigarrayAccess _ | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _ | Ccall _
   | GetGlobal _ | Fun _ ->
@@ -119,7 +119,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | FloatValue a -> (Anf.float_operand_vars Ident.Set.empty a, [])
   | Float64Load (_, a, i) -> (atoms_vars [a; i], [])
   | Float64Store (_, a, i, v) -> (Anf.float_operand_vars (atoms_vars [a; i]) v, [])
-  | FloatMul (a, b) -> (Anf.float_operand_vars (Anf.float_operand_vars Ident.Set.empty a) b, [])
+  | FloatBinop (_, a, b) -> (Anf.float_operand_vars (Anf.float_operand_vars Ident.Set.empty a) b, [])
   | BigarrayAccess (_, args) | Ccall (_, args) -> (atoms_vars args, [])
   | GetGlobal _ -> (Ident.Set.empty, [])
   | Assign (_, rhs) -> (Ident.Set.empty, [ rhs ])
@@ -336,7 +336,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
              | FloatField _ | SetFloatField _ | OffsetRef _
              | StringGet _ | BytesSet _ | ArrayGet _ | ArraySet _
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _
-             | Float64Load _ | Float64Store _ | FloatValue _ | FloatMul _
+             | Float64Load _ | Float64Store _ | FloatValue _ | FloatBinop _
              | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _ | MakeBlock (_, [])) as ce), body) -> (
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (Let (x, ce, body'))

@@ -223,6 +223,18 @@ let compile_fcmp b (cmp : Lambda.float_comparison) da db : t =
   in
   retag b fin
 
+let compile_float_arithmetic b op left right =
+  let qop =
+    match op with
+    | Anf.Addf -> Binop.Add
+    | Subf -> Binop.Sub
+    | Mulf -> Binop.Mul
+    | Divf -> Binop.Div
+  in
+  let result = fresh_temp b "fop" in
+  emit b (Binop (qop, Double, result, left, right));
+  result
+
 let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
   let av = compile_atom hooks b a in
   let cv = compile_atom hooks b c in
@@ -296,20 +308,10 @@ let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
       let raw = fresh_temp b "isout" in
       emit b (Cmp (Ult, Long, raw, av, cv));
       retag b raw
-  | Fadd | Fsub | Fmul | Fdiv ->
+  | Float_arithmetic op ->
       let da = load_double b av in
       let db = load_double b cv in
-      let qop =
-        match op with
-        | Fadd -> Binop.Add
-        | Fsub -> Binop.Sub
-        | Fmul -> Binop.Mul
-        | Fdiv -> Binop.Div
-        | _ -> assert false
-      in
-      let dr = fresh_temp b "fop" in
-      emit b (Binop (qop, Double, dr, da, db));
-      box_double b dr
+      box_double b (compile_float_arithmetic b op da db)
   | Fcmp cmp ->
       let da = load_double b av in
       let db = load_double b cv in
@@ -910,12 +912,10 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       emit b (Call (Double, dst, { fn = Global "ocamlcc_ba_get_float64_1"; args }));
       dst
   | FloatValue value -> compile_float_operand hooks b value
-  | FloatMul (lhs, rhs) ->
+  | FloatBinop (op, lhs, rhs) ->
       let l = compile_float_operand hooks b lhs in
       let r = compile_float_operand hooks b rhs in
-      let dst = fresh_temp b "fmul" in
-      emit b (Binop (Mul, Double, dst, l, r));
-      dst
+      compile_float_arithmetic b op l r
   | Float64Store (_, arr, index, value) ->
       let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
       let v = compile_float_operand hooks b value in

@@ -90,13 +90,13 @@ direct calls to known Stdlib builtins resolved via
 
 ANF carries the operation, rank, kind, layout and bounds-check mode for
 Bigarray accesses. A concrete float64 Array1 store accepts raw doubles
-from nested reads and multiplications. A backwards scan of consecutive
-`let` bindings also selects raw loads and products when every use accepts a
+from nested reads and arithmetic. A backwards scan of consecutive
+`let` bindings also selects raw loads and arithmetic results when every use accepts a
 double in the same chain. Captures and other boxed uses keep the existing
 OCaml value. ARC borrows the arrays, checks for exceptions after
 access, and excludes raw temporaries from reference counting and shadow
-frames. QBE emits a double multiply between the typed load and store
-helpers. Inline and scalar-only named float conditionals use a double phi and keep the selected
+frames. QBE emits double addition, subtraction, multiplication, or division between
+the typed load and store helpers. Inline and scalar-only named float conditionals use a double phi and keep the selected
 result out of ARC ownership tracking. See [memory views](/concepts/memory-views.md).
 
 # Match lowering

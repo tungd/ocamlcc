@@ -72,7 +72,7 @@ baseline; it does not establish a timing baseline.
 | Storage | `ArcBigarray` points to an ARC-owned `ArcBigarrayBuffer` with PAL-allocated or imported contiguous storage. | Numeric elements have no individual ARC headers or counts. |
 | Views | `ba_view` retains the backing and adjusts the data pointer; sub, slice, reshape, and layout changes use shared storage. | A view can outlive its original wrapper without copying the payload. View creation still allocates a descriptor. |
 | Scalar reads | `ba_read` boxes floats, `int32`, `int64`, native integers, and complex results; immediate integer kinds remain tagged values. | A typed float64 Array1 load feeding a specialized store uses a double-returning helper. |
-| Scalar arithmetic | A multiply feeding a concrete float64 Array1 store uses QBE double operands and result. | Ordinary OCaml calls and escaping results use the boxed value ABI. |
+| Scalar arithmetic | Addition, subtraction, multiplication, and division feeding a concrete float64 Array1 store use QBE double operands and result. | Ordinary OCaml calls and escaping results use the boxed value ABI. |
 | Primitive lowering | Bigarray reads and writes carry operation, rank, element kind, layout and bounds-check mode through ANF and ARC. | QBE code generation can inspect each access before choosing its runtime helper. |
 | C bindings | Bindgen maps direct, fully typed Array1 and Array2 parameters and results to retained C view handles. | Subviews preserve aliasing across the call and can outlive the input handle. |
 | Release | Last backing-owner release frees PAL storage or schedules the imported owner’s callback on the releasing thread. | Stable addresses and predictable ownership do not guarantee bounded release time. |
@@ -202,10 +202,11 @@ passed under ASan/UBSan on macOS and on emulated AMD64 Linux.[^c-host][^tests]
 
 For a float64 Array1 store with known C or Fortran layout, the compiler
 propagates the demand for a double into its value expression. Direct float64
-Array1 reads return doubles and multiplication produces a QBE double.
+Array1 reads return doubles. Addition, subtraction, multiplication, and
+division produce QBE doubles.
 Other operands cross the ordinary OCaml value ABI and are unboxed at use.
 The compiler also follows named `let` bindings backwards within a
-straight-line chain. A load or multiply stays unboxed when all of its uses
+straight-line chain. A load or arithmetic result stays unboxed when all of its uses
 feed scalar operations in that chain. A binding with a boxed use, such as
 returning it or capturing it in a closure, keeps one shared OCaml value.
 An `if` feeding the scalar expression selects a branch result through a QBE
@@ -214,7 +215,9 @@ accept a double. Only the selected branch runs. If an arm computes a boxed
 OCaml value, the compiler loads the double before releasing the box. A result
 that escapes, including through a closure capture, retains its boxed identity.
 The named conditional loop measured 3 ARC words for 128 elements and for
-zero iterations.
+zero iterations. A straight-line loop using all four operations fell from
+1923 words to 3 for 128 elements, matching the same control. A division by
+negative zero produced negative infinity, matching stock OCaml.
 Raw temporaries stay out of ARC cleanup and the fiber shadow stack.
 The backing owners follow ordinary ARC liveness.[^lowering][^codegen]
 
@@ -291,7 +294,7 @@ Unknown kind/layout or unsupported escape patterns retain the generic path.
    cover rejected transfers, escaping rows and cycle-owned views.
 4. **Typed scalar lowering (float64 Array1 scale implemented).** Direct
    expressions and straight-line local bindings use the scalar path. Further
-   work covers additional operations, more control-flow forms, and other kinds.
+   work covers unary operations, comparisons, more control-flow forms, and other kinds.
 5. **Integration and reporting.** Update examples, public C ownership comments,
    [stdlib compatibility](/concepts/stdlib-compatibility.md), and the
    [compiler pipeline](/concepts/compiler-pipeline.md) to describe implemented

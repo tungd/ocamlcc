@@ -25,6 +25,8 @@ type atom =
   | ConstBlock of int * const_item list
   | Unit
 
+type float_arithmetic = Addf | Subf | Mulf | Divf
+
 type binop =
   | Add
   | Sub
@@ -40,10 +42,7 @@ type binop =
   | Cmp of Lambda.integer_comparison
   | Compare_ints
   | Isout
-  | Fadd
-  | Fsub
-  | Fmul
-  | Fdiv
+  | Float_arithmetic of float_arithmetic
   | Fcmp of Lambda.float_comparison
   | Compare_floats
   | Bint_add of Lambda.boxed_integer
@@ -107,7 +106,7 @@ type cexpr =
   | Float64Load of bigarray_access * atom * atom
   | Float64Store of bigarray_access * atom * atom * float_operand
   | FloatValue of float_operand
-  | FloatMul of float_operand * float_operand
+  | FloatBinop of float_arithmetic * float_operand * float_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
@@ -242,6 +241,13 @@ let with_finalizer_poll body =
       If (Var due, Let (result, Ccall ("ocamlcc_poll_finalizers", []), Halt Unit),
           Halt Unit),
       body))
+
+let float_arithmetic = function
+  | Lambda.Paddfloat -> Addf
+  | Psubfloat -> Subf
+  | Pmulfloat -> Mulf
+  | Pdivfloat -> Divf
+  | _ -> assert false
 
 let scalar_layout = function
   | Lambda.Pbigarray_c_layout | Pbigarray_fortran_layout -> true
@@ -492,10 +498,8 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
       conv_expr a (fun av -> emit_cexpr (Unop (Fneg, av)))
   | Lprim (Pabsfloat, [ a ], _) ->
       conv_expr a (fun av -> emit_cexpr (Unop (Fabs, av)))
-  | Lprim (Paddfloat, [ a; c ], _) -> binop Fadd a c emit_cexpr
-  | Lprim (Psubfloat, [ a; c ], _) -> binop Fsub a c emit_cexpr
-  | Lprim (Pmulfloat, [ a; c ], _) -> binop Fmul a c emit_cexpr
-  | Lprim (Pdivfloat, [ a; c ], _) -> binop Fdiv a c emit_cexpr
+  | Lprim (((Paddfloat | Psubfloat | Pmulfloat | Pdivfloat) as prim), [ a; c ], _) ->
+      binop (Float_arithmetic (float_arithmetic prim)) a c emit_cexpr
   | Lprim (Pfloatcomp cmp, [ a; c ], _) -> binop (Fcmp cmp) a c emit_cexpr
   | Lprim (Pcompare_floats, [ a; c ], _) -> binop Compare_floats a c emit_cexpr
   | Lprim (Pbintofint bi, [ a ], _) ->
@@ -599,8 +603,9 @@ and conv_float_operand lam k =
       let access = { operation = `Get; rank = 1; kind = Pbigarray_float64;
                      layout; checked = not unsafe } in
       conv_expr arr (fun a -> conv_expr index (fun i -> bind (Float64Load (access, a, i))))
-  | Lprim (Pmulfloat, [lhs; rhs], _) ->
-      conv_float_operand lhs (fun l -> conv_float_operand rhs (fun r -> bind (FloatMul (l, r))))
+  | Lprim (((Paddfloat | Psubfloat | Pmulfloat | Pdivfloat) as prim), [lhs; rhs], _) ->
+      conv_float_operand lhs (fun l ->
+          conv_float_operand rhs (fun r -> bind (FloatBinop (float_arithmetic prim, l, r))))
   | Lifthenelse (cond, yes, no) ->
       conv_expr cond (fun cond ->
           let id = Ident.create_local "scalar_join" in
@@ -732,7 +737,7 @@ let cexpr_vars free_aexpr acc = function
   | FloatValue a -> float_operand_vars acc a
   | Float64Load (_, a, i) -> atom_vars (atom_vars acc a) i
   | Float64Store (_, a, i, v) -> float_operand_vars (atom_vars (atom_vars acc a) i) v
-  | FloatMul (a, b) -> float_operand_vars (float_operand_vars acc a) b
+  | FloatBinop (_, a, b) -> float_operand_vars (float_operand_vars acc a) b
   | Atom a -> atom_vars acc a
   | Binop (_, a, b) -> atom_vars (atom_vars acc a) b
   | Unop (_, a) -> atom_vars acc a
@@ -889,8 +894,8 @@ let rec specialize_float_chain bindings tail =
             (({ operation = `Get; rank = 1; kind = Pbigarray_float64; layout; _ } as access),
              [arr; index])) when scalar_layout layout ->
             Value (Float64Load (access, arr, index)), Ident.Set.add id raw
-        | Value (Binop (Fmul, lhs, rhs)) ->
-            Value (FloatMul (Boxed_float lhs, Boxed_float rhs)), Ident.Set.add id raw
+        | Value (Binop (Float_arithmetic op, lhs, rhs)) ->
+            Value (FloatBinop (op, Boxed_float lhs, Boxed_float rhs)), Ident.Set.add id raw
         | Join rhs ->
             Join (specialize_conditional rhs), Ident.Set.add id raw
         | _ -> binding, raw
@@ -901,7 +906,7 @@ let rec specialize_float_chain bindings tail =
       match binding with
       | Value (Float64Store (_, arr, index, v)) ->
           atom_vars (atom_vars boxed arr) index, demand scalar v
-      | Value (FloatMul (lhs, rhs)) -> boxed, demand (demand scalar lhs) rhs
+      | Value (FloatBinop (_, lhs, rhs)) -> boxed, demand (demand scalar lhs) rhs
       | Value (FloatValue value) -> boxed, demand scalar value
       | Value ce -> cexpr_vars free_vars boxed ce, scalar
       | Join rhs -> Ident.Set.union boxed (free_vars rhs), scalar
@@ -920,7 +925,7 @@ let rec specialize_float_chain bindings tail =
       match binding with
       | Value (Float64Store (access, arr, index, v)) ->
           Value (Float64Store (access, arr, index, operand v))
-      | Value (FloatMul (lhs, rhs)) -> Value (FloatMul (operand lhs, operand rhs))
+      | Value (FloatBinop (op, lhs, rhs)) -> Value (FloatBinop (op, operand lhs, operand rhs))
       | Value (FloatValue v) -> Value (FloatValue (operand v))
       | _ -> binding
     in
@@ -993,7 +998,7 @@ and specialize_let_chain bindings = function
   | tail ->
       let tail = specialize_float_bindings tail in
       if List.exists (function
-        | _, Value (Float64Store _ | FloatMul _ | FloatValue _) -> true
+        | _, Value (Float64Store _ | FloatBinop _ | FloatValue _) -> true
         | _ -> false) bindings
       then specialize_float_chain bindings tail
       else List.fold_left (fun body (id, binding) -> bind_float_chain id binding body) tail bindings

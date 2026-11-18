@@ -10,7 +10,8 @@ let scale_words (src : vector) (dst : vector) factor n =
   for i = 0 to n - 1 do
     let cell = src.{i} in
     let product = cell *. factor in
-    dst.{i} <- product
+    let shifted = product +. 1. in
+    dst.{i} <- (shifted -. 2.) /. 2.
   done;
   Gc.minor_words () -. before
 

@@ -25,6 +25,10 @@ let scale_and_capture (src : vector) (dst : vector) factor =
 let conditional_store (src : vector) (dst : vector) take_load i fallback =
   dst.{0} <- (if take_load then src.{i} *. 2. else fallback ())
 
+let divide_in_place (a : vector) i divisor =
+  let biased = (a.{i} +. 1.) -. 2. in
+  a.{i} <- biased /. divisor
+
 let () =
   let values = Array1.of_array float64 c_layout [|1.; 2.; 3.; 4.|] in
   let src = Array1.sub values 0 3 and dst = Array1.sub values 1 3 in
@@ -47,6 +51,8 @@ let () =
   assert (Int64.bits_of_float values.{0} = Int64.bits_of_float (-0.));
   conditional_store src short true 1 (fun () -> assert false);
   assert (values.{0} = 4.);
+  divide_in_place values 0 (-0.);
+  assert (values.{0} = neg_infinity);
   let col = Array1.of_array float64 fortran_layout [|-0.; nan; infinity|] in
   scale_column col col 1 3 2.;
   assert (Int64.bits_of_float col.{3} = Int64.bits_of_float (-0.));

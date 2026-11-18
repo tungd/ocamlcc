@@ -95,8 +95,9 @@ and dump_ce (ce : Anf.cexpr) : string =
         | Anf.Or -> "or" | Anf.Xor -> "xor" | Anf.Lsl -> "lsl"
         | Anf.Lsr -> "lsr" | Anf.Asr -> "asr" | Anf.Cmp _ -> "cmp"
         | Anf.Compare_ints -> "icmp" | Anf.Isout -> "isout"
-        | Anf.Fadd -> "fadd" | Anf.Fsub -> "fsub" | Anf.Fmul -> "fmul"
-        | Anf.Fdiv -> "fdiv" | Anf.Fcmp _ -> "fcmp"
+        | Anf.Float_arithmetic Addf -> "fadd" | Anf.Float_arithmetic Subf -> "fsub"
+        | Anf.Float_arithmetic Mulf -> "fmul" | Anf.Float_arithmetic Divf -> "fdiv"
+        | Anf.Fcmp _ -> "fcmp"
         | Anf.Compare_floats -> "fcmp3"
         | Anf.Bint_add _ -> "badd" | Anf.Bint_sub _ -> "bsub"
         | Anf.Bint_mul _ -> "bmul" | Anf.Bint_div _ -> "bdiv"
@@ -169,7 +170,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.App (f, args) -> List.fold_left count_atom (count_atom acc f) args
     | Anf.Builtin (_, _, a) -> count_atom acc a
     | Anf.BigarrayAccess (_, args) | Anf.Ccall (_, args) -> List.fold_left count_atom acc args
-    | Anf.Float64Load _ | Anf.Float64Store _ | Anf.FloatMul _ | Anf.FloatValue _ | Anf.GetGlobal _ -> acc
+    | Anf.Float64Load _ | Anf.Float64Store _ | Anf.FloatBinop _ | Anf.FloatValue _ | Anf.GetGlobal _ -> acc
     | Anf.Fun lf -> count_release_mut id lf.Anf.body
     | Anf.Assign (_, a) -> count_atom acc a
   in

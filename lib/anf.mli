@@ -30,6 +30,8 @@ type atom =
   | ConstBlock of int * const_item list
   | Unit
 
+type float_arithmetic = Addf | Subf | Mulf | Divf
+
 type binop =
   | Add
   | Sub
@@ -45,10 +47,7 @@ type binop =
   | Cmp of Lambda.integer_comparison
   | Compare_ints
   | Isout
-  | Fadd
-  | Fsub
-  | Fmul
-  | Fdiv
+  | Float_arithmetic of float_arithmetic
   | Fcmp of Lambda.float_comparison
   | Compare_floats
   | Bint_add of Lambda.boxed_integer
@@ -112,7 +111,7 @@ type cexpr =
   | Float64Load of bigarray_access * atom * atom
   | Float64Store of bigarray_access * atom * atom * float_operand
   | FloatValue of float_operand
-  | FloatMul of float_operand * float_operand
+  | FloatBinop of float_arithmetic * float_operand * float_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
