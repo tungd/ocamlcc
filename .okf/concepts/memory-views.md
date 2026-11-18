@@ -32,6 +32,9 @@ sources:
   - id: tests
     resource: ../../tests/stdlib_runtime.c
     title: Native runtime lifetime regressions
+  - id: c-host
+    resource: ../../tests/bigarray_bindgen/host.c
+    title: Generated Array1 binding ownership across two shared libraries
 ---
 
 # Objective and scope
@@ -126,6 +129,27 @@ ASan/UBSan), ARM64 Linux in a local VM, and AMD64 Linux under emulation.
 The AMD64 macOS fixture cross-linked on the ARM64 host, which could not
 execute x86_64 macOS binaries. A C++17 consumer compiled and linked
 against the installed header on ARM64 macOS.
+
+## Generated Array1 bindings
+
+With the compatibility stdlib, `ocamlcc build --shared --emit-header` emits
+a self-contained header. For a module named `Vectors`, inspect a returned
+handle with `ocamlcc_Vectors_view_info`, retain it with
+`ocamlcc_Vectors_view_retain`, and release it with
+`ocamlcc_Vectors_view_release`. The same helpers work when the library
+also exports C stubs. Keep the producing library loaded while using its views.
+
+Each independently linked runtime has its own ARC heap. A typed shim
+checks the origin of each argument along with its rank, kind and layout
+before marshalling. Modules linked to the same runtime can exchange a view.
+Passing one between independent heaps reports an error and preserves the
+caller’s owner.[^bindgen]
+
+The two-library C fixture passed on ARM64 Linux and ARM64 macOS, including
+an ASan/UBSan run on macOS. It passes a C-created view into OCaml, checks
+that writes through a returned subview reach the parent, and reads the
+subview after releasing the parent. A C++17 host on macOS also retained
+and released a view using the generated and installed headers together.[^c-host]
 
 ## Foreign storage imported into OCaml
 
@@ -295,3 +319,4 @@ policies can be added separately when a concrete integration needs them.
 [^codegen]: `lib/codegen_expr.ml` emits scalar boxing and generic word-sized C-call arguments/results.
 [^bindgen]: `lib/c_bindgen.ml` defines the supported C types, opaque ownership helpers, and generated exception/mutator handling.
 [^tests]: `tests/stdlib_runtime.c` and `tests/stdlib/bigarray/main.ml` exercise existing shared-backing lifetime and source-level behavior.
+[^c-host]: `tests/bigarray_bindgen/run.sh` builds the two libraries and runs the C assertions in `host.c`.

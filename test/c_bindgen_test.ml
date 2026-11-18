@@ -188,6 +188,23 @@ let () =
       Printf.printf "reject higher-order: FAIL\n";
       incr failures
   | Error _ -> Printf.printf "reject higher-order: PASS\n");
+  let rejects signature diagnostic =
+    match C_bindgen.generate ~filename:"views.mli" ~modname:"Views" signature with
+    | Error msg -> has_substr ~sub:diagnostic msg
+    | Ok _ -> false
+  in
+  let rejected_views =
+    rejects "val f : (float, Bigarray.float64_elt, 'layout) Bigarray.Array1.t -> unit"
+      "concrete layout"
+    && rejects "val f : (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t option"
+      "nested Array1"
+    && rejects "module Bigarray : sig module Array1 : sig type ('a,'b,'c) t end end
+                val f : (float,int,int) Bigarray.Array1.t -> unit"
+      "unsupported type Bigarray.Array1.t"
+  in
+  Printf.printf "reject unsupported Array1 signatures: %s\n"
+    (if rejected_views then "PASS" else "FAIL");
+  if not rejected_views then incr failures;
   (* Dependency-ordered typedefs + _free helpers for option/tuple + const char* free *)
   let nested_mli =
     {|

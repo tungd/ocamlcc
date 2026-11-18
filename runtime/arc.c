@@ -62,6 +62,7 @@ typedef struct ArcBigarrayBuffer {
 
 typedef struct OcamlccBigarrayView {
     ArcBigarrayBuffer *backing;
+    const void *runtime_id; /* distinguish independently linked ARC heaps */
     uint8_t *data;
     int ndims, kind, layout;
     int64_t dims[16];

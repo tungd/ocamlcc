@@ -425,11 +425,13 @@ let emit_free_field ?(indent = "    ") b ptr t =
       p "%s%s_free(&(%s));\n" indent r2.ri_cname ptr
   | _ -> ()
 
+let view_prefix modname = "ocamlcc_" ^ sanitize_c modname ^ "_view_"
+
 let emit_header ~uses_views ~modname ~mod_prefix header_decls vals =
   let b = Buffer.create 2048 in
   let p fmt = Printf.bprintf b fmt in
   let guard = "OCAMLCC_" ^ String.uppercase_ascii mod_prefix ^ "_H" in
-  let guard = if guard = "OCAMLCC_BIGARRAY_H" then guard ^ "_BINDINGS" else guard in
+  let guard = if guard = "OCAMLCC_BIGARRAY_TYPES_H" || guard = "OCAMLCC_BIGARRAY_H" then guard ^ "_BINDINGS" else guard in
   p "#ifndef %s\n#define %s\n\n" guard guard;
   if uses_views then Buffer.add_string b Bigarray_header.contents;
   p "#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n#include <stdlib.h>\n\n";
@@ -495,7 +497,14 @@ let emit_header ~uses_views ~modname ~mod_prefix header_decls vals =
           p "#endif\n\n")
     header_decls;
   p "void %s_init(void);\n\n" mod_prefix;
-  ignore modname;
+  if uses_views then begin
+    let prefix = view_prefix modname in
+    p "/* View arguments are borrowed. Each returned or retained handle owns one reference.\n";
+    p " * Use helpers from the library that supplied the handle. */\n";
+    p "OcamlccBigarrayInfo %sinfo(const OcamlccBigarrayView *v);\n" prefix;
+    p "OcamlccBigarrayView *%sretain(OcamlccBigarrayView *v);\n" prefix;
+    p "void %srelease(OcamlccBigarrayView *v);\n\n" prefix
+  end;
   List.iter
     (fun ev ->
       let args =
@@ -576,12 +585,18 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
   p "    return 1;\n";
   p "}\n\n";
   if uses_views then begin
-    p "OCAMLCC_UNUSED static bool shim_view_matches(OcamlccBigarrayView *v, int kind, int layout) {\n";
-    p "    if (!v) return false;\n";
-    p "    OcamlccBigarrayInfo info = ocamlcc_bigarray_view_info(v);\n";
-    p "    return info.rank == 1 && info.kind == kind && info.layout == layout;\n}\n\n";
+    let prefix = view_prefix modname in
+    p "extern int ocamlcc_bigarray_view_matches(const OcamlccBigarrayView *, int, int, int);\n";
+    p "extern int64_t ocamlcc_bigarray_view_to_value(OcamlccBigarrayView *);\n";
+    p "extern OcamlccBigarrayView *ocamlcc_bigarray_view_acquire(int64_t);\n";
+    p "extern OcamlccBigarrayView *ocamlcc_bigarray_view_retain(OcamlccBigarrayView *);\n";
+    p "extern void ocamlcc_bigarray_view_release(OcamlccBigarrayView *);\n";
+    p "extern OcamlccBigarrayInfo ocamlcc_bigarray_view_info(const OcamlccBigarrayView *);\n";
+    p "OcamlccBigarrayInfo %sinfo(const OcamlccBigarrayView *v) { return ocamlcc_bigarray_view_info(v); }\n" prefix;
+    p "OcamlccBigarrayView *%sretain(OcamlccBigarrayView *v) { return ocamlcc_bigarray_view_retain(v); }\n" prefix;
+    p "void %srelease(OcamlccBigarrayView *v) { ocamlcc_bigarray_view_release(v); }\n" prefix;
     p "OCAMLCC_UNUSED static void shim_view_error(ocamlcc_error_t *err) {\n";
-    p "    if (err) { err->code = 1; strcpy(err->message, \"Array1 view has incompatible rank, kind or layout\"); }\n}\n\n"
+    p "    if (err) { err->code = 1; strcpy(err->message, \"Array1 view has incompatible runtime, rank, kind or layout\"); }\n}\n\n"
   end;
   let emitted_helpers = Hashtbl.create 16 in
   let rec ensure_helpers t =
@@ -776,7 +791,7 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
       in
       List.iteri (fun i -> function
         | CT_array1 (kind, layout) ->
-            p "    if (!shim_view_matches(a%d, %s, %s)) {\n" i kind layout;
+            p "    if (!ocamlcc_bigarray_view_matches(a%d, 1, %s, %s)) {\n" i kind layout;
             p "        shim_view_error(err);\n";
             return_error ();
             p "    }\n"
@@ -786,7 +801,7 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
         if ev.ev_is_fn then p "    arc_release_val(res);\n";
         (match t with
         | CT_array1 (kind, layout) ->
-            p "    if (!shim_view_matches(out, %s, %s)) {\n" kind layout;
+            p "    if (!ocamlcc_bigarray_view_matches(out, 1, %s, %s)) {\n" kind layout;
             p "        ocamlcc_bigarray_view_release(out);\n";
             p "        shim_view_error(err);\n";
             return_error ();
@@ -887,9 +902,7 @@ let generate ?(include_dirs = []) ?(nopervasives = false) ?(nostdlib = false)
           in
           let view_syms =
             if uses_views then
-              ["ocamlcc_bigarray_view_acquire"; "ocamlcc_bigarray_view_retain";
-               "ocamlcc_bigarray_view_release"; "ocamlcc_bigarray_view_info";
-               "ocamlcc_bigarray_view_to_value"]
+              List.map ((^) (view_prefix modname)) ["info"; "retain"; "release"]
             else []
           in
           let exported_symbols = (mod_prefix ^ "_init") :: (decl_syms @ val_syms @ view_syms) in

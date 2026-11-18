@@ -2,4 +2,5 @@ header signatures: PASS
 shim body: PASS
 shim mutator gate: PASS
 reject higher-order: PASS
+reject unsupported Array1 signatures: PASS
 nested typedef order + free: PASS

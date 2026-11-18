@@ -6,7 +6,7 @@
 ;; Keep standalone generated C headers in sync with the runtime view ABI.
 (rule
  (target bigarray_header.ml)
- (deps ../runtime/ocamlcc_bigarray.h)
+ (deps ../runtime/ocamlcc_bigarray_types.h)
  (action
   (with-stdout-to %{target}
    (progn

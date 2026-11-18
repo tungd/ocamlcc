@@ -97,6 +97,10 @@ The Linux PAL and libc bindings request the default glibc interfaces before incl
 
 The driver returns a diagnostic naming an unavailable external tool, including xcrun when an iOS build runs on a Linux host.
 
+Array1 bindings embed the common view type definitions in the generated header.
+Their module-prefixed inspection and ownership functions use the producing library’s
+runtime. See [memory views](/concepts/memory-views.md).
+
 # Ninja shared-library linkage
 
 The Ninja shared-library rule links libm for the math primitives it includes. Its C host can link the resulting shared library directly on Linux.

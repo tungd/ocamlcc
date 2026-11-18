@@ -1,6 +1,7 @@
 /* ARC-native Bigarray. Included by arc.c to share allocation and I/O helpers.
  * Views own the backing descriptor; descriptors own PAL pages, never views. */
 #define BA_MAX_DIMS 16
+static char ba_runtime_id;
 static const uint8_t ba_sizes[] = {4,8,1,1,2,2,4,8,8,8,8,16,1,2};
 
 static int64_t ba_invalid(const char *message)
@@ -45,6 +46,14 @@ OcamlccBigarrayView *ocamlcc_bigarray_view_retain(OcamlccBigarrayView *view)
     return view;
 }
 
+/* Generated shims validate all borrowed inputs before retaining any. */
+int ocamlcc_bigarray_view_matches(const OcamlccBigarrayView *view, int rank,
+                                  int kind, int layout)
+{
+    return view && view->runtime_id == &ba_runtime_id && view->ndims == rank &&
+           view->kind == kind && view->layout == layout;
+}
+
 int64_t ocamlcc_bigarray_view_to_value(OcamlccBigarrayView *view)
 {
     return (int64_t)(uintptr_t)ocamlcc_bigarray_view_retain(view);
@@ -76,6 +85,7 @@ static ArcBigarray *ba_view(ArcBigarray *source, int ndims, const int64_t *dims,
 {
     ArcBigarray *a = arc_alloc(ARC_TAG_CUSTOM, 0, sizeof(ArcBigarray));
     ((ArcHeader *)a - 1)->reserved = ARC_CUSTOM_BIGARRAY;
+    a->runtime_id = &ba_runtime_id;
     a->backing = source->backing;
     arc_retain(a->backing);
     a->data = source->data + offset * ba_sizes[source->kind];
@@ -106,6 +116,7 @@ int64_t caml_ba_create(int64_t kind, int64_t layout, int64_t dimensions)
     if (b->data == NULL) pal_abort();
     ArcBigarray *a = arc_alloc(ARC_TAG_CUSTOM, 0, sizeof(*a));
     ((ArcHeader *)a - 1)->reserved = ARC_CUSTOM_BIGARRAY;
+    a->runtime_id = &ba_runtime_id;
     a->backing = b; a->data = b->data; a->kind = k; a->layout = l; a->ndims = n;
     for (int i = 0; i < n; i++) a->dims[i] = d[i] >> 1;
     return (int64_t)(uintptr_t)a;
