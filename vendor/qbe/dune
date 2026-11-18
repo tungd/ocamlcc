@@ -1,0 +1,9 @@
+(rule
+ (target qbe)
+ (deps
+  Makefile
+  (glob_files *.[ch])
+  (glob_files amd64/*.[ch])
+  (glob_files arm64/*.[ch])
+  (glob_files rv64/*.[ch]))
+ (action (run make -B -j1 "CFLAGS=-std=c99 -O2" qbe)))

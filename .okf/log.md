@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Dune builds the vendored QBE needed by the driver integration suite. A fresh OCaml 5.5 checkout can run dune runtest before any Ninja targets.
+
 - 2026-11-18 (codex/1): A load acquires its owned reference while replacement of that slot is excluded. Exchanges transfer slot ownership to their caller, and successful compare-and-set releases the displaced reference after unlocking.
 
 - 2026-11-18 (codex/1): Polymorphic predicates propagate unordered floating-point comparisons through lists, records and arrays. Stdlib.compare supplies the total ordering that places NaN before numbers.

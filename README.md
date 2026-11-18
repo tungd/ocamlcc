@@ -42,6 +42,7 @@ non-pure mutual `let rec` closures, and an ARC-native core standard library
 
 ## Build
 
+Use OCaml 5.5.x, Dune, Ninja, Make, and a host C compiler.
 The whole project is driven by [ninja](https://ninja-build.org):
 
 ```sh

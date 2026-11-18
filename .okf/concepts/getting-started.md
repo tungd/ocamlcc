@@ -5,8 +5,8 @@ description: How to build the project, run the end-to-end smoke test, and where 
 tags: [build, quickstart]
 status: stable
 generated:
-  by: autoagent/1
-  at: 2026-11-13
+  by: codex/1
+  at: 2026-11-18
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -21,7 +21,7 @@ sources:
 
 # Getting started
 
-Requirements: OCaml 5.3+ (opam switch), dune >= 3.0, a C compiler, and
+Requirements: OCaml 5.5.x (opam switch), dune >= 3.0, a C compiler, and
 [ninja](https://ninja-build.org).
 
 ## Build
@@ -72,3 +72,7 @@ build/bin/ocamlcc dump-lambda examples/hello.ml                 # dump Lambda IR
 [vendored-qbe]: /concepts/vendored-qbe.md
 [^build-ninja]: The ninja rules, artifact paths, and flags live in
   `build.ninja` and are the authority for build behavior.
+
+# Clean-checkout tests
+
+Dune builds the vendored QBE needed by the driver integration suite. A fresh OCaml 5.5 checkout can run dune runtest before any Ninja targets.

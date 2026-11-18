@@ -5,8 +5,8 @@ description: The four-stage architecture — official OCaml frontend, middle-end
 tags: [compiler, architecture, lambda, qbe]
 status: stable
 generated:
-  by: autoagent/1
-  at: 2026-11-16
+  by: codex/1
+  at: 2026-11-18
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -30,7 +30,7 @@ sources:
 The pipeline has four stages[^design-doc]:
 
 1. **Official OCaml frontend** — ocamlcc links against `compiler-libs.common`
-   (OCaml `5.3+` `Unit_info`/`Typemod` APIs) and reuses Parse (syntax),
+   (OCaml `5.5.x` `Unit_info`/`Typemod` APIs) and reuses Parse (syntax),
    Typemod (typechecking, including `.mli` → `.cmi`), and Translmod (Lambda
    lowering). Module system, functors, GADTs, and polymorphic variants all
    arrive pre-desugared: frontend fidelity is free, and unsupported

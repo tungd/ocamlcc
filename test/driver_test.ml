@@ -78,7 +78,10 @@ let () =
     if not ok then incr failures
   in
   let root = find_repo_root () in
-  let qbe = Filename.concat root "build/qbe/qbe" in
+  let qbe =
+    if Array.length Sys.argv > 1 then Unix.realpath Sys.argv.(1)
+    else Filename.concat root "build/qbe/qbe"
+  in
   let runtime_dir = Filename.concat root "runtime" in
   let stdlib_src_dir = Filename.concat root "stdlib" in
   let stdlib_build_dir = Filename.concat root "build/stdlib" in
