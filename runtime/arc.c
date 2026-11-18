@@ -4879,12 +4879,16 @@ int64_t caml_get_minor_free(int64_t ignored)
 int64_t caml_final_register(int64_t fn, int64_t v)
 {
     (void)fn; (void)v;
+    static const char message[] = "Gc.finalise: unsupported by ARC";
+    raise_failure_cstr(message, sizeof(message) - 1);
     return 1;
 }
 
 int64_t caml_final_register_called_without_value(int64_t fn, int64_t v)
 {
     (void)fn; (void)v;
+    static const char message[] = "Gc.finalise_last: unsupported by ARC";
+    raise_failure_cstr(message, sizeof(message) - 1);
     return 1;
 }
 

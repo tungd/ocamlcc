@@ -359,8 +359,8 @@ let table =
     ("caml_gc_full_major", abi 1 true false);
     ("caml_gc_compaction", abi 1 true false);
     ("caml_get_minor_free", abi 1 false false);
-    ("caml_final_register", abi 2 false false);
-    ("caml_final_register_called_without_value", abi 2 false false);
+    ("caml_final_register", abi 2 true false);
+    ("caml_final_register_called_without_value", abi 2 true false);
     ("caml_final_release", abi 1 false false);
     ("caml_memprof_start", abi 3 true false);
     ("caml_memprof_is_sampling", abi 1 false false);

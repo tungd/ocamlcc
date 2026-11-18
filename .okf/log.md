@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Gc.finalise and Gc.finalise_last raise a catchable Failure when called on the ARC runtime. Code that needs external resource cleanup can handle the failure at registration time.
+
 - 2026-11-18 (codex/1): A staged Dune installation supplies the vendored QBE executable and core stdlib and runtime sources relative to the compiler prefix. The installed driver can build multi-unit executables outside the checkout.
 
 - 2026-11-18 (codex/1): Dune builds the vendored QBE needed by the driver integration suite. A fresh OCaml 5.5 checkout can run dune runtest before any Ninja targets.

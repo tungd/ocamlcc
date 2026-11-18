@@ -6,7 +6,7 @@ tags: [stdlib, compatibility, testing, arc]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-17
+  at: 2026-11-18
 sources:
   - id: runner
     resource: tools/stdlib_compat.py
@@ -131,3 +131,7 @@ The test is integrated into `ninja -j1 test` and `ninja -j1 asan_test`.
 matrix, and runs repository API regressions. The default compiler/driver still
 uses the smaller original `stdlib/` archive unless given the compatibility
 CMI/archive paths explicitly; 72/72 describes the compatibility build.
+
+# Finalizer registration
+
+Gc.finalise and Gc.finalise_last raise a catchable Failure when called on the ARC runtime. Code that needs external resource cleanup can handle the failure at registration time.
