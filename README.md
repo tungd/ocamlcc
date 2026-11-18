@@ -43,6 +43,11 @@ non-pure mutual `let rec` closures, and an ARC-native core standard library
 ## Build
 
 Use OCaml 5.5.x, Dune, Ninja, Make, and a host C compiler.
+A Dune installation includes the compiler, its private QBE backend, and the
+runtime and core stdlib sources used by `ocamlcc build`. A C toolchain is
+needed on the consumer host. To select a locally built upstream stdlib, pass
+`--stdlib-dir /absolute/path/to/build/stdlib_compat/out`.
+
 The whole project is driven by [ninja](https://ninja-build.org):
 
 ```sh

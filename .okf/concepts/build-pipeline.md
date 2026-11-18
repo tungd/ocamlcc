@@ -80,3 +80,7 @@ is present or `--emit-header` is explicitly passed).
 # Executable startup
 
 The executable initializes every explicitly linked implementation once, in dependency order. This includes units whose only effect is registration at startup.
+
+# Installed driver
+
+A staged Dune installation supplies the vendored QBE executable and core stdlib and runtime sources relative to the compiler prefix. The installed driver can build multi-unit executables outside the checkout.

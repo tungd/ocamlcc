@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): A staged Dune installation supplies the vendored QBE executable and core stdlib and runtime sources relative to the compiler prefix. The installed driver can build multi-unit executables outside the checkout.
+
 - 2026-11-18 (codex/1): Dune builds the vendored QBE needed by the driver integration suite. A fresh OCaml 5.5 checkout can run dune runtest before any Ninja targets.
 
 - 2026-11-18 (codex/1): A load acquires its owned reference while replacement of that slot is excluded. Exchanges transfer slot ownership to their caller, and successful compare-and-set releases the displaced reference after unlocking.

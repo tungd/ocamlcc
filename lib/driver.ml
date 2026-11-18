@@ -217,6 +217,18 @@ let find_in_path exe =
       if Sys.file_exists p && not (Sys.is_directory p) then Some p else None)
     dirs
 
+(* The private backend, target runtime and core library share one Dune
+   package directory, relative to the installed executable. *)
+let installed_toolchain () =
+  let exe = Sys.executable_name in
+  let exe =
+    if Filename.is_implicit exe then Option.value (find_in_path exe) ~default:exe
+    else exe
+  in
+  let prefix = Filename.dirname (Filename.dirname exe) in
+  let dir = Filename.concat prefix "lib/ocamlcc" in
+  if Sys.file_exists (Filename.concat dir "qbe") then Some dir else None
+
 let search_upwards rel_path =
   let starts =
     [ Sys.getcwd (); Filename.dirname Sys.executable_name ]
@@ -236,7 +248,9 @@ let resolve_qbe cfg =
   | None -> (
       match Sys.getenv_opt "OCAMLCC_QBE" with
       | Some p when Sys.file_exists p -> Ok p
-      | _ -> (
+      | _ -> (match installed_toolchain () with
+        | Some dir -> Ok (Filename.concat dir "qbe")
+        | None ->
           let sibling =
             Filename.concat
               (Filename.dirname (Filename.dirname Sys.executable_name))
@@ -258,11 +272,14 @@ let resolve_runtime_dir cfg =
   | None -> (
       match Sys.getenv_opt "OCAMLCC_RUNTIME_DIR" with
       | Some d when Sys.file_exists d -> Some d
-      | _ -> search_upwards "runtime")
+      | _ -> (match installed_toolchain () with
+              | Some dir -> Some (Filename.concat dir "runtime")
+              | None -> search_upwards "runtime"))
 
 let resolve_prebuilt_rt_dir cfg =
   match cfg.prebuilt_rt_dir with
   | Some d -> Some d
+  | None when Option.is_some (installed_toolchain ()) -> None
   | None ->
       let sibling =
         Filename.concat
@@ -278,11 +295,14 @@ let resolve_stdlib_src_dir cfg =
   | None -> (
       match Sys.getenv_opt "OCAMLCC_STDLIB_DIR" with
       | Some d when Sys.file_exists d -> Some d
-      | _ -> search_upwards "stdlib")
+      | _ -> (match installed_toolchain () with
+              | Some dir -> Some (Filename.concat dir "stdlib")
+              | None -> search_upwards "stdlib"))
 
 let resolve_prebuilt_stdlib_dir cfg =
   match cfg.prebuilt_stdlib_dir with
   | Some d -> Some d
+  | None when Option.is_some (installed_toolchain ()) -> None
   | None ->
       let sibling =
         Filename.concat

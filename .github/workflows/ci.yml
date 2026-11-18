@@ -21,6 +21,11 @@ jobs:
         run: opam exec -- dune runtest
       - name: Build and run ninja end-to-end tests (epoll)
         run: opam exec -- ninja test
+      - name: Exercise the installed driver outside the checkout
+        run: |
+          opam exec -- dune build -p ocamlcc
+          opam exec -- dune install --prefix "$RUNNER_TEMP/ocamlcc" ocamlcc
+          opam exec -- sh tests/installed_driver.sh "$RUNNER_TEMP/ocamlcc/bin/ocamlcc"
       - name: Run ASan + UBSan runtime tests
         run: opam exec -- ninja asan_test
 
@@ -38,5 +43,14 @@ jobs:
         run: opam exec -- dune runtest
       - name: Build and run ninja end-to-end tests (kqueue)
         run: opam exec -- ninja test
+      - name: Exercise the installed driver outside the checkout
+        run: |
+          opam exec -- dune build -p ocamlcc
+          opam exec -- dune install --prefix "$RUNNER_TEMP/ocamlcc" ocamlcc
+          opam exec -- sh tests/installed_driver.sh "$RUNNER_TEMP/ocamlcc/bin/ocamlcc"
       - name: Run ASan + UBSan runtime tests
         run: opam exec -- ninja asan_test
+      - name: Exercise upstream stdlib and installed multi-module startup
+        run: |
+          opam exec -- ninja -j1 stdlib_compat
+          opam exec -- sh tests/installed_driver.sh "$RUNNER_TEMP/ocamlcc/bin/ocamlcc" --stdlib-dir "$PWD/build/stdlib_compat/out"
