@@ -134,7 +134,7 @@ CMI/archive paths explicitly; 72/72 describes the compatibility build.
 
 # Finalizer registration
 
-Gc.finalise and Gc.finalise_last raise a catchable Failure when called on the ARC runtime. Code that needs external resource cleanup can handle the failure at registration time.
+Gc.finalise and Gc.finalise_last raise a catchable Failure when called on the ARC runtime. Code that needs external resource cleanup can handle the failure at registration time. The [ARC finalizer design](/concepts/arc-finalizers.md) describes the intended callback lifecycle.
 
 # Verified coverage (2026-11-18, macOS arm64 / OCaml 5.5.0)
 

@@ -1,0 +1,70 @@
+(* Run with stock OCaml or with an ocamlcc compatibility stdlib. This
+   contract deliberately treats unsupported registration as a test failure. *)
+type node = { mutable next : node option; payload : int ref }
+
+let check ok message = if not ok then failwith message
+
+let collect () =
+  Gc.full_major ();
+  Gc.full_major ()
+
+let check_lifetime cyclic =
+  let weak = Weak.create 1 in
+  let saved = ref None in
+  let events = ref [] in
+  let put_back x =
+    check (!(x.payload) = 42) "lost payload";
+    if cyclic then
+      (match x.next with
+       | Some original -> check (original == x) "lost cycle identity"
+       | None -> failwith "lost cycle");
+    saved := Some x;
+    events := "publish" :: !events
+  in
+  let install () =
+    let x = { next = None; payload = ref 42 } in
+    if cyclic then x.next <- Some x;
+    Weak.set weak 0 (Some x);
+    Gc.finalise (fun _ -> events := "older" :: !events) x;
+    Gc.finalise_last (fun () ->
+      check (Weak.get weak 0 = None) "last callback observed live target";
+      events := "last" :: !events) x;
+    Gc.finalise put_back x;
+    collect ();
+    check (!events = []) "callback ran while target was rooted";
+    ignore (Sys.opaque_identity x)
+  in
+  install ();
+  collect ();
+  check (!events = ["older"; "publish"]) "ordinary callback order or resurrection";
+  (match !saved with
+   | None -> failwith "missing resurrected target"
+   | Some x -> check (!(x.payload) = 42) "resurrected target lost payload");
+  saved := None;
+  collect ();
+  check (!events = ["last"; "older"; "publish"]) "permanent death or duplicate delivery"
+
+let check_alarm () =
+  let calls = ref 0 in
+  let alarm = Gc.create_alarm (fun () -> incr calls) in
+  collect ();
+  check (!calls > 0) "alarm never fired";
+  let first = !calls in
+  collect ();
+  check (!calls > first) "alarm did not re-register";
+  Gc.delete_alarm alarm;
+  let stopped = !calls in
+  collect ();
+  check (!calls = stopped) "deleted alarm fired"
+
+let () =
+  try
+    check_lifetime false;
+    print_endline "acyclic resurrection and final death: ok";
+    check_lifetime true;
+    print_endline "cyclic resurrection and final death: ok";
+    check_alarm ();
+    print_endline "alarm re-registration and deletion: ok"
+  with Failure message ->
+    prerr_endline message;
+    exit 1
