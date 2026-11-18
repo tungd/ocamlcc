@@ -135,3 +135,9 @@ CMI/archive paths explicitly; 72/72 describes the compatibility build.
 # Finalizer registration
 
 Gc.finalise and Gc.finalise_last raise a catchable Failure when called on the ARC runtime. Code that needs external resource cleanup can handle the failure at registration time.
+
+# Verified coverage (2026-11-18, macOS arm64 / OCaml 5.5.0)
+
+The compatibility build compiles 72/72 interfaces and implementations. All 11 repository API fixtures pass on both stock OCaml and ocamlcc, including structural comparison and finalizer registration. Of 119 upstream files, 67 pass, ten fail and 42 are skipped.
+
+Compared with the November 17 run, `lib-marshal/intern_final.ml` changed from passing to a runtime failure, and `lib-sys/opaque.ml` changed from an output mismatch to a runtime failure. Both call `Gc.finalise` and leave the new explicit ARC exception uncaught. The other 117 results match the prior report.

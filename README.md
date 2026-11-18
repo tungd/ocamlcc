@@ -18,7 +18,7 @@ full design and roadmap.
 
 ## Status
 
-Phases 1–5 complete (`ninja test`: 25/25, `ninja asan_test`: 15/15,
+Phases 1–5 complete (`ninja test`: 26/26, `ninja asan_test`: 16/16,
 `dune runtest`: 14/14 passing).
 
 `ocamlcc` compiles multi-module OCaml programs (`.mli` interfaces and `.ml`
@@ -106,10 +106,11 @@ consult the report for individual failures and skips. It skips toplevel expect
 tests, C-stub tests, and unsupported ocamltest directives. Tests execute in
 copied working directories. Repository API regressions return nonzero on failure.
 
-The verified local matrix passes 68/77 standalone upstream tests, with nine
-failures and 42 explicitly skipped files. All nine repository API fixtures
-pass on both stock OCaml and ocamlcc; module compilation and behavioral
-compatibility are separate results.
+On macOS arm64 with OCaml 5.5.0, 67 of 77 standalone upstream tests pass,
+ten fail, and 42 additional files are skipped. All 11 repository API fixtures
+pass on both stock OCaml and ocamlcc. Finalizer registration raises a catchable
+`Failure` under ARC. The upstream Marshal `intern_final` and Sys `opaque` tests
+leave that exception uncaught.
 
 Lexing and Parsing use pure OCaml table interpreters. Bigarray views retain a
 shared ARC backing buffer. Marshal reads/writes the standard uncompressed
