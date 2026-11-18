@@ -77,7 +77,7 @@ let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
   | BytesSet _ | ArraySet _ | Builtin _ | Assign _ ->
       true
-  | MakeBlock (_, []) | Float64Load _ | FloatMul _ | Float64Store _ -> true
+  | MakeBlock (_, []) | Float64Load _ | FloatUnbox _ | FloatMul _ | Float64Store _ -> true
   | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _
   | BigarrayAccess _ | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _ | Ccall _
   | GetGlobal _ | Fun _ ->
@@ -116,6 +116,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | MakeArrayInit (len, init) -> (atom_vars len, [ init ])
   | App (fn, args) -> (atom_vars fn, args)
   | Builtin (_, _, a) -> (atom_vars a, [])
+  | FloatUnbox a -> (atom_vars a, [])
   | Float64Load (_, a, i) -> (atoms_vars [a; i], [])
   | Float64Store (_, a, i, v) -> (Anf.float_operand_vars (atoms_vars [a; i]) v, [])
   | FloatMul (a, b) -> (Anf.float_operand_vars (Anf.float_operand_vars Ident.Set.empty a) b, [])
@@ -167,7 +168,7 @@ let compute_yield_info (e : Anf.aexpr) : Ident.Set.t * Ident.Set.t =
             collect rb.def.body)
           bindings;
         collect body
-    | LetJoin (_, a, b) | If (_, a, b) | CheckExn (a, b) | While (a, b)
+    | LetJoin (_, a, b) | If (_, a, b) | FloatIf (_, a, b) | CheckExn (a, b) | While (a, b)
     | StaticCatch (a, _, _, b) | TryWith (a, _, b) ->
         collect a;
         collect b
@@ -178,7 +179,7 @@ let compute_yield_info (e : Anf.aexpr) : Ident.Set.t * Ident.Set.t =
     | StringSwitch (_, cases, fail) ->
         List.iter (fun (_, arm) -> collect arm) cases;
         Option.iter collect fail
-    | Halt _ | StaticRaise _ | Raise _ | Unwind -> ()
+    | Halt _ | HaltFloat _ | StaticRaise _ | Raise _ | Unwind -> ()
   in
   collect e;
   let known =
@@ -199,7 +200,7 @@ let compute_yield_info (e : Anf.aexpr) : Ident.Set.t * Ident.Set.t =
     | DropReuse (_, _, body) | FreeReuse (_, body)
     | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
         body_yields yielding body
-    | LetJoin (_, a, b) | If (_, a, b) | CheckExn (a, b) | While (a, b)
+    | LetJoin (_, a, b) | If (_, a, b) | FloatIf (_, a, b) | CheckExn (a, b) | While (a, b)
     | StaticCatch (a, _, _, b) | TryWith (a, _, b) ->
         body_yields yielding a || body_yields yielding b
     | Switch (_, sw) ->
@@ -209,7 +210,7 @@ let compute_yield_info (e : Anf.aexpr) : Ident.Set.t * Ident.Set.t =
     | StringSwitch (_, cases, fail) ->
         List.exists (fun (_, arm) -> body_yields yielding arm) cases
         || Option.fold ~none:false ~some:(body_yields yielding) fail
-    | Halt _ | StaticRaise _ | Raise _ | Unwind -> false
+    | Halt _ | HaltFloat _ | StaticRaise _ | Raise _ | Unwind -> false
   in
   let rec fix yielding =
     let next, changed =
@@ -226,7 +227,7 @@ let compute_yield_info (e : Anf.aexpr) : Ident.Set.t * Ident.Set.t =
 
 let rec can_raise (e : Anf.aexpr) : bool =
   match e with
-  | Halt _ | Unwind | StaticRaise _ -> false
+  | Halt _ | HaltFloat _ | Unwind | StaticRaise _ -> false
   | Raise _ -> true
   | Let (_, ce, body) | MutLet (_, ce, body) ->
       ce_may_raise_fn ce || can_raise body
@@ -239,7 +240,7 @@ let rec can_raise (e : Anf.aexpr) : bool =
   | ShadowPush (_, _, _, body)
   | ShadowPop (_, _, body) ->
       can_raise body
-  | LetJoin (_, a, b) | If (_, a, b) | CheckExn (a, b) | While (a, b) ->
+  | LetJoin (_, a, b) | If (_, a, b) | FloatIf (_, a, b) | CheckExn (a, b) | While (a, b) ->
       can_raise a || can_raise b
   | For (_, _, _, _, body) -> can_raise body
   | Switch (_, sw) ->
@@ -255,7 +256,7 @@ let rec can_raise (e : Anf.aexpr) : bool =
 
 let rec reachable_raises (e : Anf.aexpr) : IntSet.t =
   match e with
-  | Halt _ | Unwind | Raise _ -> IntSet.empty
+  | Halt _ | HaltFloat _ | Unwind | Raise _ -> IntSet.empty
   | StaticRaise (id, _) -> IntSet.singleton id
   | While (a, b) -> IntSet.union (reachable_raises a) (reachable_raises b)
   | For (_, _, _, _, body) -> reachable_raises body
@@ -266,7 +267,7 @@ let rec reachable_raises (e : Anf.aexpr) : IntSet.t =
       reachable_raises body
   | LetJoin (_, rhs, body) | CheckExn (rhs, body) | TryWith (rhs, _, body) ->
       IntSet.union (reachable_raises rhs) (reachable_raises body)
-  | If (_, th, el) ->
+  | If (_, th, el) | FloatIf (_, th, el) ->
       IntSet.union (reachable_raises th) (reachable_raises el)
   | Switch (_, sw) ->
       let acc =
@@ -309,13 +310,13 @@ let live_with_handlers (env : state) (e : Anf.aexpr) : Ident.Set.t =
 
 let rec has_static_raise = function
   | Anf.StaticRaise _ | Unwind | Raise _ -> true
-  | Halt _ | While _ | For _ -> false
+  | Halt _ | HaltFloat _ | While _ | For _ -> false
   | Let (_, _, b) | MutLet (_, _, b) | LetRec (_, b)
   | Retain (_, b) | Release (_, b) | ReleaseMut (_, b)
   | DropReuse (_, _, b) | FreeReuse (_, b)
   | ShadowPush (_, _, _, b) | ShadowPop (_, _, b) ->
       has_static_raise b
-  | LetJoin (_, a, b) | If (_, a, b) | CheckExn (a, b) | TryWith (a, _, b) ->
+  | LetJoin (_, a, b) | If (_, a, b) | FloatIf (_, a, b) | CheckExn (a, b) | TryWith (a, _, b) ->
       has_static_raise a || has_static_raise b
   | Switch (_, sw) ->
       List.exists (fun (_, a) -> has_static_raise a) sw.consts
@@ -335,7 +336,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
              | FloatField _ | SetFloatField _ | OffsetRef _
              | StringGet _ | BytesSet _ | ArrayGet _ | ArraySet _
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _
-             | Float64Load _ | Float64Store _ | FloatMul _
+             | Float64Load _ | Float64Store _ | FloatUnbox _ | FloatMul _
              | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _ | MakeBlock (_, [])) as ce), body) -> (
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (Let (x, ce, body'))
@@ -514,6 +515,9 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
               cont
           in
           emit_drops env remaining_owned cont)
+  | HaltFloat _ ->
+      let cont = emit_mut_releases (Ident.Set.diff env.muts env.no_release_muts) e in
+      emit_drops env env.owned cont
   | Raise a ->
       prepare_consumed env ~borrowed_also:Ident.Set.empty
         ~live_after:env.try_owned [ a ] (fun remaining_owned atoms' ->
@@ -666,7 +670,11 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           no_release_muts = env.muts }
       in
       let rhs' = transform_aexpr env_rhs rhs in
-      let env_body = { env with owned = Ident.Set.add id shared } in
+      let imm = match rhs with
+        | FloatIf _ -> Ident.Set.add id env.imm
+        | _ -> env.imm
+      in
+      let env_body = { env with owned = Ident.Set.add id shared; imm } in
       let body' = transform_aexpr env_body body in
       emit_drops env dead_before (LetJoin (id, rhs', body'))
   | LetRec (bindings, body) ->
@@ -747,6 +755,10 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let th' = transform_branch env th in
       let el' = transform_branch env el in
       If (cond, th', el')
+  | FloatIf (cond, th, el) ->
+      let th' = transform_branch env th in
+      let el' = transform_branch env el in
+      FloatIf (cond, th', el')
   | Switch (scrut, sw) ->
       let consts' = List.map (fun (k, a) -> (k, transform_branch env a)) sw.consts in
       let blocks' = List.map (fun (k, a) -> (k, transform_branch env a)) sw.blocks in

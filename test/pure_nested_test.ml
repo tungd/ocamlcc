@@ -20,7 +20,7 @@ let count_release id (e : Anf.aexpr) : int =
     | Anf.ReleaseMut (_, cont) | Anf.Retain (_, cont) -> go cont
     | Anf.Release (m, cont) ->
         (if Ident.same m id then 1 else 0) + go cont
-    | Anf.Halt _ | Anf.Raise _ | Anf.Unwind -> 0
+    | Anf.Halt _ | Anf.HaltFloat _ | Anf.Raise _ | Anf.Unwind -> 0
     | Anf.Let (_, ce, body) | Anf.MutLet (_, ce, body) ->
         go_ce (go body) ce
     | Anf.LetJoin (_, rhs, body) -> go rhs + go body
@@ -28,7 +28,7 @@ let count_release id (e : Anf.aexpr) : int =
         List.fold_left
           (fun acc rb -> acc + go rb.Anf.def.Anf.body)
           (go body) bindings
-    | Anf.If (_, th, el) -> go th + go el
+    | Anf.If (_, th, el) | Anf.FloatIf (_, th, el) -> go th + go el
     | Anf.Switch (_, sw) ->
         let arms =
           List.map snd sw.Anf.consts @ List.map snd sw.Anf.blocks
@@ -101,7 +101,7 @@ let static_fun_ids (e : Anf.aexpr) : Ident.Set.t =
               acc bindings
           in
           go extra acc body
-    | Anf.If (_, th, el) -> go extra (go extra acc th) el
+    | Anf.If (_, th, el) | Anf.FloatIf (_, th, el) -> go extra (go extra acc th) el
     | Anf.Switch (_, sw) ->
         let arms =
           List.map snd sw.Anf.consts @ List.map snd sw.Anf.blocks
@@ -119,7 +119,7 @@ let static_fun_ids (e : Anf.aexpr) : Ident.Set.t =
         go extra (go extra acc cond) b
     | Anf.For (_, _, _, _, body) -> go extra acc body
     | Anf.TryWith (body, _, handler) -> go extra (go extra acc body) handler
-    | Anf.Halt _ | Anf.Raise _ | Anf.Unwind | Anf.StaticRaise _ -> acc
+    | Anf.Halt _ | Anf.HaltFloat _ | Anf.Raise _ | Anf.Unwind | Anf.StaticRaise _ -> acc
     | Anf.Retain (_, cont) | Anf.Release (_, cont) | Anf.ReleaseMut (_, cont)
     | Anf.DropReuse (_, _, cont) | Anf.FreeReuse (_, cont)
     | Anf.ShadowPop (_, _, cont) | Anf.ShadowPush (_, _, _, cont) ->

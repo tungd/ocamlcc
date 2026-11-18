@@ -17,6 +17,7 @@ let dump_ident id = Ident.name id
 let rec dump (e : Anf.aexpr) : string =
   match e with
   | Anf.Halt a -> Printf.sprintf "(halt %s)" (dump_atom a)
+  | Anf.HaltFloat id -> Printf.sprintf "(halt_float %s)" (dump_ident id)
   | Anf.Let (id, ce, body) ->
       Printf.sprintf "(let %s %s %s)" (dump_ident id) (dump_ce ce) (dump body)
   | Anf.MutLet (id, ce, body) ->
@@ -29,7 +30,7 @@ let rec dump (e : Anf.aexpr) : string =
   | Anf.Retain (id, cont) -> Printf.sprintf "(retain %s %s)" (dump_ident id) (dump cont)
   | Anf.Raise a -> Printf.sprintf "(raise %s)" (dump_atom a)
   | Anf.Unwind -> "unwind"
-  | Anf.If (c, th, el) ->
+  | Anf.If (c, th, el) | Anf.FloatIf (c, th, el) ->
       Printf.sprintf "(if %s %s %s)" (dump_atom c) (dump th) (dump el)
   | Anf.While (cond, body) -> Printf.sprintf "(while %s %s)" (dump cond) (dump body)
   | Anf.For (i, s, e2, _, body) ->
@@ -168,7 +169,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.App (f, args) -> List.fold_left count_atom (count_atom acc f) args
     | Anf.Builtin (_, _, a) -> count_atom acc a
     | Anf.BigarrayAccess (_, args) | Anf.Ccall (_, args) -> List.fold_left count_atom acc args
-    | Anf.Float64Load _ | Anf.Float64Store _ | Anf.FloatMul _ | Anf.GetGlobal _ -> acc
+    | Anf.Float64Load _ | Anf.Float64Store _ | Anf.FloatMul _ | Anf.FloatUnbox _ | Anf.GetGlobal _ -> acc
     | Anf.Fun lf -> count_release_mut id lf.Anf.body
     | Anf.Assign (_, a) -> count_atom acc a
   in
@@ -177,6 +178,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
   | Anf.ReleaseMut (m', cont) ->
       (if Ident.same m' id then 1 else 0) + count_release_mut id cont
   | Anf.Halt a -> count_atom 0 a
+  | Anf.HaltFloat _ -> 0
   | Anf.Let (_, ce, body) | Anf.MutLet (_, ce, body) ->
       count_ce (count_release_mut id body) ce
   | Anf.LetJoin (_, rhs, body) ->
@@ -185,7 +187,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
       List.fold_left
         (fun acc rb -> acc + count_release_mut id rb.Anf.def.Anf.body)
         (count_release_mut id body) bindings
-  | Anf.If (_, th, el) -> count_release_mut id th + count_release_mut id el
+  | Anf.If (_, th, el) | Anf.FloatIf (_, th, el) -> count_release_mut id th + count_release_mut id el
   | Anf.Switch (_, sw) ->
       let arms =
         List.map snd sw.Anf.consts @ List.map snd sw.Anf.blocks

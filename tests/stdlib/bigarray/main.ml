@@ -22,6 +22,9 @@ let scale_and_capture (src : vector) (dst : vector) factor =
   dst.{0} <- product;
   product, (fun () -> product)
 
+let conditional_store (src : vector) (dst : vector) take_load i fallback =
+  dst.{0} <- (if take_load then src.{i} *. 2. else fallback ())
+
 let () =
   let values = Array1.of_array float64 c_layout [|1.; 2.; 3.; 4.|] in
   let src = Array1.sub values 0 3 and dst = Array1.sub values 1 3 in
@@ -35,6 +38,15 @@ let () =
   let result, capture = scale_and_capture src short 2. in
   Gc.full_major ();
   assert (result = 6. && values.{0} = 6. && capture () == result);
+  conditional_store src short false (-1) (fun () -> Gc.full_major (); -0.);
+  assert (Int64.bits_of_float values.{0} = Int64.bits_of_float (-0.));
+  assert (try
+    conditional_store src short true (-1) (fun () -> assert false);
+    false
+  with Invalid_argument _ -> true);
+  assert (Int64.bits_of_float values.{0} = Int64.bits_of_float (-0.));
+  conditional_store src short true 1 (fun () -> assert false);
+  assert (values.{0} = 4.);
   let col = Array1.of_array float64 fortran_layout [|-0.; nan; infinity|] in
   scale_column col col 1 3 2.;
   assert (Int64.bits_of_float col.{3} = Int64.bits_of_float (-0.));

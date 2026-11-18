@@ -909,6 +909,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let dst = fresh_temp b "fload" in
       emit b (Call (Double, dst, { fn = Global "ocamlcc_ba_get_float64_1"; args }));
       dst
+  | FloatUnbox value -> load_double b (compile_atom hooks b value)
   | FloatMul (lhs, rhs) ->
       let l = compile_float_operand hooks b lhs in
       let r = compile_float_operand hooks b rhs in
@@ -973,6 +974,7 @@ let emit_unwind b : t =
 let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   match e with
   | Halt a -> compile_atom hooks b a
+  | HaltFloat id -> Hashtbl.find b.vars id
   | Let (id, Fun lf, body) ->
       hooks.compile_fun_binding (compile_aexpr hooks) b tail id lf body
   | Let (id, (App _ as ce), Halt (Var v)) when tail && Ident.same id v ->
@@ -1006,7 +1008,8 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       end
   | LetRec (bindings, body) ->
       hooks.compile_letrec (compile_aexpr hooks) b tail bindings body
-  | If (cond, th, el) -> compile_if hooks b tail cond th el
+  | If (cond, th, el) -> compile_if hooks b tail Long cond th el
+  | FloatIf (cond, th, el) -> compile_if hooks b false Double cond th el
   | Switch (scrut, sw) -> compile_switch hooks b tail scrut sw
   | StringSwitch (scrut, cases, fail) ->
       compile_stringswitch hooks b tail scrut cases fail
@@ -1188,7 +1191,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
           emit b (Phi (Long, res, List.rev !preds));
           res)
 
-and compile_if hooks b tail (cond : Anf.atom) th el =
+and compile_if hooks b tail result_ty (cond : Anf.atom) th el =
   let v = compile_atom hooks b cond in
   let cv = fresh_temp b "cond" in
   emit b (Cmp (Ne, Long, cv, v, Int 1L));
@@ -1214,7 +1217,7 @@ and compile_if hooks b tail (cond : Anf.atom) th el =
   | [] -> ()
   | _ ->
       start_block b lepi;
-      emit b (Phi (Long, res, List.rev !preds)));
+      emit b (Phi (result_ty, res, List.rev !preds)));
   res
 
 and compile_switch hooks b tail (scrut : Anf.atom) (sw : Anf.switch_cases) =

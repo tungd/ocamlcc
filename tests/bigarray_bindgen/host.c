@@ -112,6 +112,15 @@ static void check_scale_allocations(void)
     for (int i = 0; i < 128; ++i) assert(cells[i] == 3. * ((double)i - 2.5));
     fprintf(stderr, "float64 scale allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
     assert(full == empty);
+    for (int i = 0; i < 128; ++i) cells[i] = (double)i - 2.5;
+    empty = vectors_conditional_scale_words(values, values, 3., 0, &err);
+    assert(!err.code);
+    full = vectors_conditional_scale_words(values, values, 3., 128, &err);
+    assert(!err.code);
+    for (int i = 0; i < 128; ++i)
+        assert(cells[i] == ((i & 1) ? 2. : 3.) * ((double)i - 2.5));
+    fprintf(stderr, "float64 conditional allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
+    assert(full == empty);
     ocamlcc_Vectors_view_release(values);
 }
 

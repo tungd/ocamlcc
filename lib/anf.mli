@@ -111,6 +111,7 @@ type cexpr =
   | BigarrayAccess of bigarray_access * atom list
   | Float64Load of bigarray_access * atom * atom
   | Float64Store of bigarray_access * atom * atom * float_operand
+  | FloatUnbox of atom
   | FloatMul of float_operand * float_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
@@ -133,11 +134,13 @@ and rec_binding = {
 
 and aexpr =
   | Halt of atom
+  | HaltFloat of Ident.t
   | Let of Ident.t * cexpr * aexpr
   | MutLet of Ident.t * cexpr * aexpr
   | LetJoin of Ident.t * aexpr * aexpr
   | LetRec of rec_binding list * aexpr
   | If of atom * aexpr * aexpr
+  | FloatIf of atom * aexpr * aexpr
   | Switch of atom * switch_cases
   | StringSwitch of atom * (string * aexpr) list * aexpr option
   | StaticCatch of aexpr * int * Ident.t list * aexpr

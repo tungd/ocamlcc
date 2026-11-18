@@ -106,6 +106,7 @@ type cexpr =
   | BigarrayAccess of bigarray_access * atom list
   | Float64Load of bigarray_access * atom * atom
   | Float64Store of bigarray_access * atom * atom * float_operand
+  | FloatUnbox of atom
   | FloatMul of float_operand * float_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
@@ -128,11 +129,13 @@ and rec_binding = {
 
 and aexpr =
   | Halt of atom
+  | HaltFloat of Ident.t
   | Let of Ident.t * cexpr * aexpr
   | MutLet of Ident.t * cexpr * aexpr
   | LetJoin of Ident.t * aexpr * aexpr
   | LetRec of rec_binding list * aexpr
   | If of atom * aexpr * aexpr
+  | FloatIf of atom * aexpr * aexpr
   | Switch of atom * switch_cases
   | StringSwitch of atom * (string * aexpr) list * aexpr option
   | StaticCatch of aexpr * int * Ident.t list * aexpr
@@ -598,7 +601,19 @@ and conv_float_operand lam k =
       conv_expr arr (fun a -> conv_expr index (fun i -> bind (Float64Load (access, a, i))))
   | Lprim (Pmulfloat, [lhs; rhs], _) ->
       conv_float_operand lhs (fun l -> conv_float_operand rhs (fun r -> bind (FloatMul (l, r))))
+  | Lifthenelse (cond, yes, no) ->
+      conv_expr cond (fun cond ->
+          let id = Ident.create_local "scalar_join" in
+          let branches = FloatIf (cond, conv_float_tail yes, conv_float_tail no) in
+          LetJoin (id, branches, k (Raw_float id)))
   | _ -> conv_expr lam (fun a -> k (Boxed_float a))
+
+and conv_float_tail lam =
+  conv_float_operand lam (function
+    | Raw_float id -> HaltFloat id
+    | Boxed_float value ->
+        let id = Ident.create_local "scalar" in
+        Let (id, FloatUnbox value, HaltFloat id))
 
 and binop op a c emit_cexpr =
   conv_expr a (fun av -> conv_expr c (fun cv -> emit_cexpr (Binop (op, av, cv))))
@@ -714,6 +729,7 @@ let float_operand_vars acc = function
   | Raw_float id -> Ident.Set.add id acc
 
 let cexpr_vars free_aexpr acc = function
+  | FloatUnbox a -> atom_vars acc a
   | Float64Load (_, a, i) -> atom_vars (atom_vars acc a) i
   | Float64Store (_, a, i, v) -> float_operand_vars (atom_vars (atom_vars acc a) i) v
   | FloatMul (a, b) -> float_operand_vars (float_operand_vars acc a) b
@@ -752,6 +768,7 @@ let cexpr_vars free_aexpr acc = function
 let rec free_vars (e : aexpr) : Ident.Set.t =
   match e with
   | Halt a -> atom_vars Ident.Set.empty a
+  | HaltFloat id -> Ident.Set.singleton id
   | Let (id, ce, body) | MutLet (id, ce, body) ->
       let f_ce = cexpr_vars free_vars Ident.Set.empty ce in
       let f_body = Ident.Set.remove id (free_vars body) in
@@ -780,7 +797,7 @@ let rec free_vars (e : aexpr) : Ident.Set.t =
       in
       let f_body = Ident.Set.diff (free_vars body) rec_ids in
       Ident.Set.union f_defs f_body
-  | If (c, th, el) ->
+  | If (c, th, el) | FloatIf (c, th, el) ->
       atom_vars (Ident.Set.union (free_vars th) (free_vars el)) c
   | Switch (s, sw) ->
       let acc = atom_vars Ident.Set.empty s in
@@ -900,6 +917,8 @@ let rec specialize_float_bindings = function
       LetRec (defs, specialize_float_bindings body)
   | If (v, yes, no) ->
       If (v, specialize_float_bindings yes, specialize_float_bindings no)
+  | FloatIf (v, yes, no) ->
+      FloatIf (v, specialize_float_bindings yes, specialize_float_bindings no)
   | Switch (v, cases) ->
       Switch (v, { consts = List.map specialize_float_case cases.consts;
                    blocks = List.map specialize_float_case cases.blocks;
@@ -1002,7 +1021,7 @@ let pure_defs (e : aexpr) : (Ident.t * lfunction) list =
           in
           go known acc' body
         end
-    | If (_, th, el) -> go known (go known acc th) el
+    | If (_, th, el) | FloatIf (_, th, el) -> go known (go known acc th) el
     | Switch (_, sw) ->
         let acc =
           List.fold_left
@@ -1021,7 +1040,7 @@ let pure_defs (e : aexpr) : (Ident.t * lfunction) list =
     | While (cond, body) | CheckExn (cond, body) ->
         go known (go known acc cond) body
     | For (_, _, _, _, body) -> go known acc body
-    | Halt _ | Raise _ | Unwind | StaticRaise _ -> acc
+    | Halt _ | HaltFloat _ | Raise _ | Unwind | StaticRaise _ -> acc
     | Retain (_, body) | Release (_, body) | ReleaseMut (_, body)
     | DropReuse (_, _, body) | FreeReuse (_, body)
     | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
