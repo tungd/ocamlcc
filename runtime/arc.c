@@ -5026,11 +5026,13 @@ static int64_t run_finalizers(int automatic)
     int entered = arc_mutator_enter();
     atomic_fetch_add_explicit(&g_gc_collections, 1, memory_order_relaxed);
     claim_last_finalizers();
+    Fiber *fiber = arc_fiber_current();
     while (pending_finalizers != NULL) {
         Finalizer *f = pending_finalizers;
         pending_finalizers = f->next;
         /* A compiled unary function consumes its argument. Transfer this
          * registration's pin and keep the borrowed callback alive across it. */
+        fiber->owns_finalizer_dispatch = 1;
         int64_t result = ocamlcc_apply1_raw(f->callback, f->last ? 1 : f->value);
         if (f->last)
             arc_release_val(f->value);
@@ -5038,6 +5040,14 @@ static int64_t run_finalizers(int automatic)
         arc_release_val(f->callback);
         arc_release(f);
         atomic_fetch_sub_explicit(&finalizer_count, 1, memory_order_relaxed);
+        /* A released callback still owns its local registration. Only the
+         * dispatcher that holds the queue may read it or clear its gate. */
+        if (!fiber->owns_finalizer_dispatch &&
+            atomic_exchange_explicit(&finalizer_dispatch_active, 1, memory_order_acquire)) {
+            arc_mutator_leave(entered);
+            return 1;
+        }
+        fiber->owns_finalizer_dispatch = 0;
         if (ocamlcc_get_exn() != 0)
             break;
     }
@@ -5121,6 +5131,11 @@ int64_t caml_final_register_called_without_value(int64_t fn, int64_t v)
 int64_t caml_final_release(int64_t ignored)
 {
     (void)ignored;
+    Fiber *fiber = arc_fiber_current();
+    if (fiber->owns_finalizer_dispatch) {
+        fiber->owns_finalizer_dispatch = 0;
+        atomic_store_explicit(&finalizer_dispatch_active, 0, memory_order_release);
+    }
     return 1;
 }
 

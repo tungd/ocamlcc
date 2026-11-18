@@ -42,7 +42,7 @@ static _Thread_local Fiber tls_main_fiber = {
 static _Thread_local Fiber     *tls_current_fiber = NULL;
 static _Thread_local SchedState tls_sched = { NULL, NULL, NULL, NULL, -1, 0, 0 };
 
-static inline Fiber *current_fiber(void)
+Fiber *arc_fiber_current(void)
 {
     if (tls_current_fiber == NULL)
         tls_current_fiber = &tls_main_fiber;
@@ -66,7 +66,7 @@ static void shadow_init(Fiber *f)
 
 void arc_fiber_push(int64_t val)
 {
-    Fiber *cur = current_fiber();
+    Fiber *cur = arc_fiber_current();
     if (cur->shadow_base == NULL)
         shadow_init(cur);
     if (cur->shadow_sp == cur->shadow_end) {
@@ -89,7 +89,7 @@ void arc_fiber_pop(int64_t n)
 {
     if (n <= 0)
         return;
-    Fiber *cur = current_fiber();
+    Fiber *cur = arc_fiber_current();
     if (cur->shadow_base == NULL ||
         (size_t)(cur->shadow_sp - cur->shadow_base) < (size_t)n)
         pal_abort();
@@ -98,7 +98,7 @@ void arc_fiber_pop(int64_t n)
 
 void arc_fiber_push_reuse(void *tok)
 {
-    Fiber *cur = current_fiber();
+    Fiber *cur = arc_fiber_current();
     if (cur->reuse_base == NULL) {
         void **buf = (void **)pal_page_alloc(SHADOW_INIT_BYTES);
         if (buf == NULL)
@@ -127,7 +127,7 @@ void arc_fiber_pop_reuse(int64_t n)
 {
     if (n <= 0)
         return;
-    Fiber *cur = current_fiber();
+    Fiber *cur = arc_fiber_current();
     if (cur->reuse_base == NULL ||
         (size_t)(cur->reuse_sp - cur->reuse_base) < (size_t)n)
         pal_abort();
@@ -190,7 +190,7 @@ void fiber_destroy(Fiber *f)
 
 static void fiber_swap_to(Fiber *next)
 {
-    Fiber *prev = current_fiber();
+    Fiber *prev = arc_fiber_current();
     prev->exn_slot = ocamlcc_get_exn();
     ocamlcc_set_exn(next->exn_slot);
     tls_current_fiber = next;
@@ -316,7 +316,7 @@ static int sched_step(void)
     sched_poll(0);
     Fiber *next = sched_pop_ready();
     if (next != NULL) {
-        next->caller = current_fiber();
+        next->caller = arc_fiber_current();
         fiber_swap_to(next);
         if (next->state == FIBER_DONE)
             arc_release(next);
@@ -333,7 +333,7 @@ static int sched_step(void)
 
 static void __attribute__((noreturn)) fiber_trampoline(void)
 {
-    Fiber *self = current_fiber();
+    Fiber *self = arc_fiber_current();
     int64_t clos = self->entry_closure;
     int64_t arg = self->result;
     self->result = 0;
@@ -403,7 +403,7 @@ int64_t ocamlcc_fiber_resume(int64_t fiber_val, int64_t send_val)
     if (f->result != 0)
         arc_release_val(f->result);
     f->result = send_val;
-    f->caller = current_fiber();
+    f->caller = arc_fiber_current();
 
     fiber_swap_to(f);
 
@@ -427,7 +427,7 @@ int64_t ocamlcc_fiber_resume(int64_t fiber_val, int64_t send_val)
 
 int64_t ocamlcc_fiber_suspend(int64_t send_val)
 {
-    Fiber *cur = current_fiber();
+    Fiber *cur = arc_fiber_current();
     if (cur == &tls_main_fiber || cur->is_scheduled) {
         /* Fiber.suspend is a coroutine operation; inside a spawned fiber it
            would strand the fiber off every scheduler queue (leaking it and
@@ -473,7 +473,7 @@ int64_t ocamlcc_fiber_spawn(int64_t closure)
 int64_t ocamlcc_fiber_yield(int64_t unit)
 {
     (void)unit;
-    Fiber *cur = current_fiber();
+    Fiber *cur = arc_fiber_current();
     if (cur == &tls_main_fiber) {
         sched_poll(0);
         Fiber *next = sched_pop_ready();
@@ -506,7 +506,7 @@ int64_t ocamlcc_fiber_sleep_ms(int64_t ms_val)
         return ocamlcc_fiber_yield(1);
 
     uint64_t deadline = pal_monotonic_ns() + (uint64_t)ms * 1000000ull;
-    Fiber *cur = current_fiber();
+    Fiber *cur = arc_fiber_current();
     if (cur == &tls_main_fiber) {
         for (;;) {
             uint64_t now = pal_monotonic_ns();
@@ -545,7 +545,7 @@ static int64_t fiber_fd_wait(int64_t fd_val, uint32_t events)
 {
     int fd = (int)(fd_val >> 1);
     int pfd = ensure_poller();
-    Fiber *cur = current_fiber();
+    Fiber *cur = arc_fiber_current();
 
     if (cur == &tls_main_fiber) {
         tls_sched.main_io_pending = 1;
@@ -591,7 +591,7 @@ int64_t ocamlcc_fiber_await(int64_t fiber_val)
     Fiber *f = (Fiber *)(uintptr_t)fiber_val;
     if (f == NULL)
         pal_abort();
-    Fiber *cur = current_fiber();
+    Fiber *cur = arc_fiber_current();
 
     if (f->state != FIBER_DONE) {
         if (cur == &tls_main_fiber) {
@@ -635,7 +635,7 @@ int64_t ocamlcc_fiber_await(int64_t fiber_val)
 int64_t ocamlcc_fiber_run_all(int64_t unit)
 {
     (void)unit;
-    if (current_fiber() != &tls_main_fiber)
+    if (arc_fiber_current() != &tls_main_fiber)
         pal_abort();
     while (sched_step())
         ;

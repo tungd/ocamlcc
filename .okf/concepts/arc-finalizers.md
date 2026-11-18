@@ -64,7 +64,7 @@ Registration retains the target before its caller can release it. Ordinary drops
 
 Queue batches in discovery order. Within each simultaneous discovery, run ordinary callbacks in reverse registration order. Last callbacks for a target wait for all of its ordinary callbacks, including any subsequent registrations and resurrection. By the time a last callback runs, a weak lookup of its target returns `None`. Ephemeron clearing belongs to the same permanent-death phase when that API gains runtime support.[^gc-api][^runtime]
 
-Programs can request delivery with `Gc.major`, `Gc.full_major`, or `Gc.compact`. A successful trial freezes its eligible ordinary registrations before the dispatcher starts. A callback that re-registers its argument can run again at a later collection. A nested collection leaves the current callback in control. The vendored alarm uses this re-registration behavior and checks its active flag to honor deletion.[^gc-ml]
+Programs can request delivery with `Gc.major`, `Gc.full_major`, or `Gc.compact`. A successful trial freezes its eligible ordinary registrations before the dispatcher starts. A callback that re-registers its argument can run again at a later collection. A nested collection leaves the current callback in control until it calls `Gc.finalise_release`. The vendored alarm uses this re-registration behavior and checks its active flag to honor deletion.[^gc-ml]
 
 One dispatcher enters the mutator context and removes each pending registration before calling its closure. An outstanding exception defers dispatch. If a callback raises, the dispatcher releases its owners, preserves the remaining queue and propagates the exception at the explicit collection or generated poll. Each call into the dispatcher carries the raising and yielding ABI. Raw collection from a C host can reclaim cycles without entering OCaml code. Process exit has no guaranteed finalizer flush.[^abi]
 
@@ -74,9 +74,15 @@ When registrations exist, the runtime compares allocation progress since the las
 
 Generated code checks at function entry, including self-tail-call backedges, at each `for` iteration, before a `while` condition, and at Lambda polls. A due poll enters the dispatcher with live roots available for suspension and exception unwinding. With an empty registry, the check returns immediately and cycles continue to await explicit collection. Straight-line allocations can cross the budget before execution reaches a poll.[^compiler][^abi]
 
+### Releasing dispatch
+
+`Gc.finalise_release ()` lets another collection dispatch while the caller continues. It returns unit and runs no user code itself. Only the executing callback’s fiber can give up dispatch. A repeated release, or one from outside a callback, has no effect. The registration has already left the queue. Its closure stays owned until return, and compiled code owns its argument across the nested collection. On return, a released callback can resume draining the queue only if it reacquires dispatch.[^runtime][^gc-api]
+
+The reference fixture attaches two ordinary callbacks to one ref. The first attempts a collection before release and again after release. The second increments the ref. The first reads both that increment and its captured byte buffer before returning. A subsequent collection checks that each callback ran once.[^contract]
+
 ### Remaining delivery work
 
-Callbacks run on the thread that wins dispatch. Delivering an alarm on its registering domain requires recording that owner and handling domain exit. `Gc.finalise_release` currently returns unit. Supporting handoff requires preserving the active callback’s roots while another callback runs.[^gc-api]
+Callbacks run on the thread that wins dispatch. Delivering an alarm on its registering domain requires recording that owner and handling domain exit.[^gc-api]
 
 ## Executable reference
 

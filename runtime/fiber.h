@@ -45,8 +45,11 @@ typedef struct Fiber {
     int           is_scheduled;  /* 1 = spawn/scheduler fiber, 0 = coroutine */
     struct Fiber *waiter_head;   /* queued fibers in Fiber.await */
     struct Fiber *sched_next;    /* scheduler ready / timer / io queue link */
+    int           owns_finalizer_dispatch; /* set during an unreleased callback */
     FiberState    state;
 } Fiber;
+
+Fiber *arc_fiber_current(void);
 
 /* Compiler shadow-stack ABI (calls inserted around yielding call sites). */
 void arc_fiber_push(int64_t val);

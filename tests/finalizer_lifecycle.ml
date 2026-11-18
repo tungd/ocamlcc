@@ -122,6 +122,27 @@ let check_exception () =
   collect ();
   check (!calls = 1) "exception lost or repeated the other registration"
 
+let check_finalise_release () =
+  let events = ref [] in
+  let install () =
+    let target = ref 40 in
+    let captured = Bytes.make 1 'x' in
+    Gc.finalise (fun x -> incr x; events := "inner" :: !events) target;
+    Gc.finalise (fun x ->
+      events := "start" :: !events;
+      Gc.full_major ();
+      check (!events = ["start"]) "nested collection dispatched before release";
+      Gc.finalise_release ();
+      Gc.full_major ();
+      check (!events = ["inner"; "start"]) "release did not allow nested dispatch";
+      check (!x = 41 && Bytes.get captured 0 = 'x') "handoff lost a callback root";
+      events := "end" :: !events) target;
+    ignore (Sys.opaque_identity target)
+  in
+  install ();
+  collect ();
+  check (!events = ["end"; "inner"; "start"]) "handoff repeated a callback"
+
 let check_many () =
   let count = 1500 in
   let seen = Array.make count 0 in
@@ -142,6 +163,7 @@ let () =
     check_lifetime true;
     print_endline "cyclic resurrection and final death: ok";
     check_exception ();
+    check_finalise_release ();
     check_registered_leaf ();
     check_many ();
     check_alarm ();
