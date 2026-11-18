@@ -2736,12 +2736,18 @@ void caml_sys_exit(int64_t code_val)
 
 /* ---- Atomics ---- */
 
+/* Readers must retain a heap value before any writer can detach it.
+ * Keep destruction outside this lock. Integer fetch-add owns no pointers. */
+static ArcSpinLock atomic_field_lock;
+
 int64_t caml_atomic_load_field(int64_t obj_val, int64_t idx_val)
 {
     int64_t idx = idx_val >> 1;
     _Atomic int64_t *slot = ((_Atomic int64_t *)(uintptr_t)obj_val) + idx;
+    arc_lock(&atomic_field_lock);
     int64_t v = atomic_load_explicit(slot, memory_order_acquire);
     arc_retain_val(v);
+    arc_unlock(&atomic_field_lock);
     return v;
 }
 
@@ -2752,13 +2758,12 @@ int64_t caml_atomic_cas_field(int64_t obj_val, int64_t idx_val,
     _Atomic int64_t *slot = ((_Atomic int64_t *)(uintptr_t)obj_val) + idx;
     arc_retain_val(desired_val);
     int64_t cur = expected_val;
-    if (atomic_compare_exchange_strong_explicit(
-            slot, &cur, desired_val, memory_order_acq_rel, memory_order_acquire)) {
-        arc_release_val(expected_val);
-        return 3; /* true */
-    }
-    arc_release_val(desired_val);
-    return 1; /* false */
+    arc_lock(&atomic_field_lock);
+    int changed = atomic_compare_exchange_strong_explicit(
+        slot, &cur, desired_val, memory_order_acq_rel, memory_order_acquire);
+    arc_unlock(&atomic_field_lock);
+    arc_release_val(changed ? expected_val : desired_val);
+    return changed ? 3 : 1;
 }
 
 int64_t caml_atomic_exchange_field(int64_t obj_val, int64_t idx_val,
@@ -2767,7 +2772,10 @@ int64_t caml_atomic_exchange_field(int64_t obj_val, int64_t idx_val,
     int64_t idx = idx_val >> 1;
     _Atomic int64_t *slot = ((_Atomic int64_t *)(uintptr_t)obj_val) + idx;
     arc_retain_val(desired_val);
-    return atomic_exchange_explicit(slot, desired_val, memory_order_acq_rel);
+    arc_lock(&atomic_field_lock);
+    int64_t old = atomic_exchange_explicit(slot, desired_val, memory_order_acq_rel);
+    arc_unlock(&atomic_field_lock);
+    return old;
 }
 
 int64_t caml_atomic_fetch_add_field(int64_t obj_val, int64_t idx_val,

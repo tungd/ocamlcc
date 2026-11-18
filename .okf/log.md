@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): A load acquires its owned reference while replacement of that slot is excluded. Exchanges transfer slot ownership to their caller, and successful compare-and-set releases the displaced reference after unlocking.
+
 - 2026-11-18 (codex/1): Polymorphic predicates propagate unordered floating-point comparisons through lists, records and arrays. Stdlib.compare supplies the total ordering that places NaN before numbers.
 
 - 2026-11-18 (codex/1): Structural predicates raise Invalid_argument when they reach a functional value, including two references to the same closure. Physical equality is available through (==).

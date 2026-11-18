@@ -66,3 +66,18 @@ let work_iter seed =
   in
   Fiber.run_all ();
   sum_list + sum_arr + wv + bv + exn_v + r2 + !acc
+
+external atomic_get : 'a ref -> 'a = "%atomic_load"
+external atomic_exchange : 'a ref -> 'a -> 'a = "%atomic_exchange"
+external atomic_cas : 'a ref -> 'a -> 'a -> bool = "%atomic_cas"
+
+let left = ref 11
+let right = ref 12
+let slot = ref left
+
+let atomic_iter seed =
+  let next = if seed land 1 = 0 then left else right in
+  let seen = atomic_get slot in
+  let old = atomic_exchange slot next in
+  ignore (atomic_cas slot next seen);
+  (!seen = 11 || !seen = 12) && (!old = 11 || !old = 12)

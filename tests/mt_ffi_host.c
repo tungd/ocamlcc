@@ -25,6 +25,7 @@ typedef struct ThreadArg {
     int64_t shared_fn_clos;
     int64_t call_shared_clos;
     int64_t cycle_iter_clos;
+    int64_t atomic_iter_clos;
     int ok;
 } ThreadArg;
 
@@ -58,6 +59,10 @@ static void *worker(void *p)
                                       arg->shared_fn_clos, tagged_seed);
         arc_release_val(arg->shared_fn_clos);
         if ((sres >> 1) != ((int64_t)seed * 3 + 1)) {
+            ok = 0;
+            break;
+        }
+        if (ocamlcc_apply1(arg->atomic_iter_clos, tagged_seed) != 3) {
             ok = 0;
             break;
         }
@@ -107,6 +112,7 @@ int main(void)
         args[t].shared_fn_clos = shared_fn_clos;
         args[t].call_shared_clos = call_shared_clos;
         args[t].cycle_iter_clos = cycle_iter_clos;
+        args[t].atomic_iter_clos = mod[4];
         args[t].ok = 0;
         if (pthread_create(&threads[t], NULL, worker, &args[t]) != 0)
             return 2;
