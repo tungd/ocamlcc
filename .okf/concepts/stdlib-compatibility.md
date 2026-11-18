@@ -6,7 +6,7 @@ tags: [stdlib, compatibility, testing, arc]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-18
+  at: 2026-11-18T06:57:26Z
 sources:
   - id: runner
     resource: tools/stdlib_compat.py
@@ -49,9 +49,10 @@ fixture checks reductions, deep nesting, parse errors, and subsequent parses.
 Bigarray primitive lowering dispatches typed and generic 1/2/3-dimensional
 accesses to ARC runtime helpers. `%caml_ba_dim_N` is translated from its
 one-based primitive number to the zero-based generic dimension API. Views
-retain a backing descriptor, which releases its PAL allocation after the last
-view dies. The core API supports all element kinds, both layouts, checked
-indexing, fill/blit, and shared sub/slice/reshape/layout views. These helpers
+retain a backing descriptor. When the last view dies, the runtime frees its
+PAL allocation or invokes the imported buffer’s release callback. The core
+API supports all element kinds, both layouts, checked indexing, fill/blit,
+and shared sub/slice/reshape/layout views. These helpers
 live in `runtime/bigarray.inc`, included by `arc.c`. C callers can retain a
 subview with its data and dimensions across collection. The public interface
 is documented in [memory views](/concepts/memory-views.md).

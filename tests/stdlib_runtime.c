@@ -185,11 +185,76 @@ static void test_c_view_shapes(void)
     assert(arc_live_objects() == before);
 }
 
+static void count_release(void *base, void *context)
+{
+    assert(base != NULL);
+    assert(!ocamlcc_get_exn());
+    int entered = arc_mutator_enter();
+    assert(entered); /* A release callback can reenter from outside the gate. */
+    arc_mutator_leave(entered);
+    (*(int *)context)++;
+}
+
+static void release_with_exception(void *base, void *context)
+{
+    count_release(base, context);
+    /* A native callback used a runtime primitive that left its own exception. */
+    ocamlcc_set_exn((int64_t)(uintptr_t)arc_alloc_bytes(5));
+}
+
+static void test_import_contract(void)
+{
+    int64_t before = arc_live_objects();
+    int released = 0;
+    double storage[2];
+    int64_t dims[] = {1, 2};
+    OcamlccBigarrayInfo src = {storage, sizeof(storage), dims, 2, OCAMLCC_BA_FLOAT64, OCAMLCC_BA_FORTRAN_LAYOUT};
+    OcamlccBigarrayInfo bad[] = {
+        src, src, src, src, src, src, src, src
+    };
+    bad[0].rank = -1;
+    bad[1].rank = 17;
+    bad[2].dims = NULL;
+    bad[3].byte_length--;
+    bad[4].data = (char *)storage + 1;
+    bad[5].kind = -1;
+    bad[6].layout = 2;
+    bad[7].data = NULL;
+    int64_t saved_exn = (int64_t)(uintptr_t)arc_alloc_bytes(3);
+    ocamlcc_set_exn(saved_exn);
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+        assert(!ocamlcc_bigarray_view_import(&bad[i], count_release, &released));
+    assert(!ocamlcc_bigarray_view_import(NULL, count_release, &released));
+    assert(!ocamlcc_bigarray_view_import(&src, NULL, &released));
+    dims[0] = -1;
+    assert(!ocamlcc_bigarray_view_import(&src, count_release, &released));
+    dims[0] = INT64_MAX / 2;
+    assert(!ocamlcc_bigarray_view_import(&src, count_release, &released));
+    assert(!released && ocamlcc_get_exn() == saved_exn);
+
+    dims[0] = 0;
+    src.byte_length = 0;
+    OcamlccBigarrayView *empty = ocamlcc_bigarray_view_import(&src, count_release, &released);
+    assert(empty && ocamlcc_bigarray_view_info(empty).byte_length == 0);
+    ocamlcc_bigarray_view_release(empty);
+    assert(released == 1 && ocamlcc_get_exn() == saved_exn);
+    src.rank = 0;
+    src.dims = NULL;
+    src.byte_length = sizeof(storage);
+    OcamlccBigarrayView *scalar = ocamlcc_bigarray_view_import(&src, release_with_exception, &released);
+    assert(scalar && ocamlcc_bigarray_view_info(scalar).byte_length == sizeof(double));
+    ocamlcc_bigarray_view_release(scalar);
+    assert(released == 2 && ocamlcc_get_exn() == saved_exn);
+    clear_exception();
+    assert(arc_live_objects() == before);
+}
+
 int main(void)
 {
     test_partial_cycle(); test_complete_cycle(); test_truncation_and_mutation(); test_view_lifetime();
     test_retained_c_subview();
     test_c_view_shapes();
+    test_import_contract();
     puts("stdlib runtime: malformed cleanup, cycles, truncation, views");
     return 0;
 }

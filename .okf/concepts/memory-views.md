@@ -6,7 +6,7 @@ tags: [memory, bigarray, ffi, compiler, performance]
 status: draft
 generated:
   by: codex/1
-  at: 2026-11-18T06:43:07Z
+  at: 2026-11-18T06:57:26Z
 sources:
   - id: scope
     resource: Conversation on 2026-11-18 about ARC, Bigarray, memory views, and desktop target scope
@@ -55,9 +55,9 @@ language-wide borrowing feature. Reuse `Array1`, `Array2`, `Array3`, and
 `Genarray` APIs and their existing slicing/layout semantics.
 
 The user selected the architecture and platform scope above. The runtime C
-view API and direct, concretely typed Array1 and Array2 bindings are
-implemented. Other ranks, foreign imports and scalar specialization are
-follow-up slices. No elapsed-time or speedup threshold has been specified.
+view API supports exported views and imports of caller-owned storage. Bindgen
+supports concrete Array1 and Array2 signatures. Other generated ranks and
+scalar specialization are follow-up slices. No elapsed-time or speedup threshold has been specified.
 
 # Current behavior
 
@@ -66,13 +66,13 @@ baseline; it does not establish a timing baseline.
 
 | Area | Current behavior | Consequence |
 |---|---|---|
-| Storage | `ArcBigarray` points to an ARC-owned `ArcBigarrayBuffer` with PAL-allocated data. | Numeric elements have no individual ARC headers or counts. |
+| Storage | `ArcBigarray` points to an ARC-owned `ArcBigarrayBuffer` with PAL-allocated or imported contiguous storage. | Numeric elements have no individual ARC headers or counts. |
 | Views | `ba_view` retains the backing and adjusts the data pointer; sub, slice, reshape, and layout changes use shared storage. | A view can outlive its original wrapper without copying the payload. View creation still allocates a descriptor. |
 | Scalar reads | `ba_read` boxes floats, `int32`, `int64`, native integers, and complex results; immediate integer kinds remain tagged values. | Preallocating a Bigarray does not currently make its scalar processing loop allocation-free. |
 | Scalar arithmetic | Existing floating arithmetic uses boxed inputs/results around QBE arithmetic. | Optimizing only the Bigarray load leaves allocation in the arithmetic chain. |
 | Primitive lowering | `Pbigarrayref` and `Pbigarrayset` discard kind/layout metadata when lowered to generic C calls. | Preserve useful primitive information before implementing specialized code generation. |
 | C bindings | Bindgen maps direct, fully typed Array1 and Array2 parameters and results to retained C view handles. | Subviews preserve aliasing across the call and can outlive the input handle. |
-| Release | Last backing-owner release calls `pal_page_free`; ordinary ARC can synchronously destroy object graphs. | Stable addresses and predictable ownership do not guarantee bounded release time. |
+| Release | Last backing-owner release frees PAL storage or schedules the imported owner’s callback on the releasing thread. | Stable addresses and predictable ownership do not guarantee bounded release time. |
 
 These behaviors are in `runtime/bigarray.inc`, `runtime/arc.c`, `lib/anf.ml`,
 `lib/codegen_expr.ml`, and `lib/c_bindgen.ml`.[^bigarray][^runtime][^lowering][^codegen][^bindgen]
@@ -159,27 +159,41 @@ and released a view using the generated and installed headers together.[^c-host]
 
 ## Foreign storage imported into OCaml
 
-An imported buffer needs a backing owner independent of the C call's stack.
-Support a native owner retained for the backing lifetime, or an explicitly
-transferred allocation with a matching release callback/context. The backing
-stores the original allocation information; a slice's offset pointer must
-never be passed to the allocation's deallocator.
+Use `ocamlcc_bigarray_view_import(&buffer, release, context)` with the
+linked runtime. From a generated shared-library header, use the producing
+module’s helper, for example `ocamlcc_Vectors_view_import`. Both return one
+owned view on success. The caller transfers a mutable contiguous allocation
+or an owned reference to a native buffer. Its release callback receives the
+original base pointer and the supplied context, including when a subview at
+a nonzero offset is the last owner.[^view-api][^bindgen]
 
-Make ownership transfer occur on successful import only; error paths leave
-the caller's ownership intact. Release the foreign owner exactly once when
-all OCaml and C views are gone. Specify which thread can invoke the callback;
-a practical default is the final releasing thread, with thread-affine native
-resources using their own dispatch adapter. Callbacks must not throw across
-the C boundary or depend on an OCaml finalizer eventually running. The collector
-currently releases outgoing references while holding its collection lock and
-excluding other mutators. Detach any reentrant native cleanup there and run it
-after the gate reopens.[^runtime]
+Set `OcamlccBigarrayInfo.byte_length` to the available capacity and supply
+a non-null, element-aligned data pointer, including for an empty view.
+Dimensions are copied in Bigarray axis order. Ranks 0 through 16 and both
+layouts are supported. Rank zero describes one element. Each dimension must
+fit a nonnegative OCaml int, and the byte count must fit the capacity.
+The returned descriptor reports the logical bytes used by the shape.
+Invalid input returns `NULL`, preserves the caller’s ownership and exception
+state, and leaves the callback uncalled.[^bigarray][^tests]
 
-An unowned pointer valid only during a C call cannot become an ordinary
-escaping Bigarray: OCaml code may store it globally or capture it. General
-imports therefore require an owner or a copy. Any internal scoped borrow
-must actually enforce non-escape; a callback-shaped API alone is insufficient.
-Do not expose read-only foreign storage as an ordinary mutable Bigarray.
+Keep the callback, its context and any library providing them alive until
+delivery. The thread dropping the last backing owner runs the callback once,
+after the outer ARC traversal finishes and the thread has left the cycle
+collection lock and FFI mutator gate. This also applies when a collected cycle
+held the last view. A callback may reenter generated bindings and collect.
+It must return normally. Thread-affine owners can dispatch their native
+release to the required thread.[^runtime][^c-host]
+
+OCaml can store a view in a closure or a global, so imported storage must
+stay writable and live beyond the call. To share a reference-counted native
+buffer, transfer one retained reference as the context and drop it in the
+callback. Copy read-only or call-scoped data into owned writable storage.
+
+The C host on ARM64 Linux and macOS imported a matrix, dropped both C
+handles, and wrote into the original allocation through a row saved by
+OCaml. A second case collected the last view in a cycle and started another
+collection from its release callback. The native descriptor tests also
+passed under ASan/UBSan on macOS and on emulated AMD64 Linux.[^c-host][^tests]
 
 # Unboxed scalar processing
 
@@ -237,8 +251,9 @@ Unknown kind/layout or unsupported escape patterns retain the generic path.
    The shared-library fixture releases its parent and reads the returned slice,
    then verifies the original live-object count. Nested view types, Array3
    and Genarray remain unsupported.[^bindgen]
-3. **Foreign backing ownership.** Add imports with an owner/release policy and
-   caller-provided storage, verifying import failure and sibling-view teardown.
+3. **Foreign backing ownership (implemented).** The runtime and generated
+   headers accept caller-owned mutable storage with a release callback. Tests
+   cover rejected transfers, escaping rows and cycle-owned views.
 4. **Typed scalar lowering.** Preserve primitive metadata, specialize a complete
    float64 loop, and expand kinds while keeping generic fallback behavior.
 5. **Integration and reporting.** Update examples, public C ownership comments,

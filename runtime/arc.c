@@ -55,9 +55,17 @@ extern void ocamlcc_c_mutex_free(void *p);
 extern void ocamlcc_c_cond_free(void *c);
 extern void ocamlcc_c_blake2_free(void *p);
 
+typedef struct ForeignRelease {
+    OcamlccBigarrayRelease release;
+    void *base;
+    void *context;
+    struct ForeignRelease *next;
+} ForeignRelease;
+
 typedef struct ArcBigarrayBuffer {
     uint8_t *data;
     size_t bytes;
+    ForeignRelease *owner;
 } ArcBigarrayBuffer;
 
 typedef struct OcamlccBigarrayView {
@@ -110,6 +118,32 @@ static _Atomic int g_cc_active = 0;
 static _Atomic int g_cc_waiting = 0;
 static _Atomic int g_active_mutators = 0;
 static _Thread_local int tls_os_mutator_active = 0;
+static _Thread_local ForeignRelease *pending_foreign_releases;
+static _Thread_local unsigned foreign_release_depth;
+
+/* A callback may call a generated binding, collect, or release another view.
+ * Finish the outer ARC traversal and leave the collector and FFI gates first. */
+static void drain_foreign_releases(void)
+{
+    if (tls_os_mutator_active || foreign_release_depth)
+        return;
+    foreign_release_depth++;
+    int64_t saved_exn = ocamlcc_get_exn();
+    ocamlcc_set_exn(0);
+    while (pending_foreign_releases) {
+        ForeignRelease *owner = pending_foreign_releases;
+        pending_foreign_releases = owner->next;
+        owner->release(owner->base, owner->context);
+        int entered = arc_mutator_enter();
+        int64_t callback_exn = ocamlcc_get_exn();
+        ocamlcc_set_exn(0);
+        arc_release_val(callback_exn);
+        arc_release(owner);
+        arc_mutator_leave(entered);
+    }
+    ocamlcc_set_exn(saved_exn);
+    foreign_release_depth--;
+}
 
 int arc_mutator_enter(void)
 {
@@ -132,6 +166,7 @@ void arc_mutator_leave(int entered)
     if (entered) {
         tls_os_mutator_active = 0;
         atomic_fetch_sub_explicit(&g_active_mutators, 1, memory_order_release);
+        if (pending_foreign_releases) drain_foreign_releases();
     }
 }
 
@@ -1031,6 +1066,7 @@ static inline void drop_child_val(DropWorklist *w, int64_t val, ArcHeader **tail
  * Frees every dead descendant; frees [root] iff [free_root] is non-zero. */
 static void release_subtree(ArcHeader *root, int free_root)
 {
+    foreign_release_depth++;
     DropWorklist w;
     w.local_len = 0;
     w.overflow = NULL;
@@ -1075,7 +1111,12 @@ static void release_subtree(ArcHeader *root, int free_root)
                 drop_child_val(&w, (int64_t)(uintptr_t)a->backing, &tail);
             } else if (cur->reserved == ARC_CUSTOM_BIGARRAY_BUFFER) {
                 ArcBigarrayBuffer *b = (void *)(cur + 1);
-                pal_page_free(b->data, b->bytes);
+                if (b->owner) {
+                    b->owner->next = pending_foreign_releases;
+                    pending_foreign_releases = b->owner;
+                } else {
+                    pal_page_free(b->data, b->bytes);
+                }
             }
         } else if (!is_unscanned_leaf_tag(tag)) {
             int64_t *fields = (int64_t *)(cur + 1);
@@ -1100,6 +1141,8 @@ static void release_subtree(ArcHeader *root, int free_root)
 
         cur = (tail != NULL) ? tail : work_pop(&w);
     }
+    foreign_release_depth--;
+    if (pending_foreign_releases) drain_foreign_releases();
 }
 
 void arc_release(void *obj)
@@ -1695,6 +1738,7 @@ static int64_t collect_cycles(int discover_finalizers)
     atomic_store_explicit(&g_cc_active, 0, memory_order_release);
     arc_unlock(&g_cc_lock);
 
+    foreign_release_depth++;
     for (size_t i = 0; i < leaves.len; i++)
         arc_release((void *)leaves.data[i]);
     for (size_t i = 0; i < dead.len; i++) {
@@ -1710,6 +1754,8 @@ static int64_t collect_cycles(int discover_finalizers)
     ccvec_free(&black_work);
     ccvec_free(&dead);
     ccvec_free(&leaves);
+    foreign_release_depth--;
+    if (pending_foreign_releases) drain_foreign_releases();
     return reclaimed;
 }
 

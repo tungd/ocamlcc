@@ -6,7 +6,7 @@ tags: [build, ninja, dune, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-18T06:43:07Z
+  at: 2026-11-18T06:57:26Z
 sources:
   - id: build-ninja
     resource: ../build.ninja
@@ -100,8 +100,9 @@ The driver returns a diagnostic naming an unavailable external tool, including x
 # Generated C headers for Bigarray views
 
 Array1 and Array2 bindings embed the common view type definitions in the generated header.
-Their module-prefixed inspection and ownership functions use the producing library’s
-runtime. See [memory views](/concepts/memory-views.md).
+Their module-prefixed import, inspection and ownership functions use the producing
+library’s runtime. An imported handle can be passed directly to a matching typed
+OCaml binding. See [memory views](/concepts/memory-views.md).
 
 # Ninja shared-library linkage
 

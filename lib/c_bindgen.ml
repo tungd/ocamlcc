@@ -507,6 +507,10 @@ let emit_header ~uses_views ~modname ~mod_prefix header_decls vals =
     let prefix = view_prefix modname in
     p "/* View arguments are borrowed. Each returned or retained handle owns one reference.\n";
     p " * Use helpers from the library that supplied the handle. */\n";
+    p "/* Import non-NULL, writable, element-aligned storage. byte_length is capacity, dims are copied.\n";
+    p " * NULL preserves ownership. On success the last releasing thread calls release(base, context)\n";
+    p " * once outside collection and the FFI gate. Keep callback and context live until then. */\n";
+    p "OcamlccBigarrayView *%simport(const OcamlccBigarrayInfo *buffer, OcamlccBigarrayRelease release, void *context);\n" prefix;
     p "OcamlccBigarrayInfo %sinfo(const OcamlccBigarrayView *v);\n" prefix;
     p "OcamlccBigarrayView *%sretain(OcamlccBigarrayView *v);\n" prefix;
     p "void %srelease(OcamlccBigarrayView *v);\n\n" prefix
@@ -594,10 +598,12 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
     let prefix = view_prefix modname in
     p "extern int ocamlcc_bigarray_view_matches(const OcamlccBigarrayView *, int, int, int);\n";
     p "extern int64_t ocamlcc_bigarray_view_to_value(OcamlccBigarrayView *);\n";
+    p "extern OcamlccBigarrayView *ocamlcc_bigarray_view_import(const OcamlccBigarrayInfo *, OcamlccBigarrayRelease, void *);\n";
     p "extern OcamlccBigarrayView *ocamlcc_bigarray_view_acquire(int64_t);\n";
     p "extern OcamlccBigarrayView *ocamlcc_bigarray_view_retain(OcamlccBigarrayView *);\n";
     p "extern void ocamlcc_bigarray_view_release(OcamlccBigarrayView *);\n";
     p "extern OcamlccBigarrayInfo ocamlcc_bigarray_view_info(const OcamlccBigarrayView *);\n";
+    p "OcamlccBigarrayView *%simport(const OcamlccBigarrayInfo *b, OcamlccBigarrayRelease release, void *ctx) { return ocamlcc_bigarray_view_import(b, release, ctx); }\n" prefix;
     p "OcamlccBigarrayInfo %sinfo(const OcamlccBigarrayView *v) { return ocamlcc_bigarray_view_info(v); }\n" prefix;
     p "OcamlccBigarrayView *%sretain(OcamlccBigarrayView *v) { return ocamlcc_bigarray_view_retain(v); }\n" prefix;
     p "void %srelease(OcamlccBigarrayView *v) { ocamlcc_bigarray_view_release(v); }\n\n" prefix
@@ -912,7 +918,7 @@ let generate ?(include_dirs = []) ?(nopervasives = false) ?(nostdlib = false)
           in
           let view_syms =
             if uses_views then
-              List.map ((^) (view_prefix modname)) ["info"; "retain"; "release"]
+              List.map ((^) (view_prefix modname)) ["import"; "info"; "retain"; "release"]
             else []
           in
           let exported_symbols = (mod_prefix ^ "_init") :: (decl_syms @ val_syms @ view_syms) in

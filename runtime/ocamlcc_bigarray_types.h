@@ -6,6 +6,7 @@
 
 /* Opaque owner of an OCaml Bigarray wrapper and its contiguous backing. */
 typedef struct OcamlccBigarrayView OcamlccBigarrayView;
+typedef void (*OcamlccBigarrayRelease)(void *base, void *context);
 
 /* Element kinds and layouts use the OCaml Bigarray constructor numbers. */
 enum OcamlccBigarrayKind {

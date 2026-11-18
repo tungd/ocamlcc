@@ -80,17 +80,61 @@ OcamlccBigarrayInfo ocamlcc_bigarray_view_info(const OcamlccBigarrayView *view)
     };
 }
 
-static ArcBigarray *ba_view(ArcBigarray *source, int ndims, const int64_t *dims,
-                            size_t offset, int layout)
+/* Takes one backing reference. */
+static ArcBigarray *ba_wrap(ArcBigarrayBuffer *backing, uint8_t *data, int kind,
+                            int layout, int ndims, const int64_t *dims)
 {
     ArcBigarray *a = arc_alloc(ARC_TAG_CUSTOM, 0, sizeof(ArcBigarray));
     ((ArcHeader *)a - 1)->reserved = ARC_CUSTOM_BIGARRAY;
     a->runtime_id = &ba_runtime_id;
-    a->backing = source->backing;
-    arc_retain(a->backing);
-    a->data = source->data + offset * ba_sizes[source->kind];
-    a->kind = source->kind; a->layout = layout; a->ndims = ndims;
+    a->backing = backing;
+    a->data = data;
+    a->kind = kind; a->layout = layout; a->ndims = ndims;
     for (int i = 0; i < ndims; i++) a->dims[i] = dims[i];
+    return a;
+}
+
+static ArcBigarray *ba_view(ArcBigarray *source, int ndims, const int64_t *dims,
+                            size_t offset, int layout)
+{
+    arc_retain(source->backing);
+    return ba_wrap(source->backing, source->data + offset * ba_sizes[source->kind],
+                   source->kind, layout, ndims, dims);
+}
+
+static ArcBigarrayBuffer *ba_backing(void)
+{
+    ArcBigarrayBuffer *b = arc_alloc(ARC_TAG_CUSTOM, 0, sizeof(*b));
+    ((ArcHeader *)b - 1)->reserved = ARC_CUSTOM_BIGARRAY_BUFFER;
+    return b;
+}
+
+OcamlccBigarrayView *ocamlcc_bigarray_view_import(const OcamlccBigarrayInfo *src,
+    OcamlccBigarrayRelease release, void *context)
+{
+    if (!src || !release || !src->data || src->rank < 0 || src->rank > BA_MAX_DIMS ||
+        (src->rank && !src->dims) || src->kind < 0 || src->kind >= (int)sizeof(ba_sizes) ||
+        (src->layout != OCAMLCC_BA_C_LAYOUT && src->layout != OCAMLCC_BA_FORTRAN_LAYOUT))
+        return NULL;
+    size_t width = ba_sizes[src->kind];
+    size_t alignment = (src->kind == OCAMLCC_BA_COMPLEX32 || src->kind == OCAMLCC_BA_COMPLEX64)
+                       ? width / 2 : width;
+    if ((uintptr_t)src->data % alignment) return NULL;
+    size_t bytes = width;
+    for (int i = 0; i < src->rank; i++) {
+        int64_t dim = src->dims[i];
+        if (dim < 0 || dim > INT64_MAX / 2 || (dim && bytes > SIZE_MAX / (size_t)dim))
+            return NULL;
+        bytes *= (size_t)dim;
+    }
+    if (bytes > src->byte_length) return NULL;
+    int entered = arc_mutator_enter();
+    ForeignRelease *owner = arc_alloc(0, 0, sizeof(*owner));
+    *owner = (ForeignRelease){ .release = release, .base = src->data, .context = context };
+    ArcBigarrayBuffer *b = ba_backing();
+    *b = (ArcBigarrayBuffer){ .data = src->data, .bytes = src->byte_length, .owner = owner };
+    ArcBigarray *a = ba_wrap(b, b->data, src->kind, src->layout, src->rank, src->dims);
+    arc_mutator_leave(entered);
     return a;
 }
 
@@ -100,6 +144,7 @@ int64_t caml_ba_create(int64_t kind, int64_t layout, int64_t dimensions)
     const int64_t *d = (void *)(uintptr_t)dimensions;
     if (n > BA_MAX_DIMS || k < 0 || k >= 14 || l < 0 || l > 1)
         return ba_invalid("Bigarray.create: invalid dimensions");
+    int64_t dims[BA_MAX_DIMS];
     size_t count = 1;
     for (int i = 0; i < n; i++) {
         int64_t dim = d[i] >> 1;
@@ -107,19 +152,15 @@ int64_t caml_ba_create(int64_t kind, int64_t layout, int64_t dimensions)
         if (dim != 0 && count > (SIZE_MAX / ba_sizes[k]) / (uint64_t)dim)
             return ba_invalid("Bigarray.create: size overflow");
         count *= (size_t)dim;
+        dims[i] = dim;
     }
-    ArcBigarrayBuffer *b = arc_alloc(ARC_TAG_CUSTOM, 0, sizeof(*b));
-    ((ArcHeader *)b - 1)->reserved = ARC_CUSTOM_BIGARRAY_BUFFER;
+    ArcBigarrayBuffer *b = ba_backing();
+    b->owner = NULL;
     b->bytes = count * ba_sizes[k];
     if (b->bytes == 0) b->bytes = 1;
     b->data = pal_page_alloc(b->bytes);
     if (b->data == NULL) pal_abort();
-    ArcBigarray *a = arc_alloc(ARC_TAG_CUSTOM, 0, sizeof(*a));
-    ((ArcHeader *)a - 1)->reserved = ARC_CUSTOM_BIGARRAY;
-    a->runtime_id = &ba_runtime_id;
-    a->backing = b; a->data = b->data; a->kind = k; a->layout = l; a->ndims = n;
-    for (int i = 0; i < n; i++) a->dims[i] = d[i] >> 1;
-    return (int64_t)(uintptr_t)a;
+    return (int64_t)(uintptr_t)ba_wrap(b, b->data, k, l, n, dims);
 }
 
 static int ba_offset(const ArcBigarray *a, int n, const int64_t *indices, size_t *out)

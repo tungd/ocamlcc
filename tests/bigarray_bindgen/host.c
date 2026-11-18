@@ -1,8 +1,74 @@
 #include "vectors.h"
 #include "peer.h"
 #include <assert.h>
+#include <stdlib.h>
 
 OcamlccBigarrayView *vectors_native_buffer(unsigned rank);
+
+typedef struct { void *base; int releases; } Owner;
+
+static void release_buffer(void *base, void *context)
+{
+    Owner *owner = context;
+    assert(base == owner->base && owner->releases == 0);
+    owner->releases++;
+    free(base);
+}
+
+static void check_import(void)
+{
+    ocamlcc_error_t err = {0};
+    double *data = malloc(6 * sizeof(*data));
+    assert(data);
+    Owner owner = {data, 0};
+    int64_t dims[] = {2, 3};
+    OcamlccBigarrayInfo src = {data, 6 * sizeof(*data), dims, 2, OCAMLCC_BA_FLOAT64, OCAMLCC_BA_C_LAYOUT};
+    OcamlccBigarrayView *matrix = ocamlcc_Vectors_view_import(&src, release_buffer, &owner);
+    assert(matrix);
+    dims[1] = 0; /* The stack dimensions are no longer borrowed. */
+    OcamlccBigarrayView *row = vectors_row(matrix, 1, &err);
+    assert(row && !err.code);
+    double *cells = ocamlcc_Vectors_view_info(row).data;
+    assert(cells == data + 3);
+    cells[0] = 42.0;
+    vectors_save(row, &err);
+    assert(!err.code);
+    ocamlcc_Vectors_view_release(matrix);
+    ocamlcc_Vectors_view_release(row);
+    assert(owner.releases == 0 && data[3] == 42.0);
+    vectors_write_saved(19.0, &err);
+    assert(!err.code && data[3] == 19.0);
+    vectors_clear(&err);
+    assert(!err.code && owner.releases == 1);
+}
+
+static void release_and_collect(void *base, void *context)
+{
+    release_buffer(base, context);
+    ocamlcc_error_t err = {0};
+    OcamlccBigarrayView *other = vectors_create(1, &err);
+    assert(other && !err.code);
+    vectors_leave_cycle(other, &err);
+    assert(!err.code);
+    ocamlcc_Vectors_view_release(other);
+    assert(vectors_collect(&err) > 0 && !err.code);
+}
+
+static void check_collected_import(void)
+{
+    ocamlcc_error_t err = {0};
+    int64_t len = 1;
+    Owner owner = {malloc(sizeof(double)), 0};
+    assert(owner.base);
+    OcamlccBigarrayInfo src = {owner.base, sizeof(double), &len, 1, OCAMLCC_BA_FLOAT64, OCAMLCC_BA_C_LAYOUT};
+    OcamlccBigarrayView *view = ocamlcc_Vectors_view_import(&src, release_and_collect, &owner);
+    assert(view);
+    vectors_leave_cycle(view, &err);
+    assert(!err.code);
+    ocamlcc_Vectors_view_release(view);
+    assert(!owner.releases);
+    assert(vectors_collect(&err) > 0 && !err.code && owner.releases == 1);
+}
 
 static void check_matrix_row(void)
 {
@@ -37,6 +103,8 @@ int main(void)
     vectors_init();
     peer_init();
     int64_t baseline = vectors_live(&err);
+    check_import();
+    check_collected_import();
     check_matrix_row();
     OcamlccBigarrayView *matrix = vectors_native_buffer(2);
     assert(matrix && vectors_sub(matrix, 0, 1, &err) == NULL && err.code);
