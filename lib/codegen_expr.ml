@@ -633,6 +633,15 @@ let compile_float_operand hooks b = function
   | Anf.Raw_float id -> Hashtbl.find b.vars id
   | Boxed_float a -> load_double b (compile_atom hooks b a)
 
+let float_access_symbol op (access : Anf.bigarray_access) =
+  let kind =
+    match access.kind with
+    | Lambda.Pbigarray_float32 -> "float32"
+    | Pbigarray_float64 -> "float64"
+    | _ -> assert false
+  in
+  Printf.sprintf "ocamlcc_ba_%s_%s_1" op kind
+
 let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   match ce with
   | Atom a -> compile_atom hooks b a
@@ -906,20 +915,20 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       in
       emit b (Call_void { fn = Global symbol; args });
       unit_const
-  | Float64Load (_, arr, index) ->
+  | FloatLoad (access, arr, index) ->
       let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
       let dst = fresh_temp b "fload" in
-      emit b (Call (Double, dst, { fn = Global "ocamlcc_ba_get_float64_1"; args }));
+      emit b (Call (Double, dst, { fn = Global (float_access_symbol "get" access); args }));
       dst
   | FloatValue value -> compile_float_operand hooks b value
   | FloatBinop (op, lhs, rhs) ->
       let l = compile_float_operand hooks b lhs in
       let r = compile_float_operand hooks b rhs in
       compile_float_arithmetic b op l r
-  | Float64Store (_, arr, index, value) ->
+  | FloatStore (access, arr, index, value) ->
       let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
       let v = compile_float_operand hooks b value in
-      emit b (Call_void { fn = Global "ocamlcc_ba_set_float64_1"; args = args @ [Double, v] });
+      emit b (Call_void { fn = Global (float_access_symbol "set" access); args = args @ [Double, v] });
       unit_const
   | BigarrayAccess (access, args) ->
       let op = match access.operation with `Get -> "get" | `Set -> "set" in

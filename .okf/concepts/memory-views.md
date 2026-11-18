@@ -71,8 +71,8 @@ baseline; it does not establish a timing baseline.
 |---|---|---|
 | Storage | `ArcBigarray` points to an ARC-owned `ArcBigarrayBuffer` with PAL-allocated or imported contiguous storage. | Numeric elements have no individual ARC headers or counts. |
 | Views | `ba_view` retains the backing and adjusts the data pointer; sub, slice, reshape, and layout changes use shared storage. | A view can outlive its original wrapper without copying the payload. View creation still allocates a descriptor. |
-| Scalar reads | `ba_read` boxes floats, `int32`, `int64`, native integers, and complex results; immediate integer kinds remain tagged values. | A typed float64 Array1 load feeding a specialized store uses a double-returning helper. |
-| Scalar arithmetic | Addition, subtraction, multiplication, and division feeding a concrete float64 Array1 store use QBE double operands and result. | Ordinary OCaml calls and escaping results use the boxed value ABI. |
+| Scalar reads | `ba_read` boxes floats, `int32`, `int64`, native integers, and complex results; immediate integer kinds remain tagged values. | Typed float32 and float64 Array1 loads feeding scalar expressions use double-returning helpers. |
+| Scalar arithmetic | Addition, subtraction, multiplication, and division feeding a concrete float32 or float64 Array1 store use QBE double operands and result. | Ordinary OCaml calls and escaping results use the boxed value ABI. |
 | Primitive lowering | Bigarray reads and writes carry operation, rank, element kind, layout and bounds-check mode through ANF and ARC. | QBE code generation can inspect each access before choosing its runtime helper. |
 | C bindings | Bindgen maps direct, fully typed Array1 and Array2 parameters and results to retained C view handles. | Subviews preserve aliasing across the call and can outlive the input handle. |
 | Release | Last backing-owner release frees PAL storage or schedules the imported owner’s callback on the releasing thread. | Stable addresses and predictable ownership do not guarantee bounded release time. |
@@ -200,9 +200,10 @@ passed under ASan/UBSan on macOS and on emulated AMD64 Linux.[^c-host][^tests]
 
 # Unboxed scalar processing
 
-For a float64 Array1 store with known C or Fortran layout, the compiler
-propagates the demand for a double into its value expression. Direct float64
-Array1 reads return doubles. Addition, subtraction, multiplication, and
+For a float32 or float64 Array1 store with known C or Fortran layout, the
+compiler propagates the demand for a double into its value expression.
+The float32 load widens to a double and the store narrows once at the write,
+matching the generic path. Both kinds use double precision in expressions. Addition, subtraction, multiplication, and
 division produce QBE doubles.
 Other operands cross the ordinary OCaml value ABI and are unboxed at use.
 The compiler also follows named `let` bindings backwards within a
@@ -243,8 +244,11 @@ Kind and layout remain independent in ANF. A float32 Array3 read can retain
 its kind even when its layout is polymorphic. The lowering test inspects both
 the frontend-to-ANF and post-ARC metadata.[^lowering-test]
 
-Start with float64 and immediate-integer loops, then extend to float32 and
-boxed-integer kinds. Keep complex and other unsupported specialized cases on
+The float32 loop `(x +. 1.) -. x` produces `1.` when `x` is `16777216.`,
+because the intermediate is a double. With 128 elements it measured 3 ARC
+words after specialization, down from 1155. The Fortran test also checks
+rounding at the store, signed zero, NaN, and a bounds exception.
+Immediate and boxed integer kinds are follow-up slices. Keep complex and other unsupported specialized cases on
 the correct generic path until implemented; report coverage by kind instead
 of claiming all Bigarray access is allocation-free.
 
@@ -292,7 +296,7 @@ Unknown kind/layout or unsupported escape patterns retain the generic path.
 3. **Foreign backing ownership (implemented).** The runtime and generated
    headers accept caller-owned mutable storage with a release callback. Tests
    cover rejected transfers, escaping rows and cycle-owned views.
-4. **Typed scalar lowering (float64 Array1 scale implemented).** Direct
+4. **Typed scalar lowering (float32 and float64 Array1 arithmetic implemented).** Direct
    expressions and straight-line local bindings use the scalar path. Further
    work covers unary operations, comparisons, more control-flow forms, and other kinds.
 5. **Integration and reporting.** Update examples, public C ownership comments,

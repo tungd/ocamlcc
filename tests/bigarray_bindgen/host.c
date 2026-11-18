@@ -125,6 +125,23 @@ static void check_scale_allocations(void)
     ocamlcc_Vectors_view_release(values);
 }
 
+static void check_single_allocations(void)
+{
+    ocamlcc_error_t err = {0};
+    OcamlccBigarrayView *values = vectors_create_singles(128, &err);
+    assert(values && !err.code);
+    float *cells = ocamlcc_Vectors_view_info(values).data;
+    for (int i = 0; i < 128; ++i) cells[i] = 16777216.f;
+    double empty = vectors_single_words(values, 0, &err);
+    assert(!err.code);
+    double full = vectors_single_words(values, 128, &err);
+    assert(!err.code);
+    for (int i = 0; i < 128; ++i) assert(cells[i] == 1.f);
+    fprintf(stderr, "float32 arithmetic allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
+    assert(full == empty);
+    ocamlcc_Vectors_view_release(values);
+}
+
 int main(void)
 {
     ocamlcc_error_t err = {0};
@@ -135,6 +152,7 @@ int main(void)
     check_collected_import();
     check_matrix_row();
     check_scale_allocations();
+    check_single_allocations();
     OcamlccBigarrayView *matrix = vectors_native_buffer(2);
     assert(matrix && vectors_sub(matrix, 0, 1, &err) == NULL && err.code);
     ocamlcc_Vectors_view_release(matrix);

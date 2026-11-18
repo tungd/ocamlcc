@@ -108,8 +108,8 @@ type cexpr =
   | ArrayGet of bool * Lambda.array_kind * atom * atom
   | ArraySet of bool * Lambda.array_kind * atom * atom * atom
   | BigarrayAccess of bigarray_access * atom list
-  | Float64Load of bigarray_access * atom * atom
-  | Float64Store of bigarray_access * atom * atom * float_operand
+  | FloatLoad of bigarray_access * atom * atom
+  | FloatStore of bigarray_access * atom * atom * float_operand
   | FloatValue of float_operand
   | FloatBinop of float_arithmetic * float_operand * float_operand
   | CreateBytes of atom

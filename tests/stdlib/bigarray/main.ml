@@ -29,6 +29,9 @@ let divide_in_place (a : vector) i divisor =
   let biased = (a.{i} +. 1.) -. 2. in
   a.{i} <- biased /. divisor
 
+let add_single (a : (float, float32_elt, fortran_layout) Array1.t) i delta =
+  a.{i} <- a.{i} +. delta
+
 let () =
   let values = Array1.of_array float64 c_layout [|1.; 2.; 3.; 4.|] in
   let src = Array1.sub values 0 3 and dst = Array1.sub values 1 3 in
@@ -53,6 +56,14 @@ let () =
   assert (values.{0} = 4.);
   divide_in_place values 0 (-0.);
   assert (values.{0} = neg_infinity);
+  let singles = Array1.of_array float32 fortran_layout [|16777216.; -0.; nan|] in
+  add_single singles 1 1.;
+  assert (singles.{1} = 16777216.);
+  add_single singles 2 (-0.);
+  assert (Int64.bits_of_float singles.{2} = Int64.bits_of_float (-0.));
+  add_single singles 3 1.;
+  assert (Float.is_nan singles.{3});
+  assert (try add_single singles 0 1.; false with Invalid_argument _ -> true);
   let col = Array1.of_array float64 fortran_layout [|-0.; nan; infinity|] in
   scale_column col col 1 3 2.;
   assert (Int64.bits_of_float col.{3} = Int64.bits_of_float (-0.));

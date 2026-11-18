@@ -1,5 +1,6 @@
 open Bigarray
 type vector = (float, float64_elt, c_layout) Array1.t
+type single_vector = (float, float32_elt, c_layout) Array1.t
 type matrix = (float, float64_elt, c_layout) Array2.t
 let matrix rows cols = Array2.create float64 c_layout rows cols
 let row m i = Array2.slice_left m i
@@ -22,6 +23,16 @@ let conditional_scale_words (src : vector) (dst : vector) factor n =
     dst.{i} <- product
   done;
   Gc.minor_words () -. before
+
+let single_words (a : single_vector) n =
+  let before = Gc.minor_words () in
+  for i = 0 to n - 1 do
+    let x = a.{i} in
+    a.{i} <- (x +. 1.) -. x
+  done;
+  Gc.minor_words () -. before
+
+let create_singles n = Array1.create float32 c_layout n
 let saved : vector option ref = ref None
 let save v = saved := Some v
 let write_saved x = match !saved with Some v -> v.{0} <- x | None -> assert false
