@@ -136,8 +136,12 @@ CMI/archive paths explicitly; 72/72 describes the compatibility build.
 
 `Gc.finalise` delivers ordinary callbacks during explicit major collections. `Gc.finalise_last` receives unit after its target’s weak slots clear. Both paths run at explicit major collection boundaries. The [ARC finalizer design](/concepts/arc-finalizers.md) describes the intended callback lifecycle.
 
-# Verified coverage (2026-11-18, macOS arm64 / OCaml 5.5.0)
+# Before finalizer delivery (2026-11-18, macOS arm64 / OCaml 5.5.0)
 
 The compatibility build compiles 72/72 interfaces and implementations. All 11 repository API fixtures pass on both stock OCaml and ocamlcc, including structural comparison and finalizer registration. Of 119 upstream files, 67 pass, ten fail and 42 are skipped.
 
 Compared with the November 17 run, `lib-marshal/intern_final.ml` changed from passing to a runtime failure, and `lib-sys/opaque.ml` changed from an output mismatch to a runtime failure. The Marshal test reaches `Gc.finalise` through `Gc.create_alarm`, and the Sys test calls it directly. Both leave the ARC exception uncaught. The other 117 results match the prior report.
+
+# After explicit major-collection finalizer delivery (2026-11-18, macOS arm64 / OCaml 5.5.0)
+
+All 72 interfaces and implementations compile, and all 11 API fixtures pass on stock OCaml and ocamlcc. The upstream run passes 68 of 77 attempted tests, with nine failures and 42 skips. Marshal `intern_final` now passes. Sys `opaque` exits normally and prints the expected `lifetime: false false true`. Its allocation count prints `dead: 4`, while the reference expects `dead: 3`. The other 117 test statuses match the pre-delivery matrix.

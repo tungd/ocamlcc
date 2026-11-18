@@ -106,8 +106,8 @@ consult the report for individual failures and skips. It skips toplevel expect
 tests, C-stub tests, and unsupported ocamltest directives. Tests execute in
 copied working directories. Repository API regressions return nonzero on failure.
 
-Before ordinary finalizer support, on macOS arm64 with OCaml 5.5.0, 67 of 77 standalone upstream tests pass,
-ten fail, and 42 additional files are skipped. All 11 repository API fixtures
+On macOS arm64 with OCaml 5.5.0, 68 of 77 standalone upstream tests pass,
+nine fail, and 42 additional files are skipped. All 11 repository API fixtures
 pass on both stock OCaml and ocamlcc. ARC runs ordinary and last callbacks at explicit major
 collections. An ordinary callback can resurrect the original object. Last
 callbacks run after its weak slots clear.

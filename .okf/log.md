@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Verify exception propagation and pending-callback retention on both compilers. Refresh the upstream matrix after finalizer delivery, including the remaining Sys.opaque allocation-count difference.
+
 - 2026-11-18 (codex/1): Preserve pending finalizers when an active FFI mutator prevents a collection. Verify concurrent last-owner release and exactly-once delivery after the gate reopens.
 
 - 2026-11-18 (codex/1): Count incoming edges to leaf objects when the collector evaluates leaf finalizers. A byte buffer and its owning ref now finalize in reverse registration order in one discovery.

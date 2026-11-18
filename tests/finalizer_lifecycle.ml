@@ -71,6 +71,23 @@ let check_registered_leaf () =
   collect ();
   check (!events = ["parent"; "leaf"]) "registration order across a leaf edge"
 
+exception From_finalizer
+
+let check_exception () =
+  let calls = ref 0 in
+  let install () =
+    let x = ref 1 in
+    Gc.finalise (fun _ -> incr calls) x;
+    Gc.finalise (fun _ -> raise From_finalizer) x;
+    ignore (Sys.opaque_identity x)
+  in
+  let caught =
+    try install (); collect (); false with From_finalizer -> true
+  in
+  check caught "finalizer exception did not reach its caller";
+  collect ();
+  check (!calls = 1) "exception lost or repeated the other registration"
+
 let check_many () =
   let count = 1500 in
   let seen = Array.make count 0 in
@@ -88,6 +105,7 @@ let () =
     print_endline "acyclic resurrection and final death: ok";
     check_lifetime true;
     print_endline "cyclic resurrection and final death: ok";
+    check_exception ();
     check_registered_leaf ();
     check_many ();
     check_alarm ();
