@@ -1,7 +1,9 @@
 /* Multi-threaded FFI stress test: 8 concurrent pthreads calling exported
  * OCaml functions sharing a closure, allocating/dropping ARC objects,
  * using Weak.t, raising/catching exceptions, and running fibers. */
+#include "../runtime/arc.h"
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -9,12 +11,6 @@
 extern void ocamlcc_init_Stdlib(void);
 extern void ocamlcc_init_Mt_ffi_lib(void);
 extern int64_t ocamlcc_global_Mt_ffi_lib;
-extern int64_t ocamlcc_apply1(int64_t clos, int64_t a0);
-extern int64_t ocamlcc_apply2(int64_t clos, int64_t a0, int64_t a1);
-extern int64_t ocamlcc_arc_collect(int64_t unit);
-extern int64_t arc_live_objects(void);
-extern void arc_retain_val(int64_t v);
-extern void arc_release_val(int64_t v);
 
 #define NUM_THREADS 8
 #define NUM_ITERS   200
@@ -85,6 +81,78 @@ static void *collector_worker(void *p)
     return NULL;
 }
 
+/* Hold the mutator gate open until the main thread has attempted a major
+ * collection. Each thread owns one reference when registration starts. */
+typedef struct {
+    void *target;
+    _Atomic int phase;
+} FinalizerHandoff;
+
+extern int64_t caml_gc_full_major(int64_t);
+extern int64_t caml_final_register_called_without_value(int64_t, int64_t);
+
+static void wait_phase(FinalizerHandoff *h, int phase)
+{
+    while (atomic_load(&h->phase) != phase)
+        sched_yield();
+}
+
+static void *drop_owner(void *arg)
+{
+    FinalizerHandoff *h = arg;
+    int entered = arc_mutator_enter();
+    atomic_store(&h->phase, 1);
+    wait_phase(h, 2);
+    arc_release(h->target);
+    atomic_store(&h->phase, 3);
+    wait_phase(h, 4);
+    arc_mutator_leave(entered);
+    return NULL;
+}
+
+static int last_calls;
+static int64_t count_last(int64_t closure, int64_t unit)
+{
+    (void)closure;
+    if (unit == 1)
+        ++last_calls;
+    return 1;
+}
+
+static int test_finalizer_handoff(void)
+{
+    int entered = arc_mutator_enter();
+    int64_t *target = arc_alloc(0, 1, sizeof(*target));
+    *target = 1;
+    arc_retain(target);
+    FinalizerHandoff handoff = { target, 0 };
+    pthread_t worker_thread;
+    if (pthread_create(&worker_thread, NULL, drop_owner, &handoff) != 0) {
+        arc_release(target);
+        arc_release(target);
+        arc_mutator_leave(entered);
+        return 0;
+    }
+    wait_phase(&handoff, 1);
+    ArcClosure *callback = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(*callback));
+    callback->code = (void *)count_last;
+    callback->arity = 1;
+    atomic_store(&handoff.phase, 2);
+    caml_final_register_called_without_value((int64_t)(uintptr_t)callback,
+                                            (int64_t)(uintptr_t)target);
+    arc_release(callback);
+    arc_release(target);
+    wait_phase(&handoff, 3);
+    caml_gc_full_major(1);
+    int deferred = last_calls == 0;
+    atomic_store(&handoff.phase, 4);
+    pthread_join(worker_thread, NULL);
+    caml_gc_full_major(1);
+    caml_gc_full_major(1);
+    arc_mutator_leave(entered);
+    return deferred && last_calls == 1;
+}
+
 int main(void)
 {
     ocamlcc_init_Stdlib();
@@ -98,6 +166,11 @@ int main(void)
 
     ocamlcc_arc_collect(1);
     int64_t base_live = arc_live_objects();
+
+    if (!test_finalizer_handoff()) {
+        fputs("finalizer delivery across skipped collection failed\n", stderr);
+        return 1;
+    }
 
     _Atomic int stop_collector = 0;
     pthread_t collector;

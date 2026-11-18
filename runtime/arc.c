@@ -1565,6 +1565,7 @@ static void cc_collect_outgoing_cb(int64_t val, void *ctx)
         ccvec_push(out->values, (ArcHeader *)(uintptr_t)val);
 }
 
+/* Number reclaimed, or -1 when another mutator prevents a trial. */
 static int64_t collect_cycles(int discover_finalizers)
 {
     if (tls_os_mutator_active != 0) {
@@ -1572,7 +1573,7 @@ static int64_t collect_cycles(int discover_finalizers)
            (an external collector may hold it waiting for us to exit), and
            skip if other FFI mutator threads are active. */
         if (!arc_trylock(&g_cc_collect_lock))
-            return tag_int(0);
+            return -1;
     } else {
         arc_lock(&g_cc_collect_lock);
     }
@@ -1582,7 +1583,7 @@ static int64_t collect_cycles(int discover_finalizers)
         if (atomic_load_explicit(&g_active_mutators, memory_order_seq_cst) > 1) {
             atomic_store_explicit(&g_cc_waiting, 0, memory_order_release);
             arc_unlock(&g_cc_collect_lock);
-            return tag_int(0);
+            return -1;
         }
     } else {
         while (atomic_load_explicit(&g_active_mutators, memory_order_seq_cst) > 0)
@@ -1594,7 +1595,7 @@ static int64_t collect_cycles(int discover_finalizers)
         arc_unlock(&g_cc_lock);
         atomic_store_explicit(&g_cc_waiting, 0, memory_order_release);
         arc_unlock(&g_cc_collect_lock);
-        return tag_int(0);
+        return 0;
     }
 
     atomic_store_explicit(&g_cc_active, 1, memory_order_release);
@@ -1701,13 +1702,14 @@ static int64_t collect_cycles(int discover_finalizers)
     ccvec_free(&black_work);
     ccvec_free(&dead);
     ccvec_free(&leaves);
-    return tag_int(reclaimed);
+    return reclaimed;
 }
 
 int64_t ocamlcc_arc_collect(int64_t unit)
 {
     (void)unit;
-    return collect_cycles(0);
+    int64_t reclaimed = collect_cycles(0);
+    return tag_int(reclaimed < 0 ? 0 : reclaimed);
 }
 
 int64_t ocamlcc_weak_create(int64_t len_val)
@@ -4988,8 +4990,11 @@ int64_t caml_gc_major(int64_t ignored)
         atomic_exchange_explicit(&finalizer_dispatch_active, 1, memory_order_acquire))
         return caml_gc_minor(ignored);
 
+    if (collect_cycles(1) < 0) {
+        atomic_store_explicit(&finalizer_dispatch_active, 0, memory_order_release);
+        return 1;
+    }
     int entered = arc_mutator_enter();
-    collect_cycles(1);
     atomic_fetch_add_explicit(&g_gc_collections, 1, memory_order_relaxed);
     claim_last_finalizers();
     while (pending_finalizers != NULL) {

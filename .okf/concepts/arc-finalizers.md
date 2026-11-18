@@ -48,7 +48,7 @@ The retirement decision and weak upgrades must agree on the winning owner under 
 
 The collector takes its collection lock, excludes competing mutators, and takes the candidate-root lock. That last lock also protects registration and pending lists. Registration and queue operations must release the registry lock before entering the mutator gate, acquiring a collector or weak lock, releasing an ARC owner, waiting, or invoking a callback. A collector waiting for a mutator that is itself waiting for the collector would otherwise deadlock. Detach work into owned batches so unlocking cannot invalidate it.[^runtime]
 
-Registration retains the target before its caller can release it. Ordinary drops and in-place reuse never consult a registration list. The collector consults the list during trial discovery. Add a native concurrency regression for dropping one owner while another registers a callback, and check eventual single delivery after both owners release.
+Registration retains the target before its caller can release it. Ordinary drops and in-place reuse never consult a registration list. The collector consults the list during trial discovery. The native FFI regression drops one owner concurrently with registration, keeps two mutators active across a skipped collection, and checks single delivery after both owners release.
 
 ## Trial deletion
 
