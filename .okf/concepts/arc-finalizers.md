@@ -44,6 +44,12 @@ A runtime side table associates each target identity with registrations. Each re
 
 The retirement decision and weak upgrades must agree on the winning owner under concurrency. A successful weak upgrade before retirement delays death. The pending hold for ordinary callbacks is a real reference, and releasing it goes through normal ARC. Unregistered values continue down the existing drop path. Registry bookkeeping must release displaced references after unlocking, since those releases can themselves discover more work.[^runtime]
 
+## Lock order and the ordinary drop path
+
+The collector already takes its collection lock, excludes competing mutators, and takes the candidate-root lock. A trial may briefly claim registrations under the registry lock in that order. Registration and queue operations must release the registry lock before entering the mutator gate, acquiring a collector or weak lock, releasing an ARC owner, waiting, or invoking a callback. A collector waiting for a mutator that is itself waiting for the collector would otherwise deadlock. Detach work into owned batches so unlocking cannot invalidate it.[^runtime]
+
+When no registrations exist, ordinary object retirement should bypass the registry lock. Publish a registration while its caller still owns the target. A fast-path check for absence must observe that publication before permitting final destruction or in-place reuse. Once registrations exist, consult the table only at the last-owner handoff or during trial discovery. Regular retains and decrements that demonstrably leave other owners need no finalizer bookkeeping. Add a native concurrency regression for dropping one owner while another registers a callback, and check eventual single delivery after both owners release.
+
 ## Trial deletion
 
 1. Run the existing trial to find the complete set of unreachable candidates. While the mutators are excluded, snapshot **all** ordinary registrations on that set before changing any colors. Otherwise the first finalizable vertex in a cycle could hide another in the same cycle.
