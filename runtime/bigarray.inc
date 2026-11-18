@@ -45,6 +45,11 @@ OcamlccBigarrayView *ocamlcc_bigarray_view_retain(OcamlccBigarrayView *view)
     return view;
 }
 
+int64_t ocamlcc_bigarray_view_to_value(OcamlccBigarrayView *view)
+{
+    return (int64_t)(uintptr_t)ocamlcc_bigarray_view_retain(view);
+}
+
 void ocamlcc_bigarray_view_release(OcamlccBigarrayView *view)
 {
     if (view != NULL) {

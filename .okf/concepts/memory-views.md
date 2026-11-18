@@ -52,8 +52,8 @@ language-wide borrowing feature. Reuse `Array1`, `Array2`, `Array3`, and
 `Genarray` APIs and their existing slicing/layout semantics.
 
 The user selected the architecture and platform scope above. The runtime C
-view API is implemented. Generated bindings, foreign imports and scalar
-specialization are proposed follow-up slices. No elapsed-time or speedup threshold
+view API and direct, concretely typed Array1 bindings are implemented. Other
+ranks, foreign imports and scalar specialization are follow-up slices. No elapsed-time or speedup threshold
 has been specified.
 
 # Current behavior
@@ -68,7 +68,7 @@ baseline; it does not establish a timing baseline.
 | Scalar reads | `ba_read` boxes floats, `int32`, `int64`, native integers, and complex results; immediate integer kinds remain tagged values. | Preallocating a Bigarray does not currently make its scalar processing loop allocation-free. |
 | Scalar arithmetic | Existing floating arithmetic uses boxed inputs/results around QBE arithmetic. | Optimizing only the Bigarray load leaves allocation in the arithmetic chain. |
 | Primitive lowering | `Pbigarrayref` and `Pbigarrayset` discard kind/layout metadata when lowered to generic C calls. | Preserve useful primitive information before implementing specialized code generation. |
-| C bindings | Bindgen supports basic types, options, tuples, records, and abstract handles, but has no dedicated Bigarray view type. | General record/string marshalling is not the desired buffer-sharing path. |
+| C bindings | Bindgen maps direct, fully typed Array1 parameters and results to retained C view handles. | Subviews preserve aliasing across the call and can outlive the input handle. |
 | Release | Last backing-owner release calls `pal_page_free`; ordinary ARC can synchronously destroy object graphs. | Stable addresses and predictable ownership do not guarantee bounded release time. |
 
 These behaviors are in `runtime/bigarray.inc`, `runtime/arc.c`, `lib/anf.ml`,
@@ -114,7 +114,7 @@ rank-zero Bigarray contains one element.[^bigarray]
 | Give a second C caller ownership | Pass the result of `ocamlcc_bigarray_view_retain(view)`. Each caller releases its own reference. |
 | Start asynchronous work | Hold an owner until completion or cancellation has stopped access. Synchronize writes across aliases. |
 | Release an owner | Call `ocamlcc_bigarray_view_release(view)`. Acquisition, retain and release participate in the runtime mutator gate. |
-| Pass an owned view back into OCaml | Planned bindgen work must give the OCaml callee its own reference and preserve the caller’s owner. |
+| Pass an owned view back into OCaml | The Array1 shim validates rank, kind and layout before acquiring an argument reference for the callee. The caller retains its own reference. |
 
 The runtime test exports a subview at a nonzero offset, observes a C write
 through a sibling, then drops all OCaml strong owners and collects. The last C
@@ -200,11 +200,13 @@ Unknown kind/layout or unsupported escape patterns retain the generic path.
 
 1. **Public runtime view ownership (implemented).** The C handle retains the
    exported wrapper and exposes its data and dimensions across collection.
-2. **Generated Bigarray bindings.** Teach typed signature translation about
-   Bigarray inputs/results and share the runtime view contract across generated
-   modules. Cover `Array1`, `Array2`, `Array3`, and `Genarray` as supported forms;
-   reject unsupported signatures explicitly. Keep metadata validation and
-   exception/error cleanup inside the existing mutator-gated shim boundary.
+2. **Generated Bigarray bindings (Array1 implemented).** Concrete element, kind
+   and layout types are required. Type aliases resolve through compiler-libs.
+   A function or module value returns one owned C handle. Null inputs, metadata
+   mismatches and OCaml exceptions use the existing `ocamlcc_error_t` convention.
+   The shared-library fixture releases its parent and reads the returned slice,
+   then verifies the original live-object count. Nested view types, Array2,
+   Array3 and Genarray are outside this first slice.[^bindgen]
 3. **Foreign backing ownership.** Add imports with an owner/release policy and
    caller-provided storage, verifying import failure and sibling-view teardown.
 4. **Typed scalar lowering.** Preserve primitive metadata, specialize a complete

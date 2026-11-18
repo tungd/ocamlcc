@@ -37,6 +37,9 @@ OcamlccBigarrayView *ocamlcc_bigarray_view_acquire(int64_t value);
 OcamlccBigarrayView *ocamlcc_bigarray_view_retain(OcamlccBigarrayView *view);
 void ocamlcc_bigarray_view_release(OcamlccBigarrayView *view);
 
+/* Give the compiled OCaml callee one owned argument from a live view. */
+int64_t ocamlcc_bigarray_view_to_value(OcamlccBigarrayView *view);
+
 /* Requires a live view. Data and dimensions remain valid while an owner is
  * held. Copying this descriptor borrows those pointers. Coordinate writes
  * across aliases and keep an owner until all asynchronous access finishes. */

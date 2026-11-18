@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Generate typed Bigarray.Array1 C arguments and owned results. The C host checks subview aliasing after parent release, metadata errors and exception cleanup through a shared library. See [memory views](/concepts/memory-views.md).
+
 - 2026-11-18 (codex/1): Export retained Bigarray subviews to C through an installed C/C++ header. Native tests cover aliasing, weak clearing after the last release, Fortran column offsets, empty views and rank-zero scalars. See [memory views](/concepts/memory-views.md).
 
 - 2026-11-18 (codex/1): Publish a released finalizer queue to polls and explicit collections on other mutators. A native FFI regression observes delivery before the releasing thread resumes, even when a fresh trial cannot run.
