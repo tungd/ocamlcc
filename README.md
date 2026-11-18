@@ -106,11 +106,10 @@ consult the report for individual failures and skips. It skips toplevel expect
 tests, C-stub tests, and unsupported ocamltest directives. Tests execute in
 copied working directories. Repository API regressions return nonzero on failure.
 
-On macOS arm64 with OCaml 5.5.0, 67 of 77 standalone upstream tests pass,
+Before ordinary finalizer support, on macOS arm64 with OCaml 5.5.0, 67 of 77 standalone upstream tests pass,
 ten fail, and 42 additional files are skipped. All 11 repository API fixtures
-pass on both stock OCaml and ocamlcc. Finalizer registration raises a catchable
-`Failure` under ARC. The upstream Marshal `intern_final` and Sys `opaque` tests
-leave that exception uncaught.
+pass on both stock OCaml and ocamlcc. Ordinary ARC finalizers now run at explicit major collections;
+`Gc.finalise_last` still raises a catchable `Failure`.
 
 Lexing and Parsing use pure OCaml table interpreters. Bigarray views retain a
 shared ARC backing buffer. Marshal reads/writes the standard uncompressed

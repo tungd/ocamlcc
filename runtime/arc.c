@@ -852,6 +852,7 @@ extern const void *ocamlcc_global_Sys_error;
         lit                                                                    \
     }
 
+DEFINE_IMMORTAL_STR(g_inv_arg_finalise, "Gc.finalise");
 DEFINE_IMMORTAL_STR(g_inv_arg_oob_str, "index out of bounds");
 DEFINE_IMMORTAL_STR(g_inv_arg_fn_str, "compare: functional value");
 DEFINE_IMMORTAL_STR(g_inv_arg_bytes_str, "Bytes.create");
@@ -1117,6 +1118,12 @@ void arc_retain_val(int64_t val)
 {
     if (is_heap_ptr(val))
         arc_retain((void *)(uintptr_t)val);
+}
+
+int64_t ocamlcc_opaque_identity(int64_t val)
+{
+    arc_retain_val(val);
+    return val;
 }
 
 void arc_release_val(int64_t val)
@@ -1473,20 +1480,76 @@ static void cc_collect_white(TrialMap *tm, CCVec *work, CCVec *dead,
     }
 }
 
-static void cc_collect_leaf_cb(int64_t val, void *ctx)
+/* Registrations own both their callback and a temporary pin on the target.
+ * The major-collection trial discounts these pins to find unreachable values.
+ * Ordinary ARC release and reuse therefore need no registry lookup or lock. */
+typedef struct Finalizer {
+    struct Finalizer *next;
+    ArcHeader *target;
+    int64_t callback;
+} Finalizer;
+
+static Finalizer *finalizers; /* newest first, protected by g_cc_lock */
+static Finalizer *pending_finalizers;
+static _Atomic int finalizer_dispatch_active;
+
+static void finalizers_mark(TrialMap *tm, CCVec *work)
+{
+    for (Finalizer *f = finalizers; f != NULL; f = f->next) {
+        TrialEntry *e = trial_get(tm, f->target);
+        e->rc--;
+        if (e->color == CC_COLOR_BLACK)
+            cc_mark_gray(tm, work, f->target);
+    }
+}
+
+/* Preserve registration order in the ready list. Snapshot eligibility for
+ * every target before restoring any pins, including targets in one cycle. */
+static void finalizers_claim(TrialMap *tm, CCVec *work, CCVec *black_work)
+{
+    for (Finalizer *f = finalizers; f != NULL; f = f->next)
+        cc_scan(tm, work, black_work, f->target);
+
+    Finalizer *ready = NULL;
+    Finalizer **tail = &ready;
+    for (Finalizer **link = &finalizers; *link != NULL;) {
+        Finalizer *f = *link;
+        if (trial_get(tm, f->target)->color == CC_COLOR_WHITE) {
+            *link = f->next;
+            *tail = f;
+            tail = &f->next;
+        } else {
+            link = &f->next;
+        }
+    }
+    *tail = NULL;
+    for (Finalizer *f = ready; f != NULL; f = f->next) {
+        if (trial_get(tm, f->target)->color == CC_COLOR_WHITE)
+            cc_scan_black(tm, black_work, f->target);
+    }
+    /* Exceptions may have left earlier callbacks pending. */
+    Finalizer **end = &pending_finalizers;
+    while (*end != NULL)
+        end = &(*end)->next;
+    *end = ready;
+}
+
+typedef struct { TrialMap *tm; CCVec *values; } OutgoingEdges;
+
+static void cc_collect_outgoing_cb(int64_t val, void *ctx)
 {
     if (!is_heap_ptr(val))
         return;
     ArcHeader *chdr = (ArcHeader *)(uintptr_t)val - 1;
     if (atomic_load_explicit(&chdr->refcount, memory_order_relaxed) == ARC_IMMORTAL)
         return;
-    if (!is_cycle_candidate_obj(chdr))
-        ccvec_push((CCVec *)ctx, (ArcHeader *)(uintptr_t)val);
+    OutgoingEdges *out = ctx;
+    if (!is_cycle_candidate_obj(chdr) || trial_get(out->tm, chdr)->color != CC_COLOR_DEAD)
+        ccvec_push(out->values, (ArcHeader *)(uintptr_t)val);
 }
 
-int64_t ocamlcc_arc_collect(int64_t unit)
+static int64_t collect_cycles(int discover_finalizers)
 {
-    (void)unit;
     if (tls_os_mutator_active != 0) {
         /* Inside an active FFI mutator call: never block on g_cc_collect_lock
            (an external collector may hold it waiting for us to exit), and
@@ -1510,7 +1573,7 @@ int64_t ocamlcc_arc_collect(int64_t unit)
     }
 
     arc_lock(&g_cc_lock);
-    if (g_cc_roots.len == 0u) {
+    if (g_cc_roots.len == 0u && !(discover_finalizers && finalizers != NULL)) {
         arc_unlock(&g_cc_lock);
         atomic_store_explicit(&g_cc_waiting, 0, memory_order_release);
         arc_unlock(&g_cc_collect_lock);
@@ -1531,8 +1594,14 @@ int64_t ocamlcc_arc_collect(int64_t unit)
             cc_mark_gray(&tm, &work, r);
     }
 
+    if (discover_finalizers)
+        finalizers_mark(&tm, &work);
+
     for (size_t i = 0; i < g_cc_roots.len; i++)
         cc_scan(&tm, &work, &black_work, g_cc_roots.data[i]);
+
+    if (discover_finalizers)
+        finalizers_claim(&tm, &work, &black_work);
 
     for (size_t i = 0; i < g_cc_roots.len; i++) {
         ArcHeader *r = g_cc_roots.data[i];
@@ -1542,6 +1611,7 @@ int64_t ocamlcc_arc_collect(int64_t unit)
     }
     g_cc_roots.len = 0;
 
+    OutgoingEdges outgoing = { &tm, &leaves };
     for (size_t i = 0; i < dead.len; i++) {
         ArcHeader *w = dead.data[i];
         int is_fiber = (w->tag == (uint16_t)ARC_TAG_FIBER);
@@ -1554,7 +1624,7 @@ int64_t ocamlcc_arc_collect(int64_t unit)
         }
         if (atomic_load_explicit(&g_weak_count, memory_order_acquire) > 0u)
             weak_clear_target((int64_t)(uintptr_t)(w + 1));
-        cc_visit_children(w, cc_collect_leaf_cb, &leaves);
+        cc_visit_children(w, cc_collect_outgoing_cb, &outgoing);
         if (is_fiber) {
             f->entry_closure = 0;
             f->result = 0;
@@ -1604,6 +1674,12 @@ int64_t ocamlcc_arc_collect(int64_t unit)
     ccvec_free(&dead);
     ccvec_free(&leaves);
     return tag_int(reclaimed);
+}
+
+int64_t ocamlcc_arc_collect(int64_t unit)
+{
+    (void)unit;
+    return collect_cycles(0);
 }
 
 int64_t ocamlcc_weak_create(int64_t len_val)
@@ -4857,17 +4933,43 @@ int64_t caml_gc_major_slice(int64_t n_val)
 
 int64_t caml_gc_major(int64_t ignored)
 {
-    return caml_gc_minor(ignored);
+    if (ocamlcc_get_exn() != 0 ||
+        atomic_exchange_explicit(&finalizer_dispatch_active, 1, memory_order_acquire))
+        return caml_gc_minor(ignored);
+
+    int entered = arc_mutator_enter();
+    collect_cycles(1);
+    atomic_fetch_add_explicit(&g_gc_collections, 1, memory_order_relaxed);
+    for (;;) {
+        arc_lock(&g_cc_lock);
+        Finalizer *f = pending_finalizers;
+        if (f != NULL)
+            pending_finalizers = f->next;
+        arc_unlock(&g_cc_lock);
+        if (f == NULL)
+            break;
+        /* A compiled unary function consumes its argument. Transfer this
+         * registration's pin and keep the borrowed callback alive across it. */
+        int64_t result = ocamlcc_apply1_raw(f->callback, (int64_t)(uintptr_t)(f->target + 1));
+        arc_release_val(result);
+        arc_release_val(f->callback);
+        arc_release(f);
+        if (ocamlcc_get_exn() != 0)
+            break;
+    }
+    arc_mutator_leave(entered);
+    atomic_store_explicit(&finalizer_dispatch_active, 0, memory_order_release);
+    return 1;
 }
 
 int64_t caml_gc_full_major(int64_t ignored)
 {
-    return caml_gc_minor(ignored);
+    return caml_gc_major(ignored);
 }
 
 int64_t caml_gc_compaction(int64_t ignored)
 {
-    return caml_gc_minor(ignored);
+    return caml_gc_major(ignored);
 }
 
 int64_t caml_get_minor_free(int64_t ignored)
@@ -4878,9 +4980,22 @@ int64_t caml_get_minor_free(int64_t ignored)
 
 int64_t caml_final_register(int64_t fn, int64_t v)
 {
-    (void)fn; (void)v;
-    static const char message[] = "Gc.finalise: unsupported by ARC";
-    raise_failure_cstr(message, sizeof(message) - 1);
+    ArcHeader *target = is_heap_ptr(v) ? (ArcHeader *)(uintptr_t)v - 1 : NULL;
+    if (target == NULL || target->tag == ARC_TAG_FLOAT ||
+        target->tag == ARC_TAG_LAZY || target->tag == ARC_TAG_FORWARD ||
+        target->tag == ARC_TAG_FORCING || target->byte_size == 0) {
+        raise_invalid_arg_imm(g_inv_arg_finalise.str);
+        return 1;
+    }
+    Finalizer *f = arc_alloc(0, 0, sizeof(*f));
+    arc_retain_val(fn);
+    arc_retain_val(v);
+    f->callback = fn;
+    f->target = target;
+    arc_lock(&g_cc_lock);
+    f->next = finalizers;
+    finalizers = f;
+    arc_unlock(&g_cc_lock);
     return 1;
 }
 

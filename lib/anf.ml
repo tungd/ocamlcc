@@ -235,7 +235,7 @@ and conv_fun (lf : Lambda.lfunction) : lfunction =
 
 and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   match rhs with
-  | Levent (l, _) | Lifused (_, l) | Lprim (Popaque, [ l ], _) ->
+  | Levent (l, _) | Lifused (_, l) ->
       conv_bind id l k
   | Lprim (Psetglobal _, [ l ], _) -> conv_bind id l k
   | Llet (_, _, id1, arg1, body1) ->
@@ -541,6 +541,8 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
         | Standard_library_default -> String ""
       in
       emit_cexpr (Atom atom)
+  | Lprim (Popaque, [arg], _) ->
+      conv_expr arg (fun value -> emit_cexpr (Ccall ("ocamlcc_opaque_identity", [value])))
   | Lprim (Ppoll, _, _) -> emit_cexpr (Atom Unit)
   | _ -> raise (Unsupported (describe lam))
 
@@ -552,7 +554,7 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
   | Lconst c -> k (conv_const c)
   | Lvar id -> k (Var id)
   | Lmutvar id -> k (MutVar id)
-  | Levent (l, _) | Lifused (_, l) | Lprim (Popaque, [ l ], _) ->
+  | Levent (l, _) | Lifused (_, l) ->
       conv_expr l k
   | Lprim (Psetglobal _, [ body ], _) -> conv_expr body k
   | Llet (_, _, id, arg, body) ->

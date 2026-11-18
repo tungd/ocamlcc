@@ -35,6 +35,7 @@ let abi argc raises yields = { argc; raises; yields }
    [runtime/fiber.c]. *)
 let table =
   [ (* printing / process *)
+    ("ocamlcc_opaque_identity", abi 1 false false);
     ("ocamlcc_print_int_val", abi 1 false false);
     ("ocamlcc_print_char_val", abi 1 false false);
     ("ocamlcc_print_float_val", abi 1 false false);
@@ -355,9 +356,9 @@ let table =
     ("caml_gc_set", abi 1 false false);
     ("caml_gc_minor", abi 1 true false);
     ("caml_gc_major_slice", abi 1 true false);
-    ("caml_gc_major", abi 1 true false);
-    ("caml_gc_full_major", abi 1 true false);
-    ("caml_gc_compaction", abi 1 true false);
+    ("caml_gc_major", abi 1 true true);
+    ("caml_gc_full_major", abi 1 true true);
+    ("caml_gc_compaction", abi 1 true true);
     ("caml_get_minor_free", abi 1 false false);
     ("caml_final_register", abi 2 true false);
     ("caml_final_register_called_without_value", abi 2 true false);
