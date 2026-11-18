@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-19 (codex/1): Generate bindings for Array3 and Genarray. The C host keeps an Array2 plane alive after releasing both parents and exercises fixed and dynamic rank checks. See [memory views](/concepts/memory-views.md).
+
 - 2026-11-19 (codex/1): Specialize float32 Array1 loads and stores while preserving double precision in expressions and rounding at the write. The 128-element test fell from 1155 to 3 ARC words. See [memory views](/concepts/memory-views.md).
 
 - 2026-11-19 (codex/1): Extend float64 Array1 scalar lowering to addition, subtraction, and division. The 128-element fixture exercising all four operations fell from 1923 to 3 ARC words. See [memory views](/concepts/memory-views.md).

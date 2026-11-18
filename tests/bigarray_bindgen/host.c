@@ -125,6 +125,37 @@ static void check_scale_allocations(void)
     ocamlcc_Vectors_view_release(values);
 }
 
+static void check_dynamic_rank(void)
+{
+    ocamlcc_error_t err = {0};
+    OcamlccBigarrayView *cube = vectors_cube(2, 2, 3, &err);
+    assert(cube && !err.code);
+    OcamlccBigarrayInfo info = ocamlcc_Vectors_view_info(cube);
+    assert(info.rank == 3 && info.dims[0] == 2 && info.dims[1] == 2 && info.dims[2] == 3);
+    double *data = info.data;
+    data[6] = 14.;
+    OcamlccBigarrayView *generic = vectors_as_genarray(cube, &err);
+    assert(generic && !err.code && vectors_generic_rank(generic, &err) == 3 && !err.code);
+    (void)peer_generic_rank(generic, &err);
+    assert(err.code);
+    ocamlcc_Vectors_view_release(cube);
+    OcamlccBigarrayView *plane = vectors_plane(generic, 1, &err);
+    assert(plane && !err.code && vectors_generic_rank(plane, &err) == 2 && !err.code);
+    assert(!vectors_as_genarray(plane, &err) && err.code);
+    OcamlccBigarrayView *wrong_kind = vectors_singles(&err);
+    assert(wrong_kind && !err.code);
+    (void)vectors_generic_rank(wrong_kind, &err);
+    assert(err.code);
+    ocamlcc_Vectors_view_release(wrong_kind);
+    assert(!vectors_plane(generic, 2, &err) && err.code);
+    OcamlccBigarrayInfo view = ocamlcc_Vectors_view_info(plane);
+    assert(view.rank == 2 && view.dims[0] == 2 && view.dims[1] == 3);
+    assert(view.data == data + 6);
+    ocamlcc_Vectors_view_release(generic);
+    assert(((double *)view.data)[0] == 14.);
+    ocamlcc_Vectors_view_release(plane);
+}
+
 static void check_single_allocations(void)
 {
     ocamlcc_error_t err = {0};
@@ -151,6 +182,7 @@ int main(void)
     check_import();
     check_collected_import();
     check_matrix_row();
+    check_dynamic_rank();
     check_scale_allocations();
     check_single_allocations();
     OcamlccBigarrayView *matrix = vectors_native_buffer(2);

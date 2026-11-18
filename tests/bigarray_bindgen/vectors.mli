@@ -1,7 +1,13 @@
 type vector = (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t
 type single_vector = (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t
 type matrix = (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array2.t
+type cube = (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array3.t
+type generic = (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t
 val matrix : int -> int -> matrix
+val cube : int -> int -> int -> cube
+val as_genarray : cube -> generic
+val generic_rank : generic -> int
+val plane : generic -> int -> matrix
 val row : matrix -> int -> vector
 val create : int -> vector
 val sub : vector -> int -> int -> vector

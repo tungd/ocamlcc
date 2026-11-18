@@ -46,11 +46,12 @@ OcamlccBigarrayView *ocamlcc_bigarray_view_retain(OcamlccBigarrayView *view)
     return view;
 }
 
-/* Generated shims validate all borrowed inputs before retaining any. */
+/* Generated shims validate all borrowed inputs before retaining any.
+ * Rank -1 accepts any rank for a Genarray signature. */
 int ocamlcc_bigarray_view_matches(const OcamlccBigarrayView *view, int rank,
                                   int kind, int layout)
 {
-    return view && view->runtime_id == &ba_runtime_id && view->ndims == rank &&
+    return view && view->runtime_id == &ba_runtime_id && (rank == -1 || view->ndims == rank) &&
            view->kind == kind && view->layout == layout;
 }
 

@@ -6,7 +6,7 @@ tags: [memory, bigarray, ffi, compiler, performance]
 status: draft
 generated:
   by: codex/1
-  at: 2026-11-18T17:08:44Z
+  at: 2026-11-18T18:02:08Z
 sources:
   - id: scope
     resource: Conversation on 2026-11-18 about ARC, Bigarray, memory views, and desktop target scope
@@ -59,8 +59,9 @@ language-wide borrowing feature. Reuse `Array1`, `Array2`, `Array3`, and
 
 The user selected the architecture and platform scope above. The runtime C
 view API supports exported views and imports of caller-owned storage. Bindgen
-supports concrete Array1 and Array2 signatures. A typed float64 Array1 store can consume
-an unboxed load and product. Other generated ranks and scalar operations are follow-up slices. No elapsed-time or speedup threshold has been specified.
+supports direct, concrete signatures for Array1, Array2, Array3, and Genarray.
+A typed float32 or float64 Array1 store can consume unboxed loads and
+arithmetic. Additional scalar operations are follow-up slices. No elapsed-time or speedup threshold has been specified.
 
 # Current behavior
 
@@ -74,7 +75,7 @@ baseline; it does not establish a timing baseline.
 | Scalar reads | `ba_read` boxes floats, `int32`, `int64`, native integers, and complex results; immediate integer kinds remain tagged values. | Typed float32 and float64 Array1 loads feeding scalar expressions use double-returning helpers. |
 | Scalar arithmetic | Addition, subtraction, multiplication, and division feeding a concrete float32 or float64 Array1 store use QBE double operands and result. | Ordinary OCaml calls and escaping results use the boxed value ABI. |
 | Primitive lowering | Bigarray reads and writes carry operation, rank, element kind, layout and bounds-check mode through ANF and ARC. | QBE code generation can inspect each access before choosing its runtime helper. |
-| C bindings | Bindgen maps direct, fully typed Array1 and Array2 parameters and results to retained C view handles. | Subviews preserve aliasing across the call and can outlive the input handle. |
+| C bindings | Bindgen maps direct, fully typed Array1, Array2, Array3, and Genarray parameters and results to retained C view handles. | Subviews preserve aliasing across the call and can outlive the input handle. |
 | Release | Last backing-owner release frees PAL storage or schedules the imported owner’s callback on the releasing thread. | Stable addresses and predictable ownership do not guarantee bounded release time. |
 
 These behaviors are in `runtime/bigarray.inc`, `runtime/arc.c`, `lib/anf.ml`,
@@ -133,7 +134,7 @@ The AMD64 macOS fixture cross-linked on the ARM64 host, which could not
 execute x86_64 macOS binaries. A C++17 consumer compiled and linked
 against the installed header on ARM64 macOS.
 
-## Generated Array1 and Array2 bindings
+## Generated Bigarray bindings
 
 A C-layout `Array2.slice_left matrix i` fixes the zero-based row index
 and returns an owned `Array1` over the same storage. A C caller can release
@@ -159,6 +160,12 @@ an ASan/UBSan run on macOS. It passes a C-created view into OCaml, checks
 that writes through a returned subview reach the parent, and reads the
 subview after releasing the parent. A C++17 host on macOS also retained
 and released a view using the generated and installed headers together.[^c-host]
+
+An `Array3` parameter or result requires rank 3. A concrete `Genarray`
+signature accepts any rank supported by the runtime and checks the element
+kind, layout, and ARC heap. The C host converts an `Array3` to a `Genarray`
+and takes an `Array2` plane without copying. The plane remains readable
+after both parent handles are released.[^c-host]
 
 ## Foreign storage imported into OCaml
 
@@ -286,13 +293,13 @@ Unknown kind/layout or unsupported escape patterns retain the generic path.
 
 1. **Public runtime view ownership (implemented).** The C handle retains the
    exported wrapper and exposes its data and dimensions across collection.
-2. **Generated Bigarray bindings (Array1 and Array2 implemented).** Concrete element, kind
-   and layout types are required. Type aliases resolve through compiler-libs.
+2. **Generated Bigarray bindings (direct views implemented).** Array1, Array2,
+   Array3, and Genarray require concrete element, kind and layout types. Type aliases resolve through compiler-libs.
    A function or module value returns one owned C handle. Null inputs, metadata
    mismatches and OCaml exceptions use the existing `ocamlcc_error_t` convention.
    The shared-library fixture releases its parent and reads the returned slice,
-   then verifies the original live-object count. Nested view types, Array3
-   and Genarray remain unsupported.[^bindgen]
+   then verifies the original live-object count. Nested view types remain
+   unsupported.[^bindgen]
 3. **Foreign backing ownership (implemented).** The runtime and generated
    headers accept caller-owned mutable storage with a release callback. Tests
    cover rejected transfers, escaping rows and cycle-owned views.

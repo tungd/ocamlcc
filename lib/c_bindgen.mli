@@ -16,7 +16,7 @@ val generate :
 (** Walk a typed [.mli] signature via [Typemod.type_interface] and emit a C99
     header + FFI shim covering exported [val]s, basic types, [option], tuples,
     records (regular and all-float), opaque abstract types, direct concrete
-    Bigarray.Array1 and Bigarray.Array2 views, ARC retain/release,
+    Bigarray Array1, Array2, Array3, and Genarray views, ARC retain/release,
     module initialization, and an explicit [ocamlcc_error_t *] out-parameter. *)
 
 val generate_file :

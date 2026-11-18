@@ -2,7 +2,13 @@ open Bigarray
 type vector = (float, float64_elt, c_layout) Array1.t
 type single_vector = (float, float32_elt, c_layout) Array1.t
 type matrix = (float, float64_elt, c_layout) Array2.t
+type cube = (float, float64_elt, c_layout) Array3.t
+type generic = (float, float64_elt, c_layout) Genarray.t
 let matrix rows cols = Array2.create float64 c_layout rows cols
+let cube x y z = Array3.create float64 c_layout x y z
+let as_genarray (a : cube) = genarray_of_array3 a
+let generic_rank (a : generic) = Genarray.num_dims a
+let plane (a : generic) i = array2_of_genarray (Genarray.slice_left a [|i|])
 let row m i = Array2.slice_left m i
 let create n = Array1.create float64 c_layout n
 let sub a pos len = Array1.sub a pos len

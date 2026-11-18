@@ -6,6 +6,8 @@ type generated = {
   exported_symbols : string list;
 }
 
+type bigarray_rank = Fixed of int | Dynamic
+
 type record_field = {
   rf_name : string;
   rf_type : c_type;
@@ -32,7 +34,7 @@ and c_type =
   | CT_tuple of c_type list
   | CT_record of record_info
   | CT_opaque of string
-  | CT_bigarray of { rank : int; kind : string; layout : string }
+  | CT_bigarray of { rank : bigarray_rank; kind : string; layout : string }
 
 type exported_val = {
   ev_name : string;
@@ -102,6 +104,14 @@ let read_file filename =
   Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () ->
       really_input_string ic (in_channel_length ic))
 
+let bigarray_name = function
+  | Fixed n -> "Array" ^ string_of_int n
+  | Dynamic -> "Genarray"
+
+let bigarray_rank_arg = function
+  | Fixed n -> n
+  | Dynamic -> -1
+
 let rec type_key = function
   | CT_unit -> "unit"
   | CT_int -> "int"
@@ -116,7 +126,8 @@ let rec type_key = function
   | CT_tuple ts -> "tup_" ^ String.concat "_" (List.map type_key ts)
   | CT_record r -> "rec_" ^ r.ri_cname
   | CT_opaque s -> "opq_" ^ s
-  | CT_bigarray { rank; kind; layout } -> Printf.sprintf "array%d_%s_%s" rank kind layout
+  | CT_bigarray { rank; kind; layout } ->
+      Printf.sprintf "%s_%s_%s" (bigarray_name rank) kind layout
 
 let rec c_slug = function
   | CT_unit -> "void"
@@ -193,12 +204,14 @@ let stdlib_type unit_name members =
 let bigarray_type members = stdlib_type "Bigarray" members
 
 let bigarray_rank path =
-  if Path.same path (bigarray_type ["Array1"; "t"]) then Some 1
-  else if Path.same path (bigarray_type ["Array2"; "t"]) then Some 2
+  if Path.same path (bigarray_type ["Array1"; "t"]) then Some (Fixed 1)
+  else if Path.same path (bigarray_type ["Array2"; "t"]) then Some (Fixed 2)
+  else if Path.same path (bigarray_type ["Array3"; "t"]) then Some (Fixed 3)
+  else if Path.same path (bigarray_type ["Genarray"; "t"]) then Some Dynamic
   else None
 
 let resolve_bigarray ~rank ~direct ~ctx env args =
-  let name = Printf.sprintf "Array%d" rank in
+  let name = bigarray_name rank in
   if not direct then failwith (ctx ^ ": nested " ^ name ^ " views are unsupported in C FFI");
   let path ty =
     match Types.get_desc (Ctype.expand_head env ty) with
@@ -611,7 +624,8 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
   let emit_view_error rank =
     p "        if (err) {\n";
     p "            err->code = 1;\n";
-    p "            strcpy(err->message, \"Array%d view has incompatible runtime, rank, kind or layout\");\n" rank;
+    p "            strcpy(err->message, \"%s view has incompatible runtime, rank, kind or layout\");\n"
+      (bigarray_name rank);
     p "        }\n"
   in
   let emitted_helpers = Hashtbl.create 16 in
@@ -807,7 +821,8 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
       in
       List.iteri (fun i -> function
         | CT_bigarray { rank; kind; layout } ->
-            p "    if (!ocamlcc_bigarray_view_matches(a%d, %d, %s, %s)) {\n" i rank kind layout;
+            p "    if (!ocamlcc_bigarray_view_matches(a%d, %d, %s, %s)) {\n"
+              i (bigarray_rank_arg rank) kind layout;
             emit_view_error rank;
             return_error ();
             p "    }\n"
@@ -817,7 +832,8 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
         if ev.ev_is_fn then p "    arc_release_val(res);\n";
         (match t with
         | CT_bigarray { rank; kind; layout } ->
-            p "    if (!ocamlcc_bigarray_view_matches(out, %d, %s, %s)) {\n" rank kind layout;
+            p "    if (!ocamlcc_bigarray_view_matches(out, %d, %s, %s)) {\n"
+              (bigarray_rank_arg rank) kind layout;
             p "        ocamlcc_bigarray_view_release(out);\n";
             emit_view_error rank;
             return_error ();
