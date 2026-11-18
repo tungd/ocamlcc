@@ -621,6 +621,12 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
       let arg_vals = List.map (compile_atom hooks b) ap_args in
       apply_closure b clos_val arg_vals
 
+let compile_ccall hooks b sym args =
+  let dst = fresh_temp b "cc" in
+  let cargs = List.map (fun a -> (Long, compile_atom hooks b a)) args in
+  emit b (Call (Long, dst, { fn = Global sym; args = cargs }));
+  dst
+
 let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   match ce with
   | Atom a -> compile_atom hooks b a
@@ -894,11 +900,10 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       in
       emit b (Call_void { fn = Global symbol; args });
       unit_const
-  | Ccall (sym, args) ->
-      let dst = fresh_temp b "cc" in
-      let cargs = List.map (fun a -> (Long, compile_atom hooks b a)) args in
-      emit b (Call (Long, dst, { fn = Global sym; args = cargs }));
-      dst
+  | BigarrayAccess (access, args) ->
+      let op = match access.operation with `Get -> "get" | `Set -> "set" in
+      compile_ccall hooks b (Printf.sprintf "caml_ba_%s_%d" op access.rank) args
+  | Ccall (sym, args) -> compile_ccall hooks b sym args
   | GetGlobal mod_name ->
       let gsym = "ocamlcc_global_" ^ sanitize mod_name in
       let gv = fresh_temp b "glob" in

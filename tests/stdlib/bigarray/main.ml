@@ -1,5 +1,17 @@
 open Bigarray
+
+type vector = (float, float64_elt, c_layout) Array1.t
+let scale (src : vector) (dst : vector) factor =
+  for i = 0 to Array1.dim src - 1 do dst.{i} <- src.{i} *. factor done
+
 let () =
+  let values = Array1.of_array float64 c_layout [|1.; 2.; 3.; 4.|] in
+  let src = Array1.sub values 0 3 and dst = Array1.sub values 1 3 in
+  scale src dst 2.;
+  assert (values.{2} = 4. && values.{3} = 8.);
+  let short = Array1.sub values 0 1 in
+  assert (try scale dst short 3.; false with Invalid_argument _ -> true);
+  assert (values.{0} = 6. && values.{1} = 2.);
   let a = Array2.create int c_layout 2 3 in
   assert (Array2.dim1 a = 2 && Array2.dim2 a = 3);
   a.{1,2} <- 42;

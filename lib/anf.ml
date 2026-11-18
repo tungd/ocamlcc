@@ -76,6 +76,14 @@ type unop =
   | Bint_cvt of Lambda.boxed_integer * Lambda.boxed_integer
   | Bint_neg of Lambda.boxed_integer
 
+type bigarray_access = {
+  operation : [ `Get | `Set ];
+  rank : int;
+  kind : Lambda.bigarray_kind;
+  layout : Lambda.bigarray_layout;
+  checked : bool;
+}
+
 type cexpr =
   | Atom of atom
   | Binop of binop * atom * atom
@@ -92,6 +100,7 @@ type cexpr =
   | BytesSet of bool * atom * atom * atom
   | ArrayGet of bool * Lambda.array_kind * atom * atom
   | ArraySet of bool * Lambda.array_kind * atom * atom * atom
+  | BigarrayAccess of bigarray_access * atom list
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
@@ -347,12 +356,12 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
   | Lprim (Psetfield_computed _, [ arg; idx; rhs ], _) ->
       conv_atoms [ arg; idx; rhs ] (fun vs ->
           emit_cexpr (Ccall ("caml_obj_set_field", vs)))
-  | Lprim (Pbigarrayref (_, dimensions, _, _), args, _) ->
-      conv_atoms args (fun vs ->
-          emit_cexpr (Ccall ("caml_ba_get_" ^ string_of_int dimensions, vs)))
-  | Lprim (Pbigarrayset (_, dimensions, _, _), args, _) ->
-      conv_atoms args (fun vs ->
-          emit_cexpr (Ccall ("caml_ba_set_" ^ string_of_int dimensions, vs)))
+  | Lprim (Pbigarrayref (unsafe, rank, kind, layout), args, _) ->
+      let access = { operation = `Get; rank; kind; layout; checked = not unsafe } in
+      conv_atoms args (fun vs -> emit_cexpr (BigarrayAccess (access, vs)))
+  | Lprim (Pbigarrayset (unsafe, rank, kind, layout), args, _) ->
+      let access = { operation = `Set; rank; kind; layout; checked = not unsafe } in
+      conv_atoms args (fun vs -> emit_cexpr (BigarrayAccess (access, vs)))
   | Lprim (Pbigarraydim d, [ arg ], _) ->
       conv_expr arg (fun a ->
           emit_cexpr (Ccall ("caml_ba_dim", [ a; Int (d - 1) ])))
@@ -688,7 +697,7 @@ let cexpr_vars free_aexpr acc = function
   | App (fn, args) ->
       List.fold_left atom_vars (atom_vars acc fn) args
   | Builtin (_, _, a) -> atom_vars acc a
-  | Ccall (_, args) -> List.fold_left atom_vars acc args
+  | BigarrayAccess (_, args) | Ccall (_, args) -> List.fold_left atom_vars acc args
   | GetGlobal _ -> acc
   | Assign (id, a) -> Ident.Set.add id (atom_vars acc a)
   | Fun lf ->

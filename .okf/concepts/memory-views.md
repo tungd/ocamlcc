@@ -6,7 +6,7 @@ tags: [memory, bigarray, ffi, compiler, performance]
 status: draft
 generated:
   by: codex/1
-  at: 2026-11-18T06:57:26Z
+  at: 2026-11-18T07:25:44Z
 sources:
   - id: scope
     resource: Conversation on 2026-11-18 about ARC, Bigarray, memory views, and desktop target scope
@@ -23,6 +23,9 @@ sources:
   - id: lowering
     resource: ../../lib/anf.ml
     title: Bigarray primitive lowering
+  - id: lowering-test
+    resource: ../../test/bigarray_lowering_test.ml
+    title: Bigarray access metadata before and after ARC
   - id: codegen
     resource: ../../lib/codegen_expr.ml
     title: Boxed scalar arithmetic and C calls
@@ -70,7 +73,7 @@ baseline; it does not establish a timing baseline.
 | Views | `ba_view` retains the backing and adjusts the data pointer; sub, slice, reshape, and layout changes use shared storage. | A view can outlive its original wrapper without copying the payload. View creation still allocates a descriptor. |
 | Scalar reads | `ba_read` boxes floats, `int32`, `int64`, native integers, and complex results; immediate integer kinds remain tagged values. | Preallocating a Bigarray does not currently make its scalar processing loop allocation-free. |
 | Scalar arithmetic | Existing floating arithmetic uses boxed inputs/results around QBE arithmetic. | Optimizing only the Bigarray load leaves allocation in the arithmetic chain. |
-| Primitive lowering | `Pbigarrayref` and `Pbigarrayset` discard kind/layout metadata when lowered to generic C calls. | Preserve useful primitive information before implementing specialized code generation. |
+| Primitive lowering | Bigarray reads and writes carry operation, rank, element kind, layout and bounds-check mode through ANF and ARC. | QBE code generation can inspect each access before choosing its runtime helper. |
 | C bindings | Bindgen maps direct, fully typed Array1 and Array2 parameters and results to retained C view handles. | Subviews preserve aliasing across the call and can outlive the input handle. |
 | Release | Last backing-owner release frees PAL storage or schedules the imported owner’s callback on the releasing thread. | Stable addresses and predictable ownership do not guarantee bounded release time. |
 
@@ -197,8 +200,17 @@ passed under ASan/UBSan on macOS and on emulated AMD64 Linux.[^c-host][^tests]
 
 # Unboxed scalar processing
 
-Preserve kind, layout, rank, and checked/unchecked access information in ANF
-where the frontend supplies it. Add a scalar representation path that keeps
+For a typed float64 Array1 scale loop, ANF preserves checked reads and
+writes with C layout. Kind and layout remain independent. A float32 Array3
+read can retain its element kind even when its layout is polymorphic.
+Unsafe operations and Fortran layout also survive lowering. ARC borrows
+the operands and keeps an exception path for the current runtime helpers.
+The lowering test inspects both the frontend-to-ANF and post-ARC results.
+In the scale loop, the rank-one read helper boxes the loaded float and the
+generated multiplication boxes its result before passing it to the write
+helper.[^lowering-test][^bigarray][^codegen]
+
+The next step is a scalar representation that keeps
 Bigarray loads, arithmetic, comparisons, and stores unboxed when their uses
 permit it. Address the whole local expression chain, including branch/loop
 joins and scalar accumulators, rather than replacing one allocating helper
@@ -254,8 +266,8 @@ Unknown kind/layout or unsupported escape patterns retain the generic path.
 3. **Foreign backing ownership (implemented).** The runtime and generated
    headers accept caller-owned mutable storage with a release callback. Tests
    cover rejected transfers, escaping rows and cycle-owned views.
-4. **Typed scalar lowering.** Preserve primitive metadata, specialize a complete
-   float64 loop, and expand kinds while keeping generic fallback behavior.
+4. **Typed scalar lowering (metadata implemented).** Specialize a complete
+   float64 loop, then expand kinds while keeping generic fallback behavior.
 5. **Integration and reporting.** Update examples, public C ownership comments,
    [stdlib compatibility](/concepts/stdlib-compatibility.md), and the
    [compiler pipeline](/concepts/compiler-pipeline.md) to describe implemented
@@ -336,7 +348,8 @@ policies can be added separately when a concrete integration needs them.
 [^view-api]: Public handle ownership, descriptor fields and element kind constants.
 [^bigarray]: `ba_view`, `caml_ba_create`, `ba_read`, `ba_write`, and shared-view operations in `runtime/bigarray.inc`.
 [^runtime]: `ArcBigarray`, `ArcBigarrayBuffer`, `release_subtree`, and mutator-gate hooks in `runtime/arc.c`.
-[^lowering]: `Pbigarrayref`/`Pbigarrayset` lowering in `lib/anf.ml` currently emits C calls without preserving kind/layout information.
+[^lowering]: `Pbigarrayref`/`Pbigarrayset` lowering in `lib/anf.ml` emits `BigarrayAccess` with the original kind, layout, rank and access mode.
+[^lowering-test]: `test/bigarray_lowering_test.ml` checks typed and polymorphic source programs through `Arc_pass.run`.
 [^codegen]: `lib/codegen_expr.ml` emits scalar boxing and generic word-sized C-call arguments/results.
 [^bindgen]: `lib/c_bindgen.ml` defines the supported C types, opaque ownership helpers, and generated exception/mutator handling.
 [^tests]: `tests/stdlib_runtime.c` and `tests/stdlib/bigarray/main.ml` exercise existing shared-backing lifetime and source-level behavior.

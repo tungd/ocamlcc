@@ -1,3 +1,8 @@
+(test
+ (name bigarray_lowering_test)
+ (modules bigarray_lowering_test)
+ (libraries ocamlcc))
+
 (executable
  (name arc_mutlet_test)
  (modules arc_mutlet_test)

@@ -81,6 +81,14 @@ type unop =
   | Bint_cvt of Lambda.boxed_integer * Lambda.boxed_integer
   | Bint_neg of Lambda.boxed_integer
 
+type bigarray_access = {
+  operation : [ `Get | `Set ];
+  rank : int;
+  kind : Lambda.bigarray_kind;
+  layout : Lambda.bigarray_layout;
+  checked : bool;
+}
+
 type cexpr =
   | Atom of atom
   | Binop of binop * atom * atom
@@ -97,6 +105,7 @@ type cexpr =
   | BytesSet of bool * atom * atom * atom
   | ArrayGet of bool * Lambda.array_kind * atom * atom
   | ArraySet of bool * Lambda.array_kind * atom * atom * atom
+  | BigarrayAccess of bigarray_access * atom list
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list

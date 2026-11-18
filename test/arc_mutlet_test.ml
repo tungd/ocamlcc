@@ -167,7 +167,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.MakeArrayInit (a, b) -> count_atom (count_atom acc a) b
     | Anf.App (f, args) -> List.fold_left count_atom (count_atom acc f) args
     | Anf.Builtin (_, _, a) -> count_atom acc a
-    | Anf.Ccall (_, args) -> List.fold_left count_atom acc args
+    | Anf.BigarrayAccess (_, args) | Anf.Ccall (_, args) -> List.fold_left count_atom acc args
     | Anf.GetGlobal _ -> acc
     | Anf.Fun lf -> count_release_mut id lf.Anf.body
     | Anf.Assign (_, a) -> count_atom acc a

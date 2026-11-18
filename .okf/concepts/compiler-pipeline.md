@@ -6,7 +6,7 @@ tags: [compiler, architecture, lambda, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-18
+  at: 2026-11-18T07:25:44Z
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -85,6 +85,13 @@ top-level (mutually recursive) pure functions with direct saturated calls,
 direct calls to known Stdlib builtins resolved via
 [Builtins](/concepts/compiler-pipeline.md). Everything else fails with an
 "unsupported" error naming the construct.
+
+# Bigarray scalar accesses
+
+Lambda Bigarray reads and writes become `Anf.BigarrayAccess`. Each carries
+the operation, rank, kind, layout and bounds-check mode. ARC borrows the
+operands and preserves the exception path. QBE code generation selects the
+rank-specific boxed runtime helper. See [memory views](/concepts/memory-views.md).
 
 # Match lowering
 
