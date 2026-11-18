@@ -37,9 +37,10 @@ let check_lifetime cyclic =
   install ();
   collect ();
   check (!events = ["older"; "publish"]) "ordinary callback order or resurrection";
-  (match !saved with
-   | None -> failwith "missing resurrected target"
-   | Some x -> check (!(x.payload) = 42) "resurrected target lost payload");
+  (match !saved, Weak.get weak 0 with
+   | Some x, Some original ->
+       check (x == original && !(x.payload) = 42) "resurrected target changed"
+   | _ -> failwith "missing resurrected target");
   saved := None;
   collect ();
   check (!events = ["last"; "older"; "publish"]) "permanent death or duplicate delivery"

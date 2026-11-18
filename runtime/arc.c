@@ -1485,21 +1485,39 @@ static void cc_collect_white(TrialMap *tm, CCVec *work, CCVec *dead,
  * Ordinary ARC release and reuse therefore need no registry lookup or lock. */
 typedef struct Finalizer {
     struct Finalizer *next;
-    ArcHeader *target;
+    int64_t value; /* ordinary target, or a one-slot weak array for last callbacks */
     int64_t callback;
+    int last;
 } Finalizer;
 
 static Finalizer *finalizers; /* newest first, protected by g_cc_lock */
-static Finalizer *pending_finalizers;
+static Finalizer *last_finalizers; /* protected by g_weak_lock */
+static Finalizer *pending_finalizers; /* owned by the active dispatcher */
 static _Atomic int finalizer_dispatch_active;
+
+static ArcHeader *finalizer_target(Finalizer *f)
+{
+    return (ArcHeader *)(uintptr_t)f->value - 1;
+}
+
+static void append_pending(Finalizer *ready)
+{
+    if (ready == NULL)
+        return;
+    /* Exceptions may have left earlier callbacks pending. */
+    Finalizer **end = &pending_finalizers;
+    while (*end != NULL)
+        end = &(*end)->next;
+    *end = ready;
+}
 
 static void finalizers_mark(TrialMap *tm, CCVec *work)
 {
     for (Finalizer *f = finalizers; f != NULL; f = f->next) {
-        TrialEntry *e = trial_get(tm, f->target);
+        TrialEntry *e = trial_get(tm, finalizer_target(f));
         e->rc--;
         if (e->color == CC_COLOR_BLACK)
-            cc_mark_gray(tm, work, f->target);
+            cc_mark_gray(tm, work, finalizer_target(f));
     }
 }
 
@@ -1508,13 +1526,13 @@ static void finalizers_mark(TrialMap *tm, CCVec *work)
 static void finalizers_claim(TrialMap *tm, CCVec *work, CCVec *black_work)
 {
     for (Finalizer *f = finalizers; f != NULL; f = f->next)
-        cc_scan(tm, work, black_work, f->target);
+        cc_scan(tm, work, black_work, finalizer_target(f));
 
     Finalizer *ready = NULL;
     Finalizer **tail = &ready;
     for (Finalizer **link = &finalizers; *link != NULL;) {
         Finalizer *f = *link;
-        if (trial_get(tm, f->target)->color == CC_COLOR_WHITE) {
+        if (trial_get(tm, finalizer_target(f))->color == CC_COLOR_WHITE) {
             *link = f->next;
             *tail = f;
             tail = &f->next;
@@ -1524,14 +1542,10 @@ static void finalizers_claim(TrialMap *tm, CCVec *work, CCVec *black_work)
     }
     *tail = NULL;
     for (Finalizer *f = ready; f != NULL; f = f->next) {
-        if (trial_get(tm, f->target)->color == CC_COLOR_WHITE)
-            cc_scan_black(tm, black_work, f->target);
+        if (trial_get(tm, finalizer_target(f))->color == CC_COLOR_WHITE)
+            cc_scan_black(tm, black_work, finalizer_target(f));
     }
-    /* Exceptions may have left earlier callbacks pending. */
-    Finalizer **end = &pending_finalizers;
-    while (*end != NULL)
-        end = &(*end)->next;
-    *end = ready;
+    append_pending(ready);
 }
 
 typedef struct { TrialMap *tm; CCVec *values; } OutgoingEdges;
@@ -4931,6 +4945,29 @@ int64_t caml_gc_major_slice(int64_t n_val)
     return tag_int(0);
 }
 
+/* Weak clearing is synchronized with ARC destruction and in-place reuse.
+ * A cleared slot can never alias the next occupant of the same address. */
+static void claim_last_finalizers(void)
+{
+    Finalizer *ready = NULL;
+    Finalizer **tail = &ready;
+    arc_lock(&g_weak_lock);
+    for (Finalizer **link = &last_finalizers; *link != NULL;) {
+        Finalizer *f = *link;
+        ArcWeakArray *weak = (ArcWeakArray *)(uintptr_t)f->value;
+        if (weak->slots[0] == 0) {
+            *link = f->next;
+            *tail = f;
+            tail = &f->next;
+        } else {
+            link = &f->next;
+        }
+    }
+    *tail = NULL;
+    arc_unlock(&g_weak_lock);
+    append_pending(ready);
+}
+
 int64_t caml_gc_major(int64_t ignored)
 {
     if (ocamlcc_get_exn() != 0 ||
@@ -4940,17 +4977,15 @@ int64_t caml_gc_major(int64_t ignored)
     int entered = arc_mutator_enter();
     collect_cycles(1);
     atomic_fetch_add_explicit(&g_gc_collections, 1, memory_order_relaxed);
-    for (;;) {
-        arc_lock(&g_cc_lock);
+    claim_last_finalizers();
+    while (pending_finalizers != NULL) {
         Finalizer *f = pending_finalizers;
-        if (f != NULL)
-            pending_finalizers = f->next;
-        arc_unlock(&g_cc_lock);
-        if (f == NULL)
-            break;
+        pending_finalizers = f->next;
         /* A compiled unary function consumes its argument. Transfer this
          * registration's pin and keep the borrowed callback alive across it. */
-        int64_t result = ocamlcc_apply1_raw(f->callback, (int64_t)(uintptr_t)(f->target + 1));
+        int64_t result = ocamlcc_apply1_raw(f->callback, f->last ? 1 : f->value);
+        if (f->last)
+            arc_release_val(f->value);
         arc_release_val(result);
         arc_release_val(f->callback);
         arc_release(f);
@@ -4978,7 +5013,7 @@ int64_t caml_get_minor_free(int64_t ignored)
     return tag_int(262144);
 }
 
-int64_t caml_final_register(int64_t fn, int64_t v)
+static int64_t register_finalizer(int64_t fn, int64_t v, int last)
 {
     ArcHeader *target = is_heap_ptr(v) ? (ArcHeader *)(uintptr_t)v - 1 : NULL;
     if (target == NULL || target->tag == ARC_TAG_FLOAT ||
@@ -4989,22 +5024,36 @@ int64_t caml_final_register(int64_t fn, int64_t v)
     }
     Finalizer *f = arc_alloc(0, 0, sizeof(*f));
     arc_retain_val(fn);
-    arc_retain_val(v);
     f->callback = fn;
-    f->target = target;
-    arc_lock(&g_cc_lock);
-    f->next = finalizers;
-    finalizers = f;
-    arc_unlock(&g_cc_lock);
+    f->last = last;
+    if (last) {
+        f->value = ocamlcc_weak_create(tag_int(1));
+        ArcWeakArray *weak = (ArcWeakArray *)(uintptr_t)f->value;
+        arc_lock(&g_weak_lock);
+        weak->slots[0] = v;
+        weak_targets_insert(v);
+        f->next = last_finalizers;
+        last_finalizers = f;
+        arc_unlock(&g_weak_lock);
+    } else {
+        arc_retain_val(v);
+        f->value = v;
+        arc_lock(&g_cc_lock);
+        f->next = finalizers;
+        finalizers = f;
+        arc_unlock(&g_cc_lock);
+    }
     return 1;
+}
+
+int64_t caml_final_register(int64_t fn, int64_t v)
+{
+    return register_finalizer(fn, v, 0);
 }
 
 int64_t caml_final_register_called_without_value(int64_t fn, int64_t v)
 {
-    (void)fn; (void)v;
-    static const char message[] = "Gc.finalise_last: unsupported by ARC";
-    raise_failure_cstr(message, sizeof(message) - 1);
-    return 1;
+    return register_finalizer(fn, v, 1);
 }
 
 int64_t caml_final_release(int64_t ignored)

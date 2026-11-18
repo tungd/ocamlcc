@@ -27,11 +27,11 @@ sources:
 
 # Decision
 
-Discover unreachable objects in the ARC runtime. Run their OCaml callbacks at a point where generated code can handle an exception and where every live OCaml value has an owner. Ordinary finalizers can publish their argument, so discovery must preserve the object and its outgoing edges. Last finalizers receive unit and become eligible after permanent death. Ordinary finalizers now run at explicit major collections. Last finalizers and automatic delivery are later parts of this design.[^runtime][^gc-api]
+Discover unreachable objects in the ARC runtime. Run their OCaml callbacks at a point where generated code can handle an exception and where every live OCaml value has an owner. Ordinary finalizers can publish their argument, so discovery must preserve the object and its outgoing edges. Last finalizers receive unit and become eligible after permanent death. Ordinary finalizers now run at explicit major collections. Last callbacks use a weak slot. After a major collection clears it, the dispatcher calls the closure with unit. Automatic delivery is a later part of this design.[^runtime][^gc-api]
 
 ## Registration and ownership
 
-Each ordinary registration owns its callback and pins its target in the runtime registry. The collection trial subtracts precisely one pin per registration from its private counts, so pins preserve storage without contributing to reachability. A callback that captures its target, even indirectly, therefore keeps it alive. Two registrations of the same function are independent. Give registrations a serial number under the registry lock. At registration, reject immediate values, empty array constants, boxed floats and identifiable lazy/forcing/forward values with `Invalid_argument`. An accepted immortal heap constant can never become eligible. Its callback remains a root, since releasing its captures early could make other finalizers run.[^gc-api]
+Each ordinary registration owns its callback and pins its target in the runtime registry. The collection trial subtracts precisely one pin per registration from its private counts, so pins preserve storage without contributing to reachability. A callback that captures its target, even indirectly, therefore keeps it alive. Two registrations of the same function are independent. Newest-first ordinary and last registration lists preserve reverse registration order during discovery. At registration, reject immediate values, empty array constants, boxed floats and identifiable lazy/forcing/forward values with `Invalid_argument`. An accepted immortal heap constant can never become eligible. Its callback remains a root, since releasing its captures early could make other finalizers run.[^gc-api]
 
 ## What happens when an owner disappears
 
@@ -67,7 +67,7 @@ One dispatcher owns a callback at a time. It takes work under a lock, unlocks, a
 
 ## Executable reference
 
-Run the standalone fixture from the repository root. It checks reverse registration order, resurrection with an intact payload and cycle, eventual last-callback delivery after weak clearing, and repeatable alarm delivery followed by deletion. It deliberately fails if registration is unsupported. Stock OCaml 5.5.0 passed each case. The ordinary-ref regression now passes on ARC. The broader lifecycle fixture also exercises last registration.[^contract]
+Run the standalone fixture from the repository root. It checks reverse registration order, resurrection with an intact payload and cycle, eventual last-callback delivery after weak clearing, and repeatable alarm delivery followed by deletion. It deliberately fails if registration is unsupported. Stock OCaml 5.5.0 passed each case. The same fixture now passes on ARC for ordinary and last callbacks on acyclic and cyclic targets, and for re-registration and deletion of alarms at explicit major collections.[^contract]
 
 ```sh
 ocaml tests/finalizer_lifecycle.ml

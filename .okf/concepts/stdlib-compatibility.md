@@ -134,7 +134,7 @@ CMI/archive paths explicitly; 72/72 describes the compatibility build.
 
 # Finalizer registration
 
-`Gc.finalise` delivers ordinary callbacks during explicit major collections. `Gc.finalise_last` currently raises a catchable `Failure`. The [ARC finalizer design](/concepts/arc-finalizers.md) describes the intended callback lifecycle.
+`Gc.finalise` delivers ordinary callbacks during explicit major collections. `Gc.finalise_last` receives unit after its target’s weak slots clear. Both paths run at explicit major collection boundaries. The [ARC finalizer design](/concepts/arc-finalizers.md) describes the intended callback lifecycle.
 
 # Verified coverage (2026-11-18, macOS arm64 / OCaml 5.5.0)
 

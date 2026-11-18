@@ -108,8 +108,9 @@ copied working directories. Repository API regressions return nonzero on failure
 
 Before ordinary finalizer support, on macOS arm64 with OCaml 5.5.0, 67 of 77 standalone upstream tests pass,
 ten fail, and 42 additional files are skipped. All 11 repository API fixtures
-pass on both stock OCaml and ocamlcc. Ordinary ARC finalizers now run at explicit major collections;
-`Gc.finalise_last` still raises a catchable `Failure`.
+pass on both stock OCaml and ocamlcc. ARC runs ordinary and last callbacks at explicit major
+collections. An ordinary callback can resurrect the original object. Last
+callbacks run after its weak slots clear.
 
 Lexing and Parsing use pure OCaml table interpreters. Bigarray views retain a
 shared ARC backing buffer. Marshal reads/writes the standard uncompressed

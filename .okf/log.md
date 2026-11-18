@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Deliver last callbacks when the weak registry confirms permanent death. The compatibility suite now runs the full lifecycle and alarm reference fixture.
+
 - 2026-11-18 (codex/1): Implement ordinary callback discovery and resurrection at explicit major collections. Registration pins protect reuse without adding lock traffic to ordinary drops. Preserve the last use of Sys.opaque_identity across collection.
 
 - 2026-11-18 (codex/1): Specify lock ordering and the empty-registry drop path for finalizers after checking existing allocator, cycle-candidate and weak-lock traffic.
