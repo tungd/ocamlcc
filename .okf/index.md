@@ -21,6 +21,7 @@ links into the concepts below.
 | [/concepts/value-representation.md](/concepts/value-representation.md) | stable | Tagged 63-bit immediates vs. heap ARC objects. |
 | [/concepts/vendored-qbe.md](/concepts/vendored-qbe.md) | stable | QBE as an out-of-tree vendored dependency. |
 | [/concepts/perceus-arc.md](/concepts/perceus-arc.md) | stable | Freestanding slab allocator, Perceus ARC, and weak refs (Phase 2). |
+| [/concepts/memory-views.md](/concepts/memory-views.md) | draft | Bigarray scalar specialization and retained native memory views on ARM64/AMD64 Linux/macOS. |
 | [/concepts/arc-finalizers.md](/concepts/arc-finalizers.md) | draft | Finalizer ownership, resurrection and cycle collection. |
 | [/concepts/wren-fibers.md](/concepts/wren-fibers.md) | stable | Stackful fibers, shadow stack, and async poller (Phase 3). |
 | [/concepts/platform-abstraction-layer.md](/concepts/platform-abstraction-layer.md) | stable | The 6-hook freestanding PAL. |

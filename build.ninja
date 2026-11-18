@@ -110,7 +110,7 @@ build $builddir/qbe/qbe: link_qbe $builddir/qbe/main.o $builddir/qbe/util.o $bui
 
 build $builddir/rt/pal.o:      cc_rt runtime/pal.c      | runtime/pal.h
 build $builddir/rt/pal_ctx.o:  as_obj runtime/pal_ctx.S
-build $builddir/rt/arc.o:      cc_rt runtime/arc.c      | runtime/arc.h runtime/pal.h runtime/fiber.h runtime/bigarray.inc runtime/marshal.inc
+build $builddir/rt/arc.o:      cc_rt runtime/arc.c      | runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/bigarray.inc runtime/marshal.inc
 build $builddir/rt/closure.o:  cc_rt runtime/closure.c  | runtime/arc.h runtime/pal.h
 build $builddir/rt/fiber.o:    cc_rt runtime/fiber.c    | runtime/fiber.h runtime/arc.h runtime/pal.h
 build $builddir/rt/builtins.o:   cc_rt runtime/builtins.c
@@ -442,7 +442,7 @@ rule run_asan_test
 
 build $builddir/asan/rt/pal.o:      cc_rt_asan runtime/pal.c      | runtime/pal.h
 build $builddir/asan/rt/pal_ctx.o:  as_obj     runtime/pal_ctx.S
-build $builddir/asan/rt/arc.o:      cc_rt_asan runtime/arc.c      | runtime/arc.h runtime/pal.h runtime/fiber.h runtime/bigarray.inc runtime/marshal.inc
+build $builddir/asan/rt/arc.o:      cc_rt_asan runtime/arc.c      | runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/bigarray.inc runtime/marshal.inc
 build $builddir/asan/rt/closure.o:  cc_rt_asan runtime/closure.c  | runtime/arc.h runtime/pal.h
 build $builddir/asan/rt/fiber.o:    cc_rt_asan runtime/fiber.c    | runtime/fiber.h runtime/arc.h runtime/pal.h
 build $builddir/asan/rt/builtins.o:   cc_rt_asan runtime/builtins.c

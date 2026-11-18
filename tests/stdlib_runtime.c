@@ -1,5 +1,6 @@
 /* Public C runtime contracts: malformed Marshal cleanup and ARC view lifetime. */
 #include "../runtime/arc.h"
+#include "../runtime/ocamlcc_bigarray.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -84,9 +85,111 @@ static void test_view_lifetime(void)
     arc_release_val(view); arc_release(dims);
     assert(arc_live_objects() == before);
 }
+static void test_retained_c_subview(void)
+{
+    int64_t before = arc_live_objects();
+    int64_t *dims = arc_alloc_array(1, tagged(4));
+    int64_t parent = caml_ba_create(tagged(OCAMLCC_BA_INT), tagged(OCAMLCC_BA_C_LAYOUT),
+                                    (int64_t)(uintptr_t)dims);
+    arc_release(dims);
+    int64_t sub = caml_ba_sub(parent, tagged(1), tagged(2));
+    caml_ba_set_1(parent, tagged(1), tagged(42));
+    int64_t sibling = caml_ba_sub(parent, tagged(2), tagged(1));
+    int64_t weak = ocamlcc_weak_create(tagged(1));
+    arc_retain_val(sub); /* transfer this owner into Some */
+    int64_t *some = arc_alloc(0, 1, sizeof(*some));
+    some[0] = sub;
+    ocamlcc_weak_set(weak, tagged(0), (int64_t)(uintptr_t)some);
+    arc_release(some);
+
+    OcamlccBigarrayView *first = ocamlcc_bigarray_view_acquire(sub);
+    assert(first != NULL);
+    OcamlccBigarrayView *second = ocamlcc_bigarray_view_retain(first);
+    assert(second != NULL);
+    OcamlccBigarrayInfo info = ocamlcc_bigarray_view_info(first);
+    arc_release_val(parent);
+    arc_release_val(sub);
+    ocamlcc_bigarray_view_release(first);
+    ocamlcc_arc_collect(1);
+
+    assert(ocamlcc_weak_check(weak, tagged(0)) == tagged(1));
+    assert(info.kind == OCAMLCC_BA_INT && info.layout == OCAMLCC_BA_C_LAYOUT);
+    assert(info.rank == 1 && info.dims[0] == 2);
+    assert(info.byte_length == 2 * sizeof(int64_t));
+    int64_t *data = info.data;
+    assert(data[0] == 42);
+    data[1] = 73;
+    assert(caml_ba_get_1(sibling, tagged(0)) == tagged(73));
+
+    arc_release_val(sibling);
+    ocamlcc_arc_collect(1);
+    assert(data[1] == 73 && info.dims[0] == 2);
+    data[0] = 17;
+    int64_t upgraded = ocamlcc_weak_get(weak, tagged(0));
+    assert(upgraded != tagged(0));
+    assert(caml_ba_get_1(*(int64_t *)(uintptr_t)upgraded, tagged(0)) == tagged(17));
+    arc_release_val(upgraded);
+    ocamlcc_bigarray_view_release(second);
+    assert(ocamlcc_weak_check(weak, tagged(0)) == tagged(0));
+    arc_release_val(weak);
+    assert(arc_live_objects() == before);
+}
+
+static void test_c_view_shapes(void)
+{
+    int64_t before = arc_live_objects();
+    int64_t *dims = arc_alloc_array(2, tagged(3));
+    dims[1] = tagged(2);
+    int64_t parent = caml_ba_create(tagged(OCAMLCC_BA_FLOAT64), tagged(OCAMLCC_BA_FORTRAN_LAYOUT),
+                                    (int64_t)(uintptr_t)dims);
+    arc_release(dims);
+    /* Fortran sub indexes the last dimension from one. */
+    int64_t column = caml_ba_sub(parent, tagged(2), tagged(1));
+    int64_t empty = caml_ba_sub(parent, tagged(3), tagged(0));
+    OcamlccBigarrayView *whole = ocamlcc_bigarray_view_acquire(parent);
+    OcamlccBigarrayView *part = ocamlcc_bigarray_view_acquire(column);
+    OcamlccBigarrayView *end = ocamlcc_bigarray_view_acquire(empty);
+    assert(whole && part && end);
+    OcamlccBigarrayInfo base = ocamlcc_bigarray_view_info(whole);
+    OcamlccBigarrayInfo slice = ocamlcc_bigarray_view_info(part);
+    OcamlccBigarrayInfo tail = ocamlcc_bigarray_view_info(end);
+    assert(slice.kind == OCAMLCC_BA_FLOAT64 && slice.layout == OCAMLCC_BA_FORTRAN_LAYOUT);
+    assert(slice.rank == 2 && slice.dims[0] == 3 && slice.dims[1] == 1);
+    assert(slice.byte_length == 3 * sizeof(double) && slice.data == (double *)base.data + 3);
+    assert(tail.byte_length == 0 && tail.dims[1] == 0);
+    ocamlcc_bigarray_view_release(end);
+    ocamlcc_bigarray_view_release(part);
+    ocamlcc_bigarray_view_release(whole);
+    arc_release_val(empty);
+    arc_release_val(column);
+    arc_release_val(parent);
+
+    dims = arc_alloc_array(0, tagged(0));
+    int64_t scalar = caml_ba_create(tagged(OCAMLCC_BA_COMPLEX64), tagged(OCAMLCC_BA_C_LAYOUT),
+                                    (int64_t)(uintptr_t)dims);
+    arc_release(dims);
+    OcamlccBigarrayView *point = ocamlcc_bigarray_view_acquire(scalar);
+    assert(point);
+    OcamlccBigarrayInfo info = ocamlcc_bigarray_view_info(point);
+    assert(info.rank == 0 && info.byte_length == 2 * sizeof(double));
+    ocamlcc_bigarray_view_release(point);
+    arc_release_val(scalar);
+
+    int64_t boxed = ocamlcc_alloc_custom(ARC_CUSTOM_INT64, 42);
+    assert(ocamlcc_bigarray_view_acquire(boxed) == NULL);
+    assert(ocamlcc_bigarray_view_acquire(tagged(0)) == NULL);
+    assert(ocamlcc_bigarray_view_retain(NULL) == NULL);
+    ocamlcc_bigarray_view_release(NULL);
+    assert(ocamlcc_get_exn() == 0);
+    arc_release_val(boxed);
+    assert(arc_live_objects() == before);
+}
+
 int main(void)
 {
     test_partial_cycle(); test_complete_cycle(); test_truncation_and_mutation(); test_view_lifetime();
+    test_retained_c_subview();
+    test_c_view_shapes();
     puts("stdlib runtime: malformed cleanup, cycles, truncation, views");
     return 0;
 }

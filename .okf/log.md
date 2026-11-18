@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Export retained Bigarray subviews to C through an installed C/C++ header. Native tests cover aliasing, weak clearing after the last release, Fortran column offsets, empty views and rank-zero scalars. See [memory views](/concepts/memory-views.md).
+
 - 2026-11-18 (codex/1): Publish a released finalizer queue to polls and explicit collections on other mutators. A native FFI regression observes delivery before the releasing thread resumes, even when a fresh trial cannot run.
 
 - 2026-11-18 (codex/1): Implement Gc.finalise_release for nested dispatch. The shared stock OCaml and ARC fixture verifies callback order, exactly-once delivery, and the lifetimes of the outer argument and a captured buffer.

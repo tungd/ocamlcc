@@ -20,6 +20,52 @@ static size_t ba_count(const ArcBigarray *a)
     return count;
 }
 
+OcamlccBigarrayView *ocamlcc_bigarray_view_acquire(int64_t value)
+{
+    if (!is_heap_ptr(value))
+        return NULL;
+    int entered = arc_mutator_enter();
+    ArcBigarray *view = (ArcBigarray *)(uintptr_t)value;
+    const ArcHeader *header = (const ArcHeader *)view - 1;
+    if (header->tag == ARC_TAG_CUSTOM && header->reserved == ARC_CUSTOM_BIGARRAY)
+        arc_retain(view);
+    else
+        view = NULL;
+    arc_mutator_leave(entered);
+    return view;
+}
+
+OcamlccBigarrayView *ocamlcc_bigarray_view_retain(OcamlccBigarrayView *view)
+{
+    if (view != NULL) {
+        int entered = arc_mutator_enter();
+        arc_retain(view);
+        arc_mutator_leave(entered);
+    }
+    return view;
+}
+
+void ocamlcc_bigarray_view_release(OcamlccBigarrayView *view)
+{
+    if (view != NULL) {
+        int entered = arc_mutator_enter();
+        arc_release(view);
+        arc_mutator_leave(entered);
+    }
+}
+
+OcamlccBigarrayInfo ocamlcc_bigarray_view_info(const OcamlccBigarrayView *view)
+{
+    return (OcamlccBigarrayInfo){
+        .data = view->data,
+        .byte_length = ba_count(view) * ba_sizes[view->kind],
+        .dims = view->dims,
+        .rank = view->ndims,
+        .kind = view->kind,
+        .layout = view->layout
+    };
+}
+
 static ArcBigarray *ba_view(ArcBigarray *source, int ndims, const int64_t *dims,
                             size_t offset, int layout)
 {

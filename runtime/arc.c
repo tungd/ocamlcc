@@ -3,6 +3,7 @@
  *
  * Uses pal_page_alloc / pal_page_free directly with no libc heap calls. */
 #include "arc.h"
+#include "ocamlcc_bigarray.h"
 
 #include "fiber.h"
 #include "pal.h"
@@ -59,7 +60,7 @@ typedef struct ArcBigarrayBuffer {
     size_t bytes;
 } ArcBigarrayBuffer;
 
-typedef struct ArcBigarray {
+typedef struct OcamlccBigarrayView {
     ArcBigarrayBuffer *backing;
     uint8_t *data;
     int ndims, kind, layout;

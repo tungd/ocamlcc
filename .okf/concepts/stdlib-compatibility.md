@@ -52,7 +52,9 @@ one-based primitive number to the zero-based generic dimension API. Views
 retain a backing descriptor, which releases its PAL allocation after the last
 view dies. The core API supports all element kinds, both layouts, checked
 indexing, fill/blit, and shared sub/slice/reshape/layout views. These helpers
-live in `runtime/bigarray.inc`, included by `arc.c`.
+live in `runtime/bigarray.inc`, included by `arc.c`. C callers can retain a
+subview with its data and dimensions across collection. The public interface
+is documented in [memory views](/concepts/memory-views.md).
 The native stdlib build now compiles all 72/72 modules. Marshal supports
 uncompressed standard streams for integers, ordinary blocks, strings, floats,
 float arrays, and boxed integers, via strings/bytes/buffers/channels. The

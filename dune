@@ -4,6 +4,7 @@
  (files
   (runtime/arc.c as runtime/arc.c)
   (runtime/arc.h as runtime/arc.h)
+  (runtime/ocamlcc_bigarray.h as runtime/ocamlcc_bigarray.h)
   (runtime/bigarray.inc as runtime/bigarray.inc)
   (runtime/builtins.c as runtime/builtins.c)
   (runtime/closure.c as runtime/closure.c)
