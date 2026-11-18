@@ -6,7 +6,7 @@ tags: [memory, bigarray, ffi, compiler, performance]
 status: draft
 generated:
   by: codex/1
-  at: 2026-11-18T07:37:52Z
+  at: 2026-11-18T17:08:44Z
 sources:
   - id: scope
     resource: Conversation on 2026-11-18 about ARC, Bigarray, memory views, and desktop target scope
@@ -204,19 +204,26 @@ For a float64 Array1 store with known C or Fortran layout, the compiler
 propagates the demand for a double into its value expression. Direct float64
 Array1 reads return doubles and multiplication produces a QBE double.
 Other operands cross the ordinary OCaml value ABI and are unboxed at use.
-This specialization covers nested multiplication expressions. An intermediate
-bound by a separate `let`, returned, or passed to a generic call can still
-allocate a box. Raw temporaries stay out of ARC cleanup and the fiber shadow
-stack. The backing owners follow ordinary ARC liveness.[^lowering][^codegen]
+The compiler also follows named `let` bindings backwards within a
+straight-line chain. A load or multiply stays unboxed when all of its uses
+feed scalar operations in that chain. A binding with a boxed use, such as
+returning it or capturing it in a closure, keeps one shared OCaml value.
+Bindings used across a branch or join retain the boxed representation.
+Raw temporaries stay out of ARC cleanup and the fiber shadow stack.
+The backing owners follow ordinary ARC liveness.[^lowering][^codegen]
 
 The read and write helpers share the runtime’s rank, layout and bounds
 checks. The regression exercises overlapping views, partial writes on a
 short destination, Fortran indexing, NaN, signed zero and a callback that
-collects between the load and multiply.[^bigarray][^tests]
+mutates the source and collects between the load and multiply. A separate
+case checks that the returned product and the closure capture share the
+same box.[^bigarray][^tests]
 
 Using `Gc.minor_words ()` around the loop on ARM64 macOS, the same test
 measured 771 ARC words before specialization and 3 afterward for 128
-elements. Its zero-iteration control measured 3 words in both builds.
+elements. Both the direct expression and the loop with named `cell` and
+`product` bindings reproduced this change in their respective revisions.
+The zero-iteration control measured 3 words in each build.
 The first counter read allocates its own three-word result. The views and
 factor are already allocated at entry. The ARM64 Linux fixture also measured
 3 words for both sizes, and the generated scale function produced the
@@ -276,9 +283,9 @@ Unknown kind/layout or unsupported escape patterns retain the generic path.
 3. **Foreign backing ownership (implemented).** The runtime and generated
    headers accept caller-owned mutable storage with a release callback. Tests
    cover rejected transfers, escaping rows and cycle-owned views.
-4. **Typed scalar lowering (float64 Array1 scale implemented).** Extend the
-   scalar path to local bindings and additional operations while preserving
-   value identity at escapes. Then expand kinds with generic fallback.
+4. **Typed scalar lowering (float64 Array1 scale implemented).** Direct
+   expressions and straight-line local bindings use the scalar path. Further
+   work covers additional operations, control-flow joins, and other kinds.
 5. **Integration and reporting.** Update examples, public C ownership comments,
    [stdlib compatibility](/concepts/stdlib-compatibility.md), and the
    [compiler pipeline](/concepts/compiler-pipeline.md) to describe implemented

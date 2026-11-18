@@ -839,6 +839,101 @@ let rec free_vars (e : aexpr) : Ident.Set.t =
       Ident.Set.union s (Ident.Set.of_list rtoks)
   | ShadowPop (_, _, body) -> free_vars body
 
+(* Walk a straight-line chain backwards from its scalar consumers. A binding
+   needs a box if any use needs an OCaml value, including captures and uses in
+   the control-flow expression at the end of the chain. *)
+let specialize_float_chain bindings tail =
+  let demand vars = function
+    | Boxed_float (Var id) -> Ident.Set.add id vars
+    | Boxed_float _ | Raw_float _ -> vars
+  in
+  let select (boxed, scalar, raw, code) (id, ce) =
+    let ce, raw =
+      if Ident.Set.mem id scalar && not (Ident.Set.mem id boxed) then
+        match ce with
+        | BigarrayAccess
+            (({ operation = `Get; rank = 1; kind = Pbigarray_float64; layout; _ } as access),
+             [arr; index]) when scalar_layout layout ->
+            Float64Load (access, arr, index), Ident.Set.add id raw
+        | Binop (Fmul, lhs, rhs) ->
+            FloatMul (Boxed_float lhs, Boxed_float rhs), Ident.Set.add id raw
+        | _ -> ce, raw
+      else ce, raw
+    in
+    let boxed = Ident.Set.remove id boxed and scalar = Ident.Set.remove id scalar in
+    let boxed, scalar =
+      match ce with
+      | Float64Store (_, arr, index, v) ->
+          atom_vars (atom_vars boxed arr) index, demand scalar v
+      | FloatMul (lhs, rhs) -> boxed, demand (demand scalar lhs) rhs
+      | _ -> cexpr_vars free_vars boxed ce, scalar
+    in
+    boxed, scalar, raw, (id, ce) :: code
+  in
+  let _, _, raw, code =
+    List.fold_left select (free_vars tail, Ident.Set.empty, Ident.Set.empty, []) bindings
+  in
+  let operand = function
+    | Boxed_float (Var id) when Ident.Set.mem id raw -> Raw_float id
+    | v -> v
+  in
+  List.fold_right (fun (id, ce) body ->
+    let ce =
+      match ce with
+      | Float64Store (access, arr, index, v) ->
+          Float64Store (access, arr, index, operand v)
+      | FloatMul (lhs, rhs) -> FloatMul (operand lhs, operand rhs)
+      | _ -> ce
+    in
+    Let (id, ce, body)) code tail
+
+let rec specialize_float_bindings = function
+  | Let _ as expr -> specialize_let_chain [] expr
+  | MutLet (id, ce, body) ->
+      MutLet (id, ce, specialize_float_bindings body)
+  | LetJoin (id, rhs, body) ->
+      LetJoin (id, specialize_float_bindings rhs, specialize_float_bindings body)
+  | LetRec (defs, body) ->
+      let defs =
+        List.map (fun rb -> { rb with def = specialize_float_function rb.def }) defs
+      in
+      LetRec (defs, specialize_float_bindings body)
+  | If (v, yes, no) ->
+      If (v, specialize_float_bindings yes, specialize_float_bindings no)
+  | Switch (v, cases) ->
+      Switch (v, { consts = List.map specialize_float_case cases.consts;
+                   blocks = List.map specialize_float_case cases.blocks;
+                   fail = Option.map specialize_float_bindings cases.fail })
+  | StringSwitch (v, cases, fail) ->
+      StringSwitch (v, List.map specialize_float_case cases,
+                    Option.map specialize_float_bindings fail)
+  | StaticCatch (body, label, params, handler) ->
+      StaticCatch (specialize_float_bindings body, label, params,
+                   specialize_float_bindings handler)
+  | TryWith (body, exn, handler) ->
+      TryWith (specialize_float_bindings body, exn, specialize_float_bindings handler)
+  | While (cond, body) ->
+      While (specialize_float_bindings cond, specialize_float_bindings body)
+  | For (id, start, stop, dir, body) ->
+      For (id, start, stop, dir, specialize_float_bindings body)
+  | expr -> expr
+
+and specialize_let_chain bindings = function
+  | Let (id, ce, body) ->
+      let ce = match ce with Fun lf -> Fun (specialize_float_function lf) | _ -> ce in
+      specialize_let_chain ((id, ce) :: bindings) body
+  | tail ->
+      let tail = specialize_float_bindings tail in
+      if List.exists (function _, (Float64Store _ | FloatMul _) -> true | _ -> false) bindings
+      then specialize_float_chain bindings tail
+      else List.fold_left (fun body (id, ce) -> Let (id, ce, body)) tail bindings
+
+and specialize_float_function lf =
+  { lf with body = specialize_float_bindings lf.body }
+
+and specialize_float_case : 'a. 'a * aexpr -> 'a * aexpr =
+  fun (tag, arm) -> tag, specialize_float_bindings arm
+
 (* Non-capturing function definitions, in pre-order.
 
    A function (or a whole mutual [let rec] group) whose free variables are
@@ -942,5 +1037,7 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = [])
   Fun.protect
     ~finally:(fun () -> builtins_table := saved)
     (fun () ->
-      try Ok { module_ident = program.module_ident; code = conv_tail program.code }
+      try
+        let code = conv_tail program.code |> specialize_float_bindings in
+        Ok { module_ident = program.module_ident; code }
       with Unsupported what -> Error what)

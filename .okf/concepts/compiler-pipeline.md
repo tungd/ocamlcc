@@ -6,7 +6,7 @@ tags: [compiler, architecture, lambda, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-18T07:37:52Z
+  at: 2026-11-18T17:08:44Z
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -90,8 +90,10 @@ direct calls to known Stdlib builtins resolved via
 
 ANF carries the operation, rank, kind, layout and bounds-check mode for
 Bigarray accesses. A concrete float64 Array1 store accepts raw doubles
-from nested reads and multiplications. Other value expressions use the
-ordinary boxed ABI. ARC borrows the arrays, checks for exceptions after
+from nested reads and multiplications. A backwards scan of consecutive
+`let` bindings also selects raw loads and products when every use accepts a
+double in the same chain. Captures and other boxed uses keep the existing
+OCaml value. ARC borrows the arrays, checks for exceptions after
 access, and excludes raw temporaries from reference counting and shadow
 frames. QBE emits a double multiply between the typed load and store
 helpers. See [memory views](/concepts/memory-views.md).
