@@ -102,69 +102,53 @@ let rec rm_rf path =
     end
     else Sys.remove path
 
+let capture_process prog args stream =
+  let read_fd, write_fd = Unix.pipe ~cloexec:true () in
+  let stdout, stderr =
+    match stream with
+    | `Stdout -> (write_fd, Unix.stderr)
+    | `Stderr stdout_fd -> (stdout_fd, write_fd)
+  in
+  let channel = Unix.in_channel_of_descr read_fd in
+  Fun.protect ~finally:(fun () -> close_in_noerr channel) (fun () ->
+      match
+        Fun.protect ~finally:(fun () -> Unix.close write_fd) (fun () ->
+            Unix.create_process prog (Array.of_list (prog :: args))
+              Unix.stdin stdout stderr)
+      with
+      | exception Unix.Unix_error (err, _, _) ->
+          Error (Printf.sprintf "cannot start command `%s`: %s" prog (Unix.error_message err))
+      | pid ->
+          let output = In_channel.input_all channel in
+          let _, status = Unix.waitpid [] pid in
+          Ok (status, String.trim output))
+
 let run_cmd ~verbose ?stdout_file prog args =
   if verbose then
     Printf.eprintf "+ %s %s\n%!" prog (String.concat " " args);
-  let out_fd =
+  let run stdout_fd = capture_process prog args (`Stderr stdout_fd) in
+  let result =
     match stdout_file with
-    | Some p ->
-        Unix.openfile p [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644
-    | None -> Unix.stdout
+    | None -> run Unix.stdout
+    | Some path ->
+        let fd = Unix.openfile path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o644 in
+        Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> run fd)
   in
-  let r_err, w_err = Unix.pipe () in
-  let pid =
-    Fun.protect
-      ~finally:(fun () ->
-        (match stdout_file with Some _ -> Unix.close out_fd | None -> ());
-        Unix.close w_err)
-      (fun () ->
-        Unix.create_process prog
-          (Array.of_list (prog :: args))
-          Unix.stdin out_fd w_err)
-  in
-  let ic = Unix.in_channel_of_descr r_err in
-  let err_buf = Buffer.create 256 in
-  (try
-     while true do
-       Buffer.add_string err_buf (input_line ic);
-       Buffer.add_char err_buf '\n'
-     done
-   with End_of_file -> ());
-  close_in_noerr ic;
-  let _, status = Unix.waitpid [] pid in
-  match status with
-  | Unix.WEXITED 0 -> Ok ()
-  | Unix.WEXITED c ->
-      let msg = String.trim (Buffer.contents err_buf) in
+  match result with
+  | Error _ as error -> error
+  | Ok (Unix.WEXITED 0, _) -> Ok ()
+  | Ok (Unix.WEXITED c, msg) ->
       Error
         (Printf.sprintf "command `%s` exited with %d%s" prog c
            (if msg = "" then "" else ": " ^ msg))
-  | Unix.WSIGNALED s | Unix.WSTOPPED s ->
+  | Ok ((Unix.WSIGNALED s | Unix.WSTOPPED s), _) ->
       Error (Printf.sprintf "command `%s` terminated by signal %d" prog s)
 
 let capture_cmd prog args =
-  let r_fd, w_fd = Unix.pipe () in
-  let pid =
-    Fun.protect
-      ~finally:(fun () -> Unix.close w_fd)
-      (fun () ->
-        Unix.create_process prog
-          (Array.of_list (prog :: args))
-          Unix.stdin w_fd Unix.stderr)
-  in
-  let ic = Unix.in_channel_of_descr r_fd in
-  let buf = Buffer.create 64 in
-  (try
-     while true do
-       Buffer.add_string buf (input_line ic);
-       Buffer.add_char buf '\n'
-     done
-   with End_of_file -> ());
-  close_in_noerr ic;
-  let _, status = Unix.waitpid [] pid in
-  match status with
-  | Unix.WEXITED 0 -> Ok (String.trim (Buffer.contents buf))
-  | _ -> Error (Printf.sprintf "command `%s` failed" prog)
+  match capture_process prog args `Stdout with
+  | Error _ as error -> error
+  | Ok (Unix.WEXITED 0, output) -> Ok output
+  | Ok _ -> Error (Printf.sprintf "command `%s` failed" prog)
 
 let detect_host_target () : target_spec =
   let os_s = match capture_cmd "uname" [ "-s" ] with Ok s -> s | Error _ -> "Linux" in

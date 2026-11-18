@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): The driver returns a diagnostic naming an unavailable external tool, including xcrun when an iOS build runs on a Linux host.
+
 - 2026-11-18 (codex/1): The Linux PAL and libc bindings request the default glibc interfaces before including headers. Strict C11 builds use these interfaces for the monotonic clock, anonymous mappings and mutex attributes.
 
 - 2026-11-18 (codex/1): Each standalone test executable declares its module explicitly so Dune 3.14 can also build the suite.

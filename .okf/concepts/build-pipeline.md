@@ -92,3 +92,7 @@ Bindgen reserves legal record member names before escaping C and C++ keywords an
 # Linux runtime compilation
 
 The Linux PAL and libc bindings request the default glibc interfaces before including headers. Strict C11 builds use these interfaces for the monotonic clock, anonymous mappings and mutex attributes.
+
+# Missing toolchain executables
+
+The driver returns a diagnostic naming an unavailable external tool, including xcrun when an iOS build runs on a Linux host.
