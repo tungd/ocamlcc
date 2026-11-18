@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Publish a released finalizer queue to polls and explicit collections on other mutators. A native FFI regression observes delivery before the releasing thread resumes, even when a fresh trial cannot run.
+
 - 2026-11-18 (codex/1): Implement Gc.finalise_release for nested dispatch. The shared stock OCaml and ARC fixture verifies callback order, exactly-once delivery, and the lifetimes of the outer argument and a captured buffer.
 
 - 2026-11-18 (codex/1): Add the Bigarray memory-view implementation brief: retain ARC/QBE, specialize scalar loops, expose retained C views and foreign backing ownership, and focus on ARM64/AMD64 Linux/macOS. Defer MCU work and record measurement/reporting guidance without performance thresholds.

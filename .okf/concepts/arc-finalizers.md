@@ -17,6 +17,9 @@ sources:
   - id: runtime
     resource: runtime/arc.c
     title: ARC destruction, weak upgrades, trial deletion and GC primitives
+  - id: ffi-test
+    resource: tests/mt_ffi_host.c
+    title: Released callbacks across concurrent FFI mutators
   - id: contract
     resource: tests/finalizer_lifecycle.ml
     title: Executable reference contract for resurrection, weak slots and alarms
@@ -58,7 +61,7 @@ Registration retains the target before its caller can release it. Ordinary drops
 1. Run the existing trial to find the complete set of unreachable candidates. While the mutators are excluded, snapshot **all** ordinary registrations on that set before changing any colors. Otherwise the first finalizable vertex in a cycle could hide another in the same cycle.
 2. Claim those registrations once. Keep the registration pins on all claimed targets. From the pinned targets trace all strong outgoing edges and exclude their reachable subgraph from this sweep. This includes paths through closures and suspended fibers. Order callbacks discovered together by reverse registration order, including a leaf and its registered parent.
 3. Reclaim the remaining dead set. For each outgoing strong edge from that set to a survivor, decrement the survivor exactly once, including a survivor newly protected by a finalizer. Edges wholly inside the reclaimed set need no decrement. Noncandidate leaves losing their last owner use normal retirement. Preserve the existing collector count of objects actually reclaimed.
-4. Release collector locks and reopen the mutator gate before dispatch. A completed collection and a collection skipped because another mutator is active are distinct outcomes even though the current primitive can return zero for either. A skipped attempt preserves registrations and pending work. When the batch drops its pins, surviving cycles become candidates for another trial. Finalizers may have altered arbitrary edges, so that trial evaluates the graph again.[^runtime]
+4. Release collector locks and reopen the mutator gate before dispatch. A completed collection and a collection skipped because another mutator is active are distinct outcomes even though the current primitive can return zero for either. A skipped trial preserves all undiscovered registrations. The caller may still deliver work that an earlier successful trial discovered and a callback explicitly released. When the batch drops its pins, surviving cycles become candidates for another trial. Finalizers may have altered arbitrary edges, so that trial evaluates the graph again.[^runtime]
 
 ## Delivery, exceptions and alarms
 
@@ -79,6 +82,8 @@ Generated code checks at function entry, including self-tail-call backedges, at 
 `Gc.finalise_release ()` lets another collection dispatch while the caller continues. It returns unit and runs no user code itself. Only the executing callback’s fiber can give up dispatch. A repeated release, or one from outside a callback, has no effect. The registration has already left the queue. Its closure stays owned until return, and compiled code owns its argument across the nested collection. On return, a released callback can resume draining the queue only if it reacquires dispatch.[^runtime][^gc-api]
 
 The reference fixture attaches two ordinary callbacks to one ref. The first attempts a collection before release and again after release. The second increments the ref. The first reads both that increment and its captured byte buffer before returning. A subsequent collection checks that each callback ran once.[^contract]
+
+Releasing with callbacks still queued publishes that work to the next compiler poll or explicit collection. A second FFI mutator can drain it while the first callback waits. If multiple mutators prevent a fresh trial, new registrations wait and the allocation budget stays due. The native FFI fixture exercises both entry points and counts exactly one callback before the releasing thread resumes.[^runtime][^ffi-test]
 
 ### Remaining delivery work
 
@@ -105,6 +110,7 @@ The upstream Marshal `intern_final` test now completes. Its final output does no
 [^gc-api]: Public eligibility, callback ordering, resurrection, weak visibility and alarm guarantees.
 [^gc-ml]: `create_alarm`, `call_alarm` and `delete_alarm` use ordinary finalization and an active flag.
 [^runtime]: `arc_release`, `drop_child_val`, `release_subtree`, `arc_drop_reuse`, `ocamlcc_arc_collect` and the GC primitives are the relevant runtime seams.
+[^ffi-test]: The two-thread handoff fixture checks foreign release attempts and delivery through both polls and explicit collection.
 [^contract]: `tests/finalizer_lifecycle.ml` uses the public Gc and Weak APIs.
 [^compiler]: The ANF conversion inserts the check before ARC computes liveness.
 [^abi]: The primitive table distinguishes the cheap eligibility check from the raising and yielding dispatcher.

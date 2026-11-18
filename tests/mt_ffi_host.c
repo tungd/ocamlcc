@@ -153,6 +153,68 @@ static int test_finalizer_handoff(void)
     return deferred && last_calls == 1;
 }
 
+/* The outer callback waits for a second mutator. Both explicit collection
+ * and the generated poll path must be able to take released, ready work. */
+extern int64_t caml_final_release(int64_t);
+extern int64_t ocamlcc_finalizers_due(void);
+extern int64_t ocamlcc_poll_finalizers(void);
+
+static int use_poll, observed_handoff;
+static void *try_dispatch(void *unused)
+{
+    (void)unused;
+    int entered = arc_mutator_enter();
+    caml_final_release(1); /* unrelated fiber, including before owner release */
+    if (!use_poll)
+        caml_gc_full_major(1);
+    else if (ocamlcc_finalizers_due() != 1)
+        ocamlcc_poll_finalizers();
+    arc_mutator_leave(entered);
+    return NULL;
+}
+
+static int run_other_mutator(void)
+{
+    pthread_t thread;
+    return pthread_create(&thread, NULL, try_dispatch, NULL) == 0 &&
+           pthread_join(thread, NULL) == 0;
+}
+
+static int64_t release_and_wait(int64_t closure, int64_t unit)
+{
+    (void)closure;
+    (void)unit;
+    if (!run_other_mutator() || last_calls != 0)
+        return 1;
+    caml_final_release(1);
+    caml_final_release(1);
+    observed_handoff = run_other_mutator() && last_calls == 1;
+    return 1;
+}
+
+static int test_released_queue(int poll)
+{
+    last_calls = observed_handoff = 0;
+    use_poll = poll;
+    int64_t *target = arc_alloc(0, 1, sizeof(*target));
+    *target = 1;
+    ArcClosure *callback = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(*callback));
+    callback->arity = 1;
+    callback->code = (void *)count_last;
+    caml_final_register_called_without_value((int64_t)(uintptr_t)callback,
+                                             (int64_t)(uintptr_t)target);
+    arc_release(callback);
+    callback = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(*callback));
+    callback->arity = 1;
+    callback->code = (void *)release_and_wait;
+    caml_final_register_called_without_value((int64_t)(uintptr_t)callback,
+                                             (int64_t)(uintptr_t)target);
+    arc_release(callback);
+    arc_release(target);
+    caml_gc_full_major(1);
+    return observed_handoff && last_calls == 1;
+}
+
 int main(void)
 {
     ocamlcc_init_Stdlib();
@@ -169,6 +231,11 @@ int main(void)
 
     if (!test_finalizer_handoff()) {
         fputs("finalizer delivery across skipped collection failed\n", stderr);
+        return 1;
+    }
+
+    if (!test_released_queue(0) || !test_released_queue(1)) {
+        fputs("released callback did not run on the waiting mutator before return\n", stderr);
         return 1;
     }
 

@@ -1496,7 +1496,10 @@ typedef struct Finalizer {
 static Finalizer *finalizers; /* newest first, protected by g_cc_lock */
 static Finalizer *last_finalizers; /* protected by g_weak_lock */
 static Finalizer *pending_finalizers; /* owned by the active dispatcher */
-static _Atomic int finalizer_dispatch_active;
+/* READY publishes a nonempty queue from a callback that released dispatch.
+ * A taker may deliver those registrations without a successful new trial. */
+enum DispatchState { DISPATCH_IDLE, DISPATCH_ACTIVE, DISPATCH_READY };
+static _Atomic enum DispatchState finalizer_dispatch;
 /* Includes registrations already claimed by a dispatcher. */
 static _Atomic uint64_t finalizer_count;
 static _Atomic uint64_t last_finalizer_poll;
@@ -5004,28 +5007,34 @@ static int finalizers_due(void)
 
 int64_t ocamlcc_finalizers_due(void)
 {
-    return tag_int(finalizers_due() &&
-                   !atomic_load_explicit(&finalizer_dispatch_active, memory_order_relaxed));
+    enum DispatchState state = atomic_load_explicit(&finalizer_dispatch, memory_order_relaxed);
+    return tag_int(state == DISPATCH_READY || (state == DISPATCH_IDLE && finalizers_due()));
 }
 
 static int64_t run_finalizers(int automatic)
 {
-    if (ocamlcc_get_exn() != 0 ||
-        atomic_exchange_explicit(&finalizer_dispatch_active, 1, memory_order_acquire))
+    if (ocamlcc_get_exn() != 0)
+        return automatic ? 1 : caml_gc_minor(1);
+    enum DispatchState prior = atomic_exchange_explicit(&finalizer_dispatch, DISPATCH_ACTIVE,
+                                                        memory_order_acquire);
+    if (prior == DISPATCH_ACTIVE)
         return automatic ? 1 : caml_gc_minor(1);
 
-    /* Another poll may have serviced this debt before we won dispatch. */
-    if (automatic && !finalizers_due()) {
-        atomic_store_explicit(&finalizer_dispatch_active, 0, memory_order_release);
+    /* With a handed-off queue the previous callback may still be waiting
+     * inside the mutator gate. Enter before trying a collection so that a
+     * competing mutator causes the trial to skip instead of waiting on it. */
+    int entered = prior == DISPATCH_READY ? arc_mutator_enter() : 0;
+    int collected = (!automatic || finalizers_due()) && collect_cycles(1) >= 0;
+    if (!collected && prior != DISPATCH_READY) {
+        atomic_store_explicit(&finalizer_dispatch, DISPATCH_IDLE, memory_order_release);
         return 1;
     }
-    if (collect_cycles(1) < 0) {
-        atomic_store_explicit(&finalizer_dispatch_active, 0, memory_order_release);
-        return 1;
+    if (prior != DISPATCH_READY)
+        entered = arc_mutator_enter();
+    if (collected) {
+        atomic_fetch_add_explicit(&g_gc_collections, 1, memory_order_relaxed);
+        claim_last_finalizers();
     }
-    int entered = arc_mutator_enter();
-    atomic_fetch_add_explicit(&g_gc_collections, 1, memory_order_relaxed);
-    claim_last_finalizers();
     Fiber *fiber = arc_fiber_current();
     while (pending_finalizers != NULL) {
         Finalizer *f = pending_finalizers;
@@ -5043,7 +5052,8 @@ static int64_t run_finalizers(int automatic)
         /* A released callback still owns its local registration. Only the
          * dispatcher that holds the queue may read it or clear its gate. */
         if (!fiber->owns_finalizer_dispatch &&
-            atomic_exchange_explicit(&finalizer_dispatch_active, 1, memory_order_acquire)) {
+            atomic_exchange_explicit(&finalizer_dispatch, DISPATCH_ACTIVE,
+                                     memory_order_acquire) == DISPATCH_ACTIVE) {
             arc_mutator_leave(entered);
             return 1;
         }
@@ -5051,9 +5061,10 @@ static int64_t run_finalizers(int automatic)
         if (ocamlcc_get_exn() != 0)
             break;
     }
-    atomic_store_explicit(&last_finalizer_poll, allocation_progress(), memory_order_release);
+    if (collected)
+        atomic_store_explicit(&last_finalizer_poll, allocation_progress(), memory_order_release);
     arc_mutator_leave(entered);
-    atomic_store_explicit(&finalizer_dispatch_active, 0, memory_order_release);
+    atomic_store_explicit(&finalizer_dispatch, DISPATCH_IDLE, memory_order_release);
     return 1;
 }
 
@@ -5134,7 +5145,8 @@ int64_t caml_final_release(int64_t ignored)
     Fiber *fiber = arc_fiber_current();
     if (fiber->owns_finalizer_dispatch) {
         fiber->owns_finalizer_dispatch = 0;
-        atomic_store_explicit(&finalizer_dispatch_active, 0, memory_order_release);
+        enum DispatchState next = pending_finalizers != NULL ? DISPATCH_READY : DISPATCH_IDLE;
+        atomic_store_explicit(&finalizer_dispatch, next, memory_order_release);
     }
     return 1;
 }
