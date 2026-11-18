@@ -58,6 +58,19 @@ let check_alarm () =
   collect ();
   check (!calls = stopped) "deleted alarm fired"
 
+let check_registered_leaf () =
+  let events = ref [] in
+  let install () =
+    let leaf = Bytes.make 1 'x' in
+    let parent = ref leaf in
+    Gc.finalise (fun _ -> events := "parent" :: !events) parent;
+    Gc.finalise (fun _ -> events := "leaf" :: !events) leaf;
+    ignore (Sys.opaque_identity parent)
+  in
+  install ();
+  collect ();
+  check (!events = ["parent"; "leaf"]) "registration order across a leaf edge"
+
 let check_many () =
   let count = 1500 in
   let seen = Array.make count 0 in
@@ -75,6 +88,7 @@ let () =
     print_endline "acyclic resurrection and final death: ok";
     check_lifetime true;
     print_endline "cyclic resurrection and final death: ok";
+    check_registered_leaf ();
     check_many ();
     check_alarm ();
     print_endline "alarm re-registration and deletion: ok"

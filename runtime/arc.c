@@ -1265,11 +1265,14 @@ static void cc_visit_children(ArcHeader *hdr, CcChildFn fn, void *ctx)
     }
 }
 
-static ArcHeader *cc_candidate_child(int64_t val)
+static ArcHeader *cc_trial_child(int64_t val, int include_leaves)
 {
     if (!is_heap_ptr(val))
         return NULL;
     ArcHeader *chdr = (ArcHeader *)(uintptr_t)val - 1;
+    if (include_leaves)
+        return atomic_load_explicit(&chdr->refcount, memory_order_relaxed) == ARC_IMMORTAL
+            ? NULL : chdr;
     return is_cycle_candidate_obj(chdr) ? chdr : NULL;
 }
 
@@ -1284,6 +1287,7 @@ typedef struct TrialMap {
     size_t      cap;
     size_t      len;
     size_t      alloc_bytes;
+    int         include_leaves;
 } TrialMap;
 
 static inline size_t trial_hash(const ArcHeader *h)
@@ -1361,10 +1365,10 @@ typedef struct CCTrialCtx {
 
 static void cc_mark_gray_cb(int64_t val, void *ctx)
 {
-    ArcHeader *chdr = cc_candidate_child(val);
+    CCTrialCtx *tc = (CCTrialCtx *)ctx;
+    ArcHeader *chdr = cc_trial_child(val, tc->tm->include_leaves);
     if (chdr == NULL)
         return;
-    CCTrialCtx *tc = (CCTrialCtx *)ctx;
     TrialEntry *e = trial_get(tc->tm, chdr);
     e->rc--;
     if (e->color != CC_COLOR_GRAY) {
@@ -1387,10 +1391,10 @@ static void cc_mark_gray(TrialMap *tm, CCVec *work, ArcHeader *start)
 
 static void cc_scan_black_cb(int64_t val, void *ctx)
 {
-    ArcHeader *chdr = cc_candidate_child(val);
+    CCTrialCtx *tc = (CCTrialCtx *)ctx;
+    ArcHeader *chdr = cc_trial_child(val, tc->tm->include_leaves);
     if (chdr == NULL)
         return;
-    CCTrialCtx *tc = (CCTrialCtx *)ctx;
     TrialEntry *e = trial_get(tc->tm, chdr);
     e->rc++;
     if (e->color != CC_COLOR_BLACK) {
@@ -1413,10 +1417,10 @@ static void cc_scan_black(TrialMap *tm, CCVec *work, ArcHeader *start)
 
 static void cc_scan_cb(int64_t val, void *ctx)
 {
-    ArcHeader *chdr = cc_candidate_child(val);
+    CCTrialCtx *tc = (CCTrialCtx *)ctx;
+    ArcHeader *chdr = cc_trial_child(val, tc->tm->include_leaves);
     if (chdr == NULL)
         return;
-    CCTrialCtx *tc = (CCTrialCtx *)ctx;
     TrialEntry *e = trial_get(tc->tm, chdr);
     if (e->color == CC_COLOR_GRAY)
         ccvec_push(tc->work, chdr);
@@ -1451,7 +1455,7 @@ typedef struct CCWhiteCtx {
 
 static void cc_collect_white_cb(int64_t val, void *ctx)
 {
-    ArcHeader *chdr = cc_candidate_child(val);
+    ArcHeader *chdr = cc_trial_child(val, 0);
     if (chdr == NULL)
         return;
     CCWhiteCtx *wc = (CCWhiteCtx *)ctx;
@@ -1595,7 +1599,18 @@ static int64_t collect_cycles(int discover_finalizers)
 
     atomic_store_explicit(&g_cc_active, 1, memory_order_release);
 
-    TrialMap tm = { NULL, 0, 0, 0 };
+    TrialMap tm = {0};
+    /* The normal cycle trial omits leaves. A registered leaf can also be
+     * unreachable via a dying parent, so account for incoming edges to
+     * leaves during discovery. The sweep still reclaims them by ARC. */
+    if (discover_finalizers) {
+        for (Finalizer *f = finalizers; f != NULL; f = f->next) {
+            if (!is_cycle_candidate_obj(finalizer_target(f))) {
+                tm.include_leaves = 1;
+                break;
+            }
+        }
+    }
     CCVec work = { NULL, 0, 0, 0 };
     CCVec black_work = { NULL, 0, 0, 0 };
     CCVec dead = { NULL, 0, 0, 0 };

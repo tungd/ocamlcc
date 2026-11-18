@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-18 (codex/1): Count incoming edges to leaf objects when the collector evaluates leaf finalizers. A byte buffer and its owning ref now finalize in reverse registration order in one discovery.
+
 - 2026-11-18 (codex/1): Fix trial-map rehashing on page-rounded capacities. The 1,500-target finalizer regression now completes with exactly one callback per target.
 
 - 2026-11-18 (codex/1): Deliver last callbacks when the weak registry confirms permanent death. The compatibility suite now runs the full lifecycle and alarm reference fixture.
