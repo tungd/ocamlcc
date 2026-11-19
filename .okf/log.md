@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Fix compressed Marshal (`0x8495a6bd`) shared-reference indexing (`runtime/marshal.inc`, `tests/stdlib_runtime.c`):
+  - OCaml 5.5's compressed Marshal format (`extern.c`/`intern.c` #4056) encodes `CODE_SHARED*` as 0-based absolute object IDs (`r->objects[n]`) rather than uncompressed backward distances (`r->objects[r->count - n]`).
+  - Updated `m_write_value`/`m_encode` (emitting absolute IDs whenever `Compression` is active with a registered codec, without falling back to `0x8495a6be` mid-encode) and `MReader`/`m_decode` (decoding `r->objects[n]` when `r->compressed` is set).
+  - TDD-verified in `tests/stdlib_runtime.c` (compressed shared-DAG + self-cycle wire fixtures), `ninja -j1 test_stdlib_runtime`, and `ninja -j1 asan_stdlib_runtime`. See [stdlib-compatibility](/concepts/stdlib-compatibility.md).
+
 - 2026-11-19 (antigravity/1): Split wide QBE `phi` nodes into fan-in trees in `Codegen_ctx.finish_blocks` (`lib/codegen_ctx.ml`):
   - QBE's parser caps `phi` incoming edges at `NPred = 63` (`vendor/qbe/parse.c`), which wide OCaml switches in `compiler-libs` (`Warnings`, `Printlambda`, `Compenv`) exceed.
   - Added `split_wide_phis` in `Codegen_ctx.finish_blocks` (chunk size 50): any block with a `Phi` having > 50 incoming edges is recursively split into trampoline `@phisplit.*` blocks with predecessor `Jmp`/`Br` edges rewritten, keeping vendored QBE unmodified and imposing zero overhead on normal blocks.

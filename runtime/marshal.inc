@@ -165,8 +165,8 @@ static void m_write_value(MWriter *w, int64_t root)
         size_t previous = m_lookup(&w->seen, (uintptr_t)v);
         if (previous != SIZE_MAX) {
             if (w->no_sharing) { w->error = "output_value: cyclic value with No_sharing"; w->invalid = 1; break; }
-            uint64_t distance = w->objects - previous;
-            m_code(w, distance < 256 ? 4 : distance < 65536 ? 5 : 6, distance, distance < 256 ? 1 : distance < 65536 ? 2 : 4);
+            uint64_t ref = w->compress ? (uint64_t)previous : (w->objects - previous);
+            m_code(w, ref < 256 ? 4 : ref < 65536 ? 5 : 6, ref, ref < 256 ? 1 : ref < 65536 ? 2 : 4);
             continue;
         }
         if (!w->no_sharing) m_insert(&w->seen, (uintptr_t)v, w->objects++);
@@ -239,37 +239,43 @@ static int m_encode(MWriter *w, int64_t value, int64_t flags)
         int flag = ((int64_t *)(uintptr_t)cur)[0] >> 1;
         if (flag == 0) w->no_sharing = 1;
         if (flag == 2) w->compat32 = 1;
-        if (flag == 3) w->compress = 1;
+        if (flag == 3 && g_marshal_compress != NULL) w->compress = 1;
     }
     for (int i = 0; i < 20; i++) m_put(w, 0, 1);
     m_write_value(w, value);
     if (w->error) return 0;
     size_t payload_len = w->output.len - 20u;
-    if (w->compress && g_marshal_compress != NULL && payload_len >= 16u) {
-        uint8_t *comp = pal_page_alloc(payload_len);
-        if (comp != NULL) {
-            size_t comp_len = 0;
-            int ok = g_marshal_compress(w->output.data + 20u, payload_len, comp, payload_len, &comp_len);
-            if (ok == 0 && comp_len > 0u && comp_len < payload_len) {
-                uint8_t hdr[64];
-                size_t hp = 5u;
-                hp += m_encode_vlq((uint64_t)comp_len, hdr + hp);
-                hp += m_encode_vlq((uint64_t)payload_len, hdr + hp);
-                hp += m_encode_vlq(w->objects, hdr + hp);
-                hp += m_encode_vlq(w->words32, hdr + hp);
-                hp += m_encode_vlq(w->words64, hdr + hp);
-                if (hp <= 63u && hp + comp_len < 20u + payload_len) {
-                    hdr[0] = 0x84u; hdr[1] = 0x95u; hdr[2] = 0xa6u; hdr[3] = 0xbdu;
-                    hdr[4] = (uint8_t)hp;
-                    pal_memcpy(w->output.data, hdr, hp);
-                    pal_memcpy(w->output.data + hp, comp, comp_len);
-                    w->output.len = hp + comp_len;
-                    pal_page_free(comp, payload_len);
-                    return 1;
-                }
-            }
-            pal_page_free(comp, payload_len);
+    if (w->compress) {
+        size_t comp_cap = payload_len + (payload_len >> 2) + 256u;
+        uint8_t *comp = pal_page_alloc(comp_cap);
+        if (comp == NULL) {
+            w->error = "output_value: out of memory"; return 0;
         }
+        size_t comp_len = 0;
+        int ok = g_marshal_compress(w->output.data + 20u, payload_len, comp, comp_cap, &comp_len);
+        if (ok != 0 || comp_len == 0u) {
+            pal_page_free(comp, comp_cap);
+            w->error = "output_value: compression failed"; return 0;
+        }
+        uint8_t hdr[64];
+        size_t hp = 5u;
+        hp += m_encode_vlq((uint64_t)comp_len, hdr + hp);
+        hp += m_encode_vlq((uint64_t)payload_len, hdr + hp);
+        hp += m_encode_vlq(w->objects, hdr + hp);
+        hp += m_encode_vlq(w->words32, hdr + hp);
+        hp += m_encode_vlq(w->words64, hdr + hp);
+        if (hp > 63u) {
+            pal_page_free(comp, comp_cap);
+            w->error = "output_value: object too big"; return 0;
+        }
+        hdr[0] = 0x84u; hdr[1] = 0x95u; hdr[2] = 0xa6u; hdr[3] = 0xbdu;
+        hdr[4] = (uint8_t)hp;
+        m_grow((void **)&w->output.data, &w->output.cap, 1, hp + comp_len);
+        pal_memcpy(w->output.data, hdr, hp);
+        pal_memcpy(w->output.data + hp, comp, comp_len);
+        w->output.len = hp + comp_len;
+        pal_page_free(comp, comp_cap);
+        return 1;
     }
     if (w->output.len > UINT32_MAX || w->words32 > UINT32_MAX || w->words64 > UINT32_MAX) {
         w->error = "output_value: object too big"; return 0;
@@ -308,6 +314,7 @@ typedef struct MReader {
     int64_t *objects, *owners; size_t count, cap, owned, ownercap;
     int64_t **tasks; size_t pending, taskcap;
     uint64_t expected;
+    int compressed;
     int64_t atoms[256];
     const char *error;
 } MReader;
@@ -451,8 +458,13 @@ static int64_t m_decode(MReader *r)
         case 3: value = tag_int((int64_t)m_get(r, 8)); break;
         case 4: case 5: case 6: case 0x14:
             n = m_get(r, code == 4 ? 1 : code == 5 ? 2 : code == 6 ? 4 : 8);
-            if (!n || n > r->count) r->error = "input_value: invalid shared reference";
-            else value = r->objects[r->count - n];
+            if (r->compressed) {
+                if (n >= r->count) r->error = "input_value: invalid shared reference";
+                else value = r->objects[n];
+            } else {
+                if (!n || n > r->count) r->error = "input_value: invalid shared reference";
+                else value = r->objects[r->count - n];
+            }
             break;
         case 8: case 0x13: {
             uint64_t hd = m_get(r, code == 8 ? 4 : 8); tag = hd & 255; n = hd >> 10; block = 1; break;
@@ -581,6 +593,7 @@ static int64_t m_from_block(const uint8_t *data, size_t available)
         r.data = uncomp_buf;
         r.pos = 0;
         r.end = (size_t)uncompressed;
+        r.compressed = 1;
     } else {
         r.end = header + (size_t)length;
     }

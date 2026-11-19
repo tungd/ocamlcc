@@ -1167,9 +1167,18 @@ static void test_compressed_marshal_hooks(void)
 {
     int64_t before = arc_live_objects();
 
-    /* Highly compressible value: (42, 200 bytes of 'Z'). */
+    /* Highly compressible value with shared sub-objects: ((s, s), 200 bytes of 'Z'). */
+    char *shared_s = arc_alloc_bytes(64);
+    memset(shared_s, 'A', 64);
+    int64_t *inner = arc_alloc(0u, 2u, 16u);
+    arc_retain(shared_s);
+    arc_retain(shared_s);
+    inner[0] = (int64_t)(uintptr_t)shared_s;
+    inner[1] = (int64_t)(uintptr_t)shared_s;
+    arc_release(shared_s);
+
     int64_t *pair = arc_alloc(0u, 2u, 16u);
-    pair[0] = tagged(42);
+    pair[0] = (int64_t)(uintptr_t)inner;
     char *s = arc_alloc_bytes(200);
     memset(s, 'Z', 200);
     pair[1] = (int64_t)(uintptr_t)s;
@@ -1203,11 +1212,70 @@ static void test_compressed_marshal_hooks(void)
     assert(!ocamlcc_get_exn());
     assert((dsz >> 1) + 16 == (int64_t)comp_total);
 
-    /* 4. Round-trip via caml_input_value_from_bytes. */
+    /* 4. Round-trip via caml_input_value_from_bytes (and verify sharing preserved). */
     int64_t dec = caml_input_value_from_bytes(comp, tagged(0));
     assert(!ocamlcc_get_exn());
     assert(caml_compare(dec, (int64_t)(uintptr_t)pair) == tagged(0));
+    int64_t *dec_pair = (int64_t *)(uintptr_t)dec;
+    int64_t *dec_inner = (int64_t *)(uintptr_t)dec_pair[0];
+    assert(dec_inner[0] == dec_inner[1]);
     arc_release_val(dec);
+
+    /* 4b. Compressed format must use 0-based absolute object IDs (per OCaml 5.5
+       intern.c #4056): decode an OCaml 5.5 compressed stream of (s, s) where
+       the second reference is CODE_SHARED8(1), NOT relative distance 1; and a
+       root self-cycle CODE_SHARED8(0) must decode to itself. */
+    {
+        /* Uncompressed payload for (x, x) with x = "ABCD" using absolute id 1:
+           0xa0 (block tag=0, size=2 -> id 0),
+           0x24 'A' 'B' 'C' 'D' (small string len 4 -> id 1),
+           0x04 0x01 (CODE_SHARED8 absolute id 1). */
+        const uint8_t raw_dag[] = { 0xa0u, 0x24u, 'A', 'B', 'C', 'D', 0x04u, 0x01u };
+        uint8_t comp_pay[64];
+        size_t comp_pay_len = 0;
+        assert(test_rle_compress(raw_dag, sizeof(raw_dag), comp_pay, sizeof(comp_pay), &comp_pay_len) == 0);
+        size_t hdr_len = 10u; /* 5 + 5 single-byte VLQs */
+        uint8_t *wire = arc_alloc_bytes(hdr_len + comp_pay_len);
+        wire[0] = 0x84u; wire[1] = 0x95u; wire[2] = 0xa6u; wire[3] = 0xbdu;
+        wire[4] = (uint8_t)hdr_len;
+        wire[5] = (uint8_t)comp_pay_len;
+        wire[6] = (uint8_t)sizeof(raw_dag);
+        wire[7] = 2u;  /* num_objects */
+        wire[8] = 6u;  /* words32 */
+        wire[9] = 6u;  /* words64 */
+        memcpy(wire + hdr_len, comp_pay, comp_pay_len);
+
+        int64_t dag = caml_input_value_from_bytes((int64_t)(uintptr_t)wire, tagged(0));
+        assert(!ocamlcc_get_exn());
+        int64_t *dp = (int64_t *)(uintptr_t)dag;
+        assert(dp[0] == dp[1]);
+        const ArcHeader *sh = (const ArcHeader *)(uintptr_t)dp[0] - 1;
+        assert(sh->tag == ARC_TAG_STRING && sh->reserved == 4u);
+        assert(memcmp((const void *)(uintptr_t)dp[0], "ABCD", 4) == 0);
+        arc_release_val(dag);
+        arc_release(wire);
+
+        /* Self-cycle compressed payload: ref(self) using absolute id 0:
+           0x90 (block tag=0, size=1 -> id 0), 0x04 0x00 (CODE_SHARED8 id 0). */
+        const uint8_t raw_cyc[] = { 0x90u, 0x04u, 0x00u };
+        assert(test_rle_compress(raw_cyc, sizeof(raw_cyc), comp_pay, sizeof(comp_pay), &comp_pay_len) == 0);
+        uint8_t *cwire = arc_alloc_bytes(hdr_len + comp_pay_len);
+        cwire[0] = 0x84u; cwire[1] = 0x95u; cwire[2] = 0xa6u; cwire[3] = 0xbdu;
+        cwire[4] = (uint8_t)hdr_len;
+        cwire[5] = (uint8_t)comp_pay_len;
+        cwire[6] = (uint8_t)sizeof(raw_cyc);
+        cwire[7] = 1u;
+        cwire[8] = 2u;
+        cwire[9] = 2u;
+        memcpy(cwire + hdr_len, comp_pay, comp_pay_len);
+
+        int64_t cyc = caml_input_value_from_bytes((int64_t)(uintptr_t)cwire, tagged(0));
+        assert(!ocamlcc_get_exn());
+        assert(((int64_t *)(uintptr_t)cyc)[0] == cyc);
+        arc_release_val(cyc);
+        arc_release(cwire);
+        ocamlcc_arc_collect(1);
+    }
 
     /* 5. Round-trip via caml_output_value + caml_input_value over a pipe. */
     int fds[2];
