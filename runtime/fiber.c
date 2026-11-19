@@ -504,9 +504,25 @@ int64_t ocamlcc_fiber_resume(int64_t fiber_val, int64_t send_val)
     return out;
 }
 
+/* poll_finalizers is registered yields = false, so the dispatcher fiber has
+ * no shadow-stack window around finalizer callbacks: if a finalizer
+ * suspended the fiber and the fiber was later abandoned, every live local
+ * in unshadowed caller frames would leak. Finalizer dispatch owns the fiber
+ * (owns_finalizer_dispatch, set by run_finalizers in arc.c), so every
+ * suspension entry point must refuse instead of yielding. */
+static int finalizer_owns_current_fiber(void)
+{
+    Fiber *cur = arc_fiber_current();
+    return cur != NULL && cur->owns_finalizer_dispatch != 0;
+}
+
 int64_t ocamlcc_fiber_suspend(int64_t send_val)
 {
     Fiber *cur = arc_fiber_current();
+    if (finalizer_owns_current_fiber()) {
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
     if (cur == &tls_main_fiber || cur->is_scheduled) {
         /* Fiber.suspend is a coroutine operation; inside a spawned fiber it
            would strand the fiber off every scheduler queue (leaking it and
@@ -553,6 +569,10 @@ int64_t ocamlcc_fiber_yield(int64_t unit)
 {
     (void)unit;
     Fiber *cur = arc_fiber_current();
+    if (finalizer_owns_current_fiber()) {
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
     if (cur == &tls_main_fiber) {
         sched_poll(0);
         Fiber *next = sched_pop_ready();
@@ -580,6 +600,10 @@ int64_t ocamlcc_fiber_yield(int64_t unit)
 
 int64_t ocamlcc_fiber_sleep_ms(int64_t ms_val)
 {
+    if (finalizer_owns_current_fiber()) {
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
     int64_t ms = ms_val >> 1;
     if (ms <= 0)
         return ocamlcc_fiber_yield(1);
@@ -622,6 +646,10 @@ int64_t ocamlcc_fiber_sleep_ms(int64_t ms_val)
 
 static int64_t fiber_fd_wait(int64_t fd_val, uint32_t events)
 {
+    if (finalizer_owns_current_fiber()) {
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
     int fd = (int)(fd_val >> 1);
     int pfd = ensure_poller();
     Fiber *cur = arc_fiber_current();
@@ -676,6 +704,10 @@ int64_t ocamlcc_fiber_fd_wait_write(int64_t fd_val)
 
 int64_t ocamlcc_fiber_await(int64_t fiber_val)
 {
+    if (finalizer_owns_current_fiber()) {
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
     Fiber *f = (Fiber *)(uintptr_t)fiber_val;
     Fiber *cur = arc_fiber_current();
     if (f == NULL || f == cur) {

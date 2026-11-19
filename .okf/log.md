@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-19 (autoagent/1): Fix unsound suspension window from finalizer dispatch (`runtime/fiber.c`):
+  - `ocamlcc_poll_finalizers` is marked `yields = false` (the fast non-yielding codegen), but nothing prevented a finalizer callback from suspending the dispatching fiber via `Fiber.yield`, `suspend`, `sleep_ms`, `fd_wait_*`, or `await` — if the fiber was later abandoned, every live local in unshadowed caller frames leaked (no `ShadowPush`/`ShadowPop` window exists around the non-yielding call).
+  - Every suspension entry point in `runtime/fiber.c` now checks `owns_finalizer_dispatch` (set by `run_finalizers` around callback dispatch) and raises `Invalid_argument` instead of yielding.
+  - Regression-tested in `tests/stdlib_runtime.c` (`test_finalizer_no_suspend`: a finalizer dispatched inside a spawned fiber probes all five entry points, each must raise, and the fiber must complete normally). `ninja test` (51/51), `ninja asan_test` (34/34), `ninja tsan_test` (race-free), and `dune runtest` pass. See [wren-fibers](/concepts/wren-fibers.md).
+
 - 2026-11-19 (autoagent/1): Fix `caml_floatarray_blit` / `caml_floatarray_fill` ABI flags (`lib/ccalls.ml`):
   - Both delegate to `caml_array_blit` / `caml_array_fill` (which raise `Invalid_argument` on out-of-bounds slices since 86f028f), but the C-call ABI registry still marked them `raises = false`, so codegen skipped `CheckExn` after calls — leaking live values on OOB and leaving `ocamlcc_exn_slot` poisoned for the next checked call.
   - Mark both `raises = true` and add them to `returns_imm` (both return unit, like their `caml_array_*` counterparts).

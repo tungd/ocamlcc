@@ -6,7 +6,7 @@ tags: [fibers, concurrency, runtime, phase-3]
 status: stable
 generated:
   by: autoagent/1
-  at: 2026-11-15
+  at: 2026-11-19
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -42,6 +42,8 @@ The two fiber kinds have disjoint operation sets, and crossing them corrupted th
 - **Scheduler fibers** (`Fiber.spawn` / `yield` / `sleep_ms` / `fd_wait_*` / `await` / `run_all`): scheduler-queued, `+1` retained by the queue.
 
 Cross-calls now raise `Invalid_argument` (`ocamlcc_fiber_raise_invalid` in `runtime/arc.c`, checked by the `CheckExn` emitted because these Ccalls are registered `raises = true` in the [C-call ABI registry](/concepts/perceus-arc.md)): `Fiber.suspend` inside a spawned fiber (it would strand the fiber off every scheduler queue, leaking it and its payload), `Fiber.yield`/`sleep_ms`/`fd_wait_*` inside a coroutine (they would queue the coroutine without scheduler ownership and return the resume payload to the resumer), and `Fiber.await` across modes in either direction (waiter handoff routes through the scheduler ready queue, which is only sound between scheduler fibers; awaiting a live coroutine from main can never complete). Regression probes in `examples/fiber_test.ml` (`cross=1,1,1,1,1`, all `delta=0`).
+
+- **Finalizer dispatch owns the fiber**: `ocamlcc_poll_finalizers` is registered `yields = false` (fast non-yielding codegen — no shadow-stack window around it), which is only sound if finalizers cannot suspend the dispatcher. `run_finalizers` (`runtime/arc.c`) sets `owns_finalizer_dispatch` on the current fiber while a callback runs, and every suspension entry point in `runtime/fiber.c` (`Fiber.yield`, `suspend`, `sleep_ms`, `fd_wait_*` via `fiber_fd_wait`, and `await`) raises `Invalid_argument` when that flag is set — otherwise a finalizer that suspended and the fiber was later abandoned would leak every live local in unshadowed caller frames. Pinned by `test_finalizer_no_suspend` in `tests/stdlib_runtime.c`: a finalizer dispatched inside a spawned fiber probes all five entry points and must see `Invalid_argument` from each, with the fiber completing normally.
 
 No OCaml 5 multicore domains and no multi-shot effects: one cooperative scheduler, explicit single-shot coroutines (`Stdlib.Fiber`, design doc §2 non-goals).
 

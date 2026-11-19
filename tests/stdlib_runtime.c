@@ -42,6 +42,7 @@ extern int64_t caml_md5_bytes(int64_t, int64_t, int64_t);
 extern int64_t caml_gc_full_major(int64_t);
 extern int64_t caml_final_register_called_without_value(int64_t, int64_t);
 extern int64_t ocamlcc_poll_finalizers(void);
+extern int64_t ocamlcc_finalizers_due(void);
 extern int64_t caml_obj_reachable_words(int64_t);
 
 static int64_t tagged(int64_t n) { return (int64_t)(((uint64_t)n << 1) | 1); }
@@ -740,6 +741,102 @@ static void test_runtime_3_3(void)
     assert(arc_live_objects() == before);
 }
 
+static int g_fin_probe_failures = 0;
+
+static void expect_invalid(const char *what)
+{
+    if (ocamlcc_get_exn() == 0) {
+        fprintf(stderr, "finalizer %s did not raise Invalid_argument\n", what);
+        g_fin_probe_failures++;
+    } else
+        clear_exception();
+}
+
+/* A finalizer callback: poll_finalizers marked yields = false means the
+ * dispatcher fiber has no shadow-stack window, so every suspension entry
+ * point must refuse (Invalid_argument) while owns_finalizer_dispatch is
+ * set instead of stranding the fiber mid-dispatch. */
+static int64_t fin_suspend_probe_fn(int64_t clos, int64_t unit)
+{
+    (void)clos;
+    (void)unit;
+    ocamlcc_fiber_yield(1);
+    expect_invalid("yield");
+    ocamlcc_fiber_suspend(1);
+    expect_invalid("suspend");
+    ocamlcc_fiber_sleep_ms(tagged(5));
+    expect_invalid("sleep_ms");
+    ocamlcc_fiber_fd_wait_read(tagged(0));
+    expect_invalid("fd_wait_read");
+    ArcClosure *noop = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
+    noop->code = (void *)noop_fiber_fn;
+    noop->arity = 1;
+    int64_t done_fib = ocamlcc_fiber_create((int64_t)(uintptr_t)noop);
+    arc_release(noop);
+    ocamlcc_fiber_resume(done_fib, tagged(0));
+    if (ocamlcc_get_exn())
+        clear_exception();
+    ocamlcc_fiber_await(done_fib);
+    expect_invalid("await");
+    arc_release_val(done_fib);
+    return 1;
+}
+
+static int64_t fin_poll_body_fn(int64_t clos, int64_t arg)
+{
+    (void)clos;
+    /* Push allocation progress past the finalizer budget (g_gc_ctrl[0]) so
+       the pending finalizer is dispatched inside this fiber. */
+    int guard = 0;
+    while (ocamlcc_finalizers_due() != 3 && guard++ < 4096) {
+        int64_t *bump = arc_alloc_array(4096, 1);
+        arc_release(bump);
+    }
+    ocamlcc_poll_finalizers();
+    if (ocamlcc_get_exn())
+        clear_exception();
+    return arg;
+}
+
+static void test_finalizer_no_suspend(void)
+{
+    int64_t before = arc_live_objects();
+    g_fin_probe_failures = 0;
+
+    int64_t *target = arc_alloc(0, 0, 8);
+    ArcClosure *cb = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
+    cb->code = (void *)fin_suspend_probe_fn;
+    cb->arity = 1;
+    caml_final_register_called_without_value((int64_t)(uintptr_t)cb,
+                                             (int64_t)(uintptr_t)target);
+    arc_release(cb);
+    arc_release(target);
+
+    /* Dispatch the finalizer inside a spawned fiber: poll_finalizers is
+       marked yields = false, so the fiber must survive the callback. */
+    ArcClosure *body = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
+    body->code = (void *)fin_poll_body_fn;
+    body->arity = 1;
+    int64_t fib = ocamlcc_fiber_create((int64_t)(uintptr_t)body);
+    arc_release(body);
+    int64_t r = tagged(0);
+    for (int i = 0; i < 8 && ((const Fiber *)(uintptr_t)fib)->state != FIBER_DONE;
+         i++)
+        r = ocamlcc_fiber_resume(fib, tagged(0));
+    assert(!ocamlcc_get_exn());
+    assert(((const Fiber *)(uintptr_t)fib)->state == FIBER_DONE);
+    assert(r == tagged(0));
+    assert(g_fin_probe_failures == 0);
+    arc_release_val(fib);
+
+    /* Drain leftover dispatch state on the main fiber. */
+    ocamlcc_poll_finalizers();
+    if (ocamlcc_get_exn())
+        clear_exception();
+    ocamlcc_arc_collect(1);
+    assert(arc_live_objects() == before);
+}
+
 static void test_reachable_words(void)
 {
     int64_t before = arc_live_objects();
@@ -868,6 +965,7 @@ int main(void)
     test_c_view_shapes();
     test_import_contract();
     test_bigarray_channel_io();
+    test_finalizer_no_suspend();
     puts("stdlib runtime: formats, malformed cleanup, cycles, truncation, views");
     return 0;
 }
