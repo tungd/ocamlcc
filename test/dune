@@ -19,6 +19,17 @@
  (libraries ocamlcc))
 
 (executable
+ (name mutrec_closure_tail_test)
+ (modules mutrec_closure_tail_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps mutrec_closure_tail_test.exe)
+ (action
+  (run ./mutrec_closure_tail_test.exe %{dep:../vendor/qbe/qbe})))
+
+(executable
  (name phi_split_test)
  (modules phi_split_test)
  (libraries ocamlcc))

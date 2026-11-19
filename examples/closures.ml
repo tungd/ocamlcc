@@ -58,7 +58,7 @@ let () =
   print_endline "";
   print_int (sum_above 4 [ 1; 5; 2; 6; 4; 10 ]);
   print_endline "";
-  print_int (mutual_with_capture 100 10000);
+  print_int (mutual_with_capture 100 300000);
   print_endline "";
-  print_int (mutual_with_capture 100 10001);
+  print_int (mutual_with_capture 100 300001);
   print_endline ""

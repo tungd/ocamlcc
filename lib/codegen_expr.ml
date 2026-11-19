@@ -513,65 +513,47 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
   | Var id -> (
       match Hashtbl.find_opt b.funs id with
       | Some info when List.length ap_args = info.arity -> (
-          if info.has_closure then begin
-            if tail && is_self id then begin
-              let vs = List.map (compile_atom hooks b) ap_args in
-              b.cur_fn.tail_sites <- (b.cur_fn.open_label, vs) :: b.cur_fn.tail_sites;
+          let clos_prefix =
+            if info.has_closure then [ Hashtbl.find b.vars id ] else []
+          in
+          match (info.tag, tail) with
+          | Some tag, true
+            when b.cur_fn.cur_group <> None
+                 && b.cur_fn.cur_group = info.group_name ->
+              let vs =
+                pad_to info.group_arity
+                  (List.map (compile_atom hooks b) ap_args)
+              in
+              b.cur_fn.tail_sites <-
+                (b.cur_fn.open_label, clos_prefix @ (Int tag :: vs))
+                :: b.cur_fn.tail_sites;
               close_block b (Jmp b.cur_fn.entry_label);
               unit_const
-            end
-            else begin
-              let clos_val = Hashtbl.find b.vars id in
-              let arg_vals = List.map (compile_atom hooks b) ap_args in
+          | Some tag, _ ->
+              let vs =
+                pad_to info.group_arity
+                  (List.map (compile_atom hooks b) ap_args)
+              in
+              let args =
+                List.map (fun v -> (Long, v)) (clos_prefix @ (Int tag :: vs))
+              in
               let dst = fresh_temp b "call" in
-              emit b
-                (Call
-                   ( Long,
-                     dst,
-                     { fn = Global info.global;
-                       args =
-                         (Long, clos_val)
-                         :: List.map (fun v -> (Long, v)) arg_vals } ));
+              emit b (Call (Long, dst, { fn = Global info.global; args }));
               dst
-            end
-          end
-          else
-            match (info.tag, tail) with
-            | Some tag, true when b.cur_fn.cur_group = info.group_name ->
-                let vs =
-                  pad_to info.group_arity
-                    (List.map (compile_atom hooks b) ap_args)
-                in
-                b.cur_fn.tail_sites <-
-                  (b.cur_fn.open_label, Int tag :: vs) :: b.cur_fn.tail_sites;
-                close_block b (Jmp b.cur_fn.entry_label);
-                unit_const
-            | Some tag, _ ->
-                let vs =
-                  pad_to info.group_arity
-                    (List.map (compile_atom hooks b) ap_args)
-                in
-                let dst = fresh_temp b "call" in
-                emit b
-                  (Call
-                     ( Long,
-                       dst,
-                       { fn = Global info.global;
-                         args =
-                           (Long, Int tag) :: List.map (fun v -> (Long, v)) vs } ));
-                dst
-            | None, true when is_self id ->
-                let vs = List.map (compile_atom hooks b) ap_args in
-                b.cur_fn.tail_sites <- (b.cur_fn.open_label, vs) :: b.cur_fn.tail_sites;
-                close_block b (Jmp b.cur_fn.entry_label);
-                unit_const
-            | None, _ ->
-                let args =
-                  List.map (fun a -> (Long, compile_atom hooks b a)) ap_args
-                in
-                let dst = fresh_temp b "call" in
-                emit b (Call (Long, dst, { fn = Global info.global; args }));
-                dst)
+          | None, true when is_self id ->
+              let vs = List.map (compile_atom hooks b) ap_args in
+              b.cur_fn.tail_sites <-
+                (b.cur_fn.open_label, vs) :: b.cur_fn.tail_sites;
+              close_block b (Jmp b.cur_fn.entry_label);
+              unit_const
+          | None, _ ->
+              let arg_vals = List.map (compile_atom hooks b) ap_args in
+              let args =
+                List.map (fun v -> (Long, v)) (clos_prefix @ arg_vals)
+              in
+              let dst = fresh_temp b "call" in
+              emit b (Call (Long, dst, { fn = Global info.global; args }));
+              dst)
       | Some info when List.length ap_args > info.arity ->
           let first_args, rest_args = split_at info.arity ap_args in
           (* Compile the over-apply tail before the first (possibly

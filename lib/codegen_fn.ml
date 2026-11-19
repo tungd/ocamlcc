@@ -29,6 +29,36 @@ let insert_header_phis b header_label binder_names start_values =
         b.cur_fn.blocks
   end
 
+let emit_group_wrapper b ~wrapper_name ~pass_clos ~target_global ~arity
+    ~tag_opt ~group_arity : unit =
+  let clos_p = fresh_name b "clos" in
+  let param_names = List.init arity (fun _ -> fresh_name b "carg") in
+  let param_vals = List.map (fun n -> Temp n) param_names in
+  let call_res = fresh_name b "wres" in
+  let call_args =
+    let clos_prefix = if pass_clos then [ (Long, Temp clos_p) ] else [] in
+    match tag_opt with
+    | Some tag ->
+        let padded = pad_to group_arity param_vals in
+        clos_prefix
+        @ ((Long, Int tag) :: List.map (fun v -> (Long, v)) padded)
+    | None -> clos_prefix @ List.map (fun v -> (Long, v)) param_vals
+  in
+  let call_inst =
+    Call (Long, Temp call_res, { fn = Global target_global; args = call_args })
+  in
+  let func =
+    { name = wrapper_name;
+      export = false;
+      retty = Some Long;
+      params = (Long, clos_p) :: List.map (fun n -> (Long, n)) param_names;
+      blocks =
+        [ { label = "start";
+            insts = [ call_inst ];
+            term = Ret (Some (Temp call_res)) } ] }
+  in
+  b.funcs <- func :: b.funcs
+
 let rec closure_value_of b id : t =
   let data_sym =
     match Hashtbl.find_opt b.clos_wrappers id with
@@ -36,37 +66,9 @@ let rec closure_value_of b id : t =
     | None ->
         let info = Hashtbl.find b.funs id in
         let wrapper_name = alloc_global_name b id in
-        let clos_p = fresh_name b "clos" in
-        let param_names = List.init info.arity (fun _ -> fresh_name b "carg") in
-        let param_vals = List.map (fun n -> (Long, Temp n)) param_names in
-        let call_res = fresh_name b "wres" in
-        let call_inst =
-          match info.tag with
-          | Some tag ->
-              let padded = pad_to info.group_arity (List.map snd param_vals) in
-              Call
-                ( Long,
-                  Temp call_res,
-                  { fn = Global info.global;
-                    args =
-                      (Long, Int tag) :: List.map (fun v -> (Long, v)) padded } )
-          | None ->
-              Call
-                ( Long,
-                  Temp call_res,
-                  { fn = Global info.global; args = param_vals } )
-        in
-        let func =
-          { name = wrapper_name;
-            export = false;
-            retty = Some Long;
-            params = (Long, clos_p) :: List.map (fun n -> (Long, n)) param_names;
-            blocks =
-              [ { label = "start";
-                  insts = [ call_inst ];
-                  term = Ret (Some (Temp call_res)) } ] }
-        in
-        b.funcs <- func :: b.funcs;
+        emit_group_wrapper b ~wrapper_name ~pass_clos:false
+          ~target_global:info.global ~arity:info.arity ~tag_opt:info.tag
+          ~group_arity:info.group_arity;
         let sym = Printf.sprintf "clos.%d" b.data_counter in
         b.data_counter <- b.data_counter + 1;
         let items =
@@ -174,27 +176,33 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
           b.funcs <- func :: b.funcs));
   g
 
-let compile_group compile_aexpr b gname (members : (Ident.t * Anf.lfunction) list)
-    : unit =
+let compile_scc_group compile_aexpr b gname ~export ~with_closure
+    (members : (Ident.t * Anf.lfunction * Ident.t list) list) : unit =
   let max_arity =
     List.fold_left
-      (fun acc ((_, lf) : Ident.t * Anf.lfunction) ->
+      (fun acc ((_, lf, _) : Ident.t * Anf.lfunction * Ident.t list) ->
         max acc (List.length lf.params))
       0 members
   in
+  let formal_clos = if with_closure then Some (fresh_name b "grpclos") else None in
+  let phi_clos = if with_closure then Some (fresh_name b "dspclos") else None in
   let formal_sel = fresh_name b "grpfn" in
   let formal_slots = List.init max_arity (fun _ -> fresh_name b "grpslot") in
   let phi_sel = fresh_name b "dspsel" in
   let phi_slots = List.init max_arity (fun _ -> fresh_name b "dspslot") in
   with_fn_state b ~self:None ~cur_group:(Some gname) ~entry_label:"dispatch"
     ~in_init:false (fun () ->
+      let clos_params =
+        match formal_clos with Some c -> [ (Long, c) ] | None -> []
+      in
       b.cur_fn.fn_params <-
-        (Long, formal_sel) :: List.map (fun n -> (Long, n)) formal_slots;
+        clos_params
+        @ ((Long, formal_sel) :: List.map (fun n -> (Long, n)) formal_slots);
       close_block b (Jmp "dispatch");
       start_block b "dispatch";
       let member_entries =
         List.mapi
-          (fun i (id, _) ->
+          (fun i (id, _, _) ->
             ( Int64.of_int (i + 1),
               Printf.sprintf "%s_entry" (sanitize (Ident.name id)) ))
           members
@@ -213,18 +221,34 @@ let compile_group compile_aexpr b gname (members : (Ident.t * Anf.lfunction) lis
       dispatch_chain member_entries;
       let ret_preds = ref [] in
       List.iter2
-        (fun (_, entry) ((_, lf) : Ident.t * Anf.lfunction) ->
+        (fun (_, entry) ((id, lf, env) : Ident.t * Anf.lfunction * Ident.t list) ->
           start_block b entry;
-          List.iteri
-            (fun j (pid, _) ->
-              Hashtbl.replace b.vars pid (Temp (List.nth phi_slots j)))
-            lf.params;
-          let result = compile_aexpr b true lf.body in
-          if b.cur_fn.term = None then begin
-            ret_preds := (b.cur_fn.open_label, result) :: !ret_preds;
-            close_block b (Jmp "ret")
-          end;
-          List.iter (fun (pid, _) -> Hashtbl.remove b.vars pid) lf.params)
+          let shadowed =
+            (if with_closure then id :: env else []) @ List.map fst lf.params
+          in
+          with_shadowed_vars b shadowed (fun () ->
+              (match phi_clos with
+              | Some cphi ->
+                  Hashtbl.replace b.vars id (Temp cphi);
+                  List.iteri
+                    (fun i ev ->
+                      let addr =
+                        ptr_offset b (Temp cphi) (16 + (8 * i)) "envp"
+                      in
+                      let dst = fresh_temp b "env" in
+                      emit b (Load (Loadl, Long, dst, addr));
+                      Hashtbl.replace b.vars ev dst)
+                    env
+              | None -> ());
+              List.iteri
+                (fun j (pid, _) ->
+                  Hashtbl.replace b.vars pid (Temp (List.nth phi_slots j)))
+                lf.params;
+              let result = compile_aexpr b true lf.body in
+              if b.cur_fn.term = None then begin
+                ret_preds := (b.cur_fn.open_label, result) :: !ret_preds;
+                close_block b (Jmp "ret")
+              end))
         member_entries members;
       (match !ret_preds with
       | [] ->
@@ -235,16 +259,29 @@ let compile_group compile_aexpr b gname (members : (Ident.t * Anf.lfunction) lis
           let res = fresh_temp b "grpres" in
           emit b (Phi (Long, res, List.rev !ret_preds));
           close_block b (Ret (Some res)));
-      insert_header_phis b "dispatch" (phi_sel :: phi_slots)
-        (Temp formal_sel :: List.map (fun n -> Temp n) formal_slots);
+      let phi_binders =
+        (match phi_clos with Some c -> [ c ] | None -> [])
+        @ (phi_sel :: phi_slots)
+      in
+      let init_args =
+        (match formal_clos with Some c -> [ Temp c ] | None -> [])
+        @ (Temp formal_sel :: List.map (fun n -> Temp n) formal_slots)
+      in
+      insert_header_phis b "dispatch" phi_binders init_args;
       let func =
         { name = gname;
-          export = true;
+          export;
           retty = Some Long;
           params = b.cur_fn.fn_params;
           blocks = finish_blocks b }
       in
       b.funcs <- func :: b.funcs)
+
+let compile_group compile_aexpr b gname (members : (Ident.t * Anf.lfunction) list)
+    : unit =
+  let members_with_env = List.map (fun (id, lf) -> (id, lf, [])) members in
+  compile_scc_group compile_aexpr b gname ~export:true ~with_closure:false
+    members_with_env
 
 let define_pure_function compile_aexpr b id (lf : Anf.lfunction)
     (info : fn_info) : unit =
@@ -406,11 +443,87 @@ let compile_letrec compile_aexpr b tail (bindings : Anf.rec_binding list) body =
               emit b (Store (Storel, v, addr)))
             env)
         infos;
+      let arities =
+        List.map
+          (fun ((rb : Anf.rec_binding), _, _, _) ->
+            (rb.id, List.length rb.def.params))
+          infos
+      in
+      let find_info id =
+        match
+          List.find_opt
+            (fun ((rb : Anf.rec_binding), _, _, _) -> Ident.same rb.id id)
+            infos
+        with
+        | Some x -> x
+        | None -> assert false
+      in
+      let binding_ids =
+        List.map (fun ((rb : Anf.rec_binding), _, _, _) -> rb.id) infos
+      in
+      let callee_edges id =
+        let rb, _, _, _ = find_info id in
+        Codegen_analysis.tail_callees ~arities rb.def.body
+        |> Ident.Set.filter (fun callee ->
+               not (Ident.same callee id)
+               && List.exists (Ident.same callee) binding_ids)
+      in
+      let sccs =
+        Codegen_analysis.strongly_connected_components binding_ids callee_edges
+      in
+      let group_comp_info =
+        List.filter_map
+          (fun comp ->
+            if List.length comp < 2 then None
+            else
+              let gname =
+                Printf.sprintf "ocamlcc_%s_group%d" b.prefix b.group_counter
+              in
+              b.group_counter <- b.group_counter + 1;
+              let comp_infos = List.map find_info comp in
+              let group_arity =
+                List.fold_left
+                  (fun acc ((rb : Anf.rec_binding), _, _, _) ->
+                    max acc (List.length rb.def.params))
+                  0 comp_infos
+              in
+              List.iteri
+                (fun i ((rb : Anf.rec_binding), wrapper_g, _, _) ->
+                  let info = Hashtbl.find b.funs rb.id in
+                  let tag = Int64.of_int (i + 1) in
+                  Hashtbl.replace b.funs rb.id
+                    { info with
+                      global = gname;
+                      tag = Some tag;
+                      group_arity;
+                      group_name = Some gname };
+                  emit_group_wrapper b ~wrapper_name:wrapper_g ~pass_clos:true
+                    ~target_global:gname ~arity:info.arity ~tag_opt:(Some tag)
+                    ~group_arity)
+                comp_infos;
+              Some (gname, comp_infos))
+          sccs
+      in
       List.iter
-        (fun ((rb : Anf.rec_binding), _, env, _) ->
-          ignore
-            (compile_function compile_aexpr b rb.id rb.def ~has_closure:true ~env))
-        infos;
+        (fun comp ->
+          match comp with
+          | [ id ] ->
+              let rb, _, env, _ = find_info id in
+              ignore
+                (compile_function compile_aexpr b rb.id rb.def ~has_closure:true
+                   ~env)
+          | _ -> ())
+        sccs;
+      List.iter
+        (fun (gname, comp_infos) ->
+          let members =
+            List.map
+              (fun ((rb : Anf.rec_binding), _, env, _) -> (rb.id, rb.def, env))
+              comp_infos
+          in
+          compile_scc_group compile_aexpr b gname ~export:false
+            ~with_closure:true members)
+        group_comp_info;
       let res = compile_aexpr b tail body in
       List.iter
         (fun ((rb : Anf.rec_binding), _, _, _) ->

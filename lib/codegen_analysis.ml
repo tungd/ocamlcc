@@ -16,46 +16,60 @@ let free_vars_of (b : Codegen_ctx.t) ?self_id (lf : Anf.lfunction) :
          | None -> true)
   |> Ident.Set.elements
 
-let rec tail_callees (e : Anf.aexpr) : Ident.Set.t =
-  match e with
-  | Let (id, App (Var callee, _), Halt (Var v)) when Ident.same id v ->
-      Ident.Set.singleton callee
-  | Let (_, _, body) | MutLet (_, _, body) | LetJoin (_, _, body)
-  | LetRec (_, body) | Retain (_, body) | Release (_, body)
-  | ReleaseMut (_, body) | DropReuse (_, _, body) | FreeReuse (_, body)
-  | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
-      tail_callees body
-  | If (_, th, el) -> Ident.Set.union (tail_callees th) (tail_callees el)
-  | ScalarIf _ -> Ident.Set.empty
-  | Switch (_, sw) ->
-      let acc =
-        List.fold_left
-          (fun acc (_, arm) -> Ident.Set.union acc (tail_callees arm))
-          Ident.Set.empty sw.consts
-      in
-      let acc =
-        List.fold_left
-          (fun acc (_, arm) -> Ident.Set.union acc (tail_callees arm))
-          acc sw.blocks
-      in
-      (match sw.fail with
-      | Some f -> Ident.Set.union acc (tail_callees f)
-      | None -> acc)
-  | StringSwitch (_, cases, fail) ->
-      let acc =
-        List.fold_left
-          (fun acc (_, arm) -> Ident.Set.union acc (tail_callees arm))
-          Ident.Set.empty cases
-      in
-      (match fail with
-      | Some f -> Ident.Set.union acc (tail_callees f)
-      | None -> acc)
-  | StaticCatch (body, _, _, handler, _)
-  | TryWith (body, _, handler) ->
-      Ident.Set.union (tail_callees body) (tail_callees handler)
-  | CheckExn (_, on_ok) -> tail_callees on_ok
-  | Halt _ | HaltScalar _ | StaticRaise _ | While _ | For _ | Raise _ | Unwind ->
-      Ident.Set.empty
+let tail_callees ?(arities : (Ident.t * int) list option) (e : Anf.aexpr) :
+    Ident.Set.t =
+  let rec go (e : Anf.aexpr) =
+    match e with
+    | Anf.Let (id, App (Var callee, args), Halt (Var v))
+      when Ident.same id v -> (
+        match arities with
+        | None -> Ident.Set.singleton callee
+        | Some tbl -> (
+            match
+              List.find_opt (fun (k, _) -> Ident.same k callee) tbl
+            with
+            | Some (_, arity) when List.length args = arity ->
+                Ident.Set.singleton callee
+            | _ -> Ident.Set.empty))
+    | Let (_, _, body) | MutLet (_, _, body) | LetJoin (_, _, body)
+    | LetRec (_, body) | Retain (_, body) | Release (_, body)
+    | ReleaseMut (_, body) | DropReuse (_, _, body) | FreeReuse (_, body)
+    | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
+        go body
+    | If (_, th, el) -> Ident.Set.union (go th) (go el)
+    | ScalarIf _ -> Ident.Set.empty
+    | Switch (_, sw) ->
+        let acc =
+          List.fold_left
+            (fun acc (_, arm) -> Ident.Set.union acc (go arm))
+            Ident.Set.empty sw.consts
+        in
+        let acc =
+          List.fold_left
+            (fun acc (_, arm) -> Ident.Set.union acc (go arm))
+            acc sw.blocks
+        in
+        (match sw.fail with
+        | Some f -> Ident.Set.union acc (go f)
+        | None -> acc)
+    | StringSwitch (_, cases, fail) ->
+        let acc =
+          List.fold_left
+            (fun acc (_, arm) -> Ident.Set.union acc (go arm))
+            Ident.Set.empty cases
+        in
+        (match fail with
+        | Some f -> Ident.Set.union acc (go f)
+        | None -> acc)
+    | StaticCatch (body, _, _, handler, _)
+    | TryWith (body, _, handler) ->
+        Ident.Set.union (go body) (go handler)
+    | CheckExn (_, on_ok) -> go on_ok
+    | Halt _ | HaltScalar _ | StaticRaise _ | While _ | For _ | Raise _
+    | Unwind ->
+        Ident.Set.empty
+  in
+  go e
 
 let strongly_connected_components nodes edges =
   let index = Hashtbl.create 16 in

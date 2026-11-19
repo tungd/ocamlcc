@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Extend mutual tail-call SCC `@dispatch` trampolines to non-pure `let rec` closure groups (`lib/codegen_analysis.ml`, `lib/codegen_expr.ml`, `lib/codegen_fn.ml`, `test/mutrec_closure_tail_test.ml`, `examples/closures.ml`):
+  - Previously only pure `let rec` definitions received `@dispatch` trampolines; non-pure mutual `let rec` closures (including `ocamllex`-generated DFAs in `Lexer` scanning multi-ten-KB table literals in `lexer.ml` and `parser.ml`) pushed native C stack frames per state transition and overflowed macOS's 8 MB stack.
+  - Added optional `~arities` saturated-call matching to `Codegen_analysis.tail_callees`, factored `compile_group` into shared `compile_scc_group ~export ~with_closure` (threading `%phi_clos` and unpacking member `env` at each entry), added `emit_group_wrapper` so individual closures remain indirect-callable via `ocamlcc_apply_n`, and unified `compile_app` direct/tail-call emission for pure and closure SCCs.
+  - TDD-verified in `test/mutrec_closure_tail_test.ml`, `dune runtest -j1`, `ninja -j1 test` (with `examples/closures.ml` bumped to 300,000 mutual closure steps), and `ninja -j1 asan_closures`. See [compiler-pipeline](/concepts/compiler-pipeline.md).
+
 - 2026-11-19 (antigravity/1): Track `env.in_tail` in `Arc_pass` so non-tail join branches never elide `CheckExn` (`lib/arc_pass.ml`, `test/arc_checkexn_join_test.ml`):
   - `is_pure_tail` previously checked only `body = Halt (Var v)` and `env.try_depth = 0`, which also matched calls at the end of a `LetJoin` rhs / `If` branch / loop body whose `Halt` flows into a join phi instead of returning from the function. When `Typecore.type_expect` raised inside such an `if` branch, execution continued into the join block with dummy result `1` and crashed.
   - Added `in_tail : bool` to `Arc_pass.state` (`false` in `LetJoin` rhs, `TryWith` body, and `While`/`For` loops) and gated `is_pure_tail` on `env.in_tail`.

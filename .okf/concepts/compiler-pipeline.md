@@ -155,14 +155,19 @@ the backedge is a plain `jmp @loop`[^design-doc]. This is the design doc's
 stack space.
 
 **Mutual tail recursion** uses the design doc's trampoline convention: a
-tail-call graph over toplevel definitions is computed, and each strongly
-connected component (of size ≥ 2) is compiled as *one* QBE function — the
-trampoline. Its `@dispatch` header compares a selector argument against each
-member's tag and jumps to the member's body; member parameters flow through
-uniform phi slots (arities are padded with unit values). A tail call to any
-group member — self or mutual — records a backedge site and jumps to
-`@dispatch`, so `even`/`odd` ping-pong 100k times in constant stack. Calls
-from outside the group pass the member's tag as the first argument.
+tail-call graph over saturated direct calls in `tail` position (for both pure
+top-level/nested `pure_defs` and non-pure `let rec` closure groups) is
+computed, and each strongly connected component (of size ≥ 2) is compiled as
+*one* QBE function — the trampoline. Its `@dispatch` header compares a selector
+argument against each member's tag and jumps to the member's body; member
+parameters flow through uniform phi slots (arities are padded with unit
+values), and non-pure closure groups also thread `%phi_clos` so each member
+entry unpacks its closure environment without pushing stack frames. A tail
+call to any group member — self or mutual — records a backedge site and jumps
+to `@dispatch`, so `even`/`odd` and `ocamllex` lexer DFAs run 300k+ transitions
+in constant stack. Calls from outside the group pass the member's tag as the
+dispatch selector (while individual member closure wrappers forward through to
+the trampoline for indirect `ocamlcc_apply_n` calls).
 
 # Builtin resolution
 

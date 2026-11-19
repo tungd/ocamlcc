@@ -1,0 +1,62 @@
+(* Regression test: non-pure mutually tail-recursive closure [let rec]
+   functions capturing outer variables must lower to a shared [@dispatch]
+   trampoline SCC (running in O(1) stack space, like pure mutual SCCs) while
+   preserving individual closure wrappers for indirect calls. *)
+
+let contains_substring ~sub s =
+  let sl = String.length s and nl = String.length sub in
+  let rec loop i =
+    if i + nl > sl then false
+    else if String.sub s i nl = sub then true
+    else loop (i + 1)
+  in
+  nl = 0 || loop 0
+
+let run_qbe qbe_path ssa =
+  let tmp = Filename.temp_dir "ocamlcc_mutrec_clos" "" in
+  let ssa_path = Filename.concat tmp "mutrec_clos.ssa" in
+  let oc = open_out_bin ssa_path in
+  output_string oc ssa;
+  close_out oc;
+  let cmd =
+    Printf.sprintf "%s %s > /dev/null 2>&1"
+      (Filename.quote qbe_path) (Filename.quote ssa_path)
+  in
+  let rc = Sys.command cmd in
+  (try Sys.remove ssa_path with _ -> ());
+  (try Sys.rmdir tmp with _ -> ());
+  rc
+
+let () =
+  let qbe_path =
+    if Array.length Sys.argv >= 2 then Sys.argv.(1) else "vendor/qbe/qbe"
+  in
+  let source =
+    {|
+      external ( = ) : 'a -> 'a -> bool = "%equal"
+      external ( + ) : int -> int -> int = "%addint"
+      external ( - ) : int -> int -> int = "%subint"
+
+      (* Two mutually tail-recursive closures with different arities capturing
+         an outer value [offset]. *)
+      let run offset n f =
+        let rec even_step k =
+          if k = 0 then offset else odd_step (k - 1) 1
+        and odd_step k acc =
+          if k = 0 then offset + acc else even_step (k - 1)
+        in
+        let indirect_even = f even_step in
+        even_step n + indirect_even 2
+    |}
+  in
+  match
+    Pipeline.compile_source ~nostdlib:true ~nopervasives:true
+      ~filename:"mutrec_clos.ml" ~modname:"Mutrec_clos" source
+  with
+  | Error msg -> failwith ("Pipeline failed: " ^ msg)
+  | Ok ssa ->
+      assert (contains_substring ~sub:"_group" ssa);
+      assert (contains_substring ~sub:"@dispatch" ssa);
+      assert (contains_substring ~sub:"jmp @dispatch" ssa);
+      assert (run_qbe qbe_path ssa = 0);
+      Printf.printf "mutrec_closure_tail_test: PASS\n"
