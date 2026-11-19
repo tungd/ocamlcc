@@ -298,8 +298,7 @@ static inline void cc_roots_add(ArcHeader *hdr)
 
 static inline void cc_roots_remove_locked(ArcHeader *hdr)
 {
-    if (hdr->tag == (uint16_t)ARC_TAG_STRING ||
-        hdr->tag == (uint16_t)ARC_TAG_WEAK)
+    if (!is_cycle_candidate_obj(hdr))
         return;
     if ((hdr->reserved & CC_BUFFERED) == 0u)
         return;
@@ -635,6 +634,10 @@ int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
         for (uint16_t i = 0; i < dhdr->scan_fields; i++)
             arc_release_val(df[i]);
     }
+
+    arc_lock(&g_cc_lock);
+    cc_roots_remove_locked(dhdr);
+    arc_unlock(&g_cc_lock);
 
     pal_memcpy((void *)(uintptr_t)dummy_val, (const void *)(uintptr_t)new_val,
                nhdr->byte_size);

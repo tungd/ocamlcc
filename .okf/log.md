@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Fix `ArcHeader.reserved` aliasing in the cycle collector root table: guard `cc_roots_remove_locked` with `!is_cycle_candidate_obj(hdr)` (preventing `ARC_TAG_CUSTOM` / leaf drops with `g_cc_active != 0` from underflowing/corrupting `g_cc_roots`) and remove `dhdr` from `g_cc_roots` under `g_cc_lock` before mutating `dhdr->tag`/`dhdr->reserved` in `caml_update_dummy`. Regression-tested in `tests/stdlib_runtime.c` (`test_buffered_dummy_update`) and `tests/mt_ffi_host.c` (`test_custom_leaf_collect_race`); `ninja test` and `ninja asan_test` pass. See [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-19 (codex/1): Validate numeric format strings before passing them to `snprintf`. Runtime regressions cover float and integer formatting, boxed integer modifiers, and malformed format rejection. See [stdlib compatibility](/concepts/stdlib-compatibility.md).
 
 - 2026-11-19 (codex/1): Integrate the ocpkg companion with main c7db0de. Compiler/runtime/ASan checks, 15 package tests, nine Crunch integration checks and all 71 non-Lwt checks pass. Record refreshed identities in packages/evidence/main-integration-2026-11-19.json.

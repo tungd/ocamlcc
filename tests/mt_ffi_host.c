@@ -90,6 +90,7 @@ typedef struct {
 
 extern int64_t caml_gc_full_major(int64_t);
 extern int64_t caml_final_register_called_without_value(int64_t, int64_t);
+extern int64_t caml_ba_create(int64_t, int64_t, int64_t);
 
 static void wait_phase(FinalizerHandoff *h, int phase)
 {
@@ -215,6 +216,56 @@ static int test_released_queue(int poll)
     return observed_handoff && last_calls == 1;
 }
 
+static void *custom_leaf_worker(void *p)
+{
+    _Atomic int *stop = (_Atomic int *)p;
+    int entered = arc_mutator_enter();
+    int64_t *dims = arc_alloc_array(1, (8ll << 1) | 1ll);
+    arc_mutator_leave(entered);
+    while (atomic_load_explicit(stop, memory_order_acquire) == 0) {
+        int iter_entered = arc_mutator_enter();
+        int64_t ba = caml_ba_create((12ll << 1) | 1ll, (0ll << 1) | 1ll,
+                                    (int64_t)(uintptr_t)dims);
+        /* Buffer a cycle candidate so g_cc_roots is non-empty during collect. */
+        int64_t *arr = arc_alloc_array(1, 1);
+        arc_retain(arr);
+        arc_release(arr);
+        arc_mutator_leave(iter_entered);
+        /* Release the Bigarray outside the mutator gate so release_subtree can
+         * race with an active cycle collection (g_cc_active != 0). */
+        arc_release_val(ba);
+        iter_entered = arc_mutator_enter();
+        arc_release(arr);
+        arc_mutator_leave(iter_entered);
+    }
+    entered = arc_mutator_enter();
+    arc_release(dims);
+    arc_mutator_leave(entered);
+    return NULL;
+}
+
+static void test_custom_leaf_collect_race(void)
+{
+    _Atomic int stop = 0;
+    pthread_t collector;
+    pthread_t workers[4];
+    if (pthread_create(&collector, NULL, collector_worker, &stop) != 0)
+        return;
+    for (int i = 0; i < 4; i++) {
+        if (pthread_create(&workers[i], NULL, custom_leaf_worker, &stop) != 0) {
+            atomic_store_explicit(&stop, 1, memory_order_release);
+            pthread_join(collector, NULL);
+            return;
+        }
+    }
+    for (int i = 0; i < 500; i++)
+        sched_yield();
+    atomic_store_explicit(&stop, 1, memory_order_release);
+    for (int i = 0; i < 4; i++)
+        pthread_join(workers[i], NULL);
+    pthread_join(collector, NULL);
+}
+
 int main(void)
 {
     ocamlcc_init_Stdlib();
@@ -238,6 +289,8 @@ int main(void)
         fputs("released callback did not run on the waiting mutator before return\n", stderr);
         return 1;
     }
+
+    test_custom_leaf_collect_race();
 
     _Atomic int stop_collector = 0;
     pthread_t collector;

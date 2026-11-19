@@ -66,6 +66,25 @@ static void test_integer_format(void)
     arc_release_val(native);
 }
 
+static void test_buffered_dummy_update(void)
+{
+    int64_t before = arc_live_objects();
+    int64_t dummy = caml_alloc_dummy(tagged(1));
+    arc_retain_val(dummy);
+    arc_release_val(dummy);
+
+    char *bytes = arc_alloc_bytes(4);
+    memcpy(bytes, "text", 4);
+    caml_update_dummy(dummy, (int64_t)(uintptr_t)bytes);
+    assert(ocamlcc_arc_collect(1) == tagged(0));
+    const ArcHeader *header = (const ArcHeader *)(uintptr_t)dummy - 1;
+    assert(header->tag == ARC_TAG_STRING && header->reserved == 4);
+    assert(memcmp((const void *)(uintptr_t)dummy, "text", 4) == 0);
+    arc_release(bytes);
+    arc_release_val(dummy);
+    assert(arc_live_objects() == before);
+}
+
 static void clear_exception(void)
 {
     int64_t ex = ocamlcc_get_exn(); assert(ex);
@@ -306,6 +325,7 @@ int main(void)
 {
     test_float_format();
     test_integer_format();
+    test_buffered_dummy_update();
     test_partial_cycle(); test_complete_cycle(); test_truncation_and_mutation(); test_view_lifetime();
     test_retained_c_subview();
     test_c_view_shapes();
