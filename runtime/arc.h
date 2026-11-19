@@ -44,7 +44,11 @@ typedef struct ArcHeader {
     uint16_t         tag;         /* constructor tag / object kind */
     uint16_t         scan_fields; /* pointer fields to dec_ref on drop */
     uint32_t         byte_size;   /* total size, for slab reuse */
-    uint32_t         reserved;
+    /* CC bookkeeping + custom kind. Written under g_cc_lock by the cycle
+     * collector, but read lock-free in release_subtree's CC_BUFFERED check
+     * (while another thread's cc_roots_remove_locked may swap-move this
+     * header and rewrite it), so it must be atomic to be C11-defined. */
+    _Atomic uint32_t reserved;
 } ArcHeader;
 
 _Static_assert(sizeof(ArcHeader) == 16u, "ArcHeader must remain 16 bytes");

@@ -344,7 +344,7 @@ static inline void cc_roots_add(ArcHeader *hdr)
     if (!is_cycle_candidate_obj(hdr))
         return;
     arc_lock(&g_cc_lock);
-    if ((hdr->reserved & CC_BUFFERED) != 0u) {
+    if ((atomic_load_explicit(&hdr->reserved, memory_order_relaxed) & CC_BUFFERED) != 0u) {
         arc_unlock(&g_cc_lock);
         return;
     }
@@ -354,8 +354,11 @@ static inline void cc_roots_add(ArcHeader *hdr)
     }
     uint32_t idx = (uint32_t)g_cc_roots.len;
     ccvec_push(&g_cc_roots, hdr);
-    hdr->reserved =
-        (hdr->reserved & CC_COLOR_MASK) | CC_BUFFERED | (idx << CC_INDEX_SHIFT);
+    atomic_store_explicit(
+        &hdr->reserved,
+        (atomic_load_explicit(&hdr->reserved, memory_order_relaxed) & CC_COLOR_MASK) |
+            CC_BUFFERED | (idx << CC_INDEX_SHIFT),
+        memory_order_relaxed);
     arc_unlock(&g_cc_lock);
 }
 
@@ -363,17 +366,23 @@ static inline void cc_roots_remove_locked(ArcHeader *hdr)
 {
     if (!is_cycle_candidate_obj(hdr))
         return;
-    if ((hdr->reserved & CC_BUFFERED) == 0u)
+    if ((atomic_load_explicit(&hdr->reserved, memory_order_relaxed) & CC_BUFFERED) == 0u)
         return;
-    uint32_t idx = hdr->reserved >> CC_INDEX_SHIFT;
+    uint32_t idx =
+        atomic_load_explicit(&hdr->reserved, memory_order_relaxed) >> CC_INDEX_SHIFT;
     uint32_t last = (uint32_t)--g_cc_roots.len;
     if (idx != last) {
         ArcHeader *moved = g_cc_roots.data[last];
         g_cc_roots.data[idx] = moved;
-        moved->reserved =
-            (moved->reserved & CC_COLOR_MASK) | CC_BUFFERED | (idx << CC_INDEX_SHIFT);
+        /* release_subtree reads reserved lock-free on other threads, so this
+         * swap-move rewrite must be an atomic store to stay C11-defined. */
+        atomic_store_explicit(
+            &moved->reserved,
+            (atomic_load_explicit(&moved->reserved, memory_order_relaxed) & CC_COLOR_MASK) |
+                CC_BUFFERED | (idx << CC_INDEX_SHIFT),
+            memory_order_relaxed);
     }
-    hdr->reserved &= CC_COLOR_MASK;
+    atomic_fetch_and_explicit(&hdr->reserved, CC_COLOR_MASK, memory_order_relaxed);
 }
 
 /* Weak-target registry: values currently referenced by any Weak.t slot.
@@ -1194,7 +1203,9 @@ static void release_subtree(ArcHeader *root, int free_root)
         if (atomic_load_explicit(&g_weak_count, memory_order_acquire) > 0u)
             weak_clear_target((int64_t)(uintptr_t)(cur + 1));
 
-        if ((is_cycle_candidate_obj(cur) && (cur->reserved & CC_BUFFERED) != 0u) ||
+        if ((is_cycle_candidate_obj(cur) &&
+             (atomic_load_explicit(&cur->reserved, memory_order_relaxed) &
+              CC_BUFFERED) != 0u) ||
             atomic_load_explicit(&g_cc_active, memory_order_acquire) != 0) {
             arc_lock(&g_cc_lock);
             cc_roots_remove_locked(cur);
@@ -1753,7 +1764,7 @@ static int64_t collect_cycles(int discover_finalizers)
         ArcHeader *r = g_cc_roots.data[i];
         if (trial_get(&tm, r)->color == CC_COLOR_WHITE)
             cc_collect_white(&tm, &work, &dead, r);
-        r->reserved &= CC_COLOR_MASK;
+        atomic_fetch_and_explicit(&r->reserved, CC_COLOR_MASK, memory_order_relaxed);
     }
     g_cc_roots.len = 0;
 

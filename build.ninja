@@ -530,3 +530,41 @@ rule run_stdlib_compat
 build stdlib_compat: run_stdlib_compat | $builddir/bin/ocamlcc $builddir/qbe/qbe $builddir/rt/libocamlrt.a
 
 default $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a $builddir/bin/ocamlcc $builddir/hello
+
+# ThreadSanitizer variant: C11 data-race detection for the concurrent runtime.
+rule cc_rt_tsan
+  command = $cc $rt_cflags -O1 -fsanitize=thread -fno-omit-frame-pointer -Iruntime -c $in -o $out
+  description = CC(TSAN) $out
+
+rule cc_link_tsan
+  command = $cc -fsanitize=thread -pthread $in -lm -o $out
+  description = LINK(TSAN) $out
+
+build $builddir/tsan/rt/pal.o:        cc_rt_tsan runtime/pal.c      | runtime/pal.h
+build $builddir/tsan/rt/pal_ctx.o:    as_obj     runtime/pal_ctx.S
+build $builddir/tsan/rt/arc.o:        cc_rt_tsan runtime/arc.c      | runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h runtime/bigarray.inc runtime/marshal.inc
+build $builddir/tsan/rt/closure.o:    cc_rt_tsan runtime/closure.c  | runtime/arc.h runtime/pal.h
+build $builddir/tsan/rt/fiber.o:      cc_rt_tsan runtime/fiber.c    | runtime/fiber.h runtime/arc.h runtime/pal.h
+build $builddir/tsan/rt/builtins.o:   cc_rt_tsan runtime/builtins.c
+build $builddir/tsan/rt/main_entry.o: cc_rt_tsan runtime/main_entry.c
+
+build $builddir/tsan/rt/libocamlrt.a: ar $builddir/tsan/rt/pal.o $builddir/tsan/rt/pal_ctx.o $builddir/tsan/rt/arc.o $builddir/tsan/rt/closure.o $builddir/tsan/rt/fiber.o $builddir/tsan/rt/builtins.o $builddir/tsan/rt/main_entry.o
+
+build $builddir/tsan/cc_reserved_race: cc_link_tsan tests/cc_reserved_race.c $builddir/tsan/rt/libocamlrt.a | tests/cc_reserved_race.c
+build $builddir/tsan/mt_ffi_host: cc_link_tsan tests/mt_ffi_host.c $builddir/mt_ffi_lib.s $stdlibdir/libocamlstdlib.a $builddir/tsan/rt/libocamlrt.a | tests/mt_ffi_host.c
+
+rule run_tsan_test
+  command = $builddir/tsan/$name > $builddir/tsan/$name.out 2>&1 && diff - tests/$name.expected < $builddir/tsan/$name.out && echo "PASS(TSAN) $name"
+  pool = console
+  description = TEST(TSAN) $name
+
+rule run_tsan_mt_ffi
+  command = $builddir/tsan/mt_ffi_host > $builddir/tsan/mt_ffi.out 2>&1 && diff - tests/mt_ffi.expected < $builddir/tsan/mt_ffi.out && echo "PASS(TSAN) mt_ffi"
+  pool = console
+  description = TEST(TSAN) mt_ffi
+
+build tsan_cc_reserved_race: run_tsan_test | $builddir/tsan/cc_reserved_race tests/cc_reserved_race.expected
+  name = cc_reserved_race
+build tsan_mt_ffi: run_tsan_mt_ffi | $builddir/tsan/mt_ffi_host tests/mt_ffi.expected
+
+build tsan_test: phony tsan_cc_reserved_race tsan_mt_ffi

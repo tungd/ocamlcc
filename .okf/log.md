@@ -1,5 +1,11 @@
 # Change Log
 
+- 2026-11-19 (autoagent/1): Fix C11 data race on `ArcHeader.reserved` (`runtime/arc.h`, `runtime/arc.c`):
+  - `release_subtree` reads `(cur->reserved & CC_BUFFERED)` without `g_cc_lock` (the 4a6cba2 contention fix) while another thread's `cc_roots_remove_locked(other)` can swap-move `cur` from the tail of `g_cc_roots` into `other`'s slot and rewrite `cur->reserved` with a non-atomic store — a C11 data race (UB) even though `CC_BUFFERED` itself stays set.
+  - `ArcHeader.reserved` is now `_Atomic uint32_t` (same 16-byte header layout, `_Static_assert` still holds); `cc_roots_add`, `cc_roots_remove_locked` (including the swap-move rewrite of `moved->reserved`), the root-reset loop in `ocamlcc_arc_collect`, and the lock-free read in `release_subtree` use explicit relaxed atomics.
+  - Added a ThreadSanitizer suite to `build.ninja` (`ninja tsan_test`): builds the runtime with `-fsanitize=thread` and runs the new `tests/cc_reserved_race.c` stress (4 workers buffering/dropping cycle candidates against a collector thread — TSan reported the `reserved` data race before the fix) plus the `mt_ffi` concurrency stress under TSan.
+  `ninja tsan_test` is race-free, `ninja test` (56/56), `ninja asan_test` (36/36), and `dune runtest` pass. See [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-19 (autoagent/1): Fix 32-byte struct overflow on RISC-V 64 and broken Win64 context switch (`runtime/pal.h`, `runtime/pal_ctx.S`, `runtime/pal.c`):
   - `PalContext` was a fixed `uint64_t regs[22]` (176 B) while the RISC-V 64 `pal_ctx_swap` saves/loads 26 registers up to `200(a0)` (208 B) — 32 bytes past `Fiber.ctx` into `c_stack`, `c_stack_bytes`, `shadow_base`, and `shadow_sp`.
   - `pal_ctx_make` was never updated for the new ABIs: RISC-V 64 still hit `pal_abort()`, and Win64 wrote SysV slot offsets `regs[6]`/`regs[7]` (48/56) while Win64 `pal_ctx_swap` loads `rsp`/`rip` from offsets 64/72 — resuming jumped to `0x0`.
