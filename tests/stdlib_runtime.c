@@ -11,6 +11,9 @@ extern int64_t caml_ba_create(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_sub(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_set_1(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_get_1(int64_t, int64_t);
+extern int64_t caml_obj_dup(int64_t);
+extern int64_t caml_obj_with_tag(int64_t, int64_t);
+extern int64_t caml_array_sub(int64_t, int64_t, int64_t);
 
 static int64_t tagged(int64_t n) { return (int64_t)(((uint64_t)n << 1) | 1); }
 
@@ -321,11 +324,123 @@ static void test_import_contract(void)
     assert(arc_live_objects() == before);
 }
 
+static int64_t dummy_closure_code(int64_t clos, int64_t a, int64_t b)
+{
+    (void)clos;
+    return a + b;
+}
+
+static void test_weak_get_copy_and_obj_dup(void)
+{
+    int64_t before = arc_live_objects();
+    int64_t w = ocamlcc_weak_create(tagged(8));
+    int64_t *some = arc_alloc(0, 1, 8);
+
+    /* 1. String (non-8-byte length). */
+    char *str = arc_alloc_bytes(5);
+    memcpy(str, "hello", 5);
+    some[0] = (int64_t)(uintptr_t)str;
+    ocamlcc_weak_set(w, tagged(0), (int64_t)(uintptr_t)some);
+    int64_t cp_opt = ocamlcc_weak_get_copy(w, tagged(0));
+    assert(cp_opt != 1);
+    int64_t cp_str = ((int64_t *)(uintptr_t)cp_opt)[0];
+    const ArcHeader *sh = (const ArcHeader *)(uintptr_t)cp_str - 1;
+    assert(sh->tag == ARC_TAG_STRING && sh->reserved == 5);
+    assert(memcmp((const void *)(uintptr_t)cp_str, "hello", 5) == 0);
+    arc_release_val(cp_opt);
+
+    /* 2. Closure with .text code pointer, arity=2, and heap env[0]. */
+    ArcClosure *clos = arc_alloc(ARC_TAG_CLOSURE, 1, sizeof(ArcClosure) + 8);
+    clos->code = (void *)dummy_closure_code;
+    clos->arity = 2;
+    arc_retain(str);
+    clos->env[0] = (uint64_t)(uintptr_t)str;
+    some[0] = (int64_t)(uintptr_t)clos;
+    arc_release(str); /* some[0] still holds clos which holds str */
+    ocamlcc_weak_set(w, tagged(1), (int64_t)(uintptr_t)some);
+
+    cp_opt = ocamlcc_weak_get_copy(w, tagged(1));
+    assert(cp_opt != 1);
+    arc_release_val(cp_opt);
+
+    int64_t dup_clos = caml_obj_dup((int64_t)(uintptr_t)clos);
+    assert(dup_clos != (int64_t)(uintptr_t)clos);
+    arc_release_val(dup_clos);
+
+    /* 3. PAP with orig closure, total_arity=2, n_applied=1, and heap args[0]. */
+    ArcPap *pap = arc_alloc(ARC_TAG_PAP, 0, sizeof(ArcPap) + 8);
+    arc_retain(clos);
+    pap->orig = clos;
+    pap->total_arity = 2;
+    pap->n_applied = 1;
+    char *arg0 = arc_alloc_bytes(3);
+    memcpy(arg0, "arg", 3);
+    pap->args[0] = (int64_t)(uintptr_t)arg0;
+    some[0] = (int64_t)(uintptr_t)pap;
+    ocamlcc_weak_set(w, tagged(2), (int64_t)(uintptr_t)some);
+
+    cp_opt = ocamlcc_weak_get_copy(w, tagged(2));
+    assert(cp_opt != 1);
+    arc_release_val(cp_opt);
+
+    int64_t dup_pap = caml_obj_dup((int64_t)(uintptr_t)pap);
+    assert(dup_pap != (int64_t)(uintptr_t)pap);
+    arc_release_val(dup_pap);
+    arc_release(pap);
+    arc_release(clos);
+
+    /* 4. Array from caml_array_sub (scan_fields == 0) holding heap strings. */
+    char *elem = arc_alloc_bytes(4);
+    memcpy(elem, "elem", 4);
+    int64_t *arr = arc_alloc_array(2, (int64_t)(uintptr_t)elem);
+    arc_release(elem);
+    int64_t sub = caml_array_sub((int64_t)(uintptr_t)arr, tagged(0), tagged(2));
+    arc_release(arr);
+    some[0] = sub;
+    ocamlcc_weak_set(w, tagged(3), (int64_t)(uintptr_t)some);
+    cp_opt = ocamlcc_weak_get_copy(w, tagged(3));
+    assert(cp_opt != 1);
+    arc_release_val(cp_opt);
+    arc_release_val(sub);
+
+    /* 5. Weak array inside weak array / Obj.dup on weak array. */
+    int64_t inner_w = ocamlcc_weak_create(tagged(2));
+    some[0] = inner_w;
+    ocamlcc_weak_set(w, tagged(4), (int64_t)(uintptr_t)some);
+    cp_opt = ocamlcc_weak_get_copy(w, tagged(4));
+    assert(cp_opt != 1);
+    arc_release_val(cp_opt);
+    int64_t dup_w = caml_obj_dup(inner_w);
+    arc_release_val(dup_w);
+    arc_release_val(inner_w);
+
+    /* 6. Custom blocks: Bigarray and boxed int64. */
+    int64_t *dims = arc_alloc_array(1, tagged(4));
+    int64_t ba = caml_ba_create(tagged(OCAMLCC_BA_INT), tagged(OCAMLCC_BA_C_LAYOUT),
+                                (int64_t)(uintptr_t)dims);
+    arc_release(dims);
+    int64_t dup_ba = caml_obj_dup(ba);
+    arc_release_val(dup_ba);
+    arc_release_val(ba);
+
+    int64_t i64 = ocamlcc_alloc_custom(ARC_CUSTOM_INT64, 123456789ULL);
+    int64_t dup_i64 = caml_obj_dup(i64);
+    const ArcHeader *i64h = (const ArcHeader *)(uintptr_t)dup_i64 - 1;
+    assert(i64h->tag == ARC_TAG_CUSTOM && i64h->reserved == ARC_CUSTOM_INT64);
+    arc_release_val(dup_i64);
+    arc_release_val(i64);
+
+    arc_release(some);
+    arc_release_val(w);
+    assert(arc_live_objects() == before);
+}
+
 int main(void)
 {
     test_float_format();
     test_integer_format();
     test_buffered_dummy_update();
+    test_weak_get_copy_and_obj_dup();
     test_partial_cycle(); test_complete_cycle(); test_truncation_and_mutation(); test_view_lifetime();
     test_retained_c_subview();
     test_c_view_shapes();

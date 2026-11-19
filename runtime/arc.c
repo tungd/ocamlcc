@@ -1850,6 +1850,8 @@ int64_t ocamlcc_weak_get(int64_t weak_val, int64_t idx_val)
     return (int64_t)(uintptr_t)some;
 }
 
+static int64_t dup_with_tag(int64_t v, int override_tag, uint16_t new_atag);
+
 int64_t ocamlcc_weak_get_copy(int64_t weak_val, int64_t idx_val)
 {
     ArcWeakArray *w = (ArcWeakArray *)(uintptr_t)weak_val;
@@ -1870,25 +1872,8 @@ int64_t ocamlcc_weak_get_copy(int64_t weak_val, int64_t idx_val)
     arc_unlock(&g_weak_lock);
     if (val == 0)
         return 1; /* None */
-    int64_t result = val;
-    if (is_heap_ptr(val)) {
-        ArcHeader *hdr = (ArcHeader *)(uintptr_t)val - 1;
-        if (hdr->tag != (uint16_t)ARC_TAG_CUSTOM &&
-            hdr->tag != (uint16_t)ARC_TAG_CHANNEL) {
-            /* Copy the block one level deep (same tag / scan_fields / size), so
-             * mutating the copy never reaches the value stored in the slot. */
-            uint32_t nbytes = hdr->byte_size;
-            int64_t *copy = (int64_t *)arc_alloc(hdr->tag, hdr->scan_fields, nbytes);
-            uint64_t *dst = (uint64_t *)(void *)copy;
-            uint64_t *src = (uint64_t *)(void *)(uintptr_t)val;
-            for (uint32_t i = 0; i < nbytes / 8u; i++)
-                dst[i] = src[i];
-            for (uint16_t i = 0; i < hdr->scan_fields; i++)
-                arc_retain_val(copy[i]);
-            arc_release_val(val);
-            result = (int64_t)(uintptr_t)copy;
-        }
-    }
+    int64_t result = dup_with_tag(val, 0, 0u);
+    arc_release_val(val);
     int64_t *some = (int64_t *)arc_alloc(0u, 1u, 8u);
     some[0] = result;
     return (int64_t)(uintptr_t)some;
@@ -4817,28 +4802,81 @@ static int64_t dup_with_tag(int64_t v, int override_tag, uint16_t new_atag)
     if (!is_heap_ptr(v))
         return v;
     const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)v - 1;
-    uint16_t tag = override_tag ? new_atag : hdr->tag;
-    if (hdr->tag == (uint16_t)ARC_TAG_STRING) {
+    uint16_t src_tag = hdr->tag;
+
+    if (src_tag == (uint16_t)ARC_TAG_STRING) {
         char *s = (char *)arc_alloc_bytes((uint64_t)hdr->reserved);
         if (hdr->reserved > 0u)
             pal_memcpy(s, (const void *)(uintptr_t)v, (size_t)hdr->reserved);
         return (int64_t)(uintptr_t)s;
     }
-    if (hdr->tag == (uint16_t)ARC_TAG_FLOAT)
+    if (src_tag == (uint16_t)ARC_TAG_FLOAT)
         return ocamlcc_alloc_float(unbox_float(v));
-    if (hdr->tag == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+    if (src_tag == (uint16_t)ARC_TAG_FLOAT_ARRAY) {
+        uint16_t tag = override_tag ? new_atag : src_tag;
         double *p = (double *)arc_alloc(tag, 0u, hdr->byte_size);
         if (hdr->byte_size > 0u)
             pal_memcpy(p, (const void *)(uintptr_t)v, hdr->byte_size);
         return (int64_t)(uintptr_t)p;
     }
-    uint16_t scan = (tag == (uint16_t)ARC_TAG_ARRAY) ? 0u : hdr->scan_fields;
+    if (src_tag == (uint16_t)ARC_TAG_CUSTOM) {
+        if (hdr->reserved == ARC_CUSTOM_INT32 ||
+            hdr->reserved == ARC_CUSTOM_INT64 ||
+            hdr->reserved == ARC_CUSTOM_NATIVEINT) {
+            return ocamlcc_alloc_custom(hdr->reserved,
+                                        *(const uint64_t *)(uintptr_t)v);
+        }
+        /* Mutex, Cond, BLAKE2, Bigarray, and Bigarray buffers own external
+         * resources or intrusive state; return a retained alias instead of
+         * shallow-duplicating handles. */
+        arc_retain_val(v);
+        return v;
+    }
+    if (src_tag == (uint16_t)ARC_TAG_WEAK ||
+        src_tag == (uint16_t)ARC_TAG_FIBER ||
+        src_tag == (uint16_t)ARC_TAG_CHANNEL) {
+        /* Runtime-managed objects hold intrusive list links, OS stacks, or
+         * synchronization primitives that cannot be shallow-copied. */
+        arc_retain_val(v);
+        return v;
+    }
+    if (src_tag == (uint16_t)ARC_TAG_CLOSURE) {
+        ArcClosure *dst =
+            (ArcClosure *)arc_alloc(src_tag, hdr->scan_fields, hdr->byte_size);
+        if (hdr->byte_size > 0u)
+            pal_memcpy(dst, (const void *)(uintptr_t)v, hdr->byte_size);
+        for (uint16_t i = 0u; i < hdr->scan_fields; i++)
+            arc_retain_val((int64_t)dst->env[i]);
+        return (int64_t)(uintptr_t)dst;
+    }
+    if (src_tag == (uint16_t)ARC_TAG_PAP) {
+        ArcPap *dst =
+            (ArcPap *)arc_alloc(src_tag, hdr->scan_fields, hdr->byte_size);
+        if (hdr->byte_size > 0u)
+            pal_memcpy(dst, (const void *)(uintptr_t)v, hdr->byte_size);
+        arc_retain_val((int64_t)(uintptr_t)dst->orig);
+        for (uint64_t i = 0u; i < dst->n_applied; i++)
+            arc_retain_val(dst->args[i]);
+        return (int64_t)(uintptr_t)dst;
+    }
+
+    uint16_t tag = override_tag ? new_atag : src_tag;
+    /* Only allow Obj.with_tag to target ordinary blocks or arrays. */
+    if (override_tag &&
+        tag != (uint16_t)ARC_TAG_ARRAY &&
+        tag != 248u &&
+        tag >= 245u) {
+        tag = src_tag;
+    }
+    uint32_t nf = (src_tag == (uint16_t)ARC_TAG_ARRAY)
+                      ? (hdr->byte_size / 8u)
+                      : (uint32_t)hdr->scan_fields;
+    uint16_t scan = (tag == (uint16_t)ARC_TAG_ARRAY)
+                        ? 0u
+                        : (nf > UINT16_MAX ? (uint16_t)UINT16_MAX : (uint16_t)nf);
     int64_t *dst = (int64_t *)arc_alloc(tag, scan, hdr->byte_size);
     if (hdr->byte_size > 0u)
         pal_memcpy(dst, (const void *)(uintptr_t)v, hdr->byte_size);
-    uint32_t nf = (hdr->tag == (uint16_t)ARC_TAG_ARRAY)
-                      ? (hdr->byte_size / 8u)
-                      : (uint32_t)hdr->scan_fields;
     for (uint32_t i = 0u; i < nf; i++)
         arc_retain_val(dst[i]);
     return (int64_t)(uintptr_t)dst;

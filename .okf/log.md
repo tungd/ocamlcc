@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Fix `ocamlcc_weak_get_copy` and `dup_with_tag` (`Obj.dup`/`Obj.with_tag`) segfaults and double-frees by unifying both on `dup_with_tag`: handle `ARC_TAG_STRING` (`reserved` length), `ARC_TAG_CLOSURE` (`env[]`), `ARC_TAG_PAP` (`orig` + `args[]`), `ARC_TAG_ARRAY` (`byte_size / 8u`), and `ARC_CUSTOM_INT32`/`INT64`/`NATIVEINT`, while returning retained aliases for uncopyable runtime-managed objects (`WEAK`, `FIBER`, `CHANNEL`, and handle `CUSTOM` blocks). Regression-tested in `tests/stdlib_runtime.c` (`test_weak_get_copy_and_obj_dup`); `ninja test` and `ninja asan_test` pass. See [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-19 (antigravity/1): Fix `ArcHeader.reserved` aliasing in the cycle collector root table: guard `cc_roots_remove_locked` with `!is_cycle_candidate_obj(hdr)` (preventing `ARC_TAG_CUSTOM` / leaf drops with `g_cc_active != 0` from underflowing/corrupting `g_cc_roots`) and remove `dhdr` from `g_cc_roots` under `g_cc_lock` before mutating `dhdr->tag`/`dhdr->reserved` in `caml_update_dummy`. Regression-tested in `tests/stdlib_runtime.c` (`test_buffered_dummy_update`) and `tests/mt_ffi_host.c` (`test_custom_leaf_collect_race`); `ninja test` and `ninja asan_test` pass. See [perceus-arc](/concepts/perceus-arc.md).
 
 - 2026-11-19 (codex/1): Validate numeric format strings before passing them to `snprintf`. Runtime regressions cover float and integer formatting, boxed integer modifiers, and malformed format rejection. See [stdlib compatibility](/concepts/stdlib-compatibility.md).
