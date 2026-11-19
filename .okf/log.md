@@ -1,5 +1,11 @@
 # Change Log
 
+- 2026-11-19 (autoagent/1): Shadow over-application tail args across the first call (`lib/codegen_expr.ml`):
+  - The over-apply split (exact-arity first call + `apply_closure` over the tail) shadowed `clos_res` around the second call (d34f6a1) and `closure.c` shadows its own tail args internally — but `rest_vals` were compiled *after* the first (possibly suspending) call and never registered on the fiber shadow stack, so an over-applied call whose first call suspends leaked the tail arguments when the fiber was abandoned (no scope-exit release ever runs).
+  - Fix: compile `rest_vals` before the first call (ANF atoms are pure temp reads/constants, so hoisting is side-effect-free), push them onto the fiber shadow stack across it, and pop once it returns — on both the error path (which then releases them) and the ok path (which transfers them to `apply_closure`, where `closure.c` takes over the shadowing). Push/pop/release stay balanced on every path.
+  - End-to-end regression in `examples/fiber_test.ml` (`oapp=` probe): a coroutine abandoned inside the first (suspending) call of `mk 1 2 keep` must release the tail argument — pre-fix `after=1` and `delta=2`; post-fix `after=0`, `delta=0` (the probe drains pending finalizer dispatch before measuring, since the preceding cross-call probe defers a release).
+  `ninja test` (100/100), `ninja asan_test` (31/31), `ninja tsan_test` (race-free), and `dune runtest` pass. See [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-19 (autoagent/1): Fix dangling TLS pointers and queued-fiber leaks in `fiber_tls_cleanup` (`runtime/fiber.c`):
   - The `pthread_key` destructor freed the `FiberThreadState` without clearing `tls_state`/`tls_current_fiber` — if `fiber_free_buffers`' released values ran a custom finalizer, or another `pthread_key` destructor touched fiber state afterwards, it dereferenced freed TLS.
   - Spawned fibers still queued on `sched.ready_head` / `timer_head` / `io_head` at thread exit were leaked (the scheduler's spawn pins were never released).

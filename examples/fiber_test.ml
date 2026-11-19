@@ -1,6 +1,8 @@
 open Stdlib
 
 external arc_live : unit -> int = "ocamlcc_arc_live"
+external arc_collect : unit -> int = "ocamlcc_arc_collect"
+external arc_poll_finalizers : unit -> int = "ocamlcc_poll_finalizers"
 
 type box =
   | Leaf
@@ -116,6 +118,35 @@ let test_coop_scheduler () =
   Fiber.run_all ();
   (Buffer.contents log, s1 + s2)
 
+(* Over-application across a suspending first call: `mk seed seed keep`
+   has arity 2 but is applied to 3 arguments, so the codegen splits it into
+   a first (suspending) call plus an over-apply tail. The tail argument must
+   be shadowed across the first call, or an abandoned fiber leaks it. *)
+let test_abandon_over_apply () =
+  let w = Weak.create 1 in
+  let make_and_drop () =
+    let c =
+      Fiber.create (fun seed ->
+          let keep = { contents = seed + 1 } in
+          Weak.set w 0 (Some keep);
+          let mk a b =
+            Fiber.suspend (a, b);
+            fun x -> a + b + x.contents
+          in
+          ignore (mk seed seed keep);
+          (seed, seed))
+    in
+    let y = Fiber.resume c 10 in
+    let still_open = if Fiber.is_done c then 0 else 1 in
+    (fst y, snd y, still_open)
+  in
+  let py1, py2, still_open = make_and_drop () in
+  (* The abandoned coroutine's release can queue finalizer / cycle work;
+     drain it so the delta measures real leaks only. *)
+  ignore (arc_collect ());
+  let alive_after = if Weak.check w 0 then 1 else 0 in
+  (py1, py2, still_open, alive_after)
+
 let test_cross_calls () =
   (* Fiber.yield inside a coroutine must raise, not queue the coroutine on
      the scheduler without ownership and return the resume payload. *)
@@ -156,6 +187,14 @@ let () =
   let delta3 = arc_live () - live0 in
   let trace, total = test_coop_scheduler () in
   let x1, x2, x3, x4, x5 = test_cross_calls () in
+  (* Earlier probes can leave finalizer dispatch pending; drain it so the
+     over-apply delta measures only this probe's leaks. *)
+  ignore (arc_poll_finalizers ());
+  let oa_before = arc_live () in
+  let oa1, oa2, oa3, oa4 = test_abandon_over_apply () in
+  ignore (arc_poll_finalizers ());
+  ignore (arc_collect ());
+  let delta5 = arc_live () - oa_before in
   Printf.printf "coro=%d,%d,%d,%d,%d,%d,%d,%d,%d delta=%d\n" a1 a2 d1 b1 b2 d2
     c1 c2 d3 delta1;
   Printf.printf "abandon=%d susp=%d open=%d after=%d delta=%d\n" y alive_susp
@@ -164,4 +203,5 @@ let () =
   Printf.printf "sched=[%s] sum=%d " trace total;
   let delta4 = arc_live () - live0 in
   Printf.printf "delta=%d\n" delta4;
-  Printf.printf "cross=%d,%d,%d,%d,%d\n" x1 x2 x3 x4 x5
+  Printf.printf "cross=%d,%d,%d,%d,%d\n" x1 x2 x3 x4 x5;
+  Printf.printf "oapp=%d,%d,%d,%d delta=%d\n" oa1 oa2 oa3 oa4 delta5
