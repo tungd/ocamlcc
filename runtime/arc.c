@@ -4433,19 +4433,12 @@ int64_t caml_ml_mutex_new(int64_t ignored)
 int64_t caml_ml_mutex_lock(int64_t m_val)
 {
     void *m = (void *)(uintptr_t)unbox_custom_i64(m_val);
-    int entered = 0;
-    if (tls_os_mutator_active) {
-        tls_os_mutator_active = 0;
-        atomic_fetch_sub_explicit(&g_active_mutators, 1, memory_order_release);
-        entered = 1;
-    }
+    int entered = tls_os_mutator_active;
+    if (entered)
+        arc_mutator_leave(1);
     int rc = ocamlcc_c_mutex_lock(m);
-    if (entered) {
-        while (atomic_load_explicit(&g_cc_waiting, memory_order_acquire) != 0)
-            cpu_relax();
-        atomic_fetch_add_explicit(&g_active_mutators, 1, memory_order_acq_rel);
-        tls_os_mutator_active = 1;
-    }
+    if (entered)
+        (void)arc_mutator_enter();
     if (rc != 0)
         raise_sys_error_errno(rc);
     return 1;
@@ -4478,19 +4471,12 @@ int64_t caml_ml_condition_wait(int64_t c_val, int64_t m_val)
 {
     void *c = (void *)(uintptr_t)unbox_custom_i64(c_val);
     void *m = (void *)(uintptr_t)unbox_custom_i64(m_val);
-    int entered = 0;
-    if (tls_os_mutator_active) {
-        tls_os_mutator_active = 0;
-        atomic_fetch_sub_explicit(&g_active_mutators, 1, memory_order_release);
-        entered = 1;
-    }
+    int entered = tls_os_mutator_active;
+    if (entered)
+        arc_mutator_leave(1);
     int rc = ocamlcc_c_cond_wait(c, m);
-    if (entered) {
-        while (atomic_load_explicit(&g_cc_waiting, memory_order_acquire) != 0)
-            cpu_relax();
-        atomic_fetch_add_explicit(&g_active_mutators, 1, memory_order_acq_rel);
-        tls_os_mutator_active = 1;
-    }
+    if (entered)
+        (void)arc_mutator_enter();
     if (rc != 0)
         raise_sys_error_errno(rc);
     return 1;

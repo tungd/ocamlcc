@@ -91,6 +91,12 @@ typedef struct {
 extern int64_t caml_gc_full_major(int64_t);
 extern int64_t caml_final_register_called_without_value(int64_t, int64_t);
 extern int64_t caml_ba_create(int64_t, int64_t, int64_t);
+extern int64_t caml_ml_mutex_new(int64_t);
+extern int64_t caml_ml_mutex_lock(int64_t);
+extern int64_t caml_ml_mutex_unlock(int64_t);
+extern int64_t caml_ml_condition_new(int64_t);
+extern int64_t caml_ml_condition_wait(int64_t, int64_t);
+extern int64_t caml_ml_condition_signal(int64_t);
 
 static void wait_phase(FinalizerHandoff *h, int phase)
 {
@@ -266,6 +272,79 @@ static void test_custom_leaf_collect_race(void)
     pthread_join(collector, NULL);
 }
 
+typedef struct {
+    int64_t mtx;
+    int64_t cond;
+    _Atomic int stop;
+    int turn;
+} SyncRaceArg;
+
+static void *sync_race_worker(void *p)
+{
+    SyncRaceArg *arg = (SyncRaceArg *)p;
+    int entered = arc_mutator_enter();
+    for (int i = 0; i < 400; i++) {
+        caml_ml_mutex_lock(arg->mtx);
+        while (arg->turn == 1 && atomic_load_explicit(&arg->stop, memory_order_acquire) == 0)
+            caml_ml_condition_wait(arg->cond, arg->mtx);
+        arg->turn = 1;
+        /* Allocate and drop a cycle candidate right after waking from wait/lock. */
+        int64_t *arr = arc_alloc_array(1, 1);
+        arc_retain(arr);
+        arc_release(arr);
+        arc_release(arr);
+        caml_ml_condition_signal(arg->cond);
+        caml_ml_mutex_unlock(arg->mtx);
+    }
+    arc_mutator_leave(entered);
+    return NULL;
+}
+
+static void test_mutex_cond_collect_race(void)
+{
+    int entered = arc_mutator_enter();
+    SyncRaceArg arg;
+    arg.mtx = caml_ml_mutex_new(1);
+    arg.cond = caml_ml_condition_new(1);
+    atomic_init(&arg.stop, 0);
+    arg.turn = 0;
+    arc_mutator_leave(entered);
+
+    _Atomic int stop_col = 0;
+    pthread_t collector, waiter;
+    if (pthread_create(&collector, NULL, collector_worker, &stop_col) != 0)
+        goto cleanup;
+    if (pthread_create(&waiter, NULL, sync_race_worker, &arg) != 0) {
+        atomic_store_explicit(&stop_col, 1, memory_order_release);
+        pthread_join(collector, NULL);
+        goto cleanup;
+    }
+
+    entered = arc_mutator_enter();
+    for (int i = 0; i < 400; i++) {
+        caml_ml_mutex_lock(arg.mtx);
+        arg.turn = 0;
+        caml_ml_condition_signal(arg.cond);
+        caml_ml_mutex_unlock(arg.mtx);
+    }
+    atomic_store_explicit(&arg.stop, 1, memory_order_release);
+    caml_ml_mutex_lock(arg.mtx);
+    arg.turn = 0;
+    caml_ml_condition_signal(arg.cond);
+    caml_ml_mutex_unlock(arg.mtx);
+    arc_mutator_leave(entered);
+
+    pthread_join(waiter, NULL);
+    atomic_store_explicit(&stop_col, 1, memory_order_release);
+    pthread_join(collector, NULL);
+
+cleanup:
+    entered = arc_mutator_enter();
+    arc_release_val(arg.cond);
+    arc_release_val(arg.mtx);
+    arc_mutator_leave(entered);
+}
+
 int main(void)
 {
     ocamlcc_init_Stdlib();
@@ -291,6 +370,7 @@ int main(void)
     }
 
     test_custom_leaf_collect_race();
+    test_mutex_cond_collect_race();
 
     _Atomic int stop_collector = 0;
     pthread_t collector;
