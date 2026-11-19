@@ -1,9 +1,12 @@
 /* Public C runtime contracts for standard library primitives and ARC views. */
 #include "../runtime/arc.h"
 #include "../runtime/ocamlcc_bigarray.h"
+#include "../runtime/pal.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 extern int64_t caml_input_value_from_bytes(int64_t, int64_t);
 extern int64_t caml_output_value_to_bytes(int64_t, int64_t);
@@ -435,12 +438,66 @@ static void test_weak_get_copy_and_obj_dup(void)
     assert(arc_live_objects() == before);
 }
 
+static void test_poller_multi_waiters_and_overflow(void)
+{
+    int pfd = pal_poller_create();
+    assert(pfd >= 0);
+
+    int fds[2];
+    assert(pipe(fds) == 0);
+    assert(write(fds[1], "x", 1) == 1);
+
+    /* Two watchers on the same (fd, PAL_POLL_READ) must both be delivered. */
+    assert(pal_poller_watch(pfd, fds[0], PAL_POLL_READ, (void *)0x101) == 0);
+    assert(pal_poller_watch(pfd, fds[0], PAL_POLL_READ, (void *)0x102) == 0);
+
+    PalPollEvent evs[2];
+    int n = pal_poller_wait(pfd, evs, 1, 100);
+    assert(n == 1 && evs[0].fd == fds[0] && evs[0].events == PAL_POLL_READ);
+    assert(evs[0].udata == (void *)0x101);
+
+    n = pal_poller_wait(pfd, evs, 1, 100);
+    assert(n == 1 && evs[0].fd == fds[0] && evs[0].events == PAL_POLL_READ);
+    assert(evs[0].udata == (void *)0x102);
+
+    close(fds[0]);
+    close(fds[1]);
+
+    /* Both READ and WRITE ready on the same fd with max_events == 1 must not
+     * overflow out[1] and must deliver both events across two waits. */
+    int sp[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sp) == 0);
+    assert(write(sp[1], "y", 1) == 1);
+    assert(pal_poller_watch(pfd, sp[0], PAL_POLL_READ, (void *)0x201) == 0);
+    assert(pal_poller_watch(pfd, sp[0], PAL_POLL_WRITE, (void *)0x202) == 0);
+
+    memset(evs, 0xAA, sizeof(evs));
+    n = pal_poller_wait(pfd, evs, 1, 100);
+    assert(n == 1);
+    /* Guard slot evs[1] must remain untouched. */
+    unsigned char *guard = (unsigned char *)&evs[1];
+    for (size_t i = 0; i < sizeof(evs[1]); i++)
+        assert(guard[i] == 0xAA);
+    void *first_udata = evs[0].udata;
+    assert(first_udata == (void *)0x201 || first_udata == (void *)0x202);
+
+    n = pal_poller_wait(pfd, evs, 1, 100);
+    assert(n == 1);
+    assert(evs[0].udata != first_udata);
+    assert(evs[0].udata == (void *)0x201 || evs[0].udata == (void *)0x202);
+
+    close(sp[0]);
+    close(sp[1]);
+    pal_poller_close(pfd);
+}
+
 int main(void)
 {
     test_float_format();
     test_integer_format();
     test_buffered_dummy_update();
     test_weak_get_copy_and_obj_dup();
+    test_poller_multi_waiters_and_overflow();
     test_partial_cycle(); test_complete_cycle(); test_truncation_and_mutation(); test_view_lifetime();
     test_retained_c_subview();
     test_c_view_shapes();

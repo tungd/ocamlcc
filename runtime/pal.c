@@ -22,23 +22,37 @@
 #include <sys/epoll.h>
 #endif
 
-#if defined(PAL_USE_EPOLL)
-/* Per-fd watch registry: epoll keys a registration by fd alone, so two
-   fibers watching the same fd (one READ, one WRITE) must share one
-   registration with both interest bits; a plain EPOLL_CTL_MOD would
-   overwrite ev.data.ptr and silently lose the first fiber's wakeup. The
-   registry keeps one udata per direction; kernel events carry the entry
-   pointer and pal_poller_wait dispatches to the right watcher(s). */
+#if defined(PAL_USE_KQUEUE) || defined(PAL_USE_EPOLL)
+/* Per-fd watch registry:
+ * - On epoll, a single kernel registration is keyed by fd alone, so READ and
+ *   WRITE watchers on the same fd share one registration.
+ * - On both kqueue and epoll, multiple fibers can wait on the same (fd, dir),
+ *   so each direction holds a FIFO list of waiter udatas instead of overwriting
+ *   the previous fiber's udata.
+ * - Slots in g_watches[] never move; kernel tokens encode (gen << 32) | idx
+ *   so freeing one watch never invalidates or aliases another registration or
+ *   a pending event in the same wait batch. */
+typedef struct PalWaiter {
+    void *udata;
+    int next;
+    int in_use;
+} PalWaiter;
+
 typedef struct PalWatch {
+    int in_use;
+    uint32_t gen;
     int pfd; /* owning poller */
     int fd;
-    void *read_udata;
-    void *write_udata;
+    int read_head;
+    int read_tail;
+    int write_head;
+    int write_tail;
 } PalWatch;
 
-#define PAL_WATCH_MAX 1024
+#define PAL_WATCH_MAX  1024
+#define PAL_WAITER_MAX 2048
 static PalWatch g_watches[PAL_WATCH_MAX];
-static int g_watch_count = 0;
+static PalWaiter g_waiters[PAL_WAITER_MAX];
 static _Atomic uint32_t g_watch_lock = 0u;
 
 static inline void watch_lock(void)
@@ -52,10 +66,90 @@ static inline void watch_unlock(void)
     atomic_store_explicit(&g_watch_lock, 0u, memory_order_release);
 }
 
+static inline uint64_t watch_encode(const PalWatch *w)
+{
+    uint32_t idx = (uint32_t)(w - g_watches);
+    return ((uint64_t)w->gen << 32) | (uint64_t)idx;
+}
+
+static inline PalWatch *watch_decode(int pfd, uint64_t token)
+{
+    uint32_t idx = (uint32_t)(token & 0xffffffffu);
+    uint32_t gen = (uint32_t)(token >> 32);
+    if (idx >= PAL_WATCH_MAX)
+        return NULL;
+    PalWatch *w = &g_watches[idx];
+    if (!w->in_use || w->gen != gen || w->pfd != pfd)
+        return NULL;
+    return w;
+}
+
+static int waiter_push(int *head, int *tail, void *udata)
+{
+    for (int i = 0; i < PAL_WAITER_MAX; i++) {
+        if (!g_waiters[i].in_use) {
+            g_waiters[i].in_use = 1;
+            g_waiters[i].udata = udata;
+            g_waiters[i].next = -1;
+            if (*tail >= 0)
+                g_waiters[*tail].next = i;
+            else
+                *head = i;
+            *tail = i;
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int waiter_pop(int *head, int *tail, void **out_udata)
+{
+    int i = *head;
+    if (i < 0)
+        return 0;
+    *out_udata = g_waiters[i].udata;
+    *head = g_waiters[i].next;
+    if (*head < 0)
+        *tail = -1;
+    g_waiters[i].in_use = 0;
+    g_waiters[i].next = -1;
+    return 1;
+}
+
+static void waiter_clear(int *head, int *tail)
+{
+    void *unused;
+    while (waiter_pop(head, tail, &unused))
+        ;
+}
+
+static void waiter_remove_idx(int *head, int *tail, int target_idx)
+{
+    if (target_idx < 0)
+        return;
+    int prev = -1;
+    int cur = *head;
+    while (cur >= 0) {
+        if (cur == target_idx) {
+            if (prev >= 0)
+                g_waiters[prev].next = g_waiters[cur].next;
+            else
+                *head = g_waiters[cur].next;
+            if (*tail == cur)
+                *tail = prev;
+            g_waiters[cur].in_use = 0;
+            g_waiters[cur].next = -1;
+            return;
+        }
+        prev = cur;
+        cur = g_waiters[cur].next;
+    }
+}
+
 static PalWatch *watch_find(int pfd, int fd)
 {
-    for (int i = 0; i < g_watch_count; i++) {
-        if (g_watches[i].pfd == pfd && g_watches[i].fd == fd)
+    for (int i = 0; i < PAL_WATCH_MAX; i++) {
+        if (g_watches[i].in_use && g_watches[i].pfd == pfd && g_watches[i].fd == fd)
             return &g_watches[i];
     }
     return NULL;
@@ -63,33 +157,45 @@ static PalWatch *watch_find(int pfd, int fd)
 
 static PalWatch *watch_alloc(int pfd, int fd)
 {
-    if (g_watch_count >= PAL_WATCH_MAX)
-        return NULL;
-    PalWatch *w = &g_watches[g_watch_count++];
-    w->pfd = pfd;
-    w->fd = fd;
-    w->read_udata = NULL;
-    w->write_udata = NULL;
-    return w;
+    for (int i = 0; i < PAL_WATCH_MAX; i++) {
+        if (!g_watches[i].in_use) {
+            PalWatch *w = &g_watches[i];
+            w->in_use = 1;
+            w->gen++;
+            if (w->gen == 0u)
+                w->gen = 1u;
+            w->pfd = pfd;
+            w->fd = fd;
+            w->read_head = -1;
+            w->read_tail = -1;
+            w->write_head = -1;
+            w->write_tail = -1;
+            return w;
+        }
+    }
+    return NULL;
 }
 
 static void watch_free(PalWatch *w)
 {
-    int idx = (int)(w - g_watches);
-    g_watches[idx] = g_watches[g_watch_count - 1];
-    g_watch_count--;
+    waiter_clear(&w->read_head, &w->read_tail);
+    waiter_clear(&w->write_head, &w->write_tail);
+    w->gen++;
+    w->in_use = 0;
 }
 
+#if defined(PAL_USE_EPOLL)
 static uint32_t watch_events_of(const PalWatch *w)
 {
     uint32_t ev = EPOLLONESHOT;
-    if (w->read_udata != NULL)
+    if (w->read_head >= 0)
         ev |= EPOLLIN;
-    if (w->write_udata != NULL)
+    if (w->write_head >= 0)
         ev |= EPOLLOUT;
     return ev;
 }
 #endif /* PAL_USE_EPOLL */
+#endif /* PAL_USE_KQUEUE || PAL_USE_EPOLL */
 
 void *pal_page_alloc(size_t size)
 {
@@ -142,17 +248,12 @@ void pal_poller_close(int pfd)
 {
     if (pfd >= 0)
         close(pfd);
-#if defined(PAL_USE_EPOLL)
+#if defined(PAL_USE_KQUEUE) || defined(PAL_USE_EPOLL)
     watch_lock();
     /* Drop this poller's watch-registry entries. */
-    int i = 0;
-    while (i < g_watch_count) {
-        if (g_watches[i].pfd == pfd) {
-            g_watches[i] = g_watches[g_watch_count - 1];
-            g_watch_count--;
-        } else {
-            i++;
-        }
+    for (int i = 0; i < PAL_WATCH_MAX; i++) {
+        if (g_watches[i].in_use && g_watches[i].pfd == pfd)
+            watch_free(&g_watches[i]);
     }
     watch_unlock();
 #endif
@@ -160,57 +261,77 @@ void pal_poller_close(int pfd)
 
 int pal_poller_watch(int pfd, int fd, uint32_t events, void *udata)
 {
-#if defined(PAL_USE_KQUEUE)
-    struct kevent kevs[2];
-    int n = 0;
-    if (events & PAL_POLL_READ) {
-        EV_SET(&kevs[n], (uintptr_t)fd, EVFILT_READ,
-               EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, udata);
-        n++;
-    }
-    if (events & PAL_POLL_WRITE) {
-        EV_SET(&kevs[n], (uintptr_t)fd, EVFILT_WRITE,
-               EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, udata);
-        n++;
-    }
-    if (n == 0)
+#if defined(PAL_USE_KQUEUE) || defined(PAL_USE_EPOLL)
+    if ((events & (PAL_POLL_READ | PAL_POLL_WRITE)) == 0u)
         return 0;
-    return kevent(pfd, kevs, n, NULL, 0, NULL);
-#elif defined(PAL_USE_EPOLL)
     watch_lock();
     PalWatch *w = watch_find(pfd, fd);
-    if (w == NULL) {
+    int is_new = (w == NULL);
+    if (is_new) {
         w = watch_alloc(pfd, fd);
         if (w == NULL) {
             watch_unlock();
             return -1;
         }
-        if (events & PAL_POLL_READ)
-            w->read_udata = udata;
-        if (events & PAL_POLL_WRITE)
-            w->write_udata = udata;
-        struct epoll_event ev;
-        ev.events = watch_events_of(w);
-        ev.data.ptr = w;
-        if (epoll_ctl(pfd, EPOLL_CTL_ADD, fd, &ev) < 0) {
-            watch_free(w);
+    }
+    int had_read = (w->read_head >= 0);
+    int had_write = (w->write_head >= 0);
+    int added_r = -1;
+    int added_w = -1;
+    if (events & PAL_POLL_READ) {
+        added_r = waiter_push(&w->read_head, &w->read_tail, udata);
+        if (added_r < 0) {
+            if (is_new)
+                watch_free(w);
             watch_unlock();
             return -1;
         }
-        watch_unlock();
-        return 0;
     }
-    /* Existing registration: merge the new interest and re-arm both. */
-    if (events & PAL_POLL_READ)
-        w->read_udata = udata;
-    if (events & PAL_POLL_WRITE)
-        w->write_udata = udata;
+    if (events & PAL_POLL_WRITE) {
+        added_w = waiter_push(&w->write_head, &w->write_tail, udata);
+        if (added_w < 0) {
+            waiter_remove_idx(&w->read_head, &w->read_tail, added_r);
+            if (is_new)
+                watch_free(w);
+            watch_unlock();
+            return -1;
+        }
+    }
+    int rc = 0;
+#if defined(PAL_USE_KQUEUE)
+    struct kevent kevs[2];
+    int n = 0;
+    void *tok = (void *)(uintptr_t)watch_encode(w);
+    if ((events & PAL_POLL_READ) && !had_read) {
+        EV_SET(&kevs[n], (uintptr_t)fd, EVFILT_READ,
+               EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, tok);
+        n++;
+    }
+    if ((events & PAL_POLL_WRITE) && !had_write) {
+        EV_SET(&kevs[n], (uintptr_t)fd, EVFILT_WRITE,
+               EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, tok);
+        n++;
+    }
+    if (n > 0)
+        rc = kevent(pfd, kevs, n, NULL, 0, NULL);
+#elif defined(PAL_USE_EPOLL)
+    (void)had_read;
+    (void)had_write;
     struct epoll_event ev;
     ev.events = watch_events_of(w);
-    ev.data.ptr = w;
-    int rc = epoll_ctl(pfd, EPOLL_CTL_MOD, fd, &ev);
+    ev.data.u64 = watch_encode(w);
+    rc = epoll_ctl(pfd, is_new ? EPOLL_CTL_ADD : EPOLL_CTL_MOD, fd, &ev);
+#endif
+    if (rc < 0) {
+        waiter_remove_idx(&w->read_head, &w->read_tail, added_r);
+        waiter_remove_idx(&w->write_head, &w->write_tail, added_w);
+        if (w->read_head < 0 && w->write_head < 0)
+            watch_free(w);
+        watch_unlock();
+        return -1;
+    }
     watch_unlock();
-    return rc;
+    return 0;
 #else
     (void)pfd;
     (void)fd;
@@ -222,41 +343,48 @@ int pal_poller_watch(int pfd, int fd, uint32_t events, void *udata)
 
 int pal_poller_unwatch(int pfd, int fd, uint32_t events)
 {
-#if defined(PAL_USE_KQUEUE)
-    struct kevent kevs[2];
-    int n = 0;
-    if (events & PAL_POLL_READ) {
-        EV_SET(&kevs[n], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-        n++;
-    }
-    if (events & PAL_POLL_WRITE) {
-        EV_SET(&kevs[n], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-        n++;
-    }
-    if (n == 0)
-        return 0;
-    return kevent(pfd, kevs, n, NULL, 0, NULL);
-#elif defined(PAL_USE_EPOLL)
+#if defined(PAL_USE_KQUEUE) || defined(PAL_USE_EPOLL)
     watch_lock();
     PalWatch *w = watch_find(pfd, fd);
     if (w == NULL) {
         watch_unlock();
         return -1;
     }
+    int had_read = (w->read_head >= 0);
+    int had_write = (w->write_head >= 0);
     if (events & PAL_POLL_READ)
-        w->read_udata = NULL;
+        waiter_clear(&w->read_head, &w->read_tail);
     if (events & PAL_POLL_WRITE)
-        w->write_udata = NULL;
-    if (w->read_udata == NULL && w->write_udata == NULL) {
-        int rc = epoll_ctl(pfd, EPOLL_CTL_DEL, fd, NULL);
-        watch_free(w);
-        watch_unlock();
-        return rc;
+        waiter_clear(&w->write_head, &w->write_tail);
+    int rc = 0;
+#if defined(PAL_USE_KQUEUE)
+    struct kevent kevs[2];
+    int n = 0;
+    if ((events & PAL_POLL_READ) && had_read) {
+        EV_SET(&kevs[n], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+        n++;
     }
-    struct epoll_event ev;
-    ev.events = watch_events_of(w);
-    ev.data.ptr = w;
-    int rc = epoll_ctl(pfd, EPOLL_CTL_MOD, fd, &ev);
+    if ((events & PAL_POLL_WRITE) && had_write) {
+        EV_SET(&kevs[n], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+        n++;
+    }
+    if (n > 0)
+        rc = kevent(pfd, kevs, n, NULL, 0, NULL);
+    if (w->read_head < 0 && w->write_head < 0)
+        watch_free(w);
+#elif defined(PAL_USE_EPOLL)
+    (void)had_read;
+    (void)had_write;
+    if (w->read_head < 0 && w->write_head < 0) {
+        rc = epoll_ctl(pfd, EPOLL_CTL_DEL, fd, NULL);
+        watch_free(w);
+    } else {
+        struct epoll_event ev;
+        ev.events = watch_events_of(w);
+        ev.data.u64 = watch_encode(w);
+        rc = epoll_ctl(pfd, EPOLL_CTL_MOD, fd, &ev);
+    }
+#endif
     watch_unlock();
     return rc;
 #else
@@ -288,14 +416,35 @@ int pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms)
     } while (n < 0 && errno == EINTR);
     if (n <= 0)
         return n;
+    int out_n = 0;
+    watch_lock();
     for (int i = 0; i < n; i++) {
-        out[i].fd = (int)kevs[i].ident;
-        out[i].events = (kevs[i].filter == EVFILT_WRITE)
-                            ? PAL_POLL_WRITE
-                            : PAL_POLL_READ;
-        out[i].udata = kevs[i].udata;
+        PalWatch *w = watch_decode(pfd, (uint64_t)(uintptr_t)kevs[i].udata);
+        if (w == NULL)
+            continue;
+        int is_write = (kevs[i].filter == EVFILT_WRITE);
+        int *head = is_write ? &w->write_head : &w->read_head;
+        int *tail = is_write ? &w->write_tail : &w->read_tail;
+        uint32_t ev_bit = is_write ? PAL_POLL_WRITE : PAL_POLL_READ;
+        void *u = NULL;
+        while (out_n < max_events && waiter_pop(head, tail, &u)) {
+            out[out_n].fd = w->fd;
+            out[out_n].events = ev_bit;
+            out[out_n].udata = u;
+            out_n++;
+        }
+        /* EV_ONESHOT consumed this filter: re-arm if waiters remain. */
+        if (*head >= 0) {
+            struct kevent kev;
+            EV_SET(&kev, (uintptr_t)w->fd, kevs[i].filter,
+                   EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, kevs[i].udata);
+            (void)kevent(pfd, &kev, 1, NULL, 0, NULL);
+        }
+        if (w->read_head < 0 && w->write_head < 0)
+            watch_free(w);
     }
-    return n;
+    watch_unlock();
+    return out_n;
 #elif defined(PAL_USE_EPOLL)
     if (max_events <= 0)
         return 0;
@@ -310,48 +459,37 @@ int pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms)
         return n;
     int out_n = 0;
     watch_lock();
-    for (int i = 0; i < n && out_n < max_events; i++) {
-        PalWatch *w = (PalWatch *)evs[i].data.ptr;
+    for (int i = 0; i < n; i++) {
+        PalWatch *w = watch_decode(pfd, evs[i].data.u64);
         if (w == NULL)
             continue;
-        /* Verify entry still belongs to this poller before dereferencing. */
-        int valid = 0;
-        for (int k = 0; k < g_watch_count; k++) {
-            if (&g_watches[k] == w && g_watches[k].pfd == pfd) {
-                valid = 1;
-                break;
+        uint32_t e = evs[i].events;
+        void *u = NULL;
+        if ((e & (EPOLLIN | EPOLLHUP | EPOLLERR)) != 0u) {
+            while (out_n < max_events && waiter_pop(&w->read_head, &w->read_tail, &u)) {
+                out[out_n].fd = w->fd;
+                out[out_n].events = PAL_POLL_READ;
+                out[out_n].udata = u;
+                out_n++;
             }
         }
-        if (!valid)
-            continue;
-        uint32_t e = evs[i].events;
-        int read_fired = (e & (EPOLLIN | EPOLLHUP | EPOLLERR)) != 0u &&
-                         w->read_udata != NULL && out_n < max_events;
-        int write_fired = (e & (EPOLLOUT | EPOLLERR)) != 0u &&
-                          w->write_udata != NULL && out_n < max_events;
-        if (read_fired) {
-            out[out_n].fd = w->fd;
-            out[out_n].events = PAL_POLL_READ;
-            out[out_n].udata = w->read_udata;
-            out_n++;
-            w->read_udata = NULL;
-        }
-        if (write_fired) {
-            out[out_n].fd = w->fd;
-            out[out_n].events = PAL_POLL_WRITE;
-            out[out_n].udata = w->write_udata;
-            out_n++;
-            w->write_udata = NULL;
+        if ((e & (EPOLLOUT | EPOLLERR)) != 0u) {
+            while (out_n < max_events && waiter_pop(&w->write_head, &w->write_tail, &u)) {
+                out[out_n].fd = w->fd;
+                out[out_n].events = PAL_POLL_WRITE;
+                out[out_n].udata = u;
+                out_n++;
+            }
         }
         /* EPOLLONESHOT consumed the registration: re-arm any surviving
            interest, or deregister the fd when both watchers are done. */
-        if (w->read_udata == NULL && w->write_udata == NULL) {
+        if (w->read_head < 0 && w->write_head < 0) {
             epoll_ctl(pfd, EPOLL_CTL_DEL, w->fd, NULL);
             watch_free(w);
         } else {
             struct epoll_event rev;
             rev.events = watch_events_of(w);
-            rev.data.ptr = w;
+            rev.data.u64 = watch_encode(w);
             epoll_ctl(pfd, EPOLL_CTL_MOD, w->fd, &rev);
         }
     }
