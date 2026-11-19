@@ -7,6 +7,9 @@
 #include "arc.h"
 #include "pal.h"
 
+extern void arc_fiber_push(int64_t val);
+extern void arc_fiber_pop(int64_t count);
+
 #define MAX_CLOSURE_ARITY 16
 
 typedef int64_t (*fn1_t)(int64_t, int64_t);
@@ -116,14 +119,19 @@ int64_t ocamlcc_apply_n_raw(int64_t clos_val, int64_t argc, int64_t *argv)
         if (c->arity == n)
             return invoke_closure(c, c->arity, argv);
         if (c->arity < n) {
+            for (uint64_t i = c->arity; i < n; i++)
+                arc_fiber_push(argv[i]);
             int64_t res = invoke_closure(c, c->arity, argv);
+            arc_fiber_pop((int64_t)(n - c->arity));
             if (ocamlcc_get_exn() != 0) {
                 for (uint64_t i = c->arity; i < n; i++)
                     arc_release_val(argv[i]);
                 return 1;
             }
+            arc_fiber_push(res);
             int64_t final = ocamlcc_apply_n_raw(
                 res, argc - (int64_t)c->arity, argv + c->arity);
+            arc_fiber_pop(1);
             arc_release_val(res);
             return final;
         }
@@ -143,15 +151,22 @@ int64_t ocamlcc_apply_n_raw(int64_t clos_val, int64_t argc, int64_t *argv)
             }
             for (uint64_t i = 0; i < rem; i++)
                 buf[p->n_applied + i] = argv[i];
+            if (n > rem) {
+                for (uint64_t i = rem; i < n; i++)
+                    arc_fiber_push(argv[i]);
+            }
             int64_t res = invoke_closure(p->orig, p->total_arity, buf);
             if (n == rem)
                 return res;
+            arc_fiber_pop((int64_t)(n - rem));
             if (ocamlcc_get_exn() != 0) {
                 for (uint64_t i = rem; i < n; i++)
                     arc_release_val(argv[i]);
                 return 1;
             }
+            arc_fiber_push(res);
             int64_t final = ocamlcc_apply_n_raw(res, argc - (int64_t)rem, argv + rem);
+            arc_fiber_pop(1);
             arc_release_val(res);
             return final;
         }

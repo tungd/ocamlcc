@@ -36,7 +36,7 @@ type state = {
      [ReleaseMut] is emitted by the continuation that still uses them, so
      [Halt] must skip them: [ReleaseMut env.muts - env.no_release_muts]. *)
   no_release_muts : Ident.Set.t;
-  handlers : (int, Ident.Set.t * Ident.Set.t) Hashtbl.t;
+  handlers : (int, Ident.Set.t * Ident.Set.t * Ident.Set.t) Hashtbl.t;
   try_owned : Ident.Set.t;
   try_muts : Ident.Set.t;
   try_depth : int;
@@ -432,7 +432,7 @@ let handler_live_vars (env : state) (e : Anf.aexpr) : Ident.Set.t =
   IntSet.fold
     (fun id acc ->
       match Hashtbl.find_opt env.handlers id with
-      | Some (ho, _) -> Ident.Set.union acc ho
+      | Some (ho, _, _) -> Ident.Set.union acc ho
       | None -> acc)
     ids Ident.Set.empty
 
@@ -441,7 +441,9 @@ let live_with_handlers (env : state) (e : Anf.aexpr) : Ident.Set.t =
 
 let rec has_static_raise = function
   | Anf.StaticRaise _ | Unwind | Raise _ -> true
-  | Halt _ | HaltScalar _ | While _ | For _ -> false
+  | Halt _ | HaltScalar _ -> false
+  | While (cond, body) -> has_static_raise cond || has_static_raise body
+  | For (_, _, _, _, body) -> has_static_raise body
   | Let (_, _, b) | MutLet (_, _, b) | LetRec (_, b)
   | Retain (_, b) | Release (_, b) | ReleaseMut (_, b)
   | DropReuse (_, _, b) | FreeReuse (_, b)
@@ -919,7 +921,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           (fun acc b -> Ident.Set.add b acc)
           handler_owned binders
       in
-      Hashtbl.replace env.handlers hid (handler_owned, env.muts);
+      let target_live = Ident.Set.union handler_owned env.frame_borrowed in
+      Hashtbl.replace env.handlers hid (handler_owned, target_live, env.muts);
       let body' = transform_aexpr env body in
       Hashtbl.remove env.handlers hid;
       let dead_at_handler = Ident.Set.diff handler_owned fv_handler in
@@ -931,14 +934,18 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       in
       StaticCatch (body', hid, binders, emit_drops env dead_at_handler handler', result_rep)
   | StaticRaise (hid, args) ->
-      let target_owned, target_muts =
+      let target_owned, target_live, target_muts =
         match Hashtbl.find_opt env.handlers hid with
-        | Some pair -> pair
-        | None -> (Ident.Set.empty, env.muts)
+        | Some triple -> triple
+        | None -> (Ident.Set.empty, env.frame_borrowed, env.muts)
       in
       prepare_consumed env ~borrowed_also:Ident.Set.empty
         ~live_after:target_owned args (fun remaining_owned args' ->
-          let dead_vars = Ident.Set.diff remaining_owned target_owned in
+          let dead_vars =
+            Ident.Set.diff
+              (Ident.Set.union remaining_owned env.frame_borrowed)
+              target_live
+          in
           let dead_muts = Ident.Set.diff env.muts target_muts in
           emit_drops env dead_vars
             (emit_mut_releases dead_muts (StaticRaise (hid, args'))))
@@ -976,9 +983,11 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
         While (cond', body')
       else
         let u = Ident.create_local "wend" in
-        (* Muts in scope outlive the loop (they are released by the join
-           continuation's own scope exit); only dead owned values drop here. *)
-        let cont = emit_drops env env.owned (Halt (Var u)) in
+        let dead_muts = Ident.Set.diff env.muts env.no_release_muts in
+        let cont =
+          emit_drops env env.owned
+            (emit_mut_releases dead_muts (Halt (Var u)))
+        in
         LetJoin (u, While (cond', body'), cont)
   | For (idx, s, e, dir, body) ->
       let loop_env =
@@ -993,7 +1002,11 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
         For (idx, s, e, dir, body')
       else
         let u = Ident.create_local "fend" in
-        let cont = emit_drops env env.owned (Halt (Var u)) in
+        let dead_muts = Ident.Set.diff env.muts env.no_release_muts in
+        let cont =
+          emit_drops env env.owned
+            (emit_mut_releases dead_muts (Halt (Var u)))
+        in
         LetJoin (u, For (idx, s, e, dir, body'), cont)
 
 and transform_branch (env : state) (arm : Anf.aexpr) : Anf.aexpr =

@@ -81,23 +81,44 @@ let compile_program ?(emit_entry = true) (program : Anf.program) :
       items = [ D_long 0L ] }
     :: b.datas;
   start_block b "start";
-  let cur = fresh_temp b "gcur" in
-  emit b (Load (Loadl, Long, cur, Global global_sym));
+  let should_init = fresh_temp b "doinit" in
+  emit b
+    (Call
+       ( Long,
+         should_init,
+         { fn = Global "ocamlcc_init_try_enter";
+           args = [ (Long, Global global_sym) ] } ));
   let ldone = fresh_label b "already_init" in
   let linit = fresh_label b "do_init" in
-  close_block b (Br (cur, ldone, linit));
+  close_block b (Br (should_init, linit, ldone));
   start_block b ldone;
   close_ret b None;
   start_block b linit;
-  emit b (Store (Storel, Int 1L, Global global_sym));
   List.iter
     (fun dep ->
       emit b
-        (Call_void { fn = Global ("ocamlcc_init_" ^ dep); args = [] }))
+        (Call_void { fn = Global ("ocamlcc_init_" ^ dep); args = [] });
+      let ex = fresh_temp b "depex" in
+      emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
+      let has_ex = fresh_temp b "dephasex" in
+      emit b (Cmp (Ne, Long, has_ex, ex, Int 0L));
+      let ldep_err = fresh_label b "dep_err" in
+      let ldep_ok = fresh_label b "dep_ok" in
+      close_block b (Br (has_ex, ldep_err, ldep_ok));
+      start_block b ldep_err;
+      emit b
+        (Call_void
+           { fn = Global "ocamlcc_init_finish";
+             args = [ (Long, Global global_sym); (Long, Int 0L) ] });
+      close_ret b None;
+      start_block b ldep_ok)
     deps;
   let mod_val = Codegen_expr.compile_aexpr Codegen_fn.hooks b false program.code in
   if b.cur_fn.term = None then begin
-    emit b (Store (Storel, mod_val, Global global_sym));
+    emit b
+      (Call_void
+         { fn = Global "ocamlcc_init_finish";
+           args = [ (Long, Global global_sym); (Long, mod_val) ] });
     close_ret b None
   end;
   let init_func =

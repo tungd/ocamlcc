@@ -94,6 +94,24 @@
   (diff alloc8_hoist_test.expected alloc8_hoist_test.actual)))
 
 (executable
+ (name arc_loop_static_test)
+ (modules arc_loop_static_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps arc_loop_static_test.exe arc_loop_static_test.expected)
+ (action
+  (with-stdout-to arc_loop_static_test.actual
+   (run ./arc_loop_static_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps arc_loop_static_test.actual arc_loop_static_test.expected)
+ (action
+  (diff arc_loop_static_test.expected arc_loop_static_test.actual)))
+
+(executable
  (name ccalls_test)
  (modules ccalls_test)
  (libraries ocamlcc))

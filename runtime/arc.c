@@ -145,6 +145,29 @@ static void drain_foreign_releases(void)
     foreign_release_depth--;
 }
 
+int64_t ocamlcc_init_try_enter(_Atomic int64_t *slot)
+{
+    for (;;) {
+        int64_t v = atomic_load_explicit(slot, memory_order_acquire);
+        if (v != 0 && v != -2)
+            return 0;
+        if (v == -2) {
+            cpu_relax();
+            continue;
+        }
+        int64_t expected = 0;
+        if (atomic_compare_exchange_strong_explicit(
+                slot, &expected, -2, memory_order_acq_rel, memory_order_acquire))
+            return 1;
+    }
+}
+
+void ocamlcc_init_finish(_Atomic int64_t *slot, int64_t val)
+{
+    int64_t store_val = (ocamlcc_get_exn() != 0) ? 0 : val;
+    atomic_store_explicit(slot, store_val, memory_order_release);
+}
+
 int arc_mutator_enter(void)
 {
     if (tls_os_mutator_active != 0)

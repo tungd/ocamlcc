@@ -593,7 +593,11 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
           let lerr_end = b.cur_fn.open_label in
           close_block b (Jmp ljoin);
           start_block b lok;
+          emit b
+            (Call_void { fn = Global "arc_fiber_push"; args = [ (Long, clos_res) ] });
           let final_v = apply_closure b clos_res rest_vals in
+          emit b
+            (Call_void { fn = Global "arc_fiber_pop"; args = [ (Long, Int 1L) ] });
           emit b
             (Call_void
                { fn = Global "arc_release_val"; args = [ (Long, clos_res) ] });

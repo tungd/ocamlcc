@@ -1,5 +1,13 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Fix ARC ownership leaks in `arc_pass.ml`, over-application, and module init:
+  (1) release `env.muts - env.no_release_muts` on tail-position `While`/`For` exits;
+  (2) track `target_live` in `StaticCatch` and drop dead `frame_borrowed` variables at `StaticRaise`;
+  (3) recurse into `While`/`For` in `has_static_raise`;
+  (4) push intermediate `clos_res`/`res` and remaining `argv` onto the fiber shadow stack during over-application (`lib/codegen_expr.ml`, `runtime/closure.c`);
+  (5) add atomic `ocamlcc_init_try_enter`/`ocamlcc_init_finish` and check `ocamlcc_get_exn()` after dependency init in `lib/codegen.ml`.
+  Regression-tested in `test/arc_loop_static_test.ml`; `dune test`, `ninja test`, and `ninja asan_test` pass. See [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-19 (antigravity/1): Hoist fixed-size `Alloc8` instructions (`MutLet`, `MakeArray Pgenarray`, and `>4`-argument closure calls) to `@start` via `fn_state.start_allocs` and `finish_blocks` (`lib/codegen_ctx.ml`, `lib/codegen_expr.ml`, `lib/codegen_fn.ml`, `lib/codegen.ml`), preventing dynamic `alloca` stack growth inside loops and tail-recursive functions. Regression-tested in `test/alloc8_hoist_test.ml`; `dune test`, `ninja test`, and `ninja asan_test` pass. See [compiler-pipeline](/concepts/compiler-pipeline.md).
 
 - 2026-11-19 (antigravity/1): Restore yield-effect inference and immediate tracking (`lib/ccalls.ml`, `lib/arc_pass.ml`): mark `ocamlcc_poll_finalizers` as non-yielding (`yields = false`), add `Ccalls.returns_imm`, track `Lambda.Pintval` parameters, immediate-returning `LetJoin`s, and `imm_funs` in `Arc_pass`, eliminating `arc_fiber_push`/`arc_fiber_pop` and `arc_retain_val`/`arc_release_val` on tagged immediates in pure integer functions like `fib`. Regression-tested in `test/yield_imm_test.ml`; `dune test`, `ninja test`, and `ninja asan_test` pass. See [perceus-arc](/concepts/perceus-arc.md).
