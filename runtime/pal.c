@@ -225,12 +225,20 @@ void pal_ctx_make(PalContext *ctx, void *stack_top, void (*entry)(void))
     memset(ctx, 0, sizeof(*ctx));
 #if defined(__aarch64__)
     uintptr_t sp = ((uintptr_t)stack_top) & ~(uintptr_t)15u;
-    ctx->regs[11] = (uint64_t)(uintptr_t)entry; /* lr (x30) */
-    ctx->regs[12] = (uint64_t)sp;               /* sp */
+    ctx->regs[PAL_CTX_PC] = (uint64_t)(uintptr_t)entry; /* lr (x30) */
+    ctx->regs[PAL_CTX_SP] = (uint64_t)sp;               /* sp */
+#elif defined(__x86_64__) && defined(_WIN32)
+    uintptr_t sp = (((uintptr_t)stack_top) & ~(uintptr_t)15u) - 8u;
+    ctx->regs[PAL_CTX_SP] = (uint64_t)sp;               /* rsp (swap loads 64) */
+    ctx->regs[PAL_CTX_PC] = (uint64_t)(uintptr_t)entry; /* rip (swap loads 72) */
 #elif defined(__x86_64__)
     uintptr_t sp = (((uintptr_t)stack_top) & ~(uintptr_t)15u) - 8u;
-    ctx->regs[6] = (uint64_t)sp;                /* rsp */
-    ctx->regs[7] = (uint64_t)(uintptr_t)entry;  /* rip */
+    ctx->regs[PAL_CTX_SP] = (uint64_t)sp;               /* rsp */
+    ctx->regs[PAL_CTX_PC] = (uint64_t)(uintptr_t)entry; /* rip */
+#elif defined(__riscv) && (__riscv_xlen == 64)
+    uintptr_t sp = ((uintptr_t)stack_top) & ~(uintptr_t)15u;
+    ctx->regs[PAL_CTX_PC] = (uint64_t)(uintptr_t)entry; /* ra (swap loads 96) */
+    ctx->regs[PAL_CTX_SP] = (uint64_t)sp;               /* sp (swap loads 104) */
 #else
     (void)stack_top;
     (void)entry;

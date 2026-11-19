@@ -1,5 +1,13 @@
 # Change Log
 
+- 2026-11-19 (autoagent/1): Fix 32-byte struct overflow on RISC-V 64 and broken Win64 context switch (`runtime/pal.h`, `runtime/pal_ctx.S`, `runtime/pal.c`):
+  - `PalContext` was a fixed `uint64_t regs[22]` (176 B) while the RISC-V 64 `pal_ctx_swap` saves/loads 26 registers up to `200(a0)` (208 B) — 32 bytes past `Fiber.ctx` into `c_stack`, `c_stack_bytes`, `shadow_base`, and `shadow_sp`.
+  - `pal_ctx_make` was never updated for the new ABIs: RISC-V 64 still hit `pal_abort()`, and Win64 wrote SysV slot offsets `regs[6]`/`regs[7]` (48/56) while Win64 `pal_ctx_swap` loads `rsp`/`rip` from offsets 64/72 — resuming jumped to `0x0`.
+  - Win64 `pal_ctx_swap` did not save/restore callee-saved `xmm6`-`xmm15`, violating the Windows x64 ABI and corrupting FP state across fiber switches.
+  - Fix: `PalContext` is now sized per ABI via a `PAL_CTX_REGS`/`PAL_CTX_SP`/`PAL_CTX_PC` ladder in `pal.h` with `_Static_assert`s pinning the byte sizes (aarch64 21 regs/168 B, x86-64 SysV 8/64 B, Win64 30/240 B incl. `xmm6`-`xmm15` via `movdqu`, RISC-V 64 26/208 B); Win64 `pal_ctx_swap` now saves/restores `xmm6`-`xmm15`; `pal_ctx_make` covers all four ABIs using the shared slot macros.
+  - New `test/pal_ctx_abi_test.ml` pins the contract from both sides: parses each `pal_ctx_swap` section (store extent, sp/pc slots, callee-saved FP registers) against the `pal.h` ladder and `pal_ctx_make`, and compiles forced-branch probes of all four ABIs on any host.
+  `dune runtest` (incl. the new test), `ninja test` (58/58), and `ninja asan_test` (38/38) pass. See [platform-abstraction-layer](/concepts/platform-abstraction-layer.md) and [wren-fibers](/concepts/wren-fibers.md).
+
 - 2026-11-19 (autoagent/1): Fix deterministic segfault / OOB read in `In_channel.input_bigarray` / `Out_channel.output_bigarray` (`runtime/arc.c`):
   - `caml_ml_input_bigarray` / `caml_ml_output_bigarray` passed raw `ArcBigarray.data` (a PAL mmap page or foreign C pointer with no `ArcHeader`) as a `Bytes`-shaped `buf_val` into `caml_ml_input` / `caml_ml_output_bytes`, whose 86f028f bounds hardening reads `((ArcHeader *)buf_val - 1)->reserved` — 16 bytes before the data: an immediate fault on page-aligned Bigarray buffers and an OOB read on foreign buffers.
   - Split the byte movement out of the header-checked entry points: `caml_ml_input` now delegates to a raw `chan_read_raw` helper (alongside the existing raw `chan_write_bytes`), keeps the `ArcHeader.reserved` slice check for `Bytes` buffers, and `caml_ml_input_bigarray` / `caml_ml_output_bigarray` validate the slice with `ba_channel_range` and call the raw helpers directly.

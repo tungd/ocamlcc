@@ -5,7 +5,7 @@ description: The 6 freestanding hooks (pal.h) the entire C runtime depends on.
 tags: [runtime, c, freestanding, pal]
 status: stable
 generated:
-  by: antigravity/1
+  by: autoagent/1
   at: 2026-11-19
 sources:
   - id: design-doc
@@ -46,4 +46,15 @@ fixed-slot `PalWatch`/`PalWaiter` registry keyed by `(gen << 32) | idx` tokens s
 or alias across `watch_free`, multiple waiters on the same `(fd, direction)` queue cleanly in FIFO
 order without overwriting `udata`, and `pal_poller_wait` enforces `out_n < max_events` per emitted
 event while re-arming any remaining one-shot waiters. `runtime/pal_ctx.S` implements callee-saved
-register switching (`pal_ctx_init` / `pal_ctx_swap`) for `arm64` and `x86_64`.
+register switching (`pal_ctx_make` / `pal_ctx_swap`) for `arm64`, x86-64 SysV, Win64, and RISC-V 64.
+The `PalContext` frame is sized per ABI by the `PAL_CTX_REGS` / `PAL_CTX_SP` / `PAL_CTX_PC` ladder in
+`runtime/pal.h` (with `_Static_assert`s pinning the byte sizes) so it exactly covers what
+`pal_ctx_swap` stores — aarch64 168 B (`x19-x30`, `sp`, `d8-d15`), x86-64 SysV 64 B
+(`rbx`, `rbp`, `r12-r15`, `rsp`, `rip`), Win64 240 B (the SysV GP set plus `rdi`/`rsi` and
+callee-saved `xmm6`-`xmm15`, restored across switches per the Windows x64 ABI), and RISC-V 64
+208 B (`s0-s11`, `ra`, `sp`, `fs0-fs11`). `pal_ctx_make` initializes the `PAL_CTX_SP`/`PAL_CTX_PC`
+slots for every implemented ABI (16-byte-aligned top of stack, SysV/Win64 also reserving the
+8-byte return-slot slop). `test/pal_ctx_abi_test.ml` pins the contract from both sides: it parses
+each `pal_ctx_swap` section (store extent, sp/pc slots, callee-saved FP registers) and cross-checks
+it against the `pal.h` ladder plus forced-branch compile probes of all four ABIs, so the assembly
+frame, the struct size, and `pal_ctx_make` cannot drift apart per architecture.

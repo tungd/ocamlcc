@@ -309,3 +309,22 @@
  (deps driver_test.actual driver_test.expected)
  (action
   (diff driver_test.expected driver_test.actual)))
+
+(executable
+ (name pal_ctx_abi_test)
+ (modules pal_ctx_abi_test)
+ (libraries unix))
+
+(rule
+ (alias runtest)
+ (deps pal_ctx_abi_test.exe pal_ctx_abi_test.expected
+  ../runtime/pal.h ../runtime/pal_ctx.S ../runtime/pal.c)
+ (action
+  (with-stdout-to pal_ctx_abi_test.actual
+   (run ./pal_ctx_abi_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps pal_ctx_abi_test.actual pal_ctx_abi_test.expected)
+ (action
+  (diff pal_ctx_abi_test.expected pal_ctx_abi_test.actual)))

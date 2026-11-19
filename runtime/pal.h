@@ -41,9 +41,47 @@ int  pal_poller_unwatch(int pfd, int fd, uint32_t events);
 int  pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms);
 
 /* 5. Fiber context switching and non-blocking fd helpers. */
+
+/* Callee-saved register frame saved by pal_ctx_swap (runtime/pal_ctx.S).
+   The layout is ABI-specific: PAL_CTX_REGS sizes the frame to exactly what
+   the assembly stores, and PAL_CTX_SP / PAL_CTX_PC index the stack-pointer
+   and resume-address slots that pal_ctx_make initializes. The static asserts
+   below pin the byte size against the assembly frame. */
+#if defined(__riscv) && (__riscv_xlen == 64)
+#define PAL_CTX_REGS 26 /* s0-s11, ra, sp, fs0-fs11 */
+#define PAL_CTX_SP 13   /* sp at offset 104 */
+#define PAL_CTX_PC 12   /* ra at offset 96 */
+#elif defined(__aarch64__)
+#define PAL_CTX_REGS 21 /* x19-x30, sp, d8-d15 */
+#define PAL_CTX_SP 12   /* sp at offset 96 */
+#define PAL_CTX_PC 11   /* lr (x30) at offset 88 */
+#elif defined(__x86_64__) && defined(_WIN32)
+#define PAL_CTX_REGS 30 /* rbx,rbp,rdi,rsi,r12-r15, rsp, rip, xmm6-xmm15 */
+#define PAL_CTX_SP 8    /* rsp at offset 64 */
+#define PAL_CTX_PC 9    /* rip at offset 72 */
+#elif defined(__x86_64__)
+#define PAL_CTX_REGS 8 /* rbx,rbp,r12-r15, rsp, rip */
+#define PAL_CTX_SP 6   /* rsp at offset 48 */
+#define PAL_CTX_PC 7   /* rip at offset 56 */
+#else
+#define PAL_CTX_REGS 1
+#define PAL_CTX_SP 0
+#define PAL_CTX_PC 0
+#endif
+
 typedef struct PalContext {
-    uint64_t regs[22];
+    uint64_t regs[PAL_CTX_REGS];
 } PalContext;
+
+#if defined(__riscv) && (__riscv_xlen == 64)
+_Static_assert(sizeof(PalContext) == 208, "PalContext must match pal_ctx.S (riscv64)");
+#elif defined(__aarch64__)
+_Static_assert(sizeof(PalContext) == 168, "PalContext must match pal_ctx.S (aarch64)");
+#elif defined(__x86_64__) && defined(_WIN32)
+_Static_assert(sizeof(PalContext) == 240, "PalContext must match pal_ctx.S (win64)");
+#elif defined(__x86_64__)
+_Static_assert(sizeof(PalContext) == 64, "PalContext must match pal_ctx.S (x86_64 SysV)");
+#endif
 
 void pal_ctx_make(PalContext *ctx, void *stack_top, void (*entry)(void));
 void pal_ctx_swap(PalContext *from, PalContext *to);

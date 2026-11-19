@@ -1,0 +1,6 @@
+pal_ctx_abi aarch64: PASS
+pal_ctx_abi win64: PASS
+pal_ctx_abi x86_64: PASS
+pal_ctx_abi riscv64: PASS
+pal_ctx_make: PASS
+pal_ctx_abi probes: PASS
