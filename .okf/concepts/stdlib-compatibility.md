@@ -6,7 +6,7 @@ tags: [stdlib, compatibility, testing, arc]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-18T06:57:26Z
+  at: 2026-11-19
 sources:
   - id: runner
     resource: tools/stdlib_compat.py
@@ -24,6 +24,10 @@ sources:
     resource: tools/stdlib_regressions.py
   - id: runtime
     resource: runtime/arc.c
+  - id: numeric-format
+    resource: runtime/builtins.c
+  - id: runtime-tests
+    resource: tests/stdlib_runtime.c
 ---
 
 # Build and test
@@ -79,6 +83,20 @@ Bigarray channel I/O works through existing buffered channel helpers.
 Random retains the upstream Bigarray state representation and the pure OCaml
 LXM algorithm, so upstream testvectors can inspect the state directly.
 
+# Numeric formatting
+
+The float, int, int32, int64, and nativeint formatting primitives accept a
+single conversion with optional flags, decimal width, and decimal precision.
+The runtime checks the entire byte string before calling `snprintf`. Float
+conversions are `fFeEgGaA`. Integer conversions are `diuxXo`, with an optional
+`l`, `ll`, `L`, or `n` immediately before the conversion. The runtime replaces
+that modifier with the length matching the C argument and passes the matching
+signed or unsigned type.[^numeric-format]
+
+Malformed formats and results that exceed the primitive's output buffer return
+an empty OCaml string.[^runtime] The native and sanitizer suites exercise the
+five primitive entry points with valid and rejected inputs.[^runtime-tests]
+
 # Verified coverage (2026-11-17, macOS arm64 / OCaml 5.5.0)
 
 The compatibility build compiles 72/72 interfaces and implementations.
@@ -122,6 +140,8 @@ Generated sources, commands, executables, and outputs stay under
 [^runner]: Native compilation and test orchestration in the compatibility runner.
 [^upstream]: Vendored source identity and test inventory.
 [^runtime]: ARC/PAL implementation of upstream primitives.
+[^numeric-format]: Numeric format validation and C argument selection.
+[^runtime-tests]: Runtime primitive regression coverage.
 
 # Runtime ownership checks
 

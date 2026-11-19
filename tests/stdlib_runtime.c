@@ -1,4 +1,4 @@
-/* Public C runtime contracts: malformed Marshal cleanup and ARC view lifetime. */
+/* Public C runtime contracts for standard library primitives and ARC views. */
 #include "../runtime/arc.h"
 #include "../runtime/ocamlcc_bigarray.h"
 #include <assert.h>
@@ -13,6 +13,59 @@ extern int64_t caml_ba_set_1(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_get_1(int64_t, int64_t);
 
 static int64_t tagged(int64_t n) { return (int64_t)(((uint64_t)n << 1) | 1); }
+
+static void expect_format(int64_t (*format)(int64_t, int64_t),
+                          const char *fmt, size_t len, int64_t value,
+                          const char *expected)
+{
+    char *input = arc_alloc_bytes(len);
+    memcpy(input, fmt, len);
+    int64_t result = format((int64_t)(uintptr_t)input, value);
+    const ArcHeader *header = (const ArcHeader *)(uintptr_t)result - 1;
+    assert(!ocamlcc_get_exn());
+    assert(header->reserved == strlen(expected));
+    assert(memcmp((const char *)(uintptr_t)result, expected, header->reserved) == 0);
+    arc_release_val(result);
+    arc_release(input);
+}
+
+static void test_float_format(void)
+{
+    int64_t value = ocamlcc_alloc_float(1.25);
+    expect_format(caml_format_float, "%+07.2f", sizeof("%+07.2f") - 1, value, "+001.25");
+    expect_format(caml_format_float, "%.f", sizeof("%.f") - 1, value, "1");
+    expect_format(caml_format_float, "value=%.2f", sizeof("value=%.2f") - 1, value, "");
+    expect_format(caml_format_float, "%.2f%%", sizeof("%.2f%%") - 1, value, "");
+    expect_format(caml_format_float, "%lf", sizeof("%lf") - 1, value, "");
+    expect_format(caml_format_float, "%f\0", sizeof("%f\0") - 1, value, "");
+    expect_format(caml_format_float, "%512f", sizeof("%512f") - 1, value, "");
+    arc_release_val(value);
+}
+
+static void test_integer_format(void)
+{
+    expect_format(caml_format_int, "%+4i", sizeof("%+4i") - 1, tagged(42), " +42");
+    expect_format(caml_format_int, "%l4d", sizeof("%l4d") - 1, tagged(42), "");
+    expect_format(caml_format_int, "%\0", sizeof("%\0") - 1, tagged(42), "");
+    expect_format(caml_format_int, "%128d", sizeof("%128d") - 1, tagged(42), "");
+
+    int64_t i32 = ocamlcc_alloc_custom(ARC_CUSTOM_INT32, UINT32_MAX);
+    expect_format(caml_int32_format, "%ld", sizeof("%ld") - 1, i32, "-1");
+    expect_format(caml_int32_format, "%lu", sizeof("%lu") - 1, i32, "4294967295");
+    expect_format(caml_int32_format, "%c", sizeof("%c") - 1, i32, "");
+    expect_format(caml_int32_format, "%d%%", sizeof("%d%%") - 1, i32, "");
+    arc_release_val(i32);
+
+    int64_t i64 = ocamlcc_alloc_custom(ARC_CUSTOM_INT64, UINT64_MAX);
+    expect_format(caml_int64_format, "%#LX", sizeof("%#LX") - 1, i64, "0XFFFFFFFFFFFFFFFF");
+    expect_format(caml_int64_format, "%lld", sizeof("%lld") - 1, i64, "-1");
+    arc_release_val(i64);
+
+    int64_t native = ocamlcc_alloc_custom(ARC_CUSTOM_NATIVEINT, 42);
+    expect_format(caml_nativeint_format, "%#.4no", sizeof("%#.4no") - 1, native, "0052");
+    arc_release_val(native);
+}
+
 static void clear_exception(void)
 {
     int64_t ex = ocamlcc_get_exn(); assert(ex);
@@ -251,10 +304,12 @@ static void test_import_contract(void)
 
 int main(void)
 {
+    test_float_format();
+    test_integer_format();
     test_partial_cycle(); test_complete_cycle(); test_truncation_and_mutation(); test_view_lifetime();
     test_retained_c_subview();
     test_c_view_shapes();
     test_import_contract();
-    puts("stdlib runtime: malformed cleanup, cycles, truncation, views");
+    puts("stdlib runtime: formats, malformed cleanup, cycles, truncation, views");
     return 0;
 }

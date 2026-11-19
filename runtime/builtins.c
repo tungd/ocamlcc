@@ -40,20 +40,39 @@ void ocamlcc_exit(int64_t code)
     exit((int)code);
 }
 
-/* Format a double according to a single Printf conversion specifier (e.g.
-   "%+.2f", "%.12g"). Rejects embedded NULs / multiple specifiers. Returns the
-   written length, or -1 if malformed/overflowed. */
+enum { NUMERIC_FORMAT_CAP = 64 };
+
+/* Parse the common prefix: percent, flags, width, and optional precision.
+   The caller must validate the remaining length modifier and conversion. */
+static size_t numeric_format_prefix(const char *fmt, size_t len)
+{
+    if (len < 2 || len >= NUMERIC_FORMAT_CAP || fmt[0] != '%')
+        return 0;
+    size_t end = len - 1;
+    size_t i = 1;
+    while (i < end && fmt[i] != '\0' && strchr("-+#0 ", fmt[i]) != NULL)
+        i++;
+    while (i < end && fmt[i] >= '0' && fmt[i] <= '9')
+        i++;
+    if (i < end && fmt[i] == '.') {
+        i++;
+        while (i < end && fmt[i] >= '0' && fmt[i] <= '9')
+            i++;
+    }
+    return i;
+}
+
+/* Format a double with one floating-point conversion. Return the written
+   length, or -1 for an invalid format or insufficient output space. */
 int ocamlcc_snprintf_double(char *out, size_t cap, const char *fmt, size_t fmt_len,
                             double d)
 {
-    if (fmt_len == 0 || fmt_len >= 64u)
+    size_t i = numeric_format_prefix(fmt, fmt_len);
+    if (i == 0 || i != fmt_len - 1 || fmt[i] == '\0' ||
+        strchr("fFeEgGaA", fmt[i]) == NULL)
         return -1;
-    char safe_fmt[64];
-    for (size_t i = 0; i < fmt_len; i++) {
-        if (fmt[i] == '\0')
-            return -1;
-        safe_fmt[i] = fmt[i];
-    }
+    char safe_fmt[NUMERIC_FORMAT_CAP];
+    memcpy(safe_fmt, fmt, fmt_len);
     safe_fmt[fmt_len] = '\0';
     int n = snprintf(out, cap, safe_fmt, d);
     if (n < 0 || (size_t)n >= cap)
@@ -61,40 +80,47 @@ int ocamlcc_snprintf_double(char *out, size_t cap, const char *fmt, size_t fmt_l
     return n;
 }
 
-/* Format a signed or unsigned 64-bit integer with a Printf conversion string
-   whose final character is one of d/i/u/x/X/o (normalizing any l/ll/L/n
-   prefix to %ll...). */
+/* Format an integer with one numeric conversion. Normalize the optional
+   OCaml length modifier (l, ll, L, n) to the argument's C width. */
 int ocamlcc_snprintf_i64(char *out, size_t cap, const char *fmt, size_t fmt_len,
                          int64_t v, int is_i32)
 {
-    if (fmt_len < 2 || fmt_len >= 64u || fmt[0] != '%')
+    size_t prefix_len = numeric_format_prefix(fmt, fmt_len);
+    if (prefix_len == 0)
         return -1;
-    char spec = fmt[fmt_len - 1u];
-    char safe_fmt[68];
-    size_t k = 0;
-    for (size_t i = 0; i + 1u < fmt_len; i++) {
-        char c = fmt[i];
-        if (c == '\0')
+    size_t end = fmt_len - 1;
+    size_t i = prefix_len;
+    if (i < end) {
+        char modifier = fmt[i++];
+        if (modifier != 'l' && modifier != 'L' && modifier != 'n')
             return -1;
-        if (c == 'l' || c == 'L' || c == 'n')
-            continue;
-        safe_fmt[k++] = c;
-        if (k >= 60u)
-            return -1;
+        if (modifier == 'l' && i < end && fmt[i] == 'l')
+            i++;
     }
+    char spec = fmt[end];
+    if (i != end || spec == '\0' || strchr("diuxXo", spec) == NULL)
+        return -1;
+
+    char safe_fmt[NUMERIC_FORMAT_CAP + 2];
+    memcpy(safe_fmt, fmt, prefix_len);
+    size_t k = prefix_len;
+    if (!is_i32) {
+        safe_fmt[k++] = 'l';
+        safe_fmt[k++] = 'l';
+    }
+    safe_fmt[k++] = spec;
+    safe_fmt[k] = '\0';
+
+    int is_signed = spec == 'd' || spec == 'i';
+    int n;
     if (is_i32) {
-        safe_fmt[k++] = spec;
-        safe_fmt[k] = '\0';
-        int n = snprintf(out, cap, safe_fmt, (int32_t)v);
-        return (n < 0 || (size_t)n >= cap) ? -1 : n;
+        n = is_signed ? snprintf(out, cap, safe_fmt, (int)(int32_t)v)
+                      : snprintf(out, cap, safe_fmt, (unsigned int)(uint32_t)v);
     } else {
-        safe_fmt[k++] = 'l';
-        safe_fmt[k++] = 'l';
-        safe_fmt[k++] = spec;
-        safe_fmt[k] = '\0';
-        int n = snprintf(out, cap, safe_fmt, (long long)v);
-        return (n < 0 || (size_t)n >= cap) ? -1 : n;
+        n = is_signed ? snprintf(out, cap, safe_fmt, (long long)v)
+                      : snprintf(out, cap, safe_fmt, (unsigned long long)v);
     }
+    return (n < 0 || (size_t)n >= cap) ? -1 : n;
 }
 
 int ocamlcc_parse_double(const char *s, size_t len, double *out)
