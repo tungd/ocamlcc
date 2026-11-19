@@ -226,6 +226,27 @@ let compile_fcmp b (cmp : Lambda.float_comparison) da db : t =
   in
   retag b fin
 
+let compile_integer_compare b kind relation lhs rhs =
+  let ty, _, _ = bint_spec kind in
+  let compare op =
+    let raw = fresh_temp b "bcmp" in
+    emit b (Cmp (op, ty, raw, lhs, rhs));
+    raw
+  in
+  let raw =
+    match relation with
+    | Anf.Predicate cmp -> compare (cmp_of_ocaml cmp)
+    | Three_way ->
+        let gt = compare Sgt in
+        let lt = compare Slt in
+        let diff = fresh_temp b "bcdiff" in
+        emit b (Binop (Sub, Word, diff, gt, lt));
+        diff
+  in
+  let extended = fresh_temp b "bcmp_l" in
+  emit b (Extsw (extended, raw));
+  retag b extended
+
 let compile_float_arithmetic b op left right =
   let qop =
     match op with
@@ -349,40 +370,14 @@ let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
   | Bint_lsl bi -> compile_bint_shift b bi Shl av cv
   | Bint_lsr bi -> compile_bint_shift b bi Shr av cv
   | Bint_asr bi -> compile_bint_shift b bi Sar av cv
-  | Bint_cmp (bi, cmp) ->
-      let ty, _, _ = bint_spec bi in
-      let ua = unbox_bint b bi av in
-      let uc = unbox_bint b bi cv in
-      let raw = fresh_temp b "bcmp" in
-      emit b (Cmp (cmp_of_ocaml cmp, ty, raw, ua, uc));
-      let raw_l =
-        match ty with
-        | Word ->
-            let ext = fresh_temp b "bcmp_l" in
-            emit b (Extsw (ext, raw));
-            ext
-        | Long | Double -> raw
-      in
-      retag b raw_l
-  | Compare_bints bi ->
-      let ty, _, _ = bint_spec bi in
-      let ua = unbox_bint b bi av in
-      let uc = unbox_bint b bi cv in
-      let gt = fresh_temp b "bcgt" in
-      let lt = fresh_temp b "bclt" in
-      let diff = fresh_temp b "bcdiff" in
-      emit b (Cmp (Sgt, ty, gt, ua, uc));
-      emit b (Cmp (Slt, ty, lt, ua, uc));
-      emit b (Binop (Sub, ty, diff, gt, lt));
-      let diff_l =
-        match ty with
-        | Word ->
-            let ext = fresh_temp b "bdiff_l" in
-            emit b (Extsw (ext, diff));
-            ext
-        | Long | Double -> diff
-      in
-      retag b diff_l
+  | Bint_cmp (kind, cmp) ->
+      let lhs = unbox_bint b kind av in
+      let rhs = unbox_bint b kind cv in
+      compile_integer_compare b kind (Predicate cmp) lhs rhs
+  | Compare_bints kind ->
+      let lhs = unbox_bint b kind av in
+      let rhs = unbox_bint b kind cv in
+      compile_integer_compare b kind Three_way lhs rhs
 
 let compile_unop hooks b (op : Anf.unop) (a : Anf.atom) : t =
   let av = compile_atom hooks b a in
@@ -957,6 +952,11 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
            let dst = fresh_temp b "integer_op" in
            emit b (Binop (qop, scalar_type rep, dst, l, r));
            dst)
+  | IntegerCompare (kind, relation, lhs, rhs) ->
+      let rep = Anf.Integer_scalar kind in
+      let l = compile_scalar_operand hooks b rep lhs in
+      let r = compile_scalar_operand hooks b rep rhs in
+      compile_integer_compare b kind relation l r
   | IntegerNeg (kind, value) ->
       let rep = Anf.Integer_scalar kind in
       let value = compile_scalar_operand hooks b rep value in

@@ -67,6 +67,17 @@ let int32_bit_words (a : int32_vector) n =
   done;
   Gc.minor_words () -. before
 
+let int32_compare_words (a : int32_vector) n =
+  let before = Gc.minor_words () in
+  for i = 0 to n - 1 do
+    let x = a.{i} in
+    let order = compare x 0l in
+    let below = x < 0l in
+    a.{i} <- (if below then (if order = -1 then 11l else 12l)
+              else if order = 0 then 20l else 21l)
+  done;
+  Gc.minor_words () -. before
+
 let int64_words (a : int64_vector) delta n =
   let before = Gc.minor_words () in
   for i = 0 to n - 1 do

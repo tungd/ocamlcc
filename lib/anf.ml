@@ -87,6 +87,8 @@ type bigarray_access = {
 type scalar_rep = Double_scalar | Integer_scalar of Lambda.boxed_integer
 
 type integer_arithmetic = Add_int | Sub_int | Mul_int | Div_int | Rem_int | And_int | Or_int | Xor_int
+type integer_relation = Predicate of Lambda.integer_comparison | Three_way
+
 type integer_shift = Left_shift | Logical_right | Arithmetic_right
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
@@ -113,6 +115,7 @@ type cexpr =
   | ScalarValue of scalar_rep * scalar_operand
   | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
   | IntegerBinop of Lambda.boxed_integer * integer_arithmetic * scalar_operand * scalar_operand
+  | IntegerCompare of Lambda.boxed_integer * integer_relation * scalar_operand * scalar_operand
   | IntegerNeg of Lambda.boxed_integer * scalar_operand
   | IntegerShift of Lambda.boxed_integer * integer_shift * scalar_operand * atom
   | CreateBytes of atom
@@ -763,7 +766,7 @@ let cexpr_vars free_aexpr acc = function
   | ScalarValue (_, a) -> scalar_operand_vars acc a
   | ScalarLoad (_, a, i) -> atom_vars (atom_vars acc a) i
   | ScalarStore (_, a, i, v) -> scalar_operand_vars (atom_vars (atom_vars acc a) i) v
-  | FloatBinop (_, a, b) | IntegerBinop (_, _, a, b) -> scalar_operand_vars (scalar_operand_vars acc a) b
+  | FloatBinop (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> scalar_operand_vars (scalar_operand_vars acc a) b
   | Atom a -> atom_vars acc a
   | Binop (_, a, b) -> atom_vars (atom_vars acc a) b
   | Unop (_, a) -> atom_vars acc a
@@ -945,6 +948,10 @@ let rec specialize_scalar_chain bindings tail =
     in
     let binding, raw =
       match wanted, binding with
+      | _, Value (Binop (Bint_cmp (kind, cmp), lhs, rhs)) ->
+          Value (IntegerCompare (kind, Predicate cmp, Boxed_scalar lhs, Boxed_scalar rhs)), raw
+      | _, Value (Binop (Compare_bints kind, lhs, rhs)) ->
+          Value (IntegerCompare (kind, Three_way, Boxed_scalar lhs, Boxed_scalar rhs)), raw
       | Some rep, Value (BigarrayAccess
           (({ operation = `Get; rank = 1; kind; layout; _ } as access), [arr; index]))
         when scalar_layout layout && scalar_rep kind = Some rep ->
@@ -970,7 +977,7 @@ let rec specialize_scalar_chain bindings tail =
           atom_vars (atom_vars boxed arr) index, demand rep scalar v
       | Value (FloatBinop (_, lhs, rhs)) ->
           boxed, demand Double_scalar (demand Double_scalar scalar lhs) rhs
-      | Value (IntegerBinop (kind, _, lhs, rhs)) ->
+      | Value (IntegerBinop (kind, _, lhs, rhs) | IntegerCompare (kind, _, lhs, rhs)) ->
           let rep = Integer_scalar kind in
           boxed, demand rep (demand rep scalar lhs) rhs
       | Value (IntegerNeg (kind, value)) ->
@@ -998,6 +1005,8 @@ let rec specialize_scalar_chain bindings tail =
       | Value (FloatBinop (op, lhs, rhs)) -> Value (FloatBinop (op, operand lhs, operand rhs))
       | Value (IntegerBinop (kind, op, lhs, rhs)) ->
           Value (IntegerBinop (kind, op, operand lhs, operand rhs))
+      | Value (IntegerCompare (kind, op, lhs, rhs)) ->
+          Value (IntegerCompare (kind, op, operand lhs, operand rhs))
       | Value (IntegerNeg (kind, value)) -> Value (IntegerNeg (kind, operand value))
       | Value (IntegerShift (kind, op, value, count)) ->
           Value (IntegerShift (kind, op, operand value, count))
@@ -1073,7 +1082,8 @@ and specialize_let_chain bindings = function
   | tail ->
       let tail = specialize_scalar_bindings tail in
       if List.exists (function
-        | _, Value (ScalarStore _ | FloatBinop _ | IntegerBinop _ | ScalarValue _) -> true
+        | _, Value (ScalarStore _ | FloatBinop _ | IntegerBinop _ | ScalarValue _
+                   | Binop ((Bint_cmp _ | Compare_bints _), _, _)) -> true
         | _ -> false) bindings
       then specialize_scalar_chain bindings tail
       else List.fold_left (fun body (id, binding) -> bind_scalar_chain id binding body) tail bindings

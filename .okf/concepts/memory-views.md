@@ -6,7 +6,7 @@ tags: [memory, bigarray, ffi, compiler, performance]
 status: draft
 generated:
   by: codex/1
-  at: 2026-11-19T02:55:18Z
+  at: 2026-11-19T03:23:43Z
 sources:
   - id: scope
     resource: Conversation on 2026-11-18 about ARC, Bigarray, memory views, and desktop target scope
@@ -261,7 +261,11 @@ and/or/xor, and shifts. The 128-element int32 bitwise and shift fixture fell
 from 3075 to 3 ARC words. Signed division and remainder also keep raw
 results, including the minimum integer divided by minus one. A zero
 divisor raises before the store. The int64 division and remainder fixture
-fell from 1155 to 3 ARC words.
+fell from 1155 to 3 ARC words. Relational operators and compiler-lowered
+three-way comparisons consume raw operands and return ordinary tagged bools
+or ints. The comparison fixture went from 387 to 3 ARC words. A comparison
+that uses the ordinary function ABI, such as a call to `Int32.compare`, can
+still require a box.
 The arithmetic wraps at 32 or 64 bits according to the element kind.
 Nativeint uses 64 bits on the supported targets.
 Bounds exceptions and boxed values that escape through ordinary OCaml calls
@@ -316,9 +320,10 @@ Unknown kind/layout or unsupported escape patterns retain the generic path.
 3. **Foreign backing ownership (implemented).** The runtime and generated
    headers accept caller-owned mutable storage with a release callback. Tests
    cover rejected transfers, escaping rows and cycle-owned views.
-4. **Typed scalar lowering (float32, float64, int32, and int64 Array1 arithmetic implemented).** Direct
+4. **Typed scalar lowering (float32, float64, int32, int64, and nativeint Array1 arithmetic implemented).** Direct
    expressions and straight-line local bindings use the scalar path. Further
-   work covers unary operations, comparisons, more control-flow forms, and other kinds.
+   work covers float unary operations and comparisons, integer conversions,
+   more control-flow forms, and additional element kinds.
 5. **Integration and reporting.** Update examples, public C ownership comments,
    [stdlib compatibility](/concepts/stdlib-compatibility.md), and the
    [compiler pipeline](/concepts/compiler-pipeline.md) to describe implemented

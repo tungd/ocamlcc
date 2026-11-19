@@ -92,6 +92,8 @@ type bigarray_access = {
 type scalar_rep = Double_scalar | Integer_scalar of Lambda.boxed_integer
 
 type integer_arithmetic = Add_int | Sub_int | Mul_int | Div_int | Rem_int | And_int | Or_int | Xor_int
+type integer_relation = Predicate of Lambda.integer_comparison | Three_way
+
 type integer_shift = Left_shift | Logical_right | Arithmetic_right
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
@@ -118,6 +120,7 @@ type cexpr =
   | ScalarValue of scalar_rep * scalar_operand
   | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
   | IntegerBinop of Lambda.boxed_integer * integer_arithmetic * scalar_operand * scalar_operand
+  | IntegerCompare of Lambda.boxed_integer * integer_relation * scalar_operand * scalar_operand
   | IntegerNeg of Lambda.boxed_integer * scalar_operand
   | IntegerShift of Lambda.boxed_integer * integer_shift * scalar_operand * atom
   | CreateBytes of atom

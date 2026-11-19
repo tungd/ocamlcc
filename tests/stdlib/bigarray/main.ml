@@ -60,6 +60,10 @@ let div_rem_int32 (a : (int32, int32_elt, fortran_layout) Array1.t) i divisor =
   let quotient = Int32.div x divisor in
   a.{i} <- Int32.add quotient (Int32.rem x divisor)
 
+let compare_integer (a : integers) i pivot =
+  let value = Int64.add a.{i} 1L in
+  if compare value pivot < 0 then -1 else if value = pivot then 0 else 1
+
 let add_nativeint (a : (nativeint, nativeint_elt, fortran_layout) Array1.t) i j delta =
   let value = a.{i} in
   a.{j} <- Nativeint.add value delta
@@ -109,6 +113,9 @@ let () =
   assert (value = Int64.min_int && integers.{2} = value && capture () == value);
   high_bits integers;
   assert (integers.{3} = Int64.succ Int64.min_int);
+  assert (compare_integer integers 1 0L = -1);
+  assert (compare_integer integers 2 (Int64.succ Int64.min_int) = 0);
+  assert (compare_integer integers 3 Int64.min_int = 1);
   let narrow = Array1.of_array int32 fortran_layout [|Int32.max_int; 7l|] in
   add_int32 narrow 1 2 1l;
   assert (Int32.to_int narrow.{2} = -2147483648);
