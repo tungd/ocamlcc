@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-19 (codex/1): Specialize nativeint Array1 loads, stores, and wrapping arithmetic on 64-bit targets. The 128-element loop fell from 1539 to 3 ARC words. See [memory views](/concepts/memory-views.md).
+
 - 2026-11-19 (codex/1): Keep int32 Array1 loads and wrapping arithmetic unboxed at 32-bit width. The 128-element loop fell from 1539 to 3 ARC words. See [memory views](/concepts/memory-views.md).
 
 - 2026-11-19 (codex/1): Specialize int64 Array1 loads, stores, and wrapping arithmetic. The 128-element loop fell from 1539 to 3 ARC words. See [memory views](/concepts/memory-views.md).

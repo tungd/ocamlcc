@@ -262,6 +262,7 @@ let scalar_rep = function
   | Lambda.Pbigarray_float32 | Pbigarray_float64 -> Some Double_scalar
   | Pbigarray_int32 -> Some (Integer_scalar Pint32)
   | Pbigarray_int64 -> Some (Integer_scalar Pint64)
+  | Pbigarray_native_int -> Some (Integer_scalar Pnativeint)
   | _ -> None
 
 let rec conv_tail (lam : Lambda.lambda) : aexpr =
@@ -395,7 +396,9 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
                      layout; checked = not unsafe } in
       conv_expr arr (fun a -> conv_expr index (fun i ->
         conv_float_operand value (fun v -> emit_cexpr (ScalarStore (access, a, i, v)))))
-  | Lprim (Pbigarrayset (unsafe, 1, ((Pbigarray_int32 | Pbigarray_int64) as kind), layout), [arr; index; value], _)
+  | Lprim (Pbigarrayset (unsafe, 1,
+             ((Pbigarray_int32 | Pbigarray_int64 | Pbigarray_native_int) as kind),
+             layout), [arr; index; value], _)
     when scalar_layout layout ->
       let access = { operation = `Set; rank = 1; kind;
                      layout; checked = not unsafe } in

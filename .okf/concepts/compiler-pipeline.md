@@ -99,9 +99,9 @@ frames. QBE emits double addition, subtraction, multiplication, or division betw
 the typed load and store helpers. Float32 converts at the buffer boundary. Inline and scalar-only named float conditionals use a double phi and keep the selected
 result out of ARC ownership tracking. See [memory views](/concepts/memory-views.md).
 
-Int32 and int64 Array1 stores also propagate scalar demand through
+Int32, int64, and nativeint Array1 stores also propagate scalar demand through
 straight-line loads and wrapping add, subtract, and multiply. These produce
-QBE words and longs respectively. The
+QBE words for int32 and longs for int64 and nativeint. The
 demand scan selects a binding only when its scalar uses agree on the
 representation and the binding has no boxed use.
 

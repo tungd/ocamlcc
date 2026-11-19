@@ -41,6 +41,8 @@ let single_words (a : single_vector) n =
   Gc.minor_words () -. before
 
 let create_singles n = Array1.create float32 c_layout n
+let create_nativeints n = Array1.create nativeint c_layout n
+
 let create_int64 n = Array1.create int64 c_layout n
 let create_int32 n = Array1.create int32 c_layout n
 
@@ -61,6 +63,15 @@ let int64_words (a : int64_vector) delta n =
     a.{i} <- Int64.sub (Int64.mul sum 3L) 1L
   done;
   Gc.minor_words () -. before
+let nativeint_words (a : (nativeint, nativeint_elt, c_layout) Array1.t) delta n =
+  let before = Gc.minor_words () in
+  for i = 0 to n - 1 do
+    let x = a.{i} in
+    let sum = Nativeint.add x delta in
+    a.{i} <- Nativeint.sub (Nativeint.mul sum 3n) 1n
+  done;
+  Gc.minor_words () -. before
+
 let saved : vector option ref = ref None
 let save v = saved := Some v
 let write_saved x = match !saved with Some v -> v.{0} <- x | None -> assert false

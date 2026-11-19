@@ -17,6 +17,8 @@ val scale_words : vector -> vector -> float -> int -> float
 val conditional_scale_words : vector -> vector -> float -> int -> float
 val single_words : single_vector -> int -> float
 val create_singles : int -> single_vector
+val create_nativeints : int -> (nativeint, Bigarray.nativeint_elt, Bigarray.c_layout) Bigarray.Array1.t
+val nativeint_words : (nativeint, Bigarray.nativeint_elt, Bigarray.c_layout) Bigarray.Array1.t -> nativeint -> int -> float
 val create_int64 : int -> int64_vector
 val create_int32 : int -> int32_vector
 val int32_words : int32_vector -> int32 -> int -> float

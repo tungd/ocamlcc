@@ -643,7 +643,7 @@ let scalar_access_symbol op (access : Anf.bigarray_access) =
     | Lambda.Pbigarray_float32 -> "float32"
     | Pbigarray_float64 -> "float64"
     | Pbigarray_int32 -> "int32"
-    | Pbigarray_int64 -> "int64"
+    | Pbigarray_int64 | Pbigarray_native_int -> "int64"
     | _ -> assert false
   in
   Printf.sprintf "ocamlcc_ba_%s_%s_1" op kind

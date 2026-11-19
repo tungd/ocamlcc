@@ -47,6 +47,10 @@ let add_int32 (a : (int32, int32_elt, fortran_layout) Array1.t) i j delta =
   let value = a.{i} in
   a.{j} <- Int32.add value delta
 
+let add_nativeint (a : (nativeint, nativeint_elt, fortran_layout) Array1.t) i j delta =
+  let value = a.{i} in
+  a.{j} <- Nativeint.add value delta
+
 let () =
   let values = Array1.of_array float64 c_layout [|1.; 2.; 3.; 4.|] in
   let src = Array1.sub values 0 3 and dst = Array1.sub values 1 3 in
@@ -95,6 +99,11 @@ let () =
   assert (Int32.to_int narrow.{2} = -2147483648);
   assert (try add_int32 narrow 0 1 1l; false with Invalid_argument _ -> true);
   assert (narrow.{1} = Int32.max_int);
+  let native = Array1.of_array nativeint fortran_layout [|Nativeint.max_int; 7n|] in
+  add_nativeint native 1 2 1n;
+  assert (native.{2} = Nativeint.min_int);
+  assert (try add_nativeint native 0 1 1n; false with Invalid_argument _ -> true);
+  assert (native.{1} = Nativeint.max_int);
   let col = Array1.of_array float64 fortran_layout [|-0.; nan; infinity|] in
   scale_column col col 1 3 2.;
   assert (Int64.bits_of_float col.{3} = Int64.bits_of_float (-0.));
