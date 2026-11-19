@@ -50,7 +50,7 @@ rule qbe_ssa
   description = QBE $out
 
 rule cc_link
-  command = $cc $in -lm -o $out
+  command = $cc -pthread $in -lm -o $out
   description = LINK $out
 
 rule as_obj
@@ -432,7 +432,7 @@ rule cc_rt_asan
   description = CC(ASAN) $out
 
 rule cc_link_asan
-  command = $cc -fsanitize=address,undefined -fno-sanitize-recover=all $in -lm -o $out
+  command = $cc -fsanitize=address,undefined -fno-sanitize-recover=all -pthread $in -lm -o $out
   description = LINK(ASAN) $out
 
 rule run_asan_test

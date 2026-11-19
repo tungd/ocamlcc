@@ -66,7 +66,34 @@ static void fiber_tls_cleanup(void *arg)
     FiberThreadState *s = (FiberThreadState *)arg;
     if (s == NULL)
         return;
+    /* Release every fiber still queued on this thread's scheduler lists:
+     * the spawn pin belongs to the scheduler, so fibers left queued at
+     * thread exit would otherwise leak. Wakes triggered by these releases
+     * can push to the ready queue again, so drain until all lists are
+     * empty. */
+    for (;;) {
+        Fiber *f = s->sched.ready_head;
+        if (f != NULL) {
+            s->sched.ready_head = f->sched_next;
+            if (s->sched.ready_head == NULL)
+                s->sched.ready_tail = NULL;
+        } else if ((f = s->sched.io_head) != NULL) {
+            s->sched.io_head = f->sched_next;
+        } else if ((f = s->sched.timer_head) != NULL) {
+            s->sched.timer_head = f->sched_next;
+        } else {
+            break;
+        }
+        f->sched_next = NULL;
+        arc_release(f);
+    }
     fiber_free_buffers(&s->main_fiber);
+    /* Detach the TLS pointers before freeing the state: releasing buffer
+     * values can run custom finalizers, and other pthread_key destructors
+     * may touch fiber/runtime state after this one. arc_fiber_current()
+     * must allocate fresh state instead of dereferencing freed memory. */
+    tls_state = NULL;
+    tls_current_fiber = NULL;
     if (s->sched.poller_fd >= 0) {
         pal_poller_close(s->sched.poller_fd);
         s->sched.poller_fd = -1;

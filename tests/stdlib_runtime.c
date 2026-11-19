@@ -4,6 +4,7 @@
 #include "../runtime/ocamlcc_bigarray.h"
 #include "../runtime/pal.h"
 #include <assert.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -950,6 +951,66 @@ static void test_poller_unwatch_waiter(void)
     pal_poller_close(pfd);
 }
 
+static _Atomic int g_probe_ran = 0;
+static _Atomic int g_probe_is_done = 0;
+static pthread_key_t g_probe_key;
+static int g_probe_key_ok = 0;
+
+static void tls_probe_dtor(void *arg)
+{
+    (void)arg;
+    /* Runs alongside fiber_tls_cleanup at thread exit: touching fiber state
+     * here must never dereference freed TLS (ASan catches that ordering). */
+    Fiber *cur = arc_fiber_current();
+    atomic_store(&g_probe_is_done,
+                 (int)(ocamlcc_fiber_is_done((int64_t)(uintptr_t)cur) >> 1));
+    atomic_store(&g_probe_ran, 1);
+}
+
+static int64_t tls_exit_body_fn(int64_t clos, int64_t arg)
+{
+    (void)clos;
+    (void)arg;
+    return 1;
+}
+
+static void *tls_queued_exit_worker(void *arg)
+{
+    (void)arg;
+    arc_fiber_current(); /* create this thread's fiber TLS */
+    ArcClosure *clos = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
+    clos->code = (void *)tls_exit_body_fn;
+    clos->arity = 1;
+    /* Spawn fibers and drop our handles: the scheduler queue owns +1 each,
+     * so they survive queued until the thread's TLS is cleaned up. */
+    for (int i = 0; i < 3; i++) {
+        int64_t fib = ocamlcc_fiber_spawn((int64_t)(uintptr_t)clos);
+        arc_release_val(fib);
+    }
+    arc_release(clos);
+    if (g_probe_key_ok)
+        pthread_setspecific(g_probe_key, (void *)(uintptr_t)1);
+    return NULL; /* thread exits with 3 fibers still queued */
+}
+
+static void test_tls_cleanup_queued_fibers(void)
+{
+    int64_t before = arc_live_objects();
+    if (!g_probe_key_ok) {
+        if (pthread_key_create(&g_probe_key, tls_probe_dtor) == 0)
+            g_probe_key_ok = 1;
+    }
+    pthread_t th;
+    assert(pthread_create(&th, NULL, tls_queued_exit_worker, NULL) == 0);
+    pthread_join(th, NULL);
+
+    /* The probe destructor ran alongside the fiber TLS cleanup. */
+    assert(atomic_load(&g_probe_ran) == 1);
+    /* Every queued fiber must have been released with its scheduler pin:
+       nothing may leak past the thread's exit. */
+    assert(arc_live_objects() == before);
+}
+
 static void test_reachable_words(void)
 {
     int64_t before = arc_live_objects();
@@ -1081,6 +1142,7 @@ int main(void)
     test_finalizer_no_suspend();
     test_destroy_waiter_cleanup();
     test_poller_unwatch_waiter();
+    test_tls_cleanup_queued_fibers();
     puts("stdlib runtime: formats, malformed cleanup, cycles, truncation, views");
     return 0;
 }

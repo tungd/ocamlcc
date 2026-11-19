@@ -1,5 +1,12 @@
 # Change Log
 
+- 2026-11-19 (autoagent/1): Fix dangling TLS pointers and queued-fiber leaks in `fiber_tls_cleanup` (`runtime/fiber.c`):
+  - The `pthread_key` destructor freed the `FiberThreadState` without clearing `tls_state`/`tls_current_fiber` — if `fiber_free_buffers`' released values ran a custom finalizer, or another `pthread_key` destructor touched fiber state afterwards, it dereferenced freed TLS.
+  - Spawned fibers still queued on `sched.ready_head` / `timer_head` / `io_head` at thread exit were leaked (the scheduler's spawn pins were never released).
+  - Fix: drain all three scheduler lists and `arc_release` each queued fiber (looping until stable, since wakes during release re-push to the ready queue), then free the main fiber's buffers, then detach `tls_state`/`tls_current_fiber` before `free(s)` so re-entrant fiber/runtime access allocates fresh state instead of touching freed TLS.
+  - Also added `-pthread` to the `cc_link` / `cc_link_asan` rules (`tests/stdlib_runtime.c` now uses pthreads; needed on Linux).
+  - Regression-tested in `tests/stdlib_runtime.c` (`test_tls_cleanup_queued_fibers`: worker exits with three queued fibers and a probe `pthread_key` destructor touching fiber state — no leak past `pthread_join`, no dangling-TLS deref). `ninja test` (51/51), `ninja asan_test` (34/34), `ninja tsan_test` (race-free), and `dune runtest` pass. See [wren-fibers](/concepts/wren-fibers.md).
+
 - 2026-11-19 (autoagent/1): Fix dead-code poller unwatch and waiter UAF in `fiber_destroy` (`runtime/fiber.c`, `runtime/pal.c`, `runtime/pal.h`):
   - `fiber_destroy` called `sched_remove_io(f)` (which zeroes `wait_fd`/`wait_events`) *before* the `pal_poller_unwatch` guard on those fields — dead code, so a destroyed fiber's waiter entry stayed in the live poller queue as a freed-fiber udata.
   - The coarse `pal_poller_unwatch` was also the wrong tool: it clears *every* waiter on the (fd, direction) queue, breaking other fibers awaiting the same fd, and operates on the calling thread's poller.
