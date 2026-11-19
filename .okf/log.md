@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Add compiler-only bootstrap stubs and minimal `Unix` shim (`bootstrap/stubs/compiler_stubs.c`, `bootstrap/unix/unix.{mli,ml}`, `bootstrap/unix/unix_stubs.c`):
+  - `compiler_stubs.c` implements `caml_zstd_initialize` (registering `ZSTD_decompress`/`ZSTD_compress` via `ocamlcc_marshal_register_codec`), `caml_sys_get_stdlib_dirs`, `caml_sys_time_include_children`, and `caml_terminfo_rows`, linked only into the self-hosted compiler binary so `libocamlrt.a` remains zstd-free.
+  - `bootstrap/unix/` provides the exact 11-function POSIX `Unix` surface used by `lib/driver.ml`, leaving `lib/driver.ml` and host Dune builds unchanged.
+  - TDD-verified under both native and ASan+UBSan (`sh tests/run_bootstrap_stubs_tests.sh`), including decoding a real host OCaml 5.5 zstd-compressed `stdlib.cmi` with zero leaks. See [self-hosting](/concepts/self-hosting.md).
+
 - 2026-11-19 (antigravity/1): Add `-open <Mod>` frontend/CLI support, compiler-libs `Ccalls` ABI entries, and inter-unit `Gc.full_major ()` in `driver.ml` (`lib/frontend.ml*`, `lib/pipeline.ml*`, `bin/main.ml`, `lib/ccalls.ml`, `lib/driver.ml`):
   - Thread `~open_modules` through `Frontend` (`Clflags.open_modules := List.rev open_modules`, saved/restored in `with_flags`), `Pipeline`, and `bin/main.ml` (`-open` / `--open`).
   - Register the four `compiler-libs.common` primitives (`caml_sys_get_stdlib_dirs`, `caml_sys_time_include_children`, `caml_terminfo_rows`, `caml_zstd_initialize`) in `lib/ccalls.ml` (with `returns_imm` for `caml_terminfo_rows` and `caml_zstd_initialize`).
