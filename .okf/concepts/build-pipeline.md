@@ -5,7 +5,7 @@ description: How the top-level build.ninja orchestrates vendored QBE, the C runt
 tags: [build, ninja, dune, qbe]
 status: stable
 generated:
-  by: codex/1
+  by: autoagent/1
   at: 2026-11-19T07:37:37+00:00
 sources:
   - id: build-ninja
@@ -80,6 +80,8 @@ is present or `--emit-header` is explicitly passed).
 # Executable startup
 
 The executable initializes every explicitly linked implementation once, in dependency order. This includes units whose only effect is registration at startup.
+
+Each unit's generated `ocamlcc_init_<Mod>` first calls `ocamlcc_init_try_enter` on its `ocamlcc_global_<Mod>` slot (`0` uninitialized, `-2` claimed, other value published) and skips initialization if it does not win the claim. Units that mutually reference each other through their `.mli` interfaces recurse into each other's init functions; the runtime treats a same-thread re-entrant call as "already initializing here" (returns `0`, no spin), so the inner unit completes with whichever of its dependencies were initialized before the cycle re-entered. `ocamlcc_init_finish` publishes the unit value — or `0` when `ocamlcc_get_exn()` holds a raised exception, so the failure can be retried — and releases the claim.
 
 # Installed driver
 

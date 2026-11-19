@@ -145,8 +145,45 @@ static void drain_foreign_releases(void)
     foreign_release_depth--;
 }
 
+/* Module-init re-entrancy: generated init functions call each other's
+ * ocamlcc_init_<Mod> unconditionally, so mutually dependent modules recurse
+ * into the same slot on the current thread. Track the slots this thread has
+ * claimed; a re-entrant hit means "already initializing here" and must skip
+ * (return 0), never spin — spinning would self-deadlock on the -2 marker.
+ * Only a slot marked -2 by a *different* thread is worth waiting on. */
+#define OCAMLC_INIT_MAX_DEPTH 64
+static _Thread_local _Atomic int64_t *tls_init_slots[OCAMLC_INIT_MAX_DEPTH];
+static _Thread_local int tls_init_depth = 0;
+
+static int tls_init_slot_active(_Atomic int64_t *slot)
+{
+    for (int i = 0; i < tls_init_depth; i++)
+        if (tls_init_slots[i] == slot)
+            return 1;
+    return 0;
+}
+
+static void tls_init_slot_push(_Atomic int64_t *slot)
+{
+    if (tls_init_depth < OCAMLC_INIT_MAX_DEPTH)
+        tls_init_slots[tls_init_depth++] = slot;
+}
+
+static void tls_init_slot_pop(_Atomic int64_t *slot)
+{
+    for (int i = tls_init_depth - 1; i >= 0; i--) {
+        if (tls_init_slots[i] == slot) {
+            tls_init_slots[i] = tls_init_slots[--tls_init_depth];
+            tls_init_slots[tls_init_depth] = NULL;
+            return;
+        }
+    }
+}
+
 int64_t ocamlcc_init_try_enter(_Atomic int64_t *slot)
 {
+    if (tls_init_slot_active(slot))
+        return 0; /* re-entrant same-thread init; caller proceeds unblocked */
     for (;;) {
         int64_t v = atomic_load_explicit(slot, memory_order_acquire);
         if (v != 0 && v != -2)
@@ -157,8 +194,10 @@ int64_t ocamlcc_init_try_enter(_Atomic int64_t *slot)
         }
         int64_t expected = 0;
         if (atomic_compare_exchange_strong_explicit(
-                slot, &expected, -2, memory_order_acq_rel, memory_order_acquire))
+                slot, &expected, -2, memory_order_acq_rel, memory_order_acquire)) {
+            tls_init_slot_push(slot);
             return 1;
+        }
     }
 }
 
@@ -166,6 +205,7 @@ void ocamlcc_init_finish(_Atomic int64_t *slot, int64_t val)
 {
     int64_t store_val = (ocamlcc_get_exn() != 0) ? 0 : val;
     atomic_store_explicit(slot, store_val, memory_order_release);
+    tls_init_slot_pop(slot);
 }
 
 int arc_mutator_enter(void)

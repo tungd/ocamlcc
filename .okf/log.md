@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-19 (autoagent/1): Fix self-deadlock on mutual module initialization (`runtime/arc.c`):
+  - `ocamlcc_init_try_enter` spun forever when a same-thread re-entrant init call hit its own `-2` claim — `.mli`-mediated mutually dependent units (`mut_app` in `test/driver_test.ml`) recurse `ocamlcc_init_A → ocamlcc_init_B → ocamlcc_init_A` while the outer initializer is in flight. It now tracks active init slots in a `_Thread_local` stack (`tls_init_slots`, depth ≤ 64), returns `0` for re-entrant same-thread calls, keeps the spin only for slots claimed by *other* threads, and `ocamlcc_init_finish` pops the claim after publishing the value.
+  - `run_capture` in `test/driver_test.ml` enforces a 60 s timeout and SIGKILLs hung children, so a startup deadlock fails the suite (`mli-mediated mutual deps: FAIL`) instead of hanging `dune runtest` forever.
+  `dune runtest` and `ninja test` (52/52, incl. `test_mutual`) pass. See [perceus-arc](/concepts/perceus-arc.md) and [build-pipeline](/concepts/build-pipeline.md).
+
 - 2026-11-19 (antigravity/1): Implement full graph traversal in `caml_obj_reachable_words` (`runtime/arc.c`) and align `docs/design.md` / `README.md` with the actual runtime architecture and unsupported OCaml feature list (`Lsend`, ephemerons, backtraces, signal handlers, `Marshal.Closures`). Regression-tested in `tests/stdlib_runtime.c` (`test_reachable_words`); `ninja test` and `ninja asan_test` pass.
 
 - 2026-11-19 (antigravity/1): Fix driver, cross-compilation, bindgen shim, and CLI issues (§4):

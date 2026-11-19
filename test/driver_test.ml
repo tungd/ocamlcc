@@ -19,27 +19,52 @@ let read_file path =
   Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () ->
       really_input_string ic (in_channel_length ic))
 
-let run_capture prog args =
+let run_capture ?(timeout = 60.0) prog args =
   let r_fd, w_fd = Unix.pipe () in
   let pid =
     Unix.create_process prog (Array.of_list (prog :: args)) Unix.stdin w_fd
       Unix.stderr
   in
   Unix.close w_fd;
-  let ic = Unix.in_channel_of_descr r_fd in
   let buf = Buffer.create 256 in
+  let chunk = Bytes.create 4096 in
+  let timed_out = ref false in
+  let deadline = Unix.gettimeofday () +. timeout in
   (try
      while true do
-       Buffer.add_string buf (input_line ic);
-       Buffer.add_char buf '\n'
+       let remaining = deadline -. Unix.gettimeofday () in
+       if remaining <= 0.0 then begin
+         timed_out := true;
+         raise Exit
+       end;
+       let ready, _, _ = Unix.select [ r_fd ] [] [] remaining in
+       if ready = [] then begin
+         timed_out := true;
+         raise Exit
+       end;
+       let n = Unix.read r_fd chunk 0 (Bytes.length chunk) in
+       if n = 0 then raise Exit;
+       Buffer.add_subbytes buf chunk 0 n
      done
-   with End_of_file -> ());
-  close_in_noerr ic;
+   with Exit -> ());
+  Unix.close r_fd;
+  if !timed_out then (try Unix.kill pid Sys.sigkill with _ -> ());
+  let out =
+    let raw = Buffer.contents buf in
+    if raw = "" || raw.[String.length raw - 1] <> '\n' then raw ^ "\n" else raw
+  in
+  if !timed_out then
+    Printf.printf "run_capture: %s timed out after %.0fs (killed)\n" prog timeout;
   let _, status = Unix.waitpid [] pid in
   let code =
-    match status with Unix.WEXITED c -> c | Unix.WSIGNALED s -> 128 + s | Unix.WSTOPPED s -> 128 + s
+    if !timed_out then 128 + Sys.sigkill
+    else
+      match status with
+      | Unix.WEXITED c -> c
+      | Unix.WSIGNALED s -> 128 + s
+      | Unix.WSTOPPED s -> 128 + s
   in
-  (code, Buffer.contents buf)
+  (code, out)
 
 let rec rm_rf path =
   if Sys.file_exists path then
