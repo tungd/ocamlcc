@@ -107,7 +107,12 @@ let stdlib_abis =
     ("caml_ceil_float", 1, false, false);
     ("caml_fmod_float", 2, false, false);
     ("caml_copysign_float", 2, false, false);
-    ("caml_classify_float", 1, false, false) ]
+    ("caml_classify_float", 1, false, false);
+    (* compiler-libs.common primitives *)
+    ("caml_sys_get_stdlib_dirs", 1, false, false);
+    ("caml_sys_time_include_children", 1, false, false);
+    ("caml_terminfo_rows", 1, true, false);
+    ("caml_zstd_initialize", 1, false, false) ]
 
 let () =
   let failures = ref 0 in
@@ -130,6 +135,10 @@ let () =
     Ccalls.returns_imm "caml_floatarray_blit"
     && Ccalls.returns_imm "caml_floatarray_fill"
     && not (Ccalls.returns_imm "caml_floatarray_sub")
+    && Ccalls.returns_imm "caml_zstd_initialize"
+    && Ccalls.returns_imm "caml_terminfo_rows"
+    && not (Ccalls.returns_imm "caml_sys_get_stdlib_dirs")
+    && not (Ccalls.returns_imm "caml_sys_time_include_children")
   in
   if imm_ok then Printf.printf "floatarray unit ccalls imm: PASS\n"
   else begin

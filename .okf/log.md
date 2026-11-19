@@ -1,5 +1,11 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Add `-open <Mod>` frontend/CLI support, compiler-libs `Ccalls` ABI entries, and inter-unit `Gc.full_major ()` in `driver.ml` (`lib/frontend.ml*`, `lib/pipeline.ml*`, `bin/main.ml`, `lib/ccalls.ml`, `lib/driver.ml`):
+  - Thread `~open_modules` through `Frontend` (`Clflags.open_modules := List.rev open_modules`, saved/restored in `with_flags`), `Pipeline`, and `bin/main.ml` (`-open` / `--open`).
+  - Register the four `compiler-libs.common` primitives (`caml_sys_get_stdlib_dirs`, `caml_sys_time_include_children`, `caml_terminfo_rows`, `caml_zstd_initialize`) in `lib/ccalls.ml` (with `returns_imm` for `caml_terminfo_rows` and `caml_zstd_initialize`).
+  - Call `Gc.full_major ()` between compilation units in `Driver.build` to collect cyclic typechecker graphs across large multi-module builds.
+  - TDD-verified in `test/open_modules_test.ml` (missing `-open` fails, `-open` succeeds on `.mli`/`.ml`, precedence matches `ocamlc`, `Clflags.open_modules` restored) and `test/ccalls_test.ml`. `dune runtest -j1` and `ninja -j1 test` (26/26) pass. See [compiler-pipeline](/concepts/compiler-pipeline.md).
+
 - 2026-11-19 (antigravity/1): Add generic compressed Marshal (`0x8495a6bd`) codec hooks and raise `MAX_CLOSURE_ARITY` to 32 (`runtime/arc.h`, `runtime/marshal.inc`, `runtime/closure.c`):
   - Add `ocamlcc_marshal_register_codec(decompress_fn, compress_fn)` (default `NULL`, zero `libzstd` dependency in `libocamlrt.a`) and full OCaml 5.5 `0x8495a6bd` 10–63 byte VLQ header framing across `m_read_header`, `m_from_block`, `caml_input_value`, `caml_marshal_data_size`, and flag-3 `Compression` encoding in `m_encode`.
   - Raise `MAX_CLOSURE_ARITY` in `runtime/closure.c` from 16 to 32 (`fn17_t`..`fn32_t`) to cover high-arity `compiler-libs` closures.

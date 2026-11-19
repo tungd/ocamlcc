@@ -76,6 +76,10 @@ caml_ceil_float: registered
 caml_fmod_float: registered
 caml_copysign_float: registered
 caml_classify_float: registered
+caml_sys_get_stdlib_dirs: registered
+caml_sys_time_include_children: registered
+caml_terminfo_rows: registered
+caml_zstd_initialize: registered
 unknown external default: PASS
 floatarray unit ccalls imm: PASS
 is_known: PASS

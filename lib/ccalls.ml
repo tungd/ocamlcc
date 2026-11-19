@@ -375,7 +375,12 @@ let table =
     ("caml_gc_tweak_get", abi 1 false false);
     ("caml_gc_tweak_list_active", abi 1 false false);
     ("caml_get_public_method", abi 2 true false);
-    ("caml_get_continuation_callstack", abi 2 false false) ]
+    ("caml_get_continuation_callstack", abi 2 false false);
+    (* compiler-libs.common primitives (linked by bootstrap compiler_stubs.c) *)
+    ("caml_sys_get_stdlib_dirs", abi 1 false false);
+    ("caml_sys_time_include_children", abi 1 false false);
+    ("caml_terminfo_rows", abi 1 true false);
+    ("caml_zstd_initialize", abi 1 false false) ]
 
 let find_opt name = List.assoc_opt name table
 
@@ -409,6 +414,7 @@ let returns_imm = function
   | "ocamlcc_arc_live" | "ocamlcc_arc_reuse" | "ocamlcc_arc_collect"
   | "ocamlcc_arc_slab_count"
   | "caml_ba_dim" | "caml_ba_num_dims" | "caml_ba_kind" | "caml_ba_layout"
-  | "caml_ba_set_1" | "caml_ba_set_2" | "caml_ba_set_3" | "caml_ba_set_generic" ->
+  | "caml_ba_set_1" | "caml_ba_set_2" | "caml_ba_set_3" | "caml_ba_set_generic"
+  | "caml_terminfo_rows" | "caml_zstd_initialize" ->
       true
   | _ -> false

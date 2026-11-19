@@ -8,6 +8,7 @@ val compile_source :
   ?nostdlib:bool ->
   ?no_alias_deps:bool ->
   ?nolabels:bool ->
+  ?open_modules:string list ->
   ?emit_entry:bool ->
   filename:string ->
   modname:string ->
@@ -23,6 +24,7 @@ val compile_file :
   ?nostdlib:bool ->
   ?no_alias_deps:bool ->
   ?nolabels:bool ->
+  ?open_modules:string list ->
   ?emit_entry:bool ->
   filename:string ->
   modname:string ->
@@ -38,6 +40,7 @@ val compile_interface_file :
   ?nostdlib:bool ->
   ?no_alias_deps:bool ->
   ?nolabels:bool ->
+  ?open_modules:string list ->
   filename:string ->
   modname:string ->
   unit ->

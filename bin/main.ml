@@ -22,6 +22,7 @@ let usage =
 
 type cli_opts = {
   include_dirs : string list;
+  open_modules : string list;
   nostdlib : bool;
   nopervasives : bool;
   no_alias_deps : bool;
@@ -51,6 +52,7 @@ type cli_opts = {
 
 let default_opts =
   { include_dirs = [];
+    open_modules = [];
     nostdlib = false;
     nopervasives = false;
     no_alias_deps = false;
@@ -83,11 +85,14 @@ let parse_opts args =
         Ok
           { opts with
             include_dirs = List.rev opts.include_dirs;
+            open_modules = List.rev opts.open_modules;
             inputs = List.rev opts.inputs;
             extra_cflags = List.rev opts.extra_cflags;
             extra_ldflags = List.rev opts.extra_ldflags }
     | "-I" :: dir :: rest ->
         go { opts with include_dirs = dir :: opts.include_dirs } rest
+    | ("-open" | "--open") :: m :: rest ->
+        go { opts with open_modules = m :: opts.open_modules } rest
     | "--nostdlib" :: rest -> go { opts with nostdlib = true } rest
     | "--nopervasives" :: rest -> go { opts with nopervasives = true } rest
     | "--no-alias-deps" :: rest -> go { opts with no_alias_deps = true } rest
@@ -171,8 +176,8 @@ let compile opts =
         Pipeline.compile_file ~include_dirs:opts.include_dirs ?output_prefix
           ~emit_cmi:opts.emit_cmi ~nopervasives:opts.nopervasives
           ~nostdlib:opts.nostdlib ~no_alias_deps:opts.no_alias_deps
-          ~nolabels:opts.nolabels ~emit_entry:(not opts.is_mod)
-          ~filename:file ~modname ()
+          ~nolabels:opts.nolabels ~open_modules:opts.open_modules
+          ~emit_entry:(not opts.is_mod) ~filename:file ~modname ()
       with
       | Ok ssa ->
           write_out opts.out ssa;
@@ -202,7 +207,8 @@ let compile_mli opts =
         Pipeline.compile_interface_file ~include_dirs:opts.include_dirs
           ?output_prefix ~nopervasives:opts.nopervasives
           ~nostdlib:opts.nostdlib ~no_alias_deps:opts.no_alias_deps
-          ~nolabels:opts.nolabels ~filename:file ~modname ()
+          ~nolabels:opts.nolabels ~open_modules:opts.open_modules
+          ~filename:file ~modname ()
       with
       | Ok _ -> 0
       | Error msg ->
@@ -224,7 +230,7 @@ let dump_lambda opts =
           match
             Frontend.compile_implementation ~include_dirs:opts.include_dirs
               ~nopervasives:opts.nopervasives ~nostdlib:opts.nostdlib
-              ~filename:file ~modname source
+              ~open_modules:opts.open_modules ~filename:file ~modname source
           with
           | Error { msg } ->
               prerr_endline ("ocamlcc: error: " ^ msg);

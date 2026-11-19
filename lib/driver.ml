@@ -928,7 +928,9 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                 ~modname:s.modname ()
                             with
                             | Error msg -> Error msg
-                            | Ok _ -> Ok ())
+                            | Ok _ ->
+                                Gc.full_major ();
+                                Ok ())
                         | `Ml -> (
                             let emit_cmi = not (has_mli s.modname) in
                             let emit_entry =
@@ -962,6 +964,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                 | Error _ as e -> e
                                 | Ok () ->
                                     asm_files := asm :: !asm_files;
+                                    Gc.full_major ();
                                     Ok ()))))
                   (Ok ()) steps
               in

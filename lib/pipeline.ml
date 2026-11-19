@@ -10,11 +10,12 @@ let read_file filename =
 
 let compile_source ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
-    ?(nolabels = false) ?(emit_entry = true) ~filename ~modname source :
-    (string, string) result =
+    ?(nolabels = false) ?(open_modules = []) ?(emit_entry = true) ~filename
+    ~modname source : (string, string) result =
   match
     Frontend.compile_implementation ~include_dirs ?output_prefix ~emit_cmi
-      ~nopervasives ~nostdlib ~no_alias_deps ~nolabels ~filename ~modname source
+      ~nopervasives ~nostdlib ~no_alias_deps ~nolabels ~open_modules ~filename
+      ~modname source
   with
   | Error { msg } -> Error msg
   | Ok program -> (
@@ -26,23 +27,26 @@ let compile_source ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
 
 let compile_file ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
-    ?(nolabels = false) ?(emit_entry = true) ~filename ~modname () :
-    (string, string) result =
+    ?(nolabels = false) ?(open_modules = []) ?(emit_entry = true) ~filename
+    ~modname () : (string, string) result =
   match read_file filename with
   | exception Sys_error msg -> Error msg
   | source ->
       compile_source ~include_dirs ?output_prefix ~emit_cmi ~nopervasives
-        ~nostdlib ~no_alias_deps ~nolabels ~emit_entry ~filename ~modname source
+        ~nostdlib ~no_alias_deps ~nolabels ~open_modules ~emit_entry ~filename
+        ~modname source
 
 let compile_interface_file ?(include_dirs = []) ?output_prefix
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
-    ?(nolabels = false) ~filename ~modname () : (string, string) result =
+    ?(nolabels = false) ?(open_modules = []) ~filename ~modname () :
+    (string, string) result =
   match read_file filename with
   | exception Sys_error msg -> Error msg
   | source -> (
       match
         Frontend.compile_interface ~include_dirs ?output_prefix ~nopervasives
-          ~nostdlib ~no_alias_deps ~nolabels ~filename ~modname source
+          ~nostdlib ~no_alias_deps ~nolabels ~open_modules ~filename ~modname
+          source
       with
       | Error { msg } -> Error msg
       | Ok cmi_path -> Ok cmi_path)

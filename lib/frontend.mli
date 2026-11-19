@@ -8,6 +8,7 @@ val compile_implementation :
   ?nostdlib:bool ->
   ?no_alias_deps:bool ->
   ?nolabels:bool ->
+  ?open_modules:string list ->
   filename:string ->
   modname:string ->
   string ->
@@ -22,6 +23,7 @@ val compile_interface :
   ?nostdlib:bool ->
   ?no_alias_deps:bool ->
   ?nolabels:bool ->
+  ?open_modules:string list ->
   filename:string ->
   modname:string ->
   string ->

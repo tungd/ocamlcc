@@ -31,11 +31,11 @@ The pipeline has four stages[^design-doc]:
 
 1. **Official OCaml frontend** — ocamlcc links against `compiler-libs.common`
    (OCaml `5.5.x` `Unit_info`/`Typemod` APIs) and reuses Parse (syntax),
-   Typemod (typechecking, including `.mli` → `.cmi`), and Translmod (Lambda
-   lowering). Module system, functors, GADTs, and polymorphic variants all
-   arrive pre-desugared: frontend fidelity is free, and unsupported
-   constructs are rejected downstream by `Anf`/`Codegen` with a
-   descriptive error.
+   Typemod (typechecking, including `.mli` → `.cmi` and `-open <Mod>` via
+   `Clflags.open_modules`), and Translmod (Lambda lowering). Module system,
+   functors, GADTs, and polymorphic variants all arrive pre-desugared:
+   frontend fidelity is free, and unsupported constructs are rejected
+   downstream by `Anf`/`Codegen` with a descriptive error.
 2. **Middle-end (pure OCaml)** — ANF conversion (`lib/anf.ml`), fixed-point
    yield-effect inference and the [Perceus ARC](/concepts/perceus-arc.md) +
    shadow-stack fiber + error-return exception pass (`lib/arc_pass.ml`).
