@@ -1,5 +1,6 @@
 /* Public C runtime contracts for standard library primitives and ARC views. */
 #include "../runtime/arc.h"
+#include "../runtime/fiber.h"
 #include "../runtime/ocamlcc_bigarray.h"
 #include "../runtime/pal.h"
 #include <assert.h>
@@ -26,6 +27,10 @@ extern int64_t caml_ml_open_descriptor_out(int64_t);
 extern int64_t caml_ml_close_channel(int64_t);
 extern int64_t caml_ml_output_bytes(int64_t, int64_t, int64_t, int64_t);
 extern int64_t caml_ml_input(int64_t, int64_t, int64_t, int64_t);
+extern int64_t ocamlcc_fiber_create(int64_t);
+extern int64_t ocamlcc_fiber_resume(int64_t, int64_t);
+extern int64_t ocamlcc_fiber_fd_wait_read(int64_t);
+extern int64_t ocamlcc_fiber_await(int64_t);
 
 static int64_t tagged(int64_t n) { return (int64_t)(((uint64_t)n << 1) | 1); }
 
@@ -588,6 +593,54 @@ static void test_bounds_and_marshal_dos(void)
     assert(arc_live_objects() == before);
 }
 
+static int64_t noop_fiber_fn(int64_t clos, int64_t arg)
+{
+    (void)clos;
+    return arg;
+}
+
+static void test_fiber_robustness(void)
+{
+    int64_t before = arc_live_objects();
+
+    /* 1. Resuming a FIBER_DONE fiber must raise Invalid_argument, not abort. */
+    ArcClosure *clos = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
+    clos->code = (void *)noop_fiber_fn;
+    clos->arity = 1;
+    int64_t fib = ocamlcc_fiber_create((int64_t)(uintptr_t)clos);
+    arc_release(clos);
+
+    const Fiber *fobj = (const Fiber *)(uintptr_t)fib;
+    assert(fobj->c_stack_bytes > 256u * 1024u); /* includes guard page */
+
+    int64_t r1 = ocamlcc_fiber_resume(fib, tagged(7));
+    assert(!ocamlcc_get_exn() && r1 == tagged(7));
+    ocamlcc_fiber_resume(fib, tagged(8));
+    clear_exception();
+    arc_release_val(fib);
+
+    /* 2. Passing an invalid fd to fiber_fd_wait must raise, not abort. */
+    ocamlcc_fiber_fd_wait_read(tagged(-1));
+    clear_exception();
+
+    /* 3. Invoking a closure with > 16 parameters must raise and not leak args. */
+    ArcClosure *big_clos = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
+    big_clos->code = (void *)noop_fiber_fn;
+    big_clos->arity = 17;
+    int64_t args[17];
+    for (int i = 0; i < 17; i++)
+        args[i] = (int64_t)(uintptr_t)arc_alloc_bytes(2);
+    ocamlcc_apply_n((int64_t)(uintptr_t)big_clos, 17, args);
+    clear_exception();
+    arc_release(big_clos);
+
+    /* 4. Self-await on current fiber must not deadlock. */
+    ocamlcc_fiber_await((int64_t)(uintptr_t)arc_fiber_current());
+    clear_exception();
+
+    assert(arc_live_objects() == before);
+}
+
 int main(void)
 {
     test_float_format();
@@ -596,6 +649,7 @@ int main(void)
     test_weak_get_copy_and_obj_dup();
     test_poller_multi_waiters_and_overflow();
     test_bounds_and_marshal_dos();
+    test_fiber_robustness();
     test_partial_cycle(); test_complete_cycle(); test_truncation_and_mutation(); test_view_lifetime();
     test_retained_c_subview();
     test_c_view_shapes();

@@ -15,6 +15,7 @@
 /* 1. Page allocation (mmap/munmap on Linux; libSystem/Bionic on mobile). */
 void *pal_page_alloc(size_t size);
 void  pal_page_free(void *ptr, size_t size);
+int   pal_page_protect_none(void *ptr, size_t size);
 
 /* 2. Abnormal termination (exit_group syscall / __builtin_trap). */
 void pal_abort(void) __attribute__((noreturn));

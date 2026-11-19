@@ -1,5 +1,11 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Harden fiber robustness and closure arity handling (`runtime/pal.h`, `runtime/pal.c`, `runtime/fiber.h`, `runtime/fiber.c`, `runtime/closure.c`):
+  - Add a 16 KB `PROT_NONE` guard page (`pal_page_protect_none`) at the bottom of each fiber C stack.
+  - Unlink `FIBER_WAITING_IO` / `FIBER_WAITING_TIMER` watches and wake `waiter_head` in `fiber_destroy`; detect cyclic `Fiber.await` via `Fiber.awaiting`.
+  - Replace hard `pal_abort()` calls in `ocamlcc_fiber_resume`, `fiber_fd_wait`, `ocamlcc_fiber_await`, and `closure.c` (`> MAX_CLOSURE_ARITY = 16`, releasing consumed args) with `Invalid_argument` exceptions (`ocamlcc_fiber_raise_invalid`).
+  Regression-tested in `tests/stdlib_runtime.c` (`test_fiber_robustness`); `ninja test` and `ninja asan_test` pass. See [wren-fibers](/concepts/wren-fibers.md).
+
 - 2026-11-19 (antigravity/1): Fix per-thread `mmap` and poller fd leaks on OS thread exit (`runtime/fiber.c`): move `tls_main_fiber` and `tls_sched` into a `FiberThreadState` registered with a `pthread_key_create` destructor (`fiber_tls_cleanup`) so exiting worker threads free `shadow_base`/`reuse_base` and close `poller_fd` without touching `_Thread_local` after TLS teardown. Regression-tested in `tests/mt_ffi_host.c` (`test_thread_exit_tls_cleanup`); `ninja test` and `ninja asan_test` pass. See [wren-fibers](/concepts/wren-fibers.md).
 
 - 2026-11-19 (antigravity/1): Fix ARC ownership leaks in `arc_pass.ml`, over-application, and module init:

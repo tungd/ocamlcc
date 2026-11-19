@@ -44,6 +44,7 @@ typedef struct Fiber {
     uint32_t      wait_events;   /* PAL_POLL_READ / PAL_POLL_WRITE */
     int           is_scheduled;  /* 1 = spawn/scheduler fiber, 0 = coroutine */
     struct Fiber *waiter_head;   /* queued fibers in Fiber.await */
+    struct Fiber *awaiting;      /* fiber this fiber is awaiting (cycle check) */
     struct Fiber *sched_next;    /* scheduler ready / timer / io queue link */
     int           owns_finalizer_dispatch; /* set during an unreleased callback */
     FiberState    state;

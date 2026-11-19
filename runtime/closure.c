@@ -49,7 +49,11 @@ static int64_t invoke_closure(ArcClosure *c, uint64_t arity, const int64_t *a)
     case 14: return ((fn14_t)c->code)(cv, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13]);
     case 15: return ((fn15_t)c->code)(cv, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14]);
     case 16: return ((fn16_t)c->code)(cv, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15]);
-    default: pal_abort();
+    default:
+        for (uint64_t i = 0; i < arity; i++)
+            arc_release_val(a[i]);
+        ocamlcc_fiber_raise_invalid();
+        return 1;
     }
 }
 
@@ -88,8 +92,11 @@ int64_t ocamlcc_apply1_raw(int64_t clos_val, int64_t a0)
     if (hdr->tag == ARC_TAG_PAP) {
         ArcPap *p = (ArcPap *)(uintptr_t)clos_val;
         if (p->n_applied + 1 == p->total_arity) {
-            if (p->total_arity > MAX_CLOSURE_ARITY)
-                pal_abort();
+            if (p->total_arity > MAX_CLOSURE_ARITY) {
+                arc_release_val(a0);
+                ocamlcc_fiber_raise_invalid();
+                return 1;
+            }
             int64_t buf[MAX_CLOSURE_ARITY];
             for (uint64_t i = 0; i < p->n_applied; i++) {
                 arc_retain_val(p->args[i]);
@@ -142,8 +149,12 @@ int64_t ocamlcc_apply_n_raw(int64_t clos_val, int64_t argc, int64_t *argv)
         uint64_t n = (uint64_t)argc;
         uint64_t rem = p->total_arity - p->n_applied;
         if (n >= rem) {
-            if (p->total_arity > MAX_CLOSURE_ARITY)
-                pal_abort();
+            if (p->total_arity > MAX_CLOSURE_ARITY) {
+                for (uint64_t i = 0; i < n; i++)
+                    arc_release_val(argv[i]);
+                ocamlcc_fiber_raise_invalid();
+                return 1;
+            }
             int64_t buf[MAX_CLOSURE_ARITY];
             for (uint64_t i = 0; i < p->n_applied; i++) {
                 arc_retain_val(p->args[i]);

@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 
+#define FIBER_GUARD_BYTES (16u * 1024u)
 #define FIBER_STACK_BYTES (256u * 1024u)
 #define SHADOW_INIT_BYTES (16u * 1024u)
 
@@ -192,10 +193,34 @@ void arc_fiber_pop_reuse(int64_t n)
     cur->reuse_sp -= (size_t)n;
 }
 
+static void sched_push_ready(Fiber *f);
+static void sched_remove_io(Fiber *f);
+static void sched_remove_timer(Fiber *f);
+
 void fiber_destroy(Fiber *f)
 {
-    if (f == NULL || f == &tls_main_fiber)
+    if (f == NULL || (tls_state != NULL && f == &tls_state->main_fiber))
         return;
+    if (f->state == FIBER_WAITING_IO) {
+        if (tls_state != NULL)
+            sched_remove_io(f);
+        if (f->wait_fd >= 0 && tls_state != NULL && tls_state->sched.poller_fd >= 0)
+            (void)pal_poller_unwatch(tls_state->sched.poller_fd, f->wait_fd, f->wait_events);
+        f->wait_fd = -1;
+        f->wait_events = 0;
+    } else if (f->state == FIBER_WAITING_TIMER) {
+        if (tls_state != NULL)
+            sched_remove_timer(f);
+    }
+    while (f->waiter_head != NULL) {
+        Fiber *w = f->waiter_head;
+        f->waiter_head = w->sched_next;
+        w->sched_next = NULL;
+        w->awaiting = NULL;
+        if (tls_state != NULL && w->state != FIBER_DONE)
+            sched_push_ready(w);
+    }
+    f->awaiting = NULL;
     fiber_free_buffers(f);
     if (f->entry_closure != 0) {
         int64_t clos = f->entry_closure;
@@ -268,19 +293,28 @@ static Fiber *sched_pop_ready(void)
     return f;
 }
 
-static void sched_remove_io(Fiber *target)
+static void sched_unlink(Fiber **pp, Fiber *target)
 {
-    Fiber **pp = &tls_sched.io_head;
     while (*pp != NULL) {
         if (*pp == target) {
             *pp = target->sched_next;
             target->sched_next = NULL;
-            target->wait_fd = -1;
-            target->wait_events = 0;
             return;
         }
         pp = &(*pp)->sched_next;
     }
+}
+
+static void sched_remove_io(Fiber *target)
+{
+    sched_unlink(&tls_sched.io_head, target);
+    target->wait_fd = -1;
+    target->wait_events = 0;
+}
+
+static void sched_remove_timer(Fiber *target)
+{
+    sched_unlink(&tls_sched.timer_head, target);
 }
 
 static void sched_drain_timers(void)
@@ -394,6 +428,7 @@ static void __attribute__((noreturn)) fiber_trampoline(void)
         Fiber *w = self->waiter_head;
         self->waiter_head = w->sched_next;
         w->sched_next = NULL;
+        w->awaiting = NULL;
         sched_push_ready(w);
     }
 
@@ -405,21 +440,26 @@ static void __attribute__((noreturn)) fiber_trampoline(void)
 
 static Fiber *alloc_fiber_obj(int64_t closure, int scheduled)
 {
-    uint8_t *cstack = (uint8_t *)pal_page_alloc(FIBER_STACK_BYTES);
+    size_t total_bytes = (size_t)FIBER_GUARD_BYTES + (size_t)FIBER_STACK_BYTES;
+    uint8_t *cstack = (uint8_t *)pal_page_alloc(total_bytes);
     if (cstack == NULL)
         pal_abort();
+    if (pal_page_protect_none(cstack, FIBER_GUARD_BYTES) != 0) {
+        pal_page_free(cstack, total_bytes);
+        pal_abort();
+    }
 
     Fiber *f = (Fiber *)arc_alloc((uint16_t)ARC_TAG_FIBER, 0u, (uint32_t)sizeof(Fiber));
     pal_memset(f, 0, sizeof(*f));
     f->c_stack = cstack;
-    f->c_stack_bytes = FIBER_STACK_BYTES;
+    f->c_stack_bytes = total_bytes;
     shadow_init(f);
     arc_retain_val(closure);
     f->entry_closure = closure;
     f->wait_fd = -1;
     f->is_scheduled = scheduled;
     f->state = scheduled ? FIBER_RUNNABLE : FIBER_SUSPENDED;
-    pal_ctx_make(&f->ctx, cstack + FIBER_STACK_BYTES, fiber_trampoline);
+    pal_ctx_make(&f->ctx, cstack + total_bytes, fiber_trampoline);
     return f;
 }
 
@@ -432,8 +472,10 @@ int64_t ocamlcc_fiber_create(int64_t closure)
 int64_t ocamlcc_fiber_resume(int64_t fiber_val, int64_t send_val)
 {
     Fiber *f = (Fiber *)(uintptr_t)fiber_val;
-    if (f == NULL || f->state != FIBER_SUSPENDED || f->caller != NULL)
-        pal_abort();
+    if (f == NULL || f->state != FIBER_SUSPENDED || f->caller != NULL) {
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
 
     arc_retain(f);
     arc_retain_val(send_val);
@@ -587,8 +629,12 @@ static int64_t fiber_fd_wait(int64_t fd_val, uint32_t events)
     if (cur == &tls_main_fiber) {
         tls_sched.main_io_pending = 1;
         tls_sched.main_io_ready = 0;
-        if (pal_poller_watch(pfd, fd, events, &tls_main_fiber) < 0)
-            pal_abort();
+        if (pal_poller_watch(pfd, fd, events, &tls_main_fiber) < 0) {
+            tls_sched.main_io_pending = 0;
+            tls_sched.main_io_ready = 0;
+            ocamlcc_fiber_raise_invalid();
+            return 1;
+        }
         while (!tls_sched.main_io_ready)
             (void)sched_step();
         tls_sched.main_io_ready = 0;
@@ -602,8 +648,13 @@ static int64_t fiber_fd_wait(int64_t fd_val, uint32_t events)
     cur->wait_fd = fd;
     cur->wait_events = events;
     cur->state = FIBER_WAITING_IO;
-    if (pal_poller_watch(pfd, fd, events, cur) < 0)
-        pal_abort();
+    if (pal_poller_watch(pfd, fd, events, cur) < 0) {
+        cur->wait_fd = -1;
+        cur->wait_events = 0;
+        cur->state = FIBER_RUNNING;
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
     cur->sched_next = tls_sched.io_head;
     tls_sched.io_head = cur;
 
@@ -626,9 +677,17 @@ int64_t ocamlcc_fiber_fd_wait_write(int64_t fd_val)
 int64_t ocamlcc_fiber_await(int64_t fiber_val)
 {
     Fiber *f = (Fiber *)(uintptr_t)fiber_val;
-    if (f == NULL)
-        pal_abort();
     Fiber *cur = arc_fiber_current();
+    if (f == NULL || f == cur) {
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
+    for (Fiber *p = f; p != NULL; p = p->awaiting) {
+        if (p == cur) {
+            ocamlcc_fiber_raise_invalid();
+            return 1;
+        }
+    }
 
     if (f->state != FIBER_DONE) {
         if (cur == &tls_main_fiber) {
@@ -639,8 +698,10 @@ int64_t ocamlcc_fiber_await(int64_t fiber_val)
                 return 1;
             }
             while (f->state != FIBER_DONE) {
-                if (!sched_step())
-                    pal_abort();
+                if (!sched_step()) {
+                    ocamlcc_fiber_raise_invalid();
+                    return 1;
+                }
             }
         } else {
             if (!cur->is_scheduled || !f->is_scheduled) {
@@ -649,14 +710,18 @@ int64_t ocamlcc_fiber_await(int64_t fiber_val)
                 ocamlcc_fiber_raise_invalid();
                 return 1;
             }
-            if (cur->caller == NULL)
-                pal_abort();
+            if (cur->caller == NULL) {
+                ocamlcc_fiber_raise_invalid();
+                return 1;
+            }
             cur->state = FIBER_WAITING_IO;
+            cur->awaiting = f;
             cur->sched_next = f->waiter_head;
             f->waiter_head = cur;
             Fiber *target = cur->caller;
             cur->caller = NULL;
             fiber_swap_to(target);
+            cur->awaiting = NULL;
         }
     }
 

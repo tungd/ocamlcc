@@ -206,6 +206,11 @@ void *pal_page_alloc(size_t size)
 
 void pal_page_free(void *ptr, size_t size) { munmap(ptr, size); }
 
+int pal_page_protect_none(void *ptr, size_t size)
+{
+    return mprotect(ptr, size, PROT_NONE);
+}
+
 void pal_abort(void) { abort(); }
 
 uint64_t pal_monotonic_ns(void)
