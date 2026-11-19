@@ -83,8 +83,12 @@ type bigarray_access = {
   checked : bool;
 }
 
-(* Raw doubles are compiler temporaries. Only scalar operations can consume them. *)
-type float_operand = Boxed_float of atom | Raw_float of Ident.t
+(* Unboxed scalars are compiler temporaries. Only scalar operations can consume them. *)
+type scalar_rep = Double_scalar | Int64_scalar
+
+type int64_arithmetic = Add64 | Sub64 | Mul64
+
+type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
 type cexpr =
   | Atom of atom
@@ -103,10 +107,11 @@ type cexpr =
   | ArrayGet of bool * Lambda.array_kind * atom * atom
   | ArraySet of bool * Lambda.array_kind * atom * atom * atom
   | BigarrayAccess of bigarray_access * atom list
-  | FloatLoad of bigarray_access * atom * atom
-  | FloatStore of bigarray_access * atom * atom * float_operand
-  | FloatValue of float_operand
-  | FloatBinop of float_arithmetic * float_operand * float_operand
+  | ScalarLoad of bigarray_access * atom * atom
+  | ScalarStore of bigarray_access * atom * atom * scalar_operand
+  | FloatValue of scalar_operand
+  | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
+  | Int64Binop of int64_arithmetic * scalar_operand * scalar_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
@@ -253,6 +258,11 @@ let scalar_layout = function
   | Lambda.Pbigarray_c_layout | Pbigarray_fortran_layout -> true
   | Pbigarray_unknown_layout -> false
 
+let scalar_rep = function
+  | Lambda.Pbigarray_float32 | Pbigarray_float64 -> Some Double_scalar
+  | Pbigarray_int64 -> Some Int64_scalar
+  | _ -> None
+
 let rec conv_tail (lam : Lambda.lambda) : aexpr =
   conv_expr lam (fun a -> Halt a)
 
@@ -383,7 +393,14 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
       let access = { operation = `Set; rank = 1; kind;
                      layout; checked = not unsafe } in
       conv_expr arr (fun a -> conv_expr index (fun i ->
-        conv_float_operand value (fun v -> emit_cexpr (FloatStore (access, a, i, v)))))
+        conv_float_operand value (fun v -> emit_cexpr (ScalarStore (access, a, i, v)))))
+  | Lprim (Pbigarrayset (unsafe, 1, Pbigarray_int64, layout), [arr; index; value], _)
+    when scalar_layout layout ->
+      let access = { operation = `Set; rank = 1; kind = Pbigarray_int64;
+                     layout; checked = not unsafe } in
+      conv_atoms [arr; index; value] (function
+        | [a; i; v] -> emit_cexpr (ScalarStore (access, a, i, Boxed_scalar v))
+        | _ -> assert false)
   | Lprim (Pbigarrayset (unsafe, rank, kind, layout), args, _) ->
       let access = { operation = `Set; rank; kind; layout; checked = not unsafe } in
       conv_atoms args (fun vs -> emit_cexpr (BigarrayAccess (access, vs)))
@@ -595,14 +612,14 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
 and conv_float_operand lam k =
   let bind ce =
     let id = Ident.create_local "scalar" in
-    Let (id, ce, k (Raw_float id))
+    Let (id, ce, k (Raw_scalar id))
   in
   match lam with
   | Lambda.Lprim (Pbigarrayref (unsafe, 1, ((Pbigarray_float32 | Pbigarray_float64) as kind), layout), [arr; index], _)
     when scalar_layout layout ->
       let access = { operation = `Get; rank = 1; kind;
                      layout; checked = not unsafe } in
-      conv_expr arr (fun a -> conv_expr index (fun i -> bind (FloatLoad (access, a, i))))
+      conv_expr arr (fun a -> conv_expr index (fun i -> bind (ScalarLoad (access, a, i))))
   | Lprim (((Paddfloat | Psubfloat | Pmulfloat | Pdivfloat) as prim), [lhs; rhs], _) ->
       conv_float_operand lhs (fun l ->
           conv_float_operand rhs (fun r -> bind (FloatBinop (float_arithmetic prim, l, r))))
@@ -610,15 +627,15 @@ and conv_float_operand lam k =
       conv_expr cond (fun cond ->
           let id = Ident.create_local "scalar_join" in
           let branches = FloatIf (cond, conv_float_tail yes, conv_float_tail no) in
-          LetJoin (id, branches, k (Raw_float id)))
-  | _ -> conv_expr lam (fun a -> k (Boxed_float a))
+          LetJoin (id, branches, k (Raw_scalar id)))
+  | _ -> conv_expr lam (fun a -> k (Boxed_scalar a))
 
 and conv_float_tail lam =
   conv_float_operand lam (function
-    | Raw_float id -> HaltFloat id
-    | Boxed_float value ->
+    | Raw_scalar id -> HaltFloat id
+    | Boxed_scalar value ->
         let id = Ident.create_local "scalar" in
-        Let (id, FloatValue (Boxed_float value), HaltFloat id))
+        Let (id, FloatValue (Boxed_scalar value), HaltFloat id))
 
 and binop op a c emit_cexpr =
   conv_expr a (fun av -> conv_expr c (fun cv -> emit_cexpr (Binop (op, av, cv))))
@@ -729,15 +746,15 @@ let atom_vars acc = function
   | ConstFloatArray _ | ConstBlock _ | Unit ->
       acc
 
-let float_operand_vars acc = function
-  | Boxed_float a -> atom_vars acc a
-  | Raw_float id -> Ident.Set.add id acc
+let scalar_operand_vars acc = function
+  | Boxed_scalar a -> atom_vars acc a
+  | Raw_scalar id -> Ident.Set.add id acc
 
 let cexpr_vars free_aexpr acc = function
-  | FloatValue a -> float_operand_vars acc a
-  | FloatLoad (_, a, i) -> atom_vars (atom_vars acc a) i
-  | FloatStore (_, a, i, v) -> float_operand_vars (atom_vars (atom_vars acc a) i) v
-  | FloatBinop (_, a, b) -> float_operand_vars (float_operand_vars acc a) b
+  | FloatValue a -> scalar_operand_vars acc a
+  | ScalarLoad (_, a, i) -> atom_vars (atom_vars acc a) i
+  | ScalarStore (_, a, i, v) -> scalar_operand_vars (atom_vars (atom_vars acc a) i) v
+  | FloatBinop (_, a, b) | Int64Binop (_, a, b) -> scalar_operand_vars (scalar_operand_vars acc a) b
   | Atom a -> atom_vars acc a
   | Binop (_, a, b) -> atom_vars (atom_vars acc a) b
   | Unop (_, a) -> atom_vars acc a
@@ -861,7 +878,7 @@ let rec free_vars (e : aexpr) : Ident.Set.t =
       Ident.Set.union s (Ident.Set.of_list rtoks)
   | ShadowPop (_, _, body) -> free_vars body
 
-type float_binding = Value of cexpr | Join of aexpr
+type scalar_binding = Value of cexpr | Join of aexpr
 
 let rec boxed_conditional = function
   | Let (_, _, body) -> boxed_conditional body
@@ -874,62 +891,80 @@ let rec returns_raw_float = function
   | FloatIf _ -> true
   | _ -> false
 
-let bind_float_chain id binding body =
+let bind_scalar_chain id binding body =
   match binding with
   | Value ce -> Let (id, ce, body)
   | Join rhs -> LetJoin (id, rhs, body)
 
 (* Walk backwards from scalar consumers. Uses that cross a control-flow
-   boundary or need an OCaml value keep the binding boxed. *)
-let rec specialize_float_chain bindings tail =
-  let demand vars = function
-    | Boxed_float (Var id) -> Ident.Set.add id vars
-    | Boxed_float _ | Raw_float _ -> vars
+   boundary or need an OCaml value keep the binding boxed. Conflicting
+   scalar representations are recorded as a present demand with no choice. *)
+let rec specialize_scalar_chain bindings tail =
+  let demand rep vars = function
+    | Boxed_scalar (Var id) ->
+        Ident.Map.update id (function
+          | None -> Some (Some rep)
+          | Some previous -> Some (if previous = Some rep then previous else None)) vars
+    | Boxed_scalar _ | Raw_scalar _ -> vars
   in
   let select (boxed, scalar, raw, code) (id, binding) =
-    let binding, raw =
-      if Ident.Set.mem id scalar && not (Ident.Set.mem id boxed) then
-        match binding with
-        | Value (BigarrayAccess
-            (({ operation = `Get; rank = 1; kind = (Pbigarray_float32 | Pbigarray_float64); layout; _ } as access),
-             [arr; index])) when scalar_layout layout ->
-            Value (FloatLoad (access, arr, index)), Ident.Set.add id raw
-        | Value (Binop (Float_arithmetic op, lhs, rhs)) ->
-            Value (FloatBinop (op, Boxed_float lhs, Boxed_float rhs)), Ident.Set.add id raw
-        | Join rhs ->
-            Join (specialize_conditional rhs), Ident.Set.add id raw
-        | _ -> binding, raw
-      else binding, raw
+    let wanted =
+      if Ident.Set.mem id boxed then None
+      else Option.join (Ident.Map.find_opt id scalar)
     in
-    let boxed = Ident.Set.remove id boxed and scalar = Ident.Set.remove id scalar in
+    let binding, raw =
+      match wanted, binding with
+      | Some rep, Value (BigarrayAccess
+          (({ operation = `Get; rank = 1; kind; layout; _ } as access), [arr; index]))
+        when scalar_layout layout && scalar_rep kind = Some rep ->
+          Value (ScalarLoad (access, arr, index)), Ident.Set.add id raw
+      | Some Double_scalar, Value (Binop (Float_arithmetic op, lhs, rhs)) ->
+          Value (FloatBinop (op, Boxed_scalar lhs, Boxed_scalar rhs)), Ident.Set.add id raw
+      | Some Int64_scalar, Value (Binop
+          (((Bint_add Pint64 | Bint_sub Pint64 | Bint_mul Pint64) as op), lhs, rhs)) ->
+          let op = match op with
+            | Bint_add _ -> Add64 | Bint_sub _ -> Sub64 | Bint_mul _ -> Mul64
+            | _ -> assert false
+          in
+          Value (Int64Binop (op, Boxed_scalar lhs, Boxed_scalar rhs)), Ident.Set.add id raw
+      | Some Double_scalar, Join rhs ->
+          Join (specialize_conditional rhs), Ident.Set.add id raw
+      | _ -> binding, raw
+    in
+    let boxed = Ident.Set.remove id boxed and scalar = Ident.Map.remove id scalar in
     let boxed, scalar =
       match binding with
-      | Value (FloatStore (_, arr, index, v)) ->
-          atom_vars (atom_vars boxed arr) index, demand scalar v
-      | Value (FloatBinop (_, lhs, rhs)) -> boxed, demand (demand scalar lhs) rhs
-      | Value (FloatValue value) -> boxed, demand scalar value
+      | Value (ScalarStore (access, arr, index, v)) ->
+          let rep = Option.get (scalar_rep access.kind) in
+          atom_vars (atom_vars boxed arr) index, demand rep scalar v
+      | Value (FloatBinop (_, lhs, rhs)) ->
+          boxed, demand Double_scalar (demand Double_scalar scalar lhs) rhs
+      | Value (Int64Binop (_, lhs, rhs)) ->
+          boxed, demand Int64_scalar (demand Int64_scalar scalar lhs) rhs
+      | Value (FloatValue value) -> boxed, demand Double_scalar scalar value
       | Value ce -> cexpr_vars free_vars boxed ce, scalar
       | Join rhs -> Ident.Set.union boxed (free_vars rhs), scalar
     in
     boxed, scalar, raw, (id, binding) :: code
   in
   let _, _, raw, code =
-    List.fold_left select (free_vars tail, Ident.Set.empty, Ident.Set.empty, []) bindings
+    List.fold_left select (free_vars tail, Ident.Map.empty, Ident.Set.empty, []) bindings
   in
   let operand = function
-    | Boxed_float (Var id) when Ident.Set.mem id raw -> Raw_float id
+    | Boxed_scalar (Var id) when Ident.Set.mem id raw -> Raw_scalar id
     | v -> v
   in
   List.fold_right (fun (id, binding) body ->
     let binding =
       match binding with
-      | Value (FloatStore (access, arr, index, v)) ->
-          Value (FloatStore (access, arr, index, operand v))
+      | Value (ScalarStore (access, arr, index, v)) ->
+          Value (ScalarStore (access, arr, index, operand v))
       | Value (FloatBinop (op, lhs, rhs)) -> Value (FloatBinop (op, operand lhs, operand rhs))
+      | Value (Int64Binop (op, lhs, rhs)) -> Value (Int64Binop (op, operand lhs, operand rhs))
       | Value (FloatValue v) -> Value (FloatValue (operand v))
       | _ -> binding
     in
-    bind_float_chain id binding body) code tail
+    bind_scalar_chain id binding body) code tail
 
 and specialize_conditional = function
   | Let (id, ce, body) -> Let (id, ce, specialize_conditional body)
@@ -943,71 +978,71 @@ and specialize_float_arm bindings = function
       specialize_float_arm ((id, Join rhs) :: bindings) body
   | Halt value ->
       let id = Ident.create_local "scalar" in
-      let bindings = (id, Value (FloatValue (Boxed_float value))) :: bindings in
-      specialize_float_chain bindings (HaltFloat id)
+      let bindings = (id, Value (FloatValue (Boxed_scalar value))) :: bindings in
+      specialize_scalar_chain bindings (HaltFloat id)
   | expr ->
       (* A complex arm computes an ordinary OCaml value before unboxing. *)
       let boxed = Ident.create_local "boxed_arm" in
       let raw = Ident.create_local "scalar" in
       let tail = LetJoin (boxed, expr,
-                          Let (raw, FloatValue (Boxed_float (Var boxed)), HaltFloat raw)) in
-      specialize_float_chain bindings tail
+                          Let (raw, FloatValue (Boxed_scalar (Var boxed)), HaltFloat raw)) in
+      specialize_scalar_chain bindings tail
 
-let rec specialize_float_bindings = function
+let rec specialize_scalar_bindings = function
   | Let _ as expr -> specialize_let_chain [] expr
   | LetJoin (_, rhs, _) as expr when boxed_conditional rhs ->
       specialize_let_chain [] expr
   | MutLet (id, ce, body) ->
-      MutLet (id, ce, specialize_float_bindings body)
+      MutLet (id, ce, specialize_scalar_bindings body)
   | LetJoin (id, rhs, body) ->
-      LetJoin (id, specialize_float_bindings rhs, specialize_float_bindings body)
+      LetJoin (id, specialize_scalar_bindings rhs, specialize_scalar_bindings body)
   | LetRec (defs, body) ->
       let defs =
-        List.map (fun rb -> { rb with def = specialize_float_function rb.def }) defs
+        List.map (fun rb -> { rb with def = specialize_scalar_function rb.def }) defs
       in
-      LetRec (defs, specialize_float_bindings body)
+      LetRec (defs, specialize_scalar_bindings body)
   | If (v, yes, no) ->
-      If (v, specialize_float_bindings yes, specialize_float_bindings no)
+      If (v, specialize_scalar_bindings yes, specialize_scalar_bindings no)
   | FloatIf (v, yes, no) ->
-      FloatIf (v, specialize_float_bindings yes, specialize_float_bindings no)
+      FloatIf (v, specialize_scalar_bindings yes, specialize_scalar_bindings no)
   | Switch (v, cases) ->
-      Switch (v, { consts = List.map specialize_float_case cases.consts;
-                   blocks = List.map specialize_float_case cases.blocks;
-                   fail = Option.map specialize_float_bindings cases.fail })
+      Switch (v, { consts = List.map specialize_scalar_case cases.consts;
+                   blocks = List.map specialize_scalar_case cases.blocks;
+                   fail = Option.map specialize_scalar_bindings cases.fail })
   | StringSwitch (v, cases, fail) ->
-      StringSwitch (v, List.map specialize_float_case cases,
-                    Option.map specialize_float_bindings fail)
+      StringSwitch (v, List.map specialize_scalar_case cases,
+                    Option.map specialize_scalar_bindings fail)
   | StaticCatch (body, label, params, handler) ->
-      StaticCatch (specialize_float_bindings body, label, params,
-                   specialize_float_bindings handler)
+      StaticCatch (specialize_scalar_bindings body, label, params,
+                   specialize_scalar_bindings handler)
   | TryWith (body, exn, handler) ->
-      TryWith (specialize_float_bindings body, exn, specialize_float_bindings handler)
+      TryWith (specialize_scalar_bindings body, exn, specialize_scalar_bindings handler)
   | While (cond, body) ->
-      While (specialize_float_bindings cond, specialize_float_bindings body)
+      While (specialize_scalar_bindings cond, specialize_scalar_bindings body)
   | For (id, start, stop, dir, body) ->
-      For (id, start, stop, dir, specialize_float_bindings body)
+      For (id, start, stop, dir, specialize_scalar_bindings body)
   | expr -> expr
 
 and specialize_let_chain bindings = function
   | Let (id, ce, body) ->
-      let ce = match ce with Fun lf -> Fun (specialize_float_function lf) | _ -> ce in
+      let ce = match ce with Fun lf -> Fun (specialize_scalar_function lf) | _ -> ce in
       specialize_let_chain ((id, Value ce) :: bindings) body
   | LetJoin (id, rhs, body) when boxed_conditional rhs ->
-      let rhs = specialize_float_bindings rhs in
+      let rhs = specialize_scalar_bindings rhs in
       specialize_let_chain ((id, Join rhs) :: bindings) body
   | tail ->
-      let tail = specialize_float_bindings tail in
+      let tail = specialize_scalar_bindings tail in
       if List.exists (function
-        | _, Value (FloatStore _ | FloatBinop _ | FloatValue _) -> true
+        | _, Value (ScalarStore _ | FloatBinop _ | Int64Binop _ | FloatValue _) -> true
         | _ -> false) bindings
-      then specialize_float_chain bindings tail
-      else List.fold_left (fun body (id, binding) -> bind_float_chain id binding body) tail bindings
+      then specialize_scalar_chain bindings tail
+      else List.fold_left (fun body (id, binding) -> bind_scalar_chain id binding body) tail bindings
 
-and specialize_float_function lf =
-  { lf with body = specialize_float_bindings lf.body }
+and specialize_scalar_function lf =
+  { lf with body = specialize_scalar_bindings lf.body }
 
-and specialize_float_case : 'a. 'a * aexpr -> 'a * aexpr =
-  fun (tag, arm) -> tag, specialize_float_bindings arm
+and specialize_scalar_case : 'a. 'a * aexpr -> 'a * aexpr =
+  fun (tag, arm) -> tag, specialize_scalar_bindings arm
 
 (* Non-capturing function definitions, in pre-order.
 
@@ -1113,6 +1148,6 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = [])
     ~finally:(fun () -> builtins_table := saved)
     (fun () ->
       try
-        let code = conv_tail program.code |> specialize_float_bindings in
+        let code = conv_tail program.code |> specialize_scalar_bindings in
         Ok { module_ident = program.module_ident; code }
       with Unsupported what -> Error what)

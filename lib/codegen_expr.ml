@@ -629,18 +629,27 @@ let compile_ccall hooks b sym args =
   emit b (Call (Long, dst, { fn = Global sym; args = cargs }));
   dst
 
-let compile_float_operand hooks b = function
-  | Anf.Raw_float id -> Hashtbl.find b.vars id
-  | Boxed_float a -> load_double b (compile_atom hooks b a)
+let compile_scalar_operand hooks b rep = function
+  | Anf.Raw_scalar id -> Hashtbl.find b.vars id
+  | Boxed_scalar a ->
+      let boxed = compile_atom hooks b a in
+      match rep with
+      | Anf.Double_scalar -> load_double b boxed
+      | Int64_scalar -> unbox_bint b Pint64 boxed
 
-let float_access_symbol op (access : Anf.bigarray_access) =
+let scalar_access_symbol op (access : Anf.bigarray_access) =
   let kind =
     match access.kind with
     | Lambda.Pbigarray_float32 -> "float32"
     | Pbigarray_float64 -> "float64"
+    | Pbigarray_int64 -> "int64"
     | _ -> assert false
   in
   Printf.sprintf "ocamlcc_ba_%s_%s_1" op kind
+
+let scalar_type = function
+  | Anf.Double_scalar -> Double
+  | Int64_scalar -> Long
 
 let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   match ce with
@@ -915,20 +924,30 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       in
       emit b (Call_void { fn = Global symbol; args });
       unit_const
-  | FloatLoad (access, arr, index) ->
+  | ScalarLoad (access, arr, index) ->
       let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
-      let dst = fresh_temp b "fload" in
-      emit b (Call (Double, dst, { fn = Global (float_access_symbol "get" access); args }));
+      let ty = scalar_type (Option.get (Anf.scalar_rep access.kind)) in
+      let dst = fresh_temp b "scalar_load" in
+      emit b (Call (ty, dst, { fn = Global (scalar_access_symbol "get" access); args }));
       dst
-  | FloatValue value -> compile_float_operand hooks b value
+  | FloatValue value -> compile_scalar_operand hooks b Double_scalar value
   | FloatBinop (op, lhs, rhs) ->
-      let l = compile_float_operand hooks b lhs in
-      let r = compile_float_operand hooks b rhs in
+      let l = compile_scalar_operand hooks b Double_scalar lhs in
+      let r = compile_scalar_operand hooks b Double_scalar rhs in
       compile_float_arithmetic b op l r
-  | FloatStore (access, arr, index, value) ->
+  | Int64Binop (op, lhs, rhs) ->
+      let l = compile_scalar_operand hooks b Int64_scalar lhs in
+      let r = compile_scalar_operand hooks b Int64_scalar rhs in
+      let qop = match op with Add64 -> Binop.Add | Sub64 -> Binop.Sub | Mul64 -> Binop.Mul in
+      let dst = fresh_temp b "i64op" in
+      emit b (Binop (qop, Long, dst, l, r));
+      dst
+  | ScalarStore (access, arr, index, value) ->
       let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
-      let v = compile_float_operand hooks b value in
-      emit b (Call_void { fn = Global (float_access_symbol "set" access); args = args @ [Double, v] });
+      let rep = Option.get (Anf.scalar_rep access.kind) in
+      let v = compile_scalar_operand hooks b rep value in
+      emit b (Call_void { fn = Global (scalar_access_symbol "set" access);
+                          args = args @ [scalar_type rep, v] });
       unit_const
   | BigarrayAccess (access, args) ->
       let op = match access.operation with `Get -> "get" | `Set -> "set" in

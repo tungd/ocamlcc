@@ -1,5 +1,6 @@
 type vector = (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t
 type single_vector = (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t
+type int64_vector = (int64, Bigarray.int64_elt, Bigarray.c_layout) Bigarray.Array1.t
 type matrix = (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array2.t
 type cube = (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array3.t
 type generic = (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t
@@ -15,6 +16,8 @@ val scale_words : vector -> vector -> float -> int -> float
 val conditional_scale_words : vector -> vector -> float -> int -> float
 val single_words : single_vector -> int -> float
 val create_singles : int -> single_vector
+val create_int64 : int -> int64_vector
+val int64_words : int64_vector -> int64 -> int -> float
 val save : vector -> unit
 val write_saved : float -> unit
 val clear : unit -> unit

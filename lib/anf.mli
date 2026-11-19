@@ -88,8 +88,12 @@ type bigarray_access = {
   checked : bool;
 }
 
-(* Raw doubles are compiler temporaries. Only scalar operations can consume them. *)
-type float_operand = Boxed_float of atom | Raw_float of Ident.t
+(* Unboxed scalars are compiler temporaries. Only scalar operations can consume them. *)
+type scalar_rep = Double_scalar | Int64_scalar
+
+type int64_arithmetic = Add64 | Sub64 | Mul64
+
+type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
 type cexpr =
   | Atom of atom
@@ -108,10 +112,11 @@ type cexpr =
   | ArrayGet of bool * Lambda.array_kind * atom * atom
   | ArraySet of bool * Lambda.array_kind * atom * atom * atom
   | BigarrayAccess of bigarray_access * atom list
-  | FloatLoad of bigarray_access * atom * atom
-  | FloatStore of bigarray_access * atom * atom * float_operand
-  | FloatValue of float_operand
-  | FloatBinop of float_arithmetic * float_operand * float_operand
+  | ScalarLoad of bigarray_access * atom * atom
+  | ScalarStore of bigarray_access * atom * atom * scalar_operand
+  | FloatValue of scalar_operand
+  | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
+  | Int64Binop of int64_arithmetic * scalar_operand * scalar_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
@@ -174,7 +179,8 @@ val of_lambda :
   ?include_dirs:string list ->
   Lambda.program ->
   (program, string) result
-val float_operand_vars : Ident.Set.t -> float_operand -> Ident.Set.t
+val scalar_rep : Lambda.bigarray_kind -> scalar_rep option
+val scalar_operand_vars : Ident.Set.t -> scalar_operand -> Ident.Set.t
 val returns_raw_float : aexpr -> bool
 val free_vars : aexpr -> Ident.Set.t
 val pure_defs : aexpr -> (Ident.t * lfunction) list

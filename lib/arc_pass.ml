@@ -77,7 +77,7 @@ let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
   | BytesSet _ | ArraySet _ | Builtin _ | Assign _ ->
       true
-  | MakeBlock (_, []) | FloatLoad _ | FloatValue _ | FloatBinop _ | FloatStore _ -> true
+  | MakeBlock (_, []) | ScalarLoad _ | FloatValue _ | FloatBinop _ | Int64Binop _ | ScalarStore _ -> true
   | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _
   | BigarrayAccess _ | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _ | Ccall _
   | GetGlobal _ | Fun _ ->
@@ -116,10 +116,10 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | MakeArrayInit (len, init) -> (atom_vars len, [ init ])
   | App (fn, args) -> (atom_vars fn, args)
   | Builtin (_, _, a) -> (atom_vars a, [])
-  | FloatValue a -> (Anf.float_operand_vars Ident.Set.empty a, [])
-  | FloatLoad (_, a, i) -> (atoms_vars [a; i], [])
-  | FloatStore (_, a, i, v) -> (Anf.float_operand_vars (atoms_vars [a; i]) v, [])
-  | FloatBinop (_, a, b) -> (Anf.float_operand_vars (Anf.float_operand_vars Ident.Set.empty a) b, [])
+  | FloatValue a -> (Anf.scalar_operand_vars Ident.Set.empty a, [])
+  | ScalarLoad (_, a, i) -> (atoms_vars [a; i], [])
+  | ScalarStore (_, a, i, v) -> (Anf.scalar_operand_vars (atoms_vars [a; i]) v, [])
+  | FloatBinop (_, a, b) | Int64Binop (_, a, b) -> (Anf.scalar_operand_vars (Anf.scalar_operand_vars Ident.Set.empty a) b, [])
   | BigarrayAccess (_, args) | Ccall (_, args) -> (atoms_vars args, [])
   | GetGlobal _ -> (Ident.Set.empty, [])
   | Assign (_, rhs) -> (Ident.Set.empty, [ rhs ])
@@ -137,7 +137,7 @@ let ce_may_raise_fn = function
   | CreateBytes _ | MakeArrayInit _ ->
       true
   (* The current Bigarray helpers check bounds even for unsafe accesses. *)
-  | BigarrayAccess _ | FloatLoad _ | FloatStore _ -> true
+  | BigarrayAccess _ | ScalarLoad _ | ScalarStore _ -> true
   | Ccall (name, _) -> (Ccalls.find name).Ccalls.raises
   | _ -> false
 
@@ -336,7 +336,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
              | FloatField _ | SetFloatField _ | OffsetRef _
              | StringGet _ | BytesSet _ | ArrayGet _ | ArraySet _
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _
-             | FloatLoad _ | FloatStore _ | FloatValue _ | FloatBinop _
+             | ScalarLoad _ | ScalarStore _ | FloatValue _ | FloatBinop _ | Int64Binop _
              | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _ | MakeBlock (_, [])) as ce), body) -> (
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (Let (x, ce, body'))

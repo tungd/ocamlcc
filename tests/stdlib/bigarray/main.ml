@@ -32,6 +32,17 @@ let divide_in_place (a : vector) i divisor =
 let add_single (a : (float, float32_elt, fortran_layout) Array1.t) i delta =
   a.{i} <- a.{i} +. delta
 
+type integers = (int64, int64_elt, fortran_layout) Array1.t
+
+let add_integer (src : integers) (dst : integers) i j delta =
+  let value = src.{i} in
+  dst.{j} <- Int64.add value delta
+
+let store_and_capture_integer (a : integers) =
+  let value = Int64.add a.{1} 1L in
+  a.{2} <- value;
+  value, (fun () -> value)
+
 let () =
   let values = Array1.of_array float64 c_layout [|1.; 2.; 3.; 4.|] in
   let src = Array1.sub values 0 3 and dst = Array1.sub values 1 3 in
@@ -64,6 +75,17 @@ let () =
   add_single singles 3 1.;
   assert (Float.is_nan singles.{3});
   assert (try add_single singles 0 1.; false with Invalid_argument _ -> true);
+  let integers = Array1.of_array int64 fortran_layout [|Int64.max_int; 7L; 11L|] in
+  add_integer integers integers 1 2 1L;
+  assert (integers.{2} = Int64.min_int);
+  add_integer integers integers 2 3 Int64.min_int;
+  assert (integers.{3} = 0L);
+  assert (try add_integer integers integers 0 1 1L; false with Invalid_argument _ -> true);
+  assert (integers.{1} = Int64.max_int);
+  assert (try add_integer integers integers 1 4 1L; false with Invalid_argument _ -> true);
+  let value, capture = store_and_capture_integer integers in
+  Gc.full_major ();
+  assert (value = Int64.min_int && integers.{2} = value && capture () == value);
   let col = Array1.of_array float64 fortran_layout [|-0.; nan; infinity|] in
   scale_column col col 1 3 2.;
   assert (Int64.bits_of_float col.{3} = Int64.bits_of_float (-0.));

@@ -13,8 +13,8 @@ let cell (a : (float, float32_elt, 'layout) Array3.t) i j k = a.{i,j,k}
 let rec accesses = function
   | Anf.Let (_, ce, rest) | MutLet (_, ce, rest) ->
       (match ce with
-       | BigarrayAccess (access, _) | FloatLoad (access, _, _)
-       | FloatStore (access, _, _, _) -> access :: accesses rest
+       | BigarrayAccess (access, _) | ScalarLoad (access, _, _)
+       | ScalarStore (access, _, _, _) -> access :: accesses rest
        | _ -> accesses rest)
   | LetJoin (_, a, b) | If (_, a, b) | FloatIf (_, a, b) | CheckExn (a, b) ->
       accesses a @ accesses b
