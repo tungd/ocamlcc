@@ -269,6 +269,48 @@ def generate_lexer_ml(tf: tarfile.TarFile, dest: Path) -> None:
             raise RuntimeError(f"ocamllex failed: {res.stdout}{res.stderr}")
 
 
+def compute_mli_order(tf: tarfile.TarFile) -> list[str]:
+    all_mods = COMPILER_LIBS_MODULES + MLI_ONLY_MODULES
+    low_to_mod = {m[0].lower() + m[1:]: m for m in all_mods}
+    dep_txt = read_member(tf, f"{TARBALL_PREFIX}/.depend").decode("utf-8")
+    joined = dep_txt.replace("\\\n", " ")
+    deps: dict[str, list[str]] = {m: [] for m in all_mods}
+    for line in joined.splitlines():
+        if ":" not in line:
+            continue
+        lhs, rhs = line.split(":", 1)
+        lhs = lhs.strip()
+        if not lhs.endswith(".cmi"):
+            continue
+        target = low_to_mod.get(os.path.basename(lhs)[:-4])
+        if target is None:
+            continue
+        for tok in rhs.split():
+            if tok.endswith(".cmi"):
+                dm = low_to_mod.get(os.path.basename(tok)[:-4])
+                if dm is not None and dm != target and dm not in deps[target]:
+                    deps[target].append(dm)
+
+    order: list[str] = []
+    state: dict[str, int] = {}
+
+    def visit(u: str) -> None:
+        st = state.get(u, 0)
+        if st == 2:
+            return
+        if st == 1:
+            raise RuntimeError(f"cyclic .mli dependency involving {u}")
+        state[u] = 1
+        for d in deps[u]:
+            visit(d)
+        state[u] = 2
+        order.append(u)
+
+    for m in all_mods:
+        visit(m)
+    return order
+
+
 def extract_sources(tarball: Path, out_dir: Path) -> dict:
     staging = out_dir.parent / (out_dir.name + ".tmp")
     if staging.exists():
@@ -294,12 +336,12 @@ def extract_sources(tarball: Path, out_dir: Path) -> dict:
                     read_member(tf, f"{TARBALL_PREFIX}/boot/menhir/menhirLib.ml")
                 )
             elif mod == "Parser":
-                (comp_dir / "parser.mli").write_bytes(
-                    read_member(tf, f"{TARBALL_PREFIX}/boot/menhir/parser.mli")
-                )
-                (comp_dir / "parser.ml").write_bytes(
-                    read_member(tf, f"{TARBALL_PREFIX}/boot/menhir/parser.ml")
-                )
+                for ext in ("mli", "ml"):
+                    raw = read_member(
+                        tf, f"{TARBALL_PREFIX}/boot/menhir/parser.{ext}"
+                    ).decode("utf-8")
+                    rewritten = raw.replace("MenhirLib", "CamlinternalMenhirLib")
+                    (comp_dir / f"parser.{ext}").write_text(rewritten, encoding="utf-8")
             elif mod == "Lexer":
                 (comp_dir / "lexer.mli").write_bytes(
                     read_member(tf, f"{TARBALL_PREFIX}/parsing/lexer.mli")
@@ -316,6 +358,8 @@ def extract_sources(tarball: Path, out_dir: Path) -> dict:
             mli_member = find_member(names, f"{base}.mli")
             (comp_dir / f"{base}.mli").write_bytes(read_member(tf, mli_member))
 
+        mli_order = compute_mli_order(tf)
+
     manifest = {
         "version": OCAML_VERSION,
         "url": TARBALL_URL,
@@ -323,6 +367,7 @@ def extract_sources(tarball: Path, out_dir: Path) -> dict:
         "tarball": str(tarball),
         "modules": COMPILER_LIBS_MODULES,
         "mli_only": MLI_ONLY_MODULES,
+        "mli_order": mli_order,
     }
     (staging / "MANIFEST.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -372,6 +417,8 @@ def main() -> int:
                 existing.get("version") == OCAML_VERSION
                 and existing.get("sha256") == TARBALL_SHA256
                 and len(existing.get("modules", [])) == len(COMPILER_LIBS_MODULES)
+                and len(existing.get("mli_order", []))
+                == len(COMPILER_LIBS_MODULES) + len(MLI_ONLY_MODULES)
             ):
                 print(
                     f"compiler-libs {OCAML_VERSION} already extracted at {args.out} "

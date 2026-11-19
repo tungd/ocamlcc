@@ -46,6 +46,7 @@ class FetchCompilerLibsTests(unittest.TestCase):
             self.assertEqual(manifest["sha256"], EXPECTED_SHA256)
             self.assertEqual(len(manifest["modules"]), 104)
             self.assertEqual(len(manifest["mli_only"]), 4)
+            self.assertEqual(len(manifest["mli_order"]), 108)
 
             comp_dir = out_dir / "compiler-libs"
             for mod in manifest["modules"]:
@@ -65,6 +66,12 @@ class FetchCompilerLibsTests(unittest.TestCase):
             # Generated lexer.ml and pre-generated parser.ml must be non-empty.
             self.assertGreater((comp_dir / "lexer.ml").stat().st_size, 10000)
             self.assertGreater((comp_dir / "parser.ml").stat().st_size, 100000)
+
+            # boot/menhir/parser.{ml,mli} must rewrite MenhirLib -> CamlinternalMenhirLib.
+            parser_mli = (comp_dir / "parser.mli").read_text(encoding="utf-8")
+            self.assertIn("CamlinternalMenhirLib", parser_mli)
+            self.assertNotIn(" MenhirLib.", parser_mli)
+            self.assertNotIn(": MenhirLib.", parser_mli)
 
 
 if __name__ == "__main__":

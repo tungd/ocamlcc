@@ -17,6 +17,9 @@ sources:
   - id: fetch-compiler-libs
     resource: ../tools/fetch-ocaml-compiler-libs.py
     title: On-demand SHA-256-pinned OCaml 5.5.0 compiler-libs.common fetcher
+  - id: bootstrap-runner
+    resource: ../tools/bootstrap.py
+    title: Multi-stage self-hosting bootstrap orchestrator (Stage 1, Stage 2, fixed-point diff)
 ---
 
 # Architecture
