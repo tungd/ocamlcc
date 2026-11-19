@@ -19,9 +19,9 @@ external ( lsr ) : int -> int -> int = "%lsrint"
 external int_of_char : char -> int = "%identity"
 external char_of_int : int -> char = "%identity"
 external caml_format_float : string -> float -> string = "caml_format_float"
-external caml_int32_format : string -> int32 -> string = "caml_int32_format"
-external caml_int64_format : string -> int64 -> string = "caml_int64_format"
-external caml_nativeint_format : string -> nativeint -> string = "caml_nativeint_format"
+let caml_int32_format = CamlinternalIntFmt.format_int32
+let caml_int64_format = CamlinternalIntFmt.format_int64
+let caml_nativeint_format = CamlinternalIntFmt.format_nativeint
 external caml_print_string : string -> unit = "ocamlcc_print_string_val"
 external caml_prerr_string : string -> unit = "ocamlcc_prerr_string_val"
 

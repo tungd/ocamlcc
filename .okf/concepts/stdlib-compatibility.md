@@ -26,6 +26,8 @@ sources:
     resource: runtime/arc.c
   - id: numeric-format
     resource: runtime/builtins.c
+  - id: int-fmt
+    resource: stdlib/camlinternalIntFmt.ml
   - id: runtime-tests
     resource: tests/stdlib_runtime.c
 ---
@@ -40,7 +42,9 @@ After `ninja -j1`, run `python3 tools/stdlib_compat.py`. The runner selects
 `stdlib/overlay/` files before upstream sources, compiles the interfaces and
 implementations with ocamlcc/QBE, archives the objects, and links upstream tests
 against that archive and our ARC runtime. It does not use the host OCaml runtime.
-`build/stdlib_compat/report.md` records module and test outcomes.[^runner] `ocamlcc_c_int_of_string` (`runtime/builtins.c`) parses both signed decimal literals (`[-(1<<62), (1<<62)-1]`) and signed/unsigned base-prefixed literals (`"-0x30"`, `"0x7fffffffffffffff"` -> `-1`, magnitude `<= INT64_MAX`, sign-extending bit 62) matching `Misc.Int_literal_converter.int`.
+`build/stdlib_compat/report.md` records module and test outcomes.[^runner]
+
+`stdlib/camlinternalIntFmt.ml` (`--nopervasives`, compiled right after `CamlinternalFormatBasics`) implements integer parsing and formatting (`format_int`, `format_int32`, `format_int64`, `format_nativeint`, `parse_int`, `parse_int32`, `parse_int64`, `parse_nativeint`) in pure OCaml, replacing the C `caml_*format*` / `caml_*_of_string` implementations previously in `runtime/builtins.c`/`runtime/arc.c`. It handles 63-bit signed decimal bounds (`[-(1<<62), (1<<62)-1]`), signed/unsigned base-prefixed literals (`"-0x30"`, `"0x7fffffffffffffff"` -> `-1`, magnitude `<= INT64_MAX`, sign-extending bit 62) matching `Misc.Int_literal_converter.int`, 32/64-bit parsing, and `%[flags][width][.prec][l|ll|L|n][d|i|u|x|X|o]` formatting.[^int-fmt]
 
 The Lexing overlay implements both DFA engines in OCaml, including signed
 16-bit transitions, unsigned memory-code offsets, captures, backtracking,

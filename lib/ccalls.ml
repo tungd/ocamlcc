@@ -103,14 +103,7 @@ let table =
     ("caml_update_dummy_lazy", abi 2 false false);
     (* floats, formatting, parsing, boxed-integer conversions *)
     ("caml_format_float", abi 2 false false);
-    ("caml_format_int", abi 2 false false);
-    ("caml_int32_format", abi 2 false false);
-    ("caml_int64_format", abi 2 false false);
-    ("caml_nativeint_format", abi 2 false false);
     ("caml_float_of_string", abi 1 true false);
-    ("caml_int32_of_string", abi 1 true false);
-    ("caml_int64_of_string", abi 1 true false);
-    ("caml_nativeint_of_string", abi 1 true false);
     ("caml_int32_to_float", abi 1 false false);
     ("caml_int32_of_float", abi 1 false false);
     ("caml_int32_bits_of_float", abi 1 false false);
@@ -134,7 +127,6 @@ let table =
     ("caml_atomic_fetch_add_field", abi 3 false false);
     ("caml_register_named_value", abi 2 false false);
     ("caml_sys_exit", abi 1 false false);
-    ("caml_int_of_string", abi 1 true false);
     ("caml_bswap16", abi 1 false false);
     ("caml_int32_bswap", abi 1 false false);
     ("caml_int64_bswap", abi 1 false false);

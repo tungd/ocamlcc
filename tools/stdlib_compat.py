@@ -128,6 +128,116 @@ class ModuleResult:
     error: str
 
 
+_COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
+    "stdlib.mli": [
+        (
+            'external int_of_string : string -> int = "caml_int_of_string"',
+            "val int_of_string : string -> int",
+        ),
+    ],
+    "int32.mli": [
+        (
+            'external of_string : string -> int32 = "caml_int32_of_string"',
+            "val of_string : string -> int32",
+        ),
+    ],
+    "int64.mli": [
+        (
+            'external of_string : string -> int64 = "caml_int64_of_string"',
+            "val of_string : string -> int64",
+        ),
+    ],
+    "nativeint.mli": [
+        (
+            'external of_string : string -> nativeint = "caml_nativeint_of_string"',
+            "val of_string : string -> nativeint",
+        ),
+    ],
+    "stdlib.ml": [
+        (
+            'external format_int : string -> int -> string = "caml_format_int"',
+            "let format_int = CamlinternalIntFmt.format_int",
+        ),
+        (
+            'external int_of_string : string -> int = "caml_int_of_string"',
+            "let int_of_string = CamlinternalIntFmt.parse_int",
+        ),
+    ],
+    "int.ml": [
+        (
+            'external format_int : string -> int -> string = "caml_format_int"',
+            "let format_int = CamlinternalIntFmt.format_int",
+        ),
+    ],
+    "int32.ml": [
+        (
+            'external format : string -> int32 -> string = "caml_int32_format"',
+            "let format = CamlinternalIntFmt.format_int32",
+        ),
+        (
+            'external of_string : string -> int32 = "caml_int32_of_string"',
+            "let of_string = CamlinternalIntFmt.parse_int32",
+        ),
+    ],
+    "int64.ml": [
+        (
+            'external format : string -> int64 -> string = "caml_int64_format"',
+            "let format = CamlinternalIntFmt.format_int64",
+        ),
+        (
+            'external of_string : string -> int64 = "caml_int64_of_string"',
+            "let of_string = CamlinternalIntFmt.parse_int64",
+        ),
+    ],
+    "nativeint.ml": [
+        (
+            'external format : string -> nativeint -> string = "caml_nativeint_format"',
+            "let format = CamlinternalIntFmt.format_nativeint",
+        ),
+        (
+            'external of_string: string -> nativeint = "caml_nativeint_of_string"',
+            "let of_string = CamlinternalIntFmt.parse_nativeint",
+        ),
+    ],
+    "uchar.ml": [
+        (
+            'external format_int : string -> int -> string = "caml_format_int"',
+            "let format_int = CamlinternalIntFmt.format_int",
+        ),
+    ],
+    "camlinternalFormat.ml": [
+        (
+            'external format_int: string -> int -> string\n  = "caml_format_int"\n'
+            'external format_int32: string -> int32 -> string\n  = "caml_int32_format"\n'
+            'external format_nativeint: string -> nativeint -> string\n  = "caml_nativeint_format"\n'
+            'external format_int64: string -> int64 -> string\n  = "caml_int64_format"',
+            "let format_int = CamlinternalIntFmt.format_int\n"
+            "let format_int32 = CamlinternalIntFmt.format_int32\n"
+            "let format_nativeint = CamlinternalIntFmt.format_nativeint\n"
+            "let format_int64 = CamlinternalIntFmt.format_int64",
+        ),
+    ],
+    "scanf.ml": [
+        (
+            'external nativeint_of_string : string -> nativeint\n  = "caml_nativeint_of_string"\n\n'
+            'external int32_of_string : string -> int32\n  = "caml_int32_of_string"\n\n'
+            'external int64_of_string : string -> int64\n  = "caml_int64_of_string"',
+            "let nativeint_of_string = CamlinternalIntFmt.parse_nativeint\n"
+            "let int32_of_string = CamlinternalIntFmt.parse_int32\n"
+            "let int64_of_string = CamlinternalIntFmt.parse_int64",
+        ),
+    ],
+}
+
+
+def apply_compat_patches(filename: str, text: str) -> str:
+    for old, new in _COMPAT_PATCHES.get(filename, []):
+        if old not in text:
+            raise RuntimeError(f"compat patch mismatch in {filename}: {old!r}")
+        text = text.replace(old, new)
+    return text
+
+
 def materialize_sources(
     vendor_src: Path, overlay_dir: Path, work_src: Path
 ) -> dict[str, tuple[str, Path | None, Path | None]]:
@@ -138,6 +248,9 @@ def materialize_sources(
 
     awk_script = vendor_src / "expand_module_aliases.awk"
     modules = parse_stdlib_modules(vendor_src / "StdlibModules")
+    if "camlinternalFormatBasics" in modules and "camlinternalIntFmt" not in modules:
+        idx = modules.index("camlinternalFormatBasics") + 1
+        modules.insert(idx, "camlinternalIntFmt")
     if (vendor_src / "std_exit.ml").exists() or (overlay_dir / "std_exit.ml").exists():
         if "std_exit" not in modules:
             modules.append("std_exit")
@@ -154,9 +267,13 @@ def materialize_sources(
 
     def resolve_one(base: str, ext: str) -> tuple[str, Path | None]:
         ov = overlay_dir / f"{base}.{ext}"
+        st = overlay_dir.parent / f"{base}.{ext}"
         up = vendor_src / f"{base}.{ext}"
         if ov.exists():
             src = ov
+            layer = "overlay"
+        elif base.startswith("camlinternal") and base != "camlinternalFormatBasics" and st.exists():
+            src = st
             layer = "overlay"
         elif up.exists():
             src = up
@@ -174,9 +291,15 @@ def materialize_sources(
                 capture_output=True,
                 check=True,
             )
-            dst.write_text(proc.stdout, encoding="utf-8")
+            text = apply_compat_patches(f"{base}.{ext}", proc.stdout)
+            dst.write_text(text, encoding="utf-8")
         else:
-            shutil.copy2(src, dst)
+            raw = src.read_text(encoding="utf-8")
+            patched = apply_compat_patches(f"{base}.{ext}", raw)
+            if patched != raw:
+                dst.write_text(patched, encoding="utf-8")
+            else:
+                shutil.copy2(src, dst)
         return (layer, dst)
 
     for base in modules:
@@ -195,7 +318,7 @@ def materialize_sources(
 
 def compflags_for(base: str, ext: str) -> list[str]:
     flags: list[str] = []
-    if base in ("camlinternalFormatBasics", "stdlib"):
+    if base in ("camlinternalFormatBasics", "camlinternalIntFmt", "stdlib"):
         flags.append("--nopervasives")
     if base == "stdlib" or base.endswith("Labels") or base == "float":
         flags.append("--no-alias-deps")
@@ -232,14 +355,17 @@ def parse_cmi_deps(depend_path: Path, bases: list[str]) -> list[str]:
                         if dep_base not in deps[target_base]:
                             deps[target_base].append(dep_base)
 
-    # Every module besides camlinternalFormatBasics and stdlib implicitly opens Stdlib
+    # Every module besides camlinternalFormatBasics, camlinternalIntFmt, and stdlib implicitly opens Stdlib
     for b in bases:
-        if b not in ("camlinternalFormatBasics", "stdlib") and "stdlib" in deps:
+        if b not in ("camlinternalFormatBasics", "camlinternalIntFmt", "stdlib") and "stdlib" in deps:
             if "stdlib" not in deps[b]:
                 deps[b].append("stdlib")
     if "stdlib" in deps and "camlinternalFormatBasics" in deps:
         if "camlinternalFormatBasics" not in deps["stdlib"]:
             deps["stdlib"].append("camlinternalFormatBasics")
+    if "stdlib" in deps and "camlinternalIntFmt" in deps:
+        if "camlinternalIntFmt" not in deps["stdlib"]:
+            deps["stdlib"].append("camlinternalIntFmt")
 
     order: list[str] = []
     state: dict[str, int] = {}  # 0=unseen, 1=visiting, 2=done

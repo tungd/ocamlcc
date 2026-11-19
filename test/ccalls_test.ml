@@ -92,14 +92,7 @@ let stdlib_abis =
     ("caml_update_dummy", 2, false, false);
     ("caml_update_dummy_lazy", 2, false, false);
     ("caml_format_float", 2, false, false);
-    ("caml_format_int", 2, false, false);
-    ("caml_int32_format", 2, false, false);
-    ("caml_int64_format", 2, false, false);
-    ("caml_nativeint_format", 2, false, false);
     ("caml_float_of_string", 1, true, false);
-    ("caml_int32_of_string", 1, true, false);
-    ("caml_int64_of_string", 1, true, false);
-    ("caml_nativeint_of_string", 1, true, false);
     ("caml_int32_to_float", 1, false, false);
     ("caml_int32_of_float", 1, false, false);
     ("caml_int32_bits_of_float", 1, false, false);

@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-20 (antigravity/1): Slice 6b — Implement integer formatting and parsing in pure OCaml and delete C `caml_*format` / `caml_*_of_string` (`stdlib/camlinternalIntFmt.ml`, `stdlib/{stdlib,stdlib__int32,stdlib__int64,stdlib__nativeint,stdlib__printf}.ml`, `lib/driver.ml`, `lib/ccalls.ml`, `runtime/{arc.h,arc.c,builtins.c}`, `tools/stdlib_compat.py`, `tools/bootstrap.py`, `build.ninja`):
+  - Replaced `caml_format_int`, `caml_int32_format`, `caml_int64_format`, `caml_nativeint_format`, `caml_int_of_string`, `caml_int32_of_string`, `caml_int64_of_string`, and `caml_nativeint_of_string` (-241 C LOC, `9,442 -> 9,201` total runtime LOC) with `--nopervasives` `stdlib/camlinternalIntFmt.ml` compiled directly after `CamlinternalFormatBasics` and declarative rewrites in `tools/stdlib_compat.py` (`73/73` modules).
+  - Added TDD fixture `tests/stdlib/int_fmt/` (verified against stock `ocamlc`).
+  - Verified `dune runtest -j1`, `ninja -j1 test` (26/26), `ninja -j1 asan_stdlib_runtime`, `stdlib_compat.py` (73/73 modules, 68/77 upstream tests), and `stdlib_regressions.py` (13/13 including `int_fmt`). See [stdlib-compatibility](/concepts/stdlib-compatibility.md).
+
 - 2026-11-19 (antigravity/1): Slice 6a — Implement Digest (MD5 + BLAKE2b) in pure OCaml and delete C digest implementation (`stdlib/overlay/digest.ml`, `runtime/arc.c`, `runtime/builtins.c`, `runtime/arc.h`, `lib/ccalls.ml`):
   - Replaced `caml_md5_{string,bytes,chan}`, `caml_blake2_{create,update,final,string,bytes}`, and `ARC_CUSTOM_BLAKE2` (-391 C LOC across `runtime/*.c`/`arc.h`) with a pure OCaml `stdlib/overlay/digest.ml` implementing RFC 1321 MD5 (unboxed 63-bit masked arithmetic) and RFC 7693 BLAKE2b (`BLAKE128`, `BLAKE256`, `BLAKE512`) over `In_channel.input` / `Bytes`.
   - Added TDD fixture `tests/stdlib/digest/` (checked against stock `ocamlc`).

@@ -17,8 +17,8 @@ external of_int32 : int32 -> nativeint = "%nativeint_of_int32"
 external to_int32 : nativeint -> int32 = "%nativeint_to_int32"
 external of_float : float -> nativeint = "caml_nativeint_of_float"
 external to_float : nativeint -> float = "caml_nativeint_to_float"
-external of_string : string -> nativeint = "caml_nativeint_of_string"
-external format : string -> nativeint -> string = "caml_nativeint_format"
+let of_string = CamlinternalIntFmt.parse_nativeint
+let format = CamlinternalIntFmt.format_nativeint
 external ( < ) : nativeint -> nativeint -> bool = "%lessthan"
 external ( = ) : nativeint -> nativeint -> bool = "%equal"
 external compare : nativeint -> nativeint -> int = "%compare"

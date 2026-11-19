@@ -76,30 +76,6 @@ static void test_float_format(void)
     arc_release_val(value);
 }
 
-static void test_integer_format(void)
-{
-    expect_format(caml_format_int, "%+4i", sizeof("%+4i") - 1, tagged(42), " +42");
-    expect_format(caml_format_int, "%l4d", sizeof("%l4d") - 1, tagged(42), "");
-    expect_format(caml_format_int, "%\0", sizeof("%\0") - 1, tagged(42), "");
-    expect_format(caml_format_int, "%128d", sizeof("%128d") - 1, tagged(42), "");
-
-    int64_t i32 = ocamlcc_alloc_custom(ARC_CUSTOM_INT32, UINT32_MAX);
-    expect_format(caml_int32_format, "%ld", sizeof("%ld") - 1, i32, "-1");
-    expect_format(caml_int32_format, "%lu", sizeof("%lu") - 1, i32, "4294967295");
-    expect_format(caml_int32_format, "%c", sizeof("%c") - 1, i32, "");
-    expect_format(caml_int32_format, "%d%%", sizeof("%d%%") - 1, i32, "");
-    arc_release_val(i32);
-
-    int64_t i64 = ocamlcc_alloc_custom(ARC_CUSTOM_INT64, UINT64_MAX);
-    expect_format(caml_int64_format, "%#LX", sizeof("%#LX") - 1, i64, "0XFFFFFFFFFFFFFFFF");
-    expect_format(caml_int64_format, "%lld", sizeof("%lld") - 1, i64, "-1");
-    arc_release_val(i64);
-
-    int64_t native = ocamlcc_alloc_custom(ARC_CUSTOM_NATIVEINT, 42);
-    expect_format(caml_nativeint_format, "%#.4no", sizeof("%#.4no") - 1, native, "0052");
-    arc_release_val(native);
-}
-
 static void test_buffered_dummy_update(void)
 {
     int64_t before = arc_live_objects();
@@ -1374,56 +1350,9 @@ static void test_string_bytes_rel_compare(void)
     assert(arc_live_objects() == before);
 }
 
-extern int64_t caml_int_of_string(int64_t s_val);
-
-static void test_int_of_string_literals(void)
-{
-    int64_t before = arc_live_objects();
-    const struct {
-        const char *str;
-        int ok;
-        int64_t expected;
-    } cases[] = {
-        {"0x30", 1, 48},
-        {"-0x30", 1, -48},
-        {"+0x30", 1, 48},
-        {"-0o77", 1, -63},
-        {"-0b1010", 1, -10},
-        {"-0u10", 1, -10},
-        {"0x3fffffffffffffff", 1, (1LL << 62) - 1LL},
-        {"-0x3fffffffffffffff", 1, -((1LL << 62) - 1LL)},
-        {"0x4000000000000000", 1, -(1LL << 62)},
-        {"-0x4000000000000000", 1, -(1LL << 62)},
-        {"0x7fffffffffffffff", 1, -1},
-        {"-0x7fffffffffffffff", 1, 1},
-        {"-0x4000000000000001", 1, (1LL << 62) - 1LL},
-        {"0x8000000000000000", 0, 0},
-        {"-0x8000000000000000", 0, 0},
-    };
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        size_t len = strlen(cases[i].str);
-        char *buf = arc_alloc_bytes(len);
-        memcpy(buf, cases[i].str, len);
-        int64_t s = (int64_t)(uintptr_t)buf;
-        int64_t res = caml_int_of_string(s);
-        if (cases[i].ok) {
-            assert(!ocamlcc_get_exn());
-            assert((res & 1LL) == 1LL);
-            assert((res >> 1) == cases[i].expected);
-        } else {
-            assert(ocamlcc_get_exn() != 0);
-            clear_exception();
-        }
-        arc_release_val(s);
-    }
-    assert(arc_live_objects() == before);
-}
-
 int main(void)
 {
     test_float_format();
-    test_integer_format();
-    test_int_of_string_literals();
     test_buffered_dummy_update();
     test_weak_get_copy_and_obj_dup();
     test_poller_multi_waiters_and_overflow();

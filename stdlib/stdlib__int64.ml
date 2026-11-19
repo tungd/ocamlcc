@@ -21,8 +21,8 @@ external of_float : float -> int64 = "caml_int64_of_float"
 external to_float : int64 -> float = "caml_int64_to_float"
 external bits_of_float : float -> int64 = "caml_int64_bits_of_float"
 external float_of_bits : int64 -> float = "caml_int64_float_of_bits"
-external of_string : string -> int64 = "caml_int64_of_string"
-external format : string -> int64 -> string = "caml_int64_format"
+let of_string = CamlinternalIntFmt.parse_int64
+let format = CamlinternalIntFmt.format_int64
 external ( < ) : int64 -> int64 -> bool = "%lessthan"
 external ( = ) : int64 -> int64 -> bool = "%equal"
 external compare : int64 -> int64 -> int = "%compare"

@@ -123,14 +123,7 @@ int64_t ocamlcc_gen_array_get(int64_t safe, int64_t arr, int64_t idx_val);
 int64_t ocamlcc_gen_array_set(int64_t safe, int64_t arr, int64_t idx_val, int64_t v);
 
 int64_t caml_format_float(int64_t fmt_val, int64_t float_val);
-int64_t caml_format_int(int64_t fmt_val, int64_t int_val);
-int64_t caml_int32_format(int64_t fmt_val, int64_t v);
-int64_t caml_int64_format(int64_t fmt_val, int64_t v);
-int64_t caml_nativeint_format(int64_t fmt_val, int64_t v);
 int64_t caml_float_of_string(int64_t s_val);
-int64_t caml_int32_of_string(int64_t s_val);
-int64_t caml_int64_of_string(int64_t s_val);
-int64_t caml_nativeint_of_string(int64_t s_val);
 
 int64_t caml_int32_to_float(int64_t v);
 int64_t caml_int32_of_float(int64_t v);

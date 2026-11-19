@@ -17,8 +17,8 @@ external of_float : float -> int32 = "caml_int32_of_float"
 external to_float : int32 -> float = "caml_int32_to_float"
 external bits_of_float : float -> int32 = "caml_int32_bits_of_float"
 external float_of_bits : int32 -> float = "caml_int32_float_of_bits"
-external of_string : string -> int32 = "caml_int32_of_string"
-external format : string -> int32 -> string = "caml_int32_format"
+let of_string = CamlinternalIntFmt.parse_int32
+let format = CamlinternalIntFmt.format_int32
 external ( < ) : int32 -> int32 -> bool = "%lessthan"
 external ( = ) : int32 -> int32 -> bool = "%equal"
 external compare : int32 -> int32 -> int = "%compare"

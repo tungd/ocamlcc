@@ -82,49 +82,6 @@ int ocamlcc_snprintf_double(char *out, size_t cap, const char *fmt, size_t fmt_l
     return n;
 }
 
-/* Format an integer with one numeric conversion. Normalize the optional
-   OCaml length modifier (l, ll, L, n) to the argument's C width. */
-int ocamlcc_snprintf_i64(char *out, size_t cap, const char *fmt, size_t fmt_len,
-                         int64_t v, int is_i32)
-{
-    size_t prefix_len = numeric_format_prefix(fmt, fmt_len);
-    if (prefix_len == 0)
-        return -1;
-    size_t end = fmt_len - 1;
-    size_t i = prefix_len;
-    if (i < end) {
-        char modifier = fmt[i++];
-        if (modifier != 'l' && modifier != 'L' && modifier != 'n')
-            return -1;
-        if (modifier == 'l' && i < end && fmt[i] == 'l')
-            i++;
-    }
-    char spec = fmt[end];
-    if (i != end || spec == '\0' || strchr("diuxXo", spec) == NULL)
-        return -1;
-
-    char safe_fmt[NUMERIC_FORMAT_CAP + 2];
-    memcpy(safe_fmt, fmt, prefix_len);
-    size_t k = prefix_len;
-    if (!is_i32) {
-        safe_fmt[k++] = 'l';
-        safe_fmt[k++] = 'l';
-    }
-    safe_fmt[k++] = spec;
-    safe_fmt[k] = '\0';
-
-    int is_signed = spec == 'd' || spec == 'i';
-    int n;
-    if (is_i32) {
-        n = is_signed ? snprintf(out, cap, safe_fmt, (int)(int32_t)v)
-                      : snprintf(out, cap, safe_fmt, (unsigned int)(uint32_t)v);
-    } else {
-        n = is_signed ? snprintf(out, cap, safe_fmt, (long long)v)
-                      : snprintf(out, cap, safe_fmt, (unsigned long long)v);
-    }
-    return (n < 0 || (size_t)n >= cap) ? -1 : n;
-}
-
 int ocamlcc_parse_double(const char *s, size_t len, double *out)
 {
     if (len == 0 || len > 512u)
@@ -160,93 +117,6 @@ int ocamlcc_parse_double(const char *s, size_t len, double *out)
     return 1;
 }
 
-int ocamlcc_parse_i64(const char *s, size_t len, int is_i32, int64_t *out)
-{
-    if (len == 0 || len > 128u)
-        return 0;
-    char buf[132];
-    size_t i = 0;
-    int neg = 0;
-    if (s[i] == '-') {
-        neg = 1;
-        i++;
-    } else if (s[i] == '+') {
-        i++;
-    }
-    if (i >= len)
-        return 0;
-    int base = 10;
-    int unsigned_mode = 0;
-    if (s[i] == '0' && i + 1u < len) {
-        char p = s[i + 1u];
-        if (p == 'x' || p == 'X') {
-            base = 16;
-            unsigned_mode = 1;
-            i += 2u;
-        } else if (p == 'o' || p == 'O') {
-            base = 8;
-            unsigned_mode = 1;
-            i += 2u;
-        } else if (p == 'b' || p == 'B') {
-            base = 2;
-            unsigned_mode = 1;
-            i += 2u;
-        } else if (p == 'u' || p == 'U') {
-            base = 10;
-            unsigned_mode = 1;
-            i += 2u;
-        }
-    }
-    size_t k = 0;
-    int seen = 0;
-    for (; i < len; i++) {
-        char c = s[i];
-        if (c == '\0')
-            return 0;
-        if (c == '_') {
-            if (!seen)
-                return 0;
-            continue;
-        }
-        seen = 1;
-        buf[k++] = c;
-    }
-    if (!seen)
-        return 0;
-    buf[k] = '\0';
-    errno = 0;
-    char *ep = NULL;
-    unsigned long long uv = strtoull(buf, &ep, base);
-    if (ep != buf + k || errno == ERANGE)
-        return 0;
-    if (is_i32) {
-        if (unsigned_mode) {
-            if (uv > (unsigned long long)UINT32_MAX)
-                return 0;
-            int32_t sv = (int32_t)(uint32_t)uv;
-            if (neg)
-                sv = (int32_t)(-(uint32_t)sv);
-            *out = (int64_t)sv;
-        } else {
-            uint64_t limit = neg ? ((uint64_t)INT32_MAX + 1ULL) : (uint64_t)INT32_MAX;
-            if (uv > limit)
-                return 0;
-            int32_t sv = neg ? (int32_t)(-(int64_t)uv) : (int32_t)uv;
-            *out = (int64_t)sv;
-        }
-    } else {
-        if (!unsigned_mode) {
-            uint64_t limit = neg ? ((uint64_t)INT64_MAX + 1ULL) : (uint64_t)INT64_MAX;
-            if (uv > limit)
-                return 0;
-            *out = neg ? (int64_t)(0ULL - uv) : (int64_t)uv;
-        } else {
-            *out = neg ? (int64_t)(0ULL - uv) : (int64_t)uv;
-        }
-    }
-    return 1;
-}
-
 double ocamlcc_c_sqrt(double d) { return sqrt(d); }
 double ocamlcc_c_floor(double d) { return floor(d); }
 double ocamlcc_c_ceil(double d) { return ceil(d); }
@@ -261,40 +131,6 @@ int    ocamlcc_c_fpclassify(double d)
     case FP_INFINITE:  return 3;
     default:           return 4; /* FP_NAN */
     }
-}
-
-int ocamlcc_c_int_of_string(const char *s, size_t len, int64_t *out)
-{
-    int64_t v = 0;
-    if (!ocamlcc_parse_i64(s, len, 0, &v))
-        return 0;
-    size_t i = 0;
-    if (i < len && (s[i] == '-' || s[i] == '+'))
-        i++;
-    int unsigned_mode = 0;
-    if (i + 1u < len && s[i] == '0') {
-        char p = s[i + 1u];
-        if (p == 'x' || p == 'X' || p == 'o' || p == 'O' ||
-            p == 'b' || p == 'B' || p == 'u' || p == 'U')
-            unsigned_mode = 1;
-    }
-    const int64_t i63_min = -(1LL << 62);
-    const int64_t i63_max = (1LL << 62) - 1LL;
-    if (!unsigned_mode) {
-        if (v < i63_min || v > i63_max)
-            return 0;
-        *out = v;
-        return 1;
-    }
-    /* Unsigned literals with magnitude up to 2^63 - 1 are accepted in 63-bit
-       OCaml (including negative "-0x..." forms from Int_literal_converter)
-       and truncated to 63 bits with sign extension from bit 62. */
-    int is_neg = (len > 0u && s[0] == '-');
-    uint64_t mag = is_neg ? (0ULL - (uint64_t)v) : (uint64_t)v;
-    if (mag > (uint64_t)INT64_MAX)
-        return 0;
-    *out = (int64_t)((uint64_t)v << 1) >> 1;
-    return 1;
 }
 
 /* open_flag bitmasks passed from runtime/arc.c:

@@ -60,14 +60,7 @@ caml_alloc_dummy_lazy: registered
 caml_update_dummy: registered
 caml_update_dummy_lazy: registered
 caml_format_float: registered
-caml_format_int: registered
-caml_int32_format: registered
-caml_int64_format: registered
-caml_nativeint_format: registered
 caml_float_of_string: registered
-caml_int32_of_string: registered
-caml_int64_of_string: registered
-caml_nativeint_of_string: registered
 caml_int32_to_float: registered
 caml_int32_of_float: registered
 caml_int32_bits_of_float: registered

@@ -2122,10 +2122,7 @@ int64_t ocamlcc_gen_array_set(int64_t safe, int64_t arr, int64_t idx_val, int64_
 
 extern int ocamlcc_snprintf_double(char *out, size_t cap, const char *fmt,
                                    size_t fmt_len, double d);
-extern int ocamlcc_snprintf_i64(char *out, size_t cap, const char *fmt,
-                                size_t fmt_len, int64_t v, int is_i32);
 extern int ocamlcc_parse_double(const char *s, size_t len, double *out);
-extern int ocamlcc_parse_i64(const char *s, size_t len, int is_i32, int64_t *out);
 extern double ocamlcc_c_sqrt(double d);
 extern double ocamlcc_c_floor(double d);
 extern double ocamlcc_c_ceil(double d);
@@ -2162,36 +2159,6 @@ int64_t caml_format_float(int64_t fmt_val, int64_t float_val)
     return alloc_c_string_buf(buf, n);
 }
 
-static int64_t format_i64_common(int64_t fmt_val, int64_t v, int is_i32)
-{
-    const ArcHeader *fh = (const ArcHeader *)(uintptr_t)fmt_val - 1;
-    char buf[128];
-    int n = ocamlcc_snprintf_i64(
-        buf, sizeof(buf), (const char *)(uintptr_t)fmt_val,
-        (size_t)fh->reserved, v, is_i32);
-    return alloc_c_string_buf(buf, n);
-}
-
-int64_t caml_format_int(int64_t fmt_val, int64_t int_val)
-{
-    return format_i64_common(fmt_val, int_val >> 1, 0);
-}
-
-int64_t caml_int32_format(int64_t fmt_val, int64_t v)
-{
-    return format_i64_common(fmt_val, unbox_custom_i64(v), 1);
-}
-
-int64_t caml_int64_format(int64_t fmt_val, int64_t v)
-{
-    return format_i64_common(fmt_val, unbox_custom_i64(v), 0);
-}
-
-int64_t caml_nativeint_format(int64_t fmt_val, int64_t v)
-{
-    return format_i64_common(fmt_val, unbox_custom_i64(v), 0);
-}
-
 int64_t caml_float_of_string(int64_t s_val)
 {
     const ArcHeader *sh = (const ArcHeader *)(uintptr_t)s_val - 1;
@@ -2202,37 +2169,6 @@ int64_t caml_float_of_string(int64_t s_val)
         return 1;
     }
     return ocamlcc_alloc_float(d);
-}
-
-static int64_t parse_custom_int(int64_t s_val, uint32_t kind, const char *err)
-{
-    const ArcHeader *sh = (const ArcHeader *)(uintptr_t)s_val - 1;
-    int64_t out = 0;
-    if (!ocamlcc_parse_i64((const char *)(uintptr_t)s_val,
-                           (size_t)sh->reserved,
-                           kind == ARC_CUSTOM_INT32, &out)) {
-        size_t len = 0;
-        while (err[len] != '\0')
-            len++;
-        raise_failure_cstr(err, len);
-        return 1;
-    }
-    return ocamlcc_alloc_custom(kind, (uint64_t)out);
-}
-
-int64_t caml_int32_of_string(int64_t s_val)
-{
-    return parse_custom_int(s_val, ARC_CUSTOM_INT32, "Int32.of_string");
-}
-
-int64_t caml_int64_of_string(int64_t s_val)
-{
-    return parse_custom_int(s_val, ARC_CUSTOM_INT64, "Int64.of_string");
-}
-
-int64_t caml_nativeint_of_string(int64_t s_val)
-{
-    return parse_custom_int(s_val, ARC_CUSTOM_NATIVEINT, "Nativeint.of_string");
 }
 
 int64_t caml_int32_to_float(int64_t v)
@@ -2919,7 +2855,6 @@ DEFINE_PREDEF_EXN(Undefined_recursive_module, 12)
 /* Batch 1 Stdlib Primitives: Atomics, Bytes/Array, Channels, Runtime */
 /* ------------------------------------------------------------------ */
 
-extern int         ocamlcc_c_int_of_string(const char *s, size_t len, int64_t *out);
 extern int         ocamlcc_c_sys_open(const char *path, int flags_mask, int perm, int *err_out);
 extern int64_t     ocamlcc_c_fd_read_raw(int fd, void *buf, size_t len, int *err_out);
 extern int         ocamlcc_c_fd_write_all(int fd, const void *buf, size_t len, int *err_out);
@@ -3061,18 +2996,6 @@ int64_t caml_atomic_fetch_add_field(int64_t obj_val, int64_t idx_val,
 }
 
 /* ---- int_of_string ---- */
-
-int64_t caml_int_of_string(int64_t s_val)
-{
-    const ArcHeader *sh = (const ArcHeader *)(uintptr_t)s_val - 1;
-    int64_t v = 0;
-    if (!ocamlcc_c_int_of_string((const char *)(uintptr_t)s_val,
-                                 (size_t)sh->reserved, &v)) {
-        raise_failure_cstr("int_of_string", 13u);
-        return 1;
-    }
-    return tag_int(v);
-}
 
 /* ---- Byte swap & unaligned 16/32/64-bit bytes/string access ---- */
 
