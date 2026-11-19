@@ -1154,7 +1154,7 @@ static void release_subtree(ArcHeader *root, int free_root)
         if (atomic_load_explicit(&g_weak_count, memory_order_acquire) > 0u)
             weak_clear_target((int64_t)(uintptr_t)(cur + 1));
 
-        if (is_cycle_candidate_obj(cur) ||
+        if ((is_cycle_candidate_obj(cur) && (cur->reserved & CC_BUFFERED) != 0u) ||
             atomic_load_explicit(&g_cc_active, memory_order_acquire) != 0) {
             arc_lock(&g_cc_lock);
             cc_roots_remove_locked(cur);
@@ -2460,6 +2460,20 @@ static __attribute__((noinline)) int compare_float_arrays_raw(
     return 0;
 }
 
+static int64_t follow_forward(int64_t v, int64_t *steps)
+{
+    while (is_heap_ptr(v) &&
+           ((const ArcHeader *)(uintptr_t)v - 1)->tag == (uint16_t)ARC_TAG_FORWARD) {
+        if (*steps <= 0) {
+            raise_invalid_arg_imm(g_inv_arg_cyc_str.str);
+            return 0;
+        }
+        (*steps)--;
+        v = ((const int64_t *)(uintptr_t)v)[0];
+    }
+    return v;
+}
+
 static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
                            int64_t *steps)
 {
@@ -2469,6 +2483,10 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
             return 1;
         }
         (*steps)--;
+        a = follow_forward(a, steps);
+        if (ocamlcc_get_exn() != 0) return 1;
+        b = follow_forward(b, steps);
+        if (ocamlcc_get_exn() != 0) return 1;
         if (a == b && (total || !is_heap_ptr(a)))
             return 0;
         int ia = (a & 1) != 0;
@@ -2506,9 +2524,15 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
                 return (ha->reserved < hb->reserved) ? -1 : 1;
             if (ha->reserved == ARC_CUSTOM_BIGARRAY)
                 return ba_compare((void *)(uintptr_t)a, (void *)(uintptr_t)b, total);
-            int64_t va = unbox_custom_i64(a);
-            int64_t vb = unbox_custom_i64(b);
-            return (va < vb) ? -1 : (va > vb ? 1 : 0);
+            if (ha->reserved == ARC_CUSTOM_INT32 ||
+                ha->reserved == ARC_CUSTOM_INT64 ||
+                ha->reserved == ARC_CUSTOM_NATIVEINT) {
+                int64_t va = unbox_custom_i64(a);
+                int64_t vb = unbox_custom_i64(b);
+                return (va < vb) ? -1 : (va > vb ? 1 : 0);
+            }
+            raise_invalid_arg_imm(g_inv_arg_fn_str.str);
+            return 1;
         }
 
         /* Objects and extension constructors compare by their unique OID,
@@ -3395,12 +3419,38 @@ static int chan_flush_internal(OcamlccChannel *ch, int *err_out)
 
 static void chan_flush_all_out(void)
 {
+    OcamlccChannel *stack_buf[64];
+    OcamlccChannel **list = stack_buf;
+    size_t cap = 64u, n = 0u, alloc_bytes = 0u;
     arc_lock(&g_chan_lock);
     for (OcamlccChannel *c = g_out_channels_head; c != NULL; c = c->out_next) {
-        int err = 0;
-        (void)chan_flush_internal(c, &err);
+        ArcHeader *chdr = (ArcHeader *)c - 1;
+        if (!arc_try_retain(chdr))
+            continue;
+        if (n == cap) {
+            size_t new_bytes = (alloc_bytes == 0u) ? 4096u : (alloc_bytes * 2u);
+            OcamlccChannel **nl = (OcamlccChannel **)pal_page_alloc(new_bytes);
+            if (nl == NULL) {
+                arc_release(c);
+                break;
+            }
+            pal_memcpy(nl, list, n * sizeof(OcamlccChannel *));
+            if (alloc_bytes > 0u)
+                pal_page_free(list, alloc_bytes);
+            list = nl;
+            alloc_bytes = new_bytes;
+            cap = new_bytes / sizeof(OcamlccChannel *);
+        }
+        list[n++] = c;
     }
     arc_unlock(&g_chan_lock);
+    for (size_t i = 0; i < n; i++) {
+        int err = 0;
+        (void)chan_flush_internal(list[i], &err);
+        arc_release(list[i]);
+    }
+    if (alloc_bytes > 0u)
+        pal_page_free(list, alloc_bytes);
 }
 
 static void channel_destroy(OcamlccChannel *ch)
@@ -3951,7 +4001,11 @@ extern int   ocamlcc_c_cond_wait(void *c, void *m);
 extern int   ocamlcc_c_cond_signal(void *c);
 extern int   ocamlcc_c_cond_broadcast(void *c);
 
+extern void  ocamlcc_c_md5_init(void *opaque_ctx);
+extern void  ocamlcc_c_md5_update(void *opaque_ctx, const uint8_t *data, size_t len);
+extern void  ocamlcc_c_md5_final(void *opaque_ctx, uint8_t out[16]);
 extern void  ocamlcc_c_md5(const uint8_t *data, size_t len, uint8_t out[16]);
+extern int   ocamlcc_c_random_bytes(uint8_t *buf, size_t len);
 extern void *ocamlcc_c_blake2_new(size_t outlen, const uint8_t *key, size_t keylen);
 extern void  ocamlcc_c_blake2_update(void *p, const uint8_t *in, size_t inlen);
 extern void  ocamlcc_c_blake2_final(void *p, size_t outlen, uint8_t *out);
@@ -4342,12 +4396,17 @@ int64_t caml_ml_runtime_warnings_enabled(int64_t ignored)
 int64_t caml_sys_random_seed(int64_t ignored)
 {
     (void)ignored;
-    uint64_t ns = pal_monotonic_ns();
+    uint32_t words[4];
+    if (ocamlcc_c_random_bytes((uint8_t *)words, sizeof(words)) != 0) {
+        uint64_t ns = pal_monotonic_ns();
+        words[0] = (uint32_t)ns;
+        words[1] = (uint32_t)(ns >> 16);
+        words[2] = (uint32_t)(ns * 6364136223846793005ULL);
+        words[3] = (uint32_t)((ns >> 32) ^ 0x9e3779b9ULL);
+    }
     int64_t *arr = (int64_t *)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 32u);
-    arr[0] = tag_int((int64_t)(ns & 0x3fffffffULL));
-    arr[1] = tag_int((int64_t)((ns >> 16) & 0x3fffffffULL));
-    arr[2] = tag_int((int64_t)((ns * 6364136223846793005ULL) & 0x3fffffffULL));
-    arr[3] = tag_int((int64_t)(((ns >> 32) ^ 0x9e3779b9ULL) & 0x3fffffffULL));
+    for (int i = 0; i < 4; i++)
+        arr[i] = tag_int((int64_t)(words[i] & 0x3fffffffu));
     return (int64_t)(uintptr_t)arr;
 }
 
@@ -4545,65 +4604,40 @@ int64_t caml_md5_string(int64_t s_val, int64_t ofs_val, int64_t len_val)
 int64_t caml_md5_chan(int64_t chan_val, int64_t len_val)
 {
     int64_t req = len_val >> 1;
-    uint8_t *tmp = NULL;
-    size_t cap = (req >= 0) ? (size_t)req : 4096u;
-    if (cap == 0u) cap = 1u;
-    char *buf_s = (char *)arc_alloc_bytes((uint64_t)cap);
+    uint64_t ctx[16];
+    ocamlcc_c_md5_init(ctx);
+    char *chunk = (char *)arc_alloc_bytes(4096u);
     size_t total = 0u;
-    if (req >= 0) {
-        while (total < (size_t)req) {
-            int64_t got = caml_ml_input(
-                chan_val, (int64_t)(uintptr_t)buf_s,
-                tag_int((int64_t)total), tag_int((int64_t)((size_t)req - total)));
-            if (ocamlcc_get_exn() != 0) {
-                arc_release(buf_s);
-                return 1;
-            }
-            int64_t n = got >> 1;
-            if (n == 0) {
-                arc_release(buf_s);
-                raise_end_of_file();
-                return 1;
-            }
-            total += (size_t)n;
-        }
-        uint8_t dig[16];
-        ocamlcc_c_md5((const uint8_t *)buf_s, total, dig);
-        arc_release(buf_s);
-        char *out = (char *)arc_alloc_bytes(16u);
-        pal_memcpy(out, dig, 16u);
-        return (int64_t)(uintptr_t)out;
-    }
-    /* Read until EOF dynamically */
-    (void)tmp;
-    size_t dyn_cap = 4096u;
-    char *acc = (char *)arc_alloc_bytes((uint64_t)dyn_cap);
     for (;;) {
-        if (total == dyn_cap) {
-            size_t nc = dyn_cap * 2u;
-            char *nacc = (char *)arc_alloc_bytes((uint64_t)nc);
-            pal_memcpy(nacc, acc, total);
-            arc_release(acc);
-            acc = nacc;
-            dyn_cap = nc;
+        size_t want = 4096u;
+        if (req >= 0) {
+            if (total >= (size_t)req)
+                break;
+            size_t rem = (size_t)req - total;
+            if (rem < want)
+                want = rem;
         }
         int64_t got = caml_ml_input(
-            chan_val, (int64_t)(uintptr_t)acc,
-            tag_int((int64_t)total), tag_int((int64_t)(dyn_cap - total)));
+            chan_val, (int64_t)(uintptr_t)chunk, tag_int(0), tag_int((int64_t)want));
         if (ocamlcc_get_exn() != 0) {
-            arc_release(buf_s);
-            arc_release(acc);
+            arc_release(chunk);
             return 1;
         }
         int64_t n = got >> 1;
-        if (n == 0)
+        if (n == 0) {
+            if (req >= 0) {
+                arc_release(chunk);
+                raise_end_of_file();
+                return 1;
+            }
             break;
+        }
+        ocamlcc_c_md5_update(ctx, (const uint8_t *)chunk, (size_t)n);
         total += (size_t)n;
     }
+    arc_release(chunk);
     uint8_t dig[16];
-    ocamlcc_c_md5((const uint8_t *)acc, total, dig);
-    arc_release(buf_s);
-    arc_release(acc);
+    ocamlcc_c_md5_final(ctx, dig);
     char *out = (char *)arc_alloc_bytes(16u);
     pal_memcpy(out, dig, 16u);
     return (int64_t)(uintptr_t)out;
@@ -5186,7 +5220,9 @@ static int64_t run_finalizers(int automatic)
     if (collected)
         atomic_store_explicit(&last_finalizer_poll, allocation_progress(), memory_order_release);
     arc_mutator_leave(entered);
-    atomic_store_explicit(&finalizer_dispatch, DISPATCH_IDLE, memory_order_release);
+    atomic_store_explicit(&finalizer_dispatch,
+                          pending_finalizers != NULL ? DISPATCH_READY : DISPATCH_IDLE,
+                          memory_order_release);
     return 1;
 }
 

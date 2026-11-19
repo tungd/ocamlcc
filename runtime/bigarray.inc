@@ -71,6 +71,8 @@ void ocamlcc_bigarray_view_release(OcamlccBigarrayView *view)
 
 OcamlccBigarrayInfo ocamlcc_bigarray_view_info(const OcamlccBigarrayView *view)
 {
+    if (view == NULL)
+        return (OcamlccBigarrayInfo){0};
     return (OcamlccBigarrayInfo){
         .data = view->data,
         .byte_length = ba_count(view) * ba_sizes[view->kind],
@@ -79,6 +81,68 @@ OcamlccBigarrayInfo ocamlcc_bigarray_view_info(const OcamlccBigarrayView *view)
         .kind = view->kind,
         .layout = view->layout
     };
+}
+
+static inline double ba_load_f16(const uint8_t *p)
+{
+#ifdef __FLT16_MANT_DIG__
+    return (double)*(const _Float16 *)p;
+#else
+    uint16_t h;
+    pal_memcpy(&h, p, 2);
+    uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+    uint32_t exp = (h >> 10) & 0x1fu;
+    uint32_t frac = h & 0x3ffu;
+    uint32_t fbits;
+    if (exp == 0u) {
+        if (frac == 0u) {
+            fbits = sign;
+        } else {
+            exp = 127u - 14u;
+            while ((frac & 0x400u) == 0u) {
+                frac <<= 1;
+                exp--;
+            }
+            fbits = sign | (exp << 23) | ((frac & 0x3ffu) << 13);
+        }
+    } else if (exp == 0x1fu) {
+        fbits = sign | 0x7f800000u | (frac << 13);
+    } else {
+        fbits = sign | ((exp + 127u - 15u) << 23) | (frac << 13);
+    }
+    float f;
+    pal_memcpy(&f, &fbits, 4);
+    return (double)f;
+#endif
+}
+
+static inline void ba_store_f16(uint8_t *p, double v)
+{
+#ifdef __FLT16_MANT_DIG__
+    *(_Float16 *)p = (_Float16)v;
+#else
+    float f = (float)v;
+    uint32_t fbits;
+    pal_memcpy(&fbits, &f, 4);
+    uint16_t sign = (uint16_t)((fbits >> 16) & 0x8000u);
+    int32_t exp = (int32_t)((fbits >> 23) & 0xffu) - 127 + 15;
+    uint32_t frac = fbits & 0x7fffffu;
+    uint16_t h;
+    if (exp <= 0) {
+        if (exp < -10) {
+            h = sign;
+        } else {
+            frac |= 0x800000u;
+            uint32_t shift = (uint32_t)(14 - exp);
+            h = (uint16_t)(sign | (frac >> shift));
+        }
+    } else if (exp >= 31) {
+        h = (uint16_t)(sign | 0x7c00u | (frac ? 0x0200u : 0u));
+    } else {
+        h = (uint16_t)(sign | ((uint32_t)exp << 10) | (frac >> 13));
+    }
+    pal_memcpy(p, &h, 2);
+#endif
 }
 
 /* Takes one backing reference. */
@@ -200,7 +264,7 @@ static int64_t ba_read(const ArcBigarray *a, size_t offset)
         z[1] = a->kind == 10 ? ((const float *)p)[1] : ((const double *)p)[1];
         return (int64_t)(uintptr_t)z;
     }
-    case 13: return ocamlcc_alloc_float(*(const _Float16 *)p);
+    case 13: return ocamlcc_alloc_float(ba_load_f16(p));
     default: pal_abort();
     }
 }
@@ -222,7 +286,7 @@ static void ba_write(ArcBigarray *a, size_t offset, int64_t value)
         else { ((double *)p)[0] = z[0]; ((double *)p)[1] = z[1]; }
         break;
     }
-    case 13: *(_Float16 *)p = (_Float16)unbox_float(value); break;
+    case 13: ba_store_f16(p, unbox_float(value)); break;
     }
 }
 
@@ -416,7 +480,15 @@ static int ba_compare(const ArcBigarray *a, const ArcBigarray *b, int total)
     case 0: BA_FCMP(float);
     case 11: count *= 2; /* fall through */
     case 1: BA_FCMP(double);
-    case 13: BA_FCMP(_Float16);
+    case 13: {
+        for (size_t i = 0; i < count; i++) {
+            double x = ba_load_f16(a->data + i * 2);
+            double y = ba_load_f16(b->data + i * 2);
+            int c = compare_f64_raw(x, y, total);
+            if (c != 0) return c;
+        }
+        return 0;
+    }
     default: pal_abort();
     }
 #undef BA_CMP
@@ -445,7 +517,7 @@ static uint32_t ba_hash(const ArcBigarray *a)
             case 8: case 9: h = hash_mix_intnat(h, ((const int64_t *)a->data)[i]); break;
             case 1: case 11: h = hash_mix_f64(h, ((const double *)a->data)[i]); break;
             case 0: case 10: h = hash_mix_f64(h, ((const float *)a->data)[i]); break;
-            case 13: h = hash_mix_f64(h, ((const _Float16 *)a->data)[i]); break;
+            case 13: h = hash_mix_f64(h, ba_load_f16(a->data + i * 2)); break;
             }
         }
     }

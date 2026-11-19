@@ -19,6 +19,8 @@
 #include <unistd.h>
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
+#elif defined(__linux__)
+#include <sys/random.h>
 #endif
 
 void ocamlcc_print_int(int64_t n) { printf("%lld", (long long)n); }
@@ -549,10 +551,16 @@ int ocamlcc_c_readdir_alloc(const char *path, char ***out_names, size_t *out_cnt
             names = nn;
         }
         size_t l = strlen(ent->d_name);
-        names[n] = (char *)malloc(l + 1u);
-        if (names[n] != NULL)
-            memcpy(names[n], ent->d_name, l + 1u);
-        n++;
+        char *copy = (char *)malloc(l + 1u);
+        if (copy == NULL) {
+            for (size_t i = 0; i < n; i++) free(names[i]);
+            free(names);
+            closedir(d);
+            *err_out = ENOMEM;
+            return -1;
+        }
+        memcpy(copy, ent->d_name, l + 1u);
+        names[n++] = copy;
     }
     closedir(d);
     *out_names = names;
@@ -751,12 +759,68 @@ static void md5_final(OcamlccMD5 *ctx, uint8_t out[16])
         memcpy(out + i * 4, &ctx->state[i], 4u);
 }
 
+void ocamlcc_c_md5_init(void *opaque_ctx)
+{
+    _Static_assert(sizeof(OcamlccMD5) <= 128u, "OcamlccMD5 exceeds 128 bytes");
+    md5_init((OcamlccMD5 *)opaque_ctx);
+}
+
+void ocamlcc_c_md5_update(void *opaque_ctx, const uint8_t *data, size_t len)
+{
+    md5_update((OcamlccMD5 *)opaque_ctx, data, len);
+}
+
+void ocamlcc_c_md5_final(void *opaque_ctx, uint8_t out[16])
+{
+    md5_final((OcamlccMD5 *)opaque_ctx, out);
+}
+
 void ocamlcc_c_md5(const uint8_t *data, size_t len, uint8_t out[16])
 {
     OcamlccMD5 ctx;
     md5_init(&ctx);
     md5_update(&ctx, data, len);
     md5_final(&ctx, out);
+}
+
+int ocamlcc_c_random_bytes(uint8_t *buf, size_t len)
+{
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    arc4random_buf(buf, len);
+    return 0;
+#elif defined(__linux__)
+    size_t off = 0;
+    while (off < len) {
+        ssize_t r = getrandom(buf + off, len - off, 0);
+        if (r > 0) {
+            off += (size_t)r;
+            continue;
+        }
+        if (r < 0 && errno == EINTR)
+            continue;
+        break;
+    }
+    if (off == len)
+        return 0;
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd >= 0) {
+        while (off < len) {
+            ssize_t r = read(fd, buf + off, len - off);
+            if (r > 0)
+                off += (size_t)r;
+            else if (r < 0 && errno == EINTR)
+                continue;
+            else
+                break;
+        }
+        close(fd);
+    }
+    return (off == len) ? 0 : -1;
+#else
+    (void)buf;
+    (void)len;
+    return -1;
+#endif
 }
 
 typedef struct {

@@ -1,5 +1,11 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Fix finalizer dispatch stranding, spinlock contention, and runtime edge cases (`runtime/arc.c`, `runtime/builtins.c`, `runtime/bigarray.inc`):
+  - Preserve `DISPATCH_READY` in `run_finalizers` when an exception breaks the loop with `pending_finalizers != NULL`.
+  - Skip `g_cc_lock` in `release_subtree` when `g_cc_active == 0` and `CC_BUFFERED` is clear; snapshot/retain live channels under `g_chan_lock` in `chan_flush_all_out` and flush outside the lock.
+  - Stream `caml_md5_chan` in 4 KB chunks (`ocamlcc_c_md5_init`/`update`/`final`); seed `caml_sys_random_seed` via `ocamlcc_c_random_bytes` (`arc4random_buf`/`getrandom`); follow `ARC_TAG_FORWARD` and reject non-numeric/non-Bigarray custom blocks in `val_compare_raw`; guard `malloc` failure in `ocamlcc_c_readdir_alloc`; add `NULL` check in `ocamlcc_bigarray_view_info` and portable IEEE-754 binary16 helpers when `__FLT16_MANT_DIG__` is absent.
+  Regression-tested in `tests/stdlib_runtime.c` (`test_runtime_3_3`); `ninja test` and `ninja asan_test` pass. See [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-19 (antigravity/1): Harden fiber robustness and closure arity handling (`runtime/pal.h`, `runtime/pal.c`, `runtime/fiber.h`, `runtime/fiber.c`, `runtime/closure.c`):
   - Add a 16 KB `PROT_NONE` guard page (`pal_page_protect_none`) at the bottom of each fiber C stack.
   - Unlink `FIBER_WAITING_IO` / `FIBER_WAITING_TIMER` watches and wake `waiter_head` in `fiber_destroy`; detect cyclic `Fiber.await` via `Fiber.awaiting`.
