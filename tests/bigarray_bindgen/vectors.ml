@@ -49,8 +49,10 @@ let create_int32 n = Array1.create int32 c_layout n
 let int32_words (a : int32_vector) delta n =
   let before = Gc.minor_words () in
   for i = 0 to n - 1 do
-    let x = a.{i} in
-    let sum = Int32.add x delta in
+    let sum =
+      if i land 1 = 0 then Int32.add a.{i} delta
+      else Int32.add (Int32.add a.{i} delta) 1l
+    in
     a.{i} <- Int32.sub (Int32.mul sum 3l) 1l
   done;
   Gc.minor_words () -. before
@@ -58,16 +60,20 @@ let int32_words (a : int32_vector) delta n =
 let int64_words (a : int64_vector) delta n =
   let before = Gc.minor_words () in
   for i = 0 to n - 1 do
-    let x = a.{i} in
-    let sum = Int64.add x delta in
+    let sum =
+      if i land 1 = 0 then Int64.add a.{i} delta
+      else Int64.add (Int64.add a.{i} delta) 1L
+    in
     a.{i} <- Int64.sub (Int64.mul sum 3L) 1L
   done;
   Gc.minor_words () -. before
 let nativeint_words (a : (nativeint, nativeint_elt, c_layout) Array1.t) delta n =
   let before = Gc.minor_words () in
   for i = 0 to n - 1 do
-    let x = a.{i} in
-    let sum = Nativeint.add x delta in
+    let sum =
+      if i land 1 = 0 then Nativeint.add a.{i} delta
+      else Nativeint.add (Nativeint.add a.{i} delta) 1n
+    in
     a.{i} <- Nativeint.sub (Nativeint.mul sum 3n) 1n
   done;
   Gc.minor_words () -. before

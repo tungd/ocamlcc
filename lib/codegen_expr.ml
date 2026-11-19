@@ -931,7 +931,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let dst = fresh_temp b "scalar_load" in
       emit b (Call (ty, dst, { fn = Global (scalar_access_symbol "get" access); args }));
       dst
-  | FloatValue value -> compile_scalar_operand hooks b Double_scalar value
+  | ScalarValue (rep, value) -> compile_scalar_operand hooks b rep value
   | FloatBinop (op, lhs, rhs) ->
       let l = compile_scalar_operand hooks b Double_scalar lhs in
       let r = compile_scalar_operand hooks b Double_scalar rhs in
@@ -1006,7 +1006,7 @@ let emit_unwind b : t =
 let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   match e with
   | Halt a -> compile_atom hooks b a
-  | HaltFloat id -> Hashtbl.find b.vars id
+  | HaltScalar id -> Hashtbl.find b.vars id
   | Let (id, Fun lf, body) ->
       hooks.compile_fun_binding (compile_aexpr hooks) b tail id lf body
   | Let (id, (App _ as ce), Halt (Var v)) when tail && Ident.same id v ->
@@ -1041,7 +1041,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   | LetRec (bindings, body) ->
       hooks.compile_letrec (compile_aexpr hooks) b tail bindings body
   | If (cond, th, el) -> compile_if hooks b tail Long cond th el
-  | FloatIf (cond, th, el) -> compile_if hooks b false Double cond th el
+  | ScalarIf (rep, cond, th, el) -> compile_if hooks b false (scalar_type rep) cond th el
   | Switch (scrut, sw) -> compile_switch hooks b tail scrut sw
   | StringSwitch (scrut, cases, fail) ->
       compile_stringswitch hooks b tail scrut cases fail

@@ -109,7 +109,7 @@ type cexpr =
   | BigarrayAccess of bigarray_access * atom list
   | ScalarLoad of bigarray_access * atom * atom
   | ScalarStore of bigarray_access * atom * atom * scalar_operand
-  | FloatValue of scalar_operand
+  | ScalarValue of scalar_rep * scalar_operand
   | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
   | IntegerBinop of Lambda.boxed_integer * wrapping_arithmetic * scalar_operand * scalar_operand
   | CreateBytes of atom
@@ -133,13 +133,13 @@ and rec_binding = {
 
 and aexpr =
   | Halt of atom
-  | HaltFloat of Ident.t
+  | HaltScalar of Ident.t
   | Let of Ident.t * cexpr * aexpr
   | MutLet of Ident.t * cexpr * aexpr
   | LetJoin of Ident.t * aexpr * aexpr
   | LetRec of rec_binding list * aexpr
   | If of atom * aexpr * aexpr
-  | FloatIf of atom * aexpr * aexpr
+  | ScalarIf of scalar_rep * atom * aexpr * aexpr
   | Switch of atom * switch_cases
   | StringSwitch of atom * (string * aexpr) list * aexpr option
   | StaticCatch of aexpr * int * Ident.t list * aexpr
@@ -630,16 +630,16 @@ and conv_float_operand lam k =
   | Lifthenelse (cond, yes, no) ->
       conv_expr cond (fun cond ->
           let id = Ident.create_local "scalar_join" in
-          let branches = FloatIf (cond, conv_float_tail yes, conv_float_tail no) in
+          let branches = ScalarIf (Double_scalar, cond, conv_float_tail yes, conv_float_tail no) in
           LetJoin (id, branches, k (Raw_scalar id)))
   | _ -> conv_expr lam (fun a -> k (Boxed_scalar a))
 
 and conv_float_tail lam =
   conv_float_operand lam (function
-    | Raw_scalar id -> HaltFloat id
+    | Raw_scalar id -> HaltScalar id
     | Boxed_scalar value ->
         let id = Ident.create_local "scalar" in
-        Let (id, FloatValue (Boxed_scalar value), HaltFloat id))
+        Let (id, ScalarValue (Double_scalar, Boxed_scalar value), HaltScalar id))
 
 and binop op a c emit_cexpr =
   conv_expr a (fun av -> conv_expr c (fun cv -> emit_cexpr (Binop (op, av, cv))))
@@ -755,7 +755,7 @@ let scalar_operand_vars acc = function
   | Raw_scalar id -> Ident.Set.add id acc
 
 let cexpr_vars free_aexpr acc = function
-  | FloatValue a -> scalar_operand_vars acc a
+  | ScalarValue (_, a) -> scalar_operand_vars acc a
   | ScalarLoad (_, a, i) -> atom_vars (atom_vars acc a) i
   | ScalarStore (_, a, i, v) -> scalar_operand_vars (atom_vars (atom_vars acc a) i) v
   | FloatBinop (_, a, b) | IntegerBinop (_, _, a, b) -> scalar_operand_vars (scalar_operand_vars acc a) b
@@ -794,7 +794,7 @@ let cexpr_vars free_aexpr acc = function
 let rec free_vars (e : aexpr) : Ident.Set.t =
   match e with
   | Halt a -> atom_vars Ident.Set.empty a
-  | HaltFloat id -> Ident.Set.singleton id
+  | HaltScalar id -> Ident.Set.singleton id
   | Let (id, ce, body) | MutLet (id, ce, body) ->
       let f_ce = cexpr_vars free_vars Ident.Set.empty ce in
       let f_body = Ident.Set.remove id (free_vars body) in
@@ -823,7 +823,7 @@ let rec free_vars (e : aexpr) : Ident.Set.t =
       in
       let f_body = Ident.Set.diff (free_vars body) rec_ids in
       Ident.Set.union f_defs f_body
-  | If (c, th, el) | FloatIf (c, th, el) ->
+  | If (c, th, el) | ScalarIf (_, c, th, el) ->
       atom_vars (Ident.Set.union (free_vars th) (free_vars el)) c
   | Switch (s, sw) ->
       let acc = atom_vars Ident.Set.empty s in
@@ -890,9 +890,9 @@ let rec boxed_conditional = function
   | _ -> false
 
 (* Conditional tests may bind temporaries before the branch itself. *)
-let rec returns_raw_float = function
-  | Let (_, _, body) -> returns_raw_float body
-  | FloatIf _ -> true
+let rec returns_scalar = function
+  | Let (_, _, body) -> returns_scalar body
+  | ScalarIf _ -> true
   | _ -> false
 
 let bind_scalar_chain id binding body =
@@ -937,8 +937,8 @@ let rec specialize_scalar_chain bindings tail =
                Value (IntegerBinop (kind, op, Boxed_scalar lhs, Boxed_scalar rhs)),
                Ident.Set.add id raw
            | None -> binding, raw)
-      | Some Double_scalar, Join rhs ->
-          Join (specialize_conditional rhs), Ident.Set.add id raw
+      | Some rep, Join rhs ->
+          Join (specialize_conditional rep rhs), Ident.Set.add id raw
       | _ -> binding, raw
     in
     let boxed = Ident.Set.remove id boxed and scalar = Ident.Map.remove id scalar in
@@ -952,7 +952,7 @@ let rec specialize_scalar_chain bindings tail =
       | Value (IntegerBinop (kind, _, lhs, rhs)) ->
           let rep = Integer_scalar kind in
           boxed, demand rep (demand rep scalar lhs) rhs
-      | Value (FloatValue value) -> boxed, demand Double_scalar scalar value
+      | Value (ScalarValue (rep, value)) -> boxed, demand rep scalar value
       | Value ce -> cexpr_vars free_vars boxed ce, scalar
       | Join rhs -> Ident.Set.union boxed (free_vars rhs), scalar
     in
@@ -973,31 +973,31 @@ let rec specialize_scalar_chain bindings tail =
       | Value (FloatBinop (op, lhs, rhs)) -> Value (FloatBinop (op, operand lhs, operand rhs))
       | Value (IntegerBinop (kind, op, lhs, rhs)) ->
           Value (IntegerBinop (kind, op, operand lhs, operand rhs))
-      | Value (FloatValue v) -> Value (FloatValue (operand v))
+      | Value (ScalarValue (rep, v)) -> Value (ScalarValue (rep, operand v))
       | _ -> binding
     in
     bind_scalar_chain id binding body) code tail
 
-and specialize_conditional = function
-  | Let (id, ce, body) -> Let (id, ce, specialize_conditional body)
+and specialize_conditional rep = function
+  | Let (id, ce, body) -> Let (id, ce, specialize_conditional rep body)
   | If (cond, yes, no) ->
-      FloatIf (cond, specialize_float_arm [] yes, specialize_float_arm [] no)
+      ScalarIf (rep, cond, specialize_scalar_arm rep [] yes, specialize_scalar_arm rep [] no)
   | _ -> assert false
 
-and specialize_float_arm bindings = function
-  | Let (id, ce, body) -> specialize_float_arm ((id, Value ce) :: bindings) body
+and specialize_scalar_arm rep bindings = function
+  | Let (id, ce, body) -> specialize_scalar_arm rep ((id, Value ce) :: bindings) body
   | LetJoin (id, rhs, body) when boxed_conditional rhs ->
-      specialize_float_arm ((id, Join rhs) :: bindings) body
+      specialize_scalar_arm rep ((id, Join rhs) :: bindings) body
   | Halt value ->
       let id = Ident.create_local "scalar" in
-      let bindings = (id, Value (FloatValue (Boxed_scalar value))) :: bindings in
-      specialize_scalar_chain bindings (HaltFloat id)
+      let bindings = (id, Value (ScalarValue (rep, Boxed_scalar value))) :: bindings in
+      specialize_scalar_chain bindings (HaltScalar id)
   | expr ->
       (* A complex arm computes an ordinary OCaml value before unboxing. *)
       let boxed = Ident.create_local "boxed_arm" in
       let raw = Ident.create_local "scalar" in
       let tail = LetJoin (boxed, expr,
-                          Let (raw, FloatValue (Boxed_scalar (Var boxed)), HaltFloat raw)) in
+                          Let (raw, ScalarValue (rep, Boxed_scalar (Var boxed)), HaltScalar raw)) in
       specialize_scalar_chain bindings tail
 
 let rec specialize_scalar_bindings = function
@@ -1015,8 +1015,8 @@ let rec specialize_scalar_bindings = function
       LetRec (defs, specialize_scalar_bindings body)
   | If (v, yes, no) ->
       If (v, specialize_scalar_bindings yes, specialize_scalar_bindings no)
-  | FloatIf (v, yes, no) ->
-      FloatIf (v, specialize_scalar_bindings yes, specialize_scalar_bindings no)
+  | ScalarIf (rep, v, yes, no) ->
+      ScalarIf (rep, v, specialize_scalar_bindings yes, specialize_scalar_bindings no)
   | Switch (v, cases) ->
       Switch (v, { consts = List.map specialize_scalar_case cases.consts;
                    blocks = List.map specialize_scalar_case cases.blocks;
@@ -1045,7 +1045,7 @@ and specialize_let_chain bindings = function
   | tail ->
       let tail = specialize_scalar_bindings tail in
       if List.exists (function
-        | _, Value (ScalarStore _ | FloatBinop _ | IntegerBinop _ | FloatValue _) -> true
+        | _, Value (ScalarStore _ | FloatBinop _ | IntegerBinop _ | ScalarValue _) -> true
         | _ -> false) bindings
       then specialize_scalar_chain bindings tail
       else List.fold_left (fun body (id, binding) -> bind_scalar_chain id binding body) tail bindings
@@ -1124,7 +1124,7 @@ let pure_defs (e : aexpr) : (Ident.t * lfunction) list =
           in
           go known acc' body
         end
-    | If (_, th, el) | FloatIf (_, th, el) -> go known (go known acc th) el
+    | If (_, th, el) | ScalarIf (_, _, th, el) -> go known (go known acc th) el
     | Switch (_, sw) ->
         let acc =
           List.fold_left
@@ -1143,7 +1143,7 @@ let pure_defs (e : aexpr) : (Ident.t * lfunction) list =
     | While (cond, body) | CheckExn (cond, body) ->
         go known (go known acc cond) body
     | For (_, _, _, _, body) -> go known acc body
-    | Halt _ | HaltFloat _ | Raise _ | Unwind | StaticRaise _ -> acc
+    | Halt _ | HaltScalar _ | Raise _ | Unwind | StaticRaise _ -> acc
     | Retain (_, body) | Release (_, body) | ReleaseMut (_, body)
     | DropReuse (_, _, body) | FreeReuse (_, body)
     | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->

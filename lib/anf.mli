@@ -114,7 +114,7 @@ type cexpr =
   | BigarrayAccess of bigarray_access * atom list
   | ScalarLoad of bigarray_access * atom * atom
   | ScalarStore of bigarray_access * atom * atom * scalar_operand
-  | FloatValue of scalar_operand
+  | ScalarValue of scalar_rep * scalar_operand
   | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
   | IntegerBinop of Lambda.boxed_integer * wrapping_arithmetic * scalar_operand * scalar_operand
   | CreateBytes of atom
@@ -138,13 +138,13 @@ and rec_binding = {
 
 and aexpr =
   | Halt of atom
-  | HaltFloat of Ident.t
+  | HaltScalar of Ident.t
   | Let of Ident.t * cexpr * aexpr
   | MutLet of Ident.t * cexpr * aexpr
   | LetJoin of Ident.t * aexpr * aexpr
   | LetRec of rec_binding list * aexpr
   | If of atom * aexpr * aexpr
-  | FloatIf of atom * aexpr * aexpr
+  | ScalarIf of scalar_rep * atom * aexpr * aexpr
   | Switch of atom * switch_cases
   | StringSwitch of atom * (string * aexpr) list * aexpr option
   | StaticCatch of aexpr * int * Ident.t list * aexpr
@@ -181,6 +181,6 @@ val of_lambda :
   (program, string) result
 val scalar_rep : Lambda.bigarray_kind -> scalar_rep option
 val scalar_operand_vars : Ident.Set.t -> scalar_operand -> Ident.Set.t
-val returns_raw_float : aexpr -> bool
+val returns_scalar : aexpr -> bool
 val free_vars : aexpr -> Ident.Set.t
 val pure_defs : aexpr -> (Ident.t * lfunction) list

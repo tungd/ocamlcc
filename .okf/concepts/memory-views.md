@@ -261,10 +261,11 @@ The arithmetic wraps at 32 or 64 bits according to the element kind.
 Nativeint uses 64 bits on the supported targets.
 Bounds exceptions and boxed values that escape through ordinary OCaml calls
 or captures keep their usual semantics. All three 128-element loops fell from
-1539 to 3 ARC words, matching the empty-loop counter overhead. Integer
-conditionals and other operations are follow-up slices. Keep complex and other unsupported specialized cases on
-the correct generic path until implemented; report coverage by kind instead
-of claiming all Bigarray access is allocation-free.
+1539 to 3 ARC words, matching the empty-loop counter overhead.
+The compiler joins int32 conditional results as QBE words and int64 or
+nativeint results as longs. The selected arm can return a boxed value from
+a generic call. A checked failure skips the store. Complex and other
+unspecialized kinds use the generic path.
 
 The compiler specializes the load, multiply, and store in this loop:
 

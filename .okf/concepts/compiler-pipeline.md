@@ -101,7 +101,9 @@ result out of ARC ownership tracking. See [memory views](/concepts/memory-views.
 
 Int32, int64, and nativeint Array1 stores also propagate scalar demand through
 straight-line loads and wrapping add, subtract, and multiply. These produce
-QBE words for int32 and longs for int64 and nativeint. The
+QBE words for int32 and longs for int64 and nativeint. A scalar-only
+conditional result uses a phi of the same width. ARC releases any boxed
+branch operand after the compiler extracts its scalar value. The
 demand scan selects a binding only when its scalar uses agree on the
 representation and the binding has no boxed use.
 

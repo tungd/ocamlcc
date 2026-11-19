@@ -184,7 +184,7 @@ static void check_int64_allocations(void)
     assert(!err.code);
     double full = vectors_int64_words(values, 1, 128, &err);
     assert(!err.code);
-    for (int i = 0; i < 128; ++i) assert(cells[i] == INT64_MAX - 3 * i);
+    for (int i = 0; i < 128; ++i) assert(cells[i] == INT64_MAX - 3 * (i - (i & 1)));
     fprintf(stderr, "int64 arithmetic allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
     assert(full == empty);
     ocamlcc_Vectors_view_release(values);
@@ -201,7 +201,7 @@ static void check_nativeint_allocations(void)
     assert(!err.code);
     double full = vectors_nativeint_words(values, 1, 128, &err);
     assert(!err.code);
-    for (int i = 0; i < 128; ++i) assert(cells[i] == INTPTR_MAX - 3 * i);
+    for (int i = 0; i < 128; ++i) assert(cells[i] == INTPTR_MAX - 3 * (i - (i & 1)));
     fprintf(stderr, "nativeint arithmetic allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
     assert(full == empty);
     ocamlcc_Vectors_view_release(values);
@@ -218,7 +218,7 @@ static void check_int32_allocations(void)
     assert(!err.code);
     double full = vectors_int32_words(values, 1, 128, &err);
     assert(!err.code);
-    for (int i = 0; i < 128; ++i) assert(cells[i] == INT32_MAX - 3 * i);
+    for (int i = 0; i < 128; ++i) assert(cells[i] == INT32_MAX - 3 * (i - (i & 1)));
     fprintf(stderr, "int32 arithmetic allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
     assert(full == empty);
     ocamlcc_Vectors_view_release(values);

@@ -26,7 +26,7 @@ let rec tail_callees (e : Anf.aexpr) : Ident.Set.t =
   | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
       tail_callees body
   | If (_, th, el) -> Ident.Set.union (tail_callees th) (tail_callees el)
-  | FloatIf _ -> Ident.Set.empty
+  | ScalarIf _ -> Ident.Set.empty
   | Switch (_, sw) ->
       let acc =
         List.fold_left
@@ -54,7 +54,7 @@ let rec tail_callees (e : Anf.aexpr) : Ident.Set.t =
   | TryWith (body, _, handler) ->
       Ident.Set.union (tail_callees body) (tail_callees handler)
   | CheckExn (_, on_ok) -> tail_callees on_ok
-  | Halt _ | HaltFloat _ | StaticRaise _ | While _ | For _ | Raise _ | Unwind ->
+  | Halt _ | HaltScalar _ | StaticRaise _ | While _ | For _ | Raise _ | Unwind ->
       Ident.Set.empty
 
 let strongly_connected_components nodes edges =
@@ -111,7 +111,7 @@ let collect_globals self_sym (e : Anf.aexpr) : string list =
   in
   let rec scan_aexpr (e : Anf.aexpr) =
     match e with
-    | Halt _ | HaltFloat _ | StaticRaise _ | Raise _ | Unwind -> ()
+    | Halt _ | HaltScalar _ | StaticRaise _ | Raise _ | Unwind -> ()
     | Let (_, ce, body) | MutLet (_, ce, body) ->
         scan_cexpr ce;
         scan_aexpr body
@@ -123,7 +123,7 @@ let collect_globals self_sym (e : Anf.aexpr) : string list =
     | LetRec (bindings, body) ->
         List.iter (fun (rb : Anf.rec_binding) -> scan_aexpr rb.def.body) bindings;
         scan_aexpr body
-    | If (_, th, el) | FloatIf (_, th, el) ->
+    | If (_, th, el) | ScalarIf (_, _, th, el) ->
         scan_aexpr th;
         scan_aexpr el
     | Switch (_, sw) ->

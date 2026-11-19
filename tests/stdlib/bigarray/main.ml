@@ -47,6 +47,10 @@ let add_int32 (a : (int32, int32_elt, fortran_layout) Array1.t) i j delta =
   let value = a.{i} in
   a.{j} <- Int32.add value delta
 
+let conditional_int32 (a : (int32, int32_elt, fortran_layout) Array1.t)
+    take_load i fallback =
+  a.{2} <- (if take_load then Int32.add a.{i} 1l else fallback ())
+
 let add_nativeint (a : (nativeint, nativeint_elt, fortran_layout) Array1.t) i j delta =
   let value = a.{i} in
   a.{j} <- Nativeint.add value delta
@@ -99,6 +103,11 @@ let () =
   assert (Int32.to_int narrow.{2} = -2147483648);
   assert (try add_int32 narrow 0 1 1l; false with Invalid_argument _ -> true);
   assert (narrow.{1} = Int32.max_int);
+  conditional_int32 narrow false 0 (fun () -> Gc.full_major (); -3l);
+  assert (narrow.{2} = -3l);
+  assert (try conditional_int32 narrow true 0 (fun () -> assert false);
+    false with Invalid_argument _ -> true);
+  assert (narrow.{2} = -3l);
   let native = Array1.of_array nativeint fortran_layout [|Nativeint.max_int; 7n|] in
   add_nativeint native 1 2 1n;
   assert (native.{2} = Nativeint.min_int);
