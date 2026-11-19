@@ -46,6 +46,14 @@ caml_bytes_equal: registered
 caml_bytes_notequal: registered
 caml_string_compare: registered
 caml_bytes_compare: registered
+caml_string_lessthan: registered
+caml_string_lessequal: registered
+caml_string_greaterthan: registered
+caml_string_greaterequal: registered
+caml_bytes_lessthan: registered
+caml_bytes_lessequal: registered
+caml_bytes_greaterthan: registered
+caml_bytes_greaterequal: registered
 caml_alloc_dummy: registered
 caml_alloc_dummy_float: registered
 caml_alloc_dummy_lazy: registered

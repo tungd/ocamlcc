@@ -2454,6 +2454,31 @@ int64_t caml_bytes_compare(int64_t a, int64_t b)
     return caml_string_compare(a, b);
 }
 
+int64_t caml_string_lessthan(int64_t a, int64_t b)
+{
+    return (bytes_compare_raw(a, b) < 0) ? 3 : 1;
+}
+
+int64_t caml_string_lessequal(int64_t a, int64_t b)
+{
+    return (bytes_compare_raw(a, b) <= 0) ? 3 : 1;
+}
+
+int64_t caml_string_greaterthan(int64_t a, int64_t b)
+{
+    return (bytes_compare_raw(a, b) > 0) ? 3 : 1;
+}
+
+int64_t caml_string_greaterequal(int64_t a, int64_t b)
+{
+    return (bytes_compare_raw(a, b) >= 0) ? 3 : 1;
+}
+
+int64_t caml_bytes_lessthan(int64_t a, int64_t b) { return caml_string_lessthan(a, b); }
+int64_t caml_bytes_lessequal(int64_t a, int64_t b) { return caml_string_lessequal(a, b); }
+int64_t caml_bytes_greaterthan(int64_t a, int64_t b) { return caml_string_greaterthan(a, b); }
+int64_t caml_bytes_greaterequal(int64_t a, int64_t b) { return caml_string_greaterequal(a, b); }
+
 /* ------------------------------------------------------------------ */
 /* Polymorphic structural comparison & bounded hashing                 */
 /* ------------------------------------------------------------------ */

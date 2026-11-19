@@ -1299,6 +1299,36 @@ static void test_high_arity_closure(void)
     assert(arc_live_objects() == before);
 }
 
+static void test_string_bytes_rel_compare(void)
+{
+    int64_t before = arc_live_objects();
+    char *a = arc_alloc_bytes(3); memcpy(a, "a\0b", 3);
+    char *b = arc_alloc_bytes(3); memcpy(b, "a\0c", 3);
+    int64_t va = (int64_t)(uintptr_t)a;
+    int64_t vb = (int64_t)(uintptr_t)b;
+
+    assert(caml_string_lessthan(va, vb) == tagged(1));
+    assert(caml_string_lessthan(va, va) == tagged(0));
+    assert(caml_string_lessthan(vb, va) == tagged(0));
+    assert(caml_string_lessequal(va, vb) == tagged(1));
+    assert(caml_string_lessequal(va, va) == tagged(1));
+    assert(caml_string_lessequal(vb, va) == tagged(0));
+    assert(caml_string_greaterthan(vb, va) == tagged(1));
+    assert(caml_string_greaterthan(va, va) == tagged(0));
+    assert(caml_string_greaterequal(vb, va) == tagged(1));
+    assert(caml_string_greaterequal(va, va) == tagged(1));
+    assert(caml_string_greaterequal(va, vb) == tagged(0));
+
+    assert(caml_bytes_lessthan(va, vb) == tagged(1));
+    assert(caml_bytes_lessequal(va, va) == tagged(1));
+    assert(caml_bytes_greaterthan(vb, va) == tagged(1));
+    assert(caml_bytes_greaterequal(va, vb) == tagged(0));
+
+    arc_release(a);
+    arc_release(b);
+    assert(arc_live_objects() == before);
+}
+
 int main(void)
 {
     test_float_format();
@@ -1321,6 +1351,7 @@ int main(void)
     test_tls_cleanup_queued_fibers();
     test_compressed_marshal_hooks();
     test_high_arity_closure();
+    test_string_bytes_rel_compare();
     puts("stdlib runtime: formats, malformed cleanup, cycles, truncation, views");
     return 0;
 }

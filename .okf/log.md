@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Add `caml_{string,bytes}_{less,greater}{than,equal}` primitives (`runtime/arc.h`, `runtime/arc.c`, `lib/ccalls.ml`):
+  - OCaml's typechecker specializes relational comparisons on `string`/`bytes` (hit by `Diffing_with_keys`, `Cmi_format`, `Typecore` in `compiler-libs.common`) to these 8 primitives.
+  - Added 1-line wrappers over `bytes_compare_raw` in `runtime/arc.c` and registered all 8 in `lib/ccalls.ml` (all `argc=2, raises=false, yields=false, returns_imm=true`).
+  - TDD-verified in `test/ccalls_test.ml` and `tests/stdlib_runtime.c` (`test_string_bytes_rel_compare`, including embedded NUL bytes); `dune runtest -j1`, `test_stdlib_runtime`, and `asan_stdlib_runtime` pass. See [stdlib-compatibility](/concepts/stdlib-compatibility.md).
+
 - 2026-11-19 (antigravity/1): Add on-demand SHA-256-pinned OCaml 5.5.0 `compiler-libs.common` fetcher (`tools/fetch-ocaml-compiler-libs.py`, `tests/test_fetch_compiler_libs.py`):
   - Fetches or reuses from local opam/build cache `ocaml-5.5.0.tar.gz`, verifies its pinned SHA-256 (`c018052c...`), and extracts only the 104-module transitive closure + 4 `.mli`-only interfaces (`annot`, `outcometree`, `parsetree`, `value_rec_types`) into `build/bootstrap/src/compiler-libs/` (with pre-generated Menhir `parser.{ml,mli}` / `camlinternalMenhirLib.{ml,mli}`, `ocamllex`-generated `lexer.ml`, and boot-configured `config.ml`).
   - TDD-verified via `python3 -m unittest tests/test_fetch_compiler_libs.py` (rejects corrupt SHA-256 fail-closed; extracts and validates all 104 `.ml`/`.mli` + 4 `.mli`-only files and `MANIFEST.json`). See [self-hosting](/concepts/self-hosting.md).

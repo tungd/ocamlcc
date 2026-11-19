@@ -78,6 +78,14 @@ let stdlib_abis =
     ("caml_bytes_notequal", 2, false, false);
     ("caml_string_compare", 2, false, false);
     ("caml_bytes_compare", 2, false, false);
+    ("caml_string_lessthan", 2, false, false);
+    ("caml_string_lessequal", 2, false, false);
+    ("caml_string_greaterthan", 2, false, false);
+    ("caml_string_greaterequal", 2, false, false);
+    ("caml_bytes_lessthan", 2, false, false);
+    ("caml_bytes_lessequal", 2, false, false);
+    ("caml_bytes_greaterthan", 2, false, false);
+    ("caml_bytes_greaterequal", 2, false, false);
     ("caml_alloc_dummy", 1, false, false);
     ("caml_alloc_dummy_float", 1, false, false);
     ("caml_alloc_dummy_lazy", 1, false, false);
@@ -137,6 +145,8 @@ let () =
     && not (Ccalls.returns_imm "caml_floatarray_sub")
     && Ccalls.returns_imm "caml_zstd_initialize"
     && Ccalls.returns_imm "caml_terminfo_rows"
+    && Ccalls.returns_imm "caml_string_lessthan"
+    && Ccalls.returns_imm "caml_bytes_greaterequal"
     && not (Ccalls.returns_imm "caml_sys_get_stdlib_dirs")
     && not (Ccalls.returns_imm "caml_sys_time_include_children")
   in

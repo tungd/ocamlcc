@@ -87,6 +87,14 @@ let table =
     ("caml_bytes_notequal", abi 2 false false);
     ("caml_string_compare", abi 2 false false);
     ("caml_bytes_compare", abi 2 false false);
+    ("caml_string_lessthan", abi 2 false false);
+    ("caml_string_lessequal", abi 2 false false);
+    ("caml_string_greaterthan", abi 2 false false);
+    ("caml_string_greaterequal", abi 2 false false);
+    ("caml_bytes_lessthan", abi 2 false false);
+    ("caml_bytes_lessequal", abi 2 false false);
+    ("caml_bytes_greaterthan", abi 2 false false);
+    ("caml_bytes_greaterequal", abi 2 false false);
     (* value let rec dummy allocation/backpatch *)
     ("caml_alloc_dummy", abi 1 false false);
     ("caml_alloc_dummy_float", abi 1 false false);
@@ -407,6 +415,10 @@ let returns_imm = function
   | "caml_lessthan" | "caml_lessequal" | "caml_greaterthan" | "caml_greaterequal"
   | "caml_string_equal" | "caml_string_notequal" | "caml_string_compare"
   | "caml_bytes_equal" | "caml_bytes_notequal" | "caml_bytes_compare"
+  | "caml_string_lessthan" | "caml_string_lessequal"
+  | "caml_string_greaterthan" | "caml_string_greaterequal"
+  | "caml_bytes_lessthan" | "caml_bytes_lessequal"
+  | "caml_bytes_greaterthan" | "caml_bytes_greaterequal"
   | "caml_obj_tag" | "caml_obj_size" | "caml_obj_is_int" | "caml_obj_set_tag"
   | "caml_ml_output" | "caml_ml_output_bytes" | "caml_ml_output_char"
   | "caml_ml_output_int" | "caml_ml_input" | "caml_ml_input_char"
