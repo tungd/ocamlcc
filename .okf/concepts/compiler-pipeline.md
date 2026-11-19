@@ -122,7 +122,11 @@ Pattern compilation in translmod produces two shapes:
   non-empty, `scrut & 1` discriminates immediates from heap pointers;
   block arms load the 16-bit constructor tag from `ArcHeader.tag` (`scrut -
   12`) and dispatch via a comparison chain, sharing a single `swfail` block
-  when `sw_failaction` is present and merging arms with `phi` nodes.
+  when `sw_failaction` is present and merging arms with `phi` nodes. Any
+  block with > 50 incoming `phi` edges is automatically split by
+  `Codegen_ctx.split_wide_phis` into a trampoline tree so arbitrarily wide
+  switches stay below QBE's `NPred = 63` parser cap without modifying
+  vendored QBE.
 - **`Lstaticcatch`/`Lstaticraise`** — static exits for or-patterns and
   wildcards. Raise sites record their predecessor block and argument
   values; the handler block emits one phi per binder merging all sites, and

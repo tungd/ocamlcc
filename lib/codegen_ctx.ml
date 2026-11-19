@@ -168,17 +168,141 @@ let emit_start_alloc b dst bytes =
   b.cur_fn.start_allocs <-
     Alloc8 (dst, Int (Int64.of_int bytes)) :: b.cur_fn.start_allocs
 
+(* QBE's parser caps phi incoming edges at NPred = 63 (vendor/qbe/parse.c).
+   Split any block with wide phis into a balanced tree of trampoline blocks
+   of at most [max_phi_preds] predecessors each so arbitrary-width OCaml
+   switches compile cleanly under unmodified upstream QBE. *)
+let max_phi_preds = 50
+
+let block_has_wide_phi (blk : Qbe_il.block) =
+  List.exists
+    (function
+      | Phi (_, _, args) -> List.length args > max_phi_preds
+      | _ -> false)
+    blk.insts
+
+let chunk_list k xs =
+  let rec go cur cur_n acc = function
+    | [] ->
+        let acc = if cur = [] then acc else List.rev cur :: acc in
+        List.rev acc
+    | x :: rest ->
+        if cur_n = k then go [ x ] 1 (List.rev cur :: acc) rest
+        else go (x :: cur) (cur_n + 1) acc rest
+  in
+  go [] 0 [] xs
+
+let rec split_wide_phis b (blocks : Qbe_il.block list) : Qbe_il.block list =
+  match List.find_opt block_has_wide_phi blocks with
+  | None -> blocks
+  | Some (target : Qbe_il.block) ->
+      let target_lbl = target.label in
+      let phis, non_phis =
+        List.partition (function Phi _ -> true | _ -> false) target.insts
+      in
+      let seen = Hashtbl.create 64 in
+      let pred_order = ref [] in
+      List.iter
+        (function
+          | Phi (_, _, args) ->
+              List.iter
+                (fun (lbl, _) ->
+                  if not (Hashtbl.mem seen lbl) then begin
+                    Hashtbl.replace seen lbl ();
+                    pred_order := lbl :: !pred_order
+                  end)
+                args
+          | _ -> ())
+        phis;
+      let chunks = chunk_list max_phi_preds (List.rev !pred_order) in
+      let pred_to_split = Hashtbl.create 64 in
+      let split_specs =
+        List.map
+          (fun chunk ->
+            let slbl = fresh_label b "phisplit" in
+            let member = Hashtbl.create (List.length chunk) in
+            List.iter
+              (fun plbl ->
+                Hashtbl.replace pred_to_split plbl slbl;
+                Hashtbl.replace member plbl ())
+              chunk;
+            (slbl, member))
+          chunks
+      in
+      let new_phi_args = Array.make (List.length phis) [] in
+      let split_blocks =
+        List.map
+          (fun (slbl, member) ->
+            let insts = ref [] in
+            List.iteri
+              (fun idx inst ->
+                match inst with
+                | Phi (ty, _, args) -> (
+                    let sub_args =
+                      List.filter (fun (lbl, _) -> Hashtbl.mem member lbl) args
+                    in
+                    match sub_args with
+                    | [] -> ()
+                    | [ (_, v) ] ->
+                        let tmp = fresh_temp b "phisp" in
+                        insts := Copy (ty, tmp, v) :: !insts;
+                        new_phi_args.(idx) <- (slbl, tmp) :: new_phi_args.(idx)
+                    | _ ->
+                        let tmp = fresh_temp b "phisp" in
+                        insts := Phi (ty, tmp, sub_args) :: !insts;
+                        new_phi_args.(idx) <- (slbl, tmp) :: new_phi_args.(idx))
+                | _ -> ())
+              phis;
+            { label = slbl; insts = List.rev !insts; term = Jmp target_lbl })
+          split_specs
+      in
+      let reduced_phis =
+        List.mapi
+          (fun idx inst ->
+            match inst with
+            | Phi (ty, dst, _) -> Phi (ty, dst, List.rev new_phi_args.(idx))
+            | other -> other)
+          phis
+      in
+      let rewrite_edge from_lbl dst_lbl =
+        if String.equal dst_lbl target_lbl then
+          match Hashtbl.find_opt pred_to_split from_lbl with
+          | Some slbl -> slbl
+          | None -> dst_lbl
+        else dst_lbl
+      in
+      let rewrite_term from_lbl = function
+        | Jmp l -> Jmp (rewrite_edge from_lbl l)
+        | Br (c, t, f) ->
+            Br (c, rewrite_edge from_lbl t, rewrite_edge from_lbl f)
+        | (Ret _ | Hlt) as term -> term
+      in
+      let blocks' =
+        List.concat_map
+          (fun blk ->
+            let term = rewrite_term blk.label blk.term in
+            if String.equal blk.label target_lbl then
+              split_blocks
+              @ [ { blk with insts = reduced_phis @ non_phis; term } ]
+            else [ { blk with term } ])
+          blocks
+      in
+      split_wide_phis b blocks'
+
 let finish_blocks b =
   let allocs = List.rev b.cur_fn.start_allocs in
   let blocks = List.rev b.cur_fn.blocks in
-  if allocs = [] then blocks
-  else
-    List.map
-      (fun blk ->
-        if String.equal blk.label "start" then
-          { blk with insts = allocs @ blk.insts }
-        else blk)
-      blocks
+  let blocks =
+    if allocs = [] then blocks
+    else
+      List.map
+        (fun blk ->
+          if String.equal blk.label "start" then
+            { blk with insts = allocs @ blk.insts }
+          else blk)
+        blocks
+  in
+  split_wide_phis b blocks
 
 let close_block b term =
   match b.cur_fn.term with

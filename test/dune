@@ -9,6 +9,17 @@
  (libraries ocamlcc compiler-libs.common))
 
 (executable
+ (name phi_split_test)
+ (modules phi_split_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps phi_split_test.exe)
+ (action
+  (run ./phi_split_test.exe %{dep:../vendor/qbe/qbe})))
+
+(executable
  (name arc_mutlet_test)
  (modules arc_mutlet_test)
  (libraries ocamlcc))

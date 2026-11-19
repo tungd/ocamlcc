@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Split wide QBE `phi` nodes into fan-in trees in `Codegen_ctx.finish_blocks` (`lib/codegen_ctx.ml`):
+  - QBE's parser caps `phi` incoming edges at `NPred = 63` (`vendor/qbe/parse.c`), which wide OCaml switches in `compiler-libs` (`Warnings`, `Printlambda`, `Compenv`) exceed.
+  - Added `split_wide_phis` in `Codegen_ctx.finish_blocks` (chunk size 50): any block with a `Phi` having > 50 incoming edges is recursively split into trampoline `@phisplit.*` blocks with predecessor `Jmp`/`Br` edges rewritten, keeping vendored QBE unmodified and imposing zero overhead on normal blocks.
+  - TDD-verified in `test/phi_split_test.ml` (90-arm match compiles with max phi fan-in ≤ 50 and passes `vendor/qbe/qbe`); `dune runtest -j1` passes. See [compiler-pipeline](/concepts/compiler-pipeline.md).
+
 - 2026-11-19 (antigravity/1): Add `caml_{string,bytes}_{less,greater}{than,equal}` primitives (`runtime/arc.h`, `runtime/arc.c`, `lib/ccalls.ml`):
   - OCaml's typechecker specializes relational comparisons on `string`/`bytes` (hit by `Diffing_with_keys`, `Cmi_format`, `Typecore` in `compiler-libs.common`) to these 8 primitives.
   - Added 1-line wrappers over `bytes_compare_raw` in `runtime/arc.c` and registered all 8 in `lib/ccalls.ml` (all `argc=2, raises=false, yields=false, returns_imm=true`).
