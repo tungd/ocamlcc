@@ -1,5 +1,9 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Add on-demand SHA-256-pinned OCaml 5.5.0 `compiler-libs.common` fetcher (`tools/fetch-ocaml-compiler-libs.py`, `tests/test_fetch_compiler_libs.py`):
+  - Fetches or reuses from local opam/build cache `ocaml-5.5.0.tar.gz`, verifies its pinned SHA-256 (`c018052c...`), and extracts only the 104-module transitive closure + 4 `.mli`-only interfaces (`annot`, `outcometree`, `parsetree`, `value_rec_types`) into `build/bootstrap/src/compiler-libs/` (with pre-generated Menhir `parser.{ml,mli}` / `camlinternalMenhirLib.{ml,mli}`, `ocamllex`-generated `lexer.ml`, and boot-configured `config.ml`).
+  - TDD-verified via `python3 -m unittest tests/test_fetch_compiler_libs.py` (rejects corrupt SHA-256 fail-closed; extracts and validates all 104 `.ml`/`.mli` + 4 `.mli`-only files and `MANIFEST.json`). See [self-hosting](/concepts/self-hosting.md).
+
 - 2026-11-19 (antigravity/1): Add compiler-only bootstrap stubs and minimal `Unix` shim (`bootstrap/stubs/compiler_stubs.c`, `bootstrap/unix/unix.{mli,ml}`, `bootstrap/unix/unix_stubs.c`):
   - `compiler_stubs.c` implements `caml_zstd_initialize` (registering `ZSTD_decompress`/`ZSTD_compress` via `ocamlcc_marshal_register_codec`), `caml_sys_get_stdlib_dirs`, `caml_sys_time_include_children`, and `caml_terminfo_rows`, linked only into the self-hosted compiler binary so `libocamlrt.a` remains zstd-free.
   - `bootstrap/unix/` provides the exact 11-function POSIX `Unix` surface used by `lib/driver.ml`, leaving `lib/driver.ml` and host Dune builds unchanged.

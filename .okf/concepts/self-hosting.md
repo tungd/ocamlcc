@@ -14,6 +14,9 @@ sources:
   - id: bootstrap-unix
     resource: ../bootstrap/unix/unix.ml
     title: Minimal Unix compatibility shim for self-hosted driver
+  - id: fetch-compiler-libs
+    resource: ../tools/fetch-ocaml-compiler-libs.py
+    title: On-demand SHA-256-pinned OCaml 5.5.0 compiler-libs.common fetcher
 ---
 
 # Architecture
