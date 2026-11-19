@@ -46,6 +46,10 @@ The Lexing overlay implements both DFA engines in OCaml, including signed
 16-bit transitions, unsigned memory-code offsets, captures, backtracking,
 refill continuations, EOF, and positions. `tests/stdlib/lexing` uses real
 ocamllex output and passes against both stock OCaml and ocamlcc.
+The Digest overlay (`stdlib/overlay/digest.ml`) implements RFC 1321 MD5 and
+RFC 7693 BLAKE2b (`MD5`, `BLAKE128`, `BLAKE256`, `BLAKE512`) in pure OCaml
+with zero C externals (`ARC_CUSTOM_BLAKE2`, `caml_md5_*`, and `caml_blake2_*`
+removed from `runtime/` and `lib/ccalls.ml`).
 The Parsing overlay interprets ocamlyacc action/goto tables in OCaml and
 preserves token translation, stack growth, reductions, error recovery,
 semantic-action suspension, positions, and trace state. A generated-parser

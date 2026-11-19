@@ -40,8 +40,6 @@ extern int64_t ocamlcc_fiber_await(int64_t);
 extern int64_t caml_lazy_make_forward(int64_t);
 extern int64_t caml_compare(int64_t, int64_t);
 extern int64_t caml_ml_mutex_new(int64_t);
-extern int64_t caml_md5_chan(int64_t, int64_t);
-extern int64_t caml_md5_bytes(int64_t, int64_t, int64_t);
 extern int64_t caml_gc_full_major(int64_t);
 extern int64_t caml_final_register_called_without_value(int64_t, int64_t);
 extern int64_t ocamlcc_poll_finalizers(void);
@@ -696,28 +694,7 @@ static void test_runtime_3_3(void)
     OcamlccBigarrayInfo null_info = ocamlcc_bigarray_view_info(NULL);
     assert(null_info.data == NULL && null_info.byte_length == 0);
 
-    /* 3. caml_md5_chan streaming (> 8 KB) matches caml_md5_bytes. */
-    size_t sz = 10000;
-    char *data = arc_alloc_bytes(sz);
-    memset(data, 'a', sz);
-    int64_t expected_md5 = caml_md5_bytes((int64_t)(uintptr_t)data, tagged(0), tagged((int64_t)sz));
-
-    int fds[2];
-    assert(pipe(fds) == 0);
-    assert(write(fds[1], data, sz) == (ssize_t)sz);
-    close(fds[1]);
-    int64_t ch_in = caml_ml_open_descriptor_in(tagged(fds[0]));
-    int64_t stream_md5 = caml_md5_chan(ch_in, tagged(-1));
-    assert(!ocamlcc_get_exn());
-    assert(memcmp((const void *)(uintptr_t)stream_md5,
-                  (const void *)(uintptr_t)expected_md5, 16) == 0);
-    caml_ml_close_channel(ch_in);
-    arc_release_val(ch_in);
-    arc_release_val(stream_md5);
-    arc_release_val(expected_md5);
-    arc_release(data);
-
-    /* 4. Stranded pending finalizers after an exception must stay DISPATCH_READY. */
+    /* 3. Stranded pending finalizers after an exception must stay DISPATCH_READY. */
     g_fin2_ran = 0;
     int64_t *t1 = arc_alloc(0, 0, 8);
     int64_t *t2 = arc_alloc(0, 0, 8);

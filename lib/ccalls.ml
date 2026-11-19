@@ -240,15 +240,6 @@ let table =
     ("caml_ml_enable_runtime_warnings", abi 1 false false);
     ("caml_ml_runtime_warnings_enabled", abi 1 false false);
     ("caml_sys_random_seed", abi 1 false false);
-    (* digest: MD5 & BLAKE2b *)
-    ("caml_md5_string", abi 3 true false);
-    ("caml_md5_bytes", abi 3 true false);
-    ("caml_md5_chan", abi 2 true false);
-    ("caml_blake2_create", abi 2 true false);
-    ("caml_blake2_update", abi 4 true false);
-    ("caml_blake2_final", abi 2 true false);
-    ("caml_blake2_string", abi 5 true false);
-    ("caml_blake2_bytes", abi 5 true false);
     (* sync: mutex / condition *)
     ("caml_ml_mutex_new", abi 1 false false);
     ("caml_ml_mutex_lock", abi 1 true false);

@@ -53,7 +53,6 @@ typedef struct OcamlccChannel {
 static void channel_destroy(OcamlccChannel *ch);
 extern void ocamlcc_c_mutex_free(void *p);
 extern void ocamlcc_c_cond_free(void *c);
-extern void ocamlcc_c_blake2_free(void *p);
 
 typedef struct ForeignRelease {
     OcamlccBigarrayRelease release;
@@ -1179,8 +1178,6 @@ static void release_subtree(ArcHeader *root, int free_root)
                 ocamlcc_c_mutex_free(p);
             else if (cur->reserved == ARC_CUSTOM_COND)
                 ocamlcc_c_cond_free(p);
-            else if (cur->reserved == ARC_CUSTOM_BLAKE2)
-                ocamlcc_c_blake2_free(p);
             else if (cur->reserved == ARC_CUSTOM_BIGARRAY) {
                 ArcBigarray *a = (void *)(cur + 1);
                 drop_child_val(&w, (int64_t)(uintptr_t)a->backing, &tail);
@@ -4090,14 +4087,7 @@ extern int   ocamlcc_c_cond_wait(void *c, void *m);
 extern int   ocamlcc_c_cond_signal(void *c);
 extern int   ocamlcc_c_cond_broadcast(void *c);
 
-extern void  ocamlcc_c_md5_init(void *opaque_ctx);
-extern void  ocamlcc_c_md5_update(void *opaque_ctx, const uint8_t *data, size_t len);
-extern void  ocamlcc_c_md5_final(void *opaque_ctx, uint8_t out[16]);
-extern void  ocamlcc_c_md5(const uint8_t *data, size_t len, uint8_t out[16]);
 extern int   ocamlcc_c_random_bytes(uint8_t *buf, size_t len);
-extern void *ocamlcc_c_blake2_new(size_t outlen, const uint8_t *key, size_t keylen);
-extern void  ocamlcc_c_blake2_update(void *p, const uint8_t *in, size_t inlen);
-extern void  ocamlcc_c_blake2_final(void *p, size_t outlen, uint8_t *out);
 
 static int64_t alloc_cstr_z(const char *s)
 {
@@ -4669,139 +4659,6 @@ int64_t caml_ml_condition_broadcast(int64_t c_val)
     void *c = (void *)(uintptr_t)unbox_custom_i64(c_val);
     (void)ocamlcc_c_cond_broadcast(c);
     return 1;
-}
-
-/* ---- Digest: MD5 & BLAKE2b ---- */
-
-int64_t caml_md5_bytes(int64_t b_val, int64_t ofs_val, int64_t len_val)
-{
-    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)b_val - 1;
-    int64_t ofs = ofs_val >> 1;
-    int64_t len = len_val >> 1;
-    if (ofs < 0 || len < 0 || ofs > (int64_t)hdr->reserved - len) {
-        ocamlcc_raise_invalid_arg_oob();
-        return 1;
-    }
-    uint8_t dig[16];
-    ocamlcc_c_md5((const uint8_t *)(uintptr_t)b_val + ofs, (size_t)len, dig);
-    char *out = (char *)arc_alloc_bytes(16u);
-    pal_memcpy(out, dig, 16u);
-    return (int64_t)(uintptr_t)out;
-}
-
-int64_t caml_md5_string(int64_t s_val, int64_t ofs_val, int64_t len_val)
-{
-    return caml_md5_bytes(s_val, ofs_val, len_val);
-}
-
-int64_t caml_md5_chan(int64_t chan_val, int64_t len_val)
-{
-    int64_t req = len_val >> 1;
-    uint64_t ctx[16];
-    ocamlcc_c_md5_init(ctx);
-    char *chunk = (char *)arc_alloc_bytes(4096u);
-    size_t total = 0u;
-    for (;;) {
-        size_t want = 4096u;
-        if (req >= 0) {
-            if (total >= (size_t)req)
-                break;
-            size_t rem = (size_t)req - total;
-            if (rem < want)
-                want = rem;
-        }
-        int64_t got = caml_ml_input(
-            chan_val, (int64_t)(uintptr_t)chunk, tag_int(0), tag_int((int64_t)want));
-        if (ocamlcc_get_exn() != 0) {
-            arc_release(chunk);
-            return 1;
-        }
-        int64_t n = got >> 1;
-        if (n == 0) {
-            if (req >= 0) {
-                arc_release(chunk);
-                raise_end_of_file();
-                return 1;
-            }
-            break;
-        }
-        ocamlcc_c_md5_update(ctx, (const uint8_t *)chunk, (size_t)n);
-        total += (size_t)n;
-    }
-    arc_release(chunk);
-    uint8_t dig[16];
-    ocamlcc_c_md5_final(ctx, dig);
-    char *out = (char *)arc_alloc_bytes(16u);
-    pal_memcpy(out, dig, 16u);
-    return (int64_t)(uintptr_t)out;
-}
-
-int64_t caml_blake2_create(int64_t outlen_val, int64_t key_val)
-{
-    int64_t outlen = outlen_val >> 1;
-    const ArcHeader *kh = (const ArcHeader *)(uintptr_t)key_val - 1;
-    if (outlen < 1 || outlen > 64 || kh->reserved > 64u) {
-        ocamlcc_raise_invalid_arg_oob();
-        return 1;
-    }
-    void *s = ocamlcc_c_blake2_new((size_t)outlen, (const uint8_t *)(uintptr_t)key_val, (size_t)kh->reserved);
-    if (s == NULL) pal_abort();
-    return ocamlcc_alloc_custom(ARC_CUSTOM_BLAKE2, (uint64_t)(uintptr_t)s);
-}
-
-int64_t caml_blake2_update(int64_t state_val, int64_t b_val, int64_t ofs_val, int64_t len_val)
-{
-    void *s = (void *)(uintptr_t)unbox_custom_i64(state_val);
-    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)b_val - 1;
-    int64_t ofs = ofs_val >> 1;
-    int64_t len = len_val >> 1;
-    if (ofs < 0 || len < 0 || ofs > (int64_t)bh->reserved - len) {
-        ocamlcc_raise_invalid_arg_oob();
-        return 1;
-    }
-    ocamlcc_c_blake2_update(s, (const uint8_t *)(uintptr_t)b_val + ofs, (size_t)len);
-    return 1;
-}
-
-int64_t caml_blake2_final(int64_t state_val, int64_t outlen_val)
-{
-    void *s = (void *)(uintptr_t)unbox_custom_i64(state_val);
-    int64_t outlen = outlen_val >> 1;
-    if (outlen < 1 || outlen > 64) {
-        ocamlcc_raise_invalid_arg_oob();
-        return 1;
-    }
-    char *out = (char *)arc_alloc_bytes((uint64_t)outlen);
-    ocamlcc_c_blake2_final(s, (size_t)outlen, (uint8_t *)out);
-    return (int64_t)(uintptr_t)out;
-}
-
-int64_t caml_blake2_bytes(int64_t outlen_val, int64_t key_val,
-                          int64_t b_val, int64_t ofs_val, int64_t len_val)
-{
-    int64_t outlen = outlen_val >> 1;
-    const ArcHeader *kh = (const ArcHeader *)(uintptr_t)key_val - 1;
-    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)b_val - 1;
-    int64_t ofs = ofs_val >> 1;
-    int64_t len = len_val >> 1;
-    if (outlen < 1 || outlen > 64 || kh->reserved > 64u ||
-        ofs < 0 || len < 0 || ofs > (int64_t)bh->reserved - len) {
-        ocamlcc_raise_invalid_arg_oob();
-        return 1;
-    }
-    void *s = ocamlcc_c_blake2_new((size_t)outlen, (const uint8_t *)(uintptr_t)key_val, (size_t)kh->reserved);
-    if (s == NULL) pal_abort();
-    ocamlcc_c_blake2_update(s, (const uint8_t *)(uintptr_t)b_val + ofs, (size_t)len);
-    char *out = (char *)arc_alloc_bytes((uint64_t)outlen);
-    ocamlcc_c_blake2_final(s, (size_t)outlen, (uint8_t *)out);
-    ocamlcc_c_blake2_free(s);
-    return (int64_t)(uintptr_t)out;
-}
-
-int64_t caml_blake2_string(int64_t outlen_val, int64_t key_val,
-                           int64_t s_val, int64_t ofs_val, int64_t len_val)
-{
-    return caml_blake2_bytes(outlen_val, key_val, s_val, ofs_val, len_val);
 }
 
 /* ---- Computed field ops & channel/bigarray helpers ---- */

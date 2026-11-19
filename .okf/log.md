@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Slice 6a — Implement Digest (MD5 + BLAKE2b) in pure OCaml and delete C digest implementation (`stdlib/overlay/digest.ml`, `runtime/arc.c`, `runtime/builtins.c`, `runtime/arc.h`, `lib/ccalls.ml`):
+  - Replaced `caml_md5_{string,bytes,chan}`, `caml_blake2_{create,update,final,string,bytes}`, and `ARC_CUSTOM_BLAKE2` (-391 C LOC across `runtime/*.c`/`arc.h`) with a pure OCaml `stdlib/overlay/digest.ml` implementing RFC 1321 MD5 (unboxed 63-bit masked arithmetic) and RFC 7693 BLAKE2b (`BLAKE128`, `BLAKE256`, `BLAKE512`) over `In_channel.input` / `Bytes`.
+  - Added TDD fixture `tests/stdlib/digest/` (checked against stock `ocamlc`).
+  - Verified `dune runtest -j1`, `ninja -j1 test` (26/26), `ninja -j1 asan_stdlib_runtime`, `stdlib_regressions.py` (12/12 including `digest`), and `stdlib_compat.py` (72/72 modules, 68/77 upstream tests including `lib-digest/digests.ml`, `lib-digest/md5.ml`, `lib-random/rand.ml`). See [stdlib-compatibility](/concepts/stdlib-compatibility.md).
+
 - 2026-11-19 (antigravity/1): Achieve bit-for-bit Stage 2 == Stage 3 self-hosting fixed point and wire Ninja targets (`build.ninja`, `tools/bootstrap.py`):
   - Added `bootstrap_fetch`, `bootstrap_stage1`, and `bootstrap` phony targets to `build.ninja`.
   - Updated `tools/bootstrap.py` to build Stage 1 -> Stage 2 -> Stage 3 using a stage-invariant `build/bootstrap/stdlib_src` directory (so `assert` `__FILE__` strings match across stages; Stage 0 `ocamlopt` evaluates `Translprim.make_params` cons cells right-to-left while self-hosted `ocamlcc` Stage 1 & Stage 2 evaluate left-to-right), verify all 386 `.ssa` and `.s` files between Stage 2 and Stage 3 (`386 checked, 0 differences`), and run the full Stage 2 validation suite (`hello`, `fib`, `closures`, `exn`, `mod_main`, `fiber_test`, `fiber_io`, `primitives_test`, `bindgen` + ASan `closures`/`exn`). See [self-hosting](/concepts/self-hosting.md).

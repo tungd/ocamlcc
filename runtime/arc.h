@@ -35,7 +35,6 @@
 #define ARC_CUSTOM_NATIVEINT 2u
 #define ARC_CUSTOM_MUTEX     3u
 #define ARC_CUSTOM_COND      4u
-#define ARC_CUSTOM_BLAKE2    5u
 #define ARC_CUSTOM_BIGARRAY  6u
 #define ARC_CUSTOM_BIGARRAY_BUFFER 7u
 
