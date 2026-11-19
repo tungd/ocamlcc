@@ -64,6 +64,14 @@ let compare_integer (a : integers) i pivot =
   let value = Int64.add a.{i} 1L in
   if compare value pivot < 0 then -1 else if value = pivot then 0 else 1
 
+let convert_through_native (a : integers) i =
+  let narrow = Int64.to_int32 a.{i} in
+  let native = Nativeint.of_int32 narrow in
+  a.{i} <- Int64.of_nativeint native
+
+let round_trip_ocaml_int (a : integers) i =
+  a.{i} <- Int64.of_int (Int64.to_int a.{i})
+
 let add_nativeint (a : (nativeint, nativeint_elt, fortran_layout) Array1.t) i j delta =
   let value = a.{i} in
   a.{j} <- Nativeint.add value delta
@@ -116,6 +124,11 @@ let () =
   assert (compare_integer integers 1 0L = -1);
   assert (compare_integer integers 2 (Int64.succ Int64.min_int) = 0);
   assert (compare_integer integers 3 Int64.min_int = 1);
+  integers.{3} <- 0x1_ffff_ffffL;
+  convert_through_native integers 3;
+  assert (integers.{3} = -1L);
+  round_trip_ocaml_int integers 2;
+  assert (integers.{2} = 0L);
   let narrow = Array1.of_array int32 fortran_layout [|Int32.max_int; 7l|] in
   add_int32 narrow 1 2 1l;
   assert (Int32.to_int narrow.{2} = -2147483648);

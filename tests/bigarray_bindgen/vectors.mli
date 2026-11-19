@@ -26,6 +26,7 @@ val int32_bit_words : int32_vector -> int -> float
 val int32_compare_words : int32_vector -> int -> float
 val int64_words : int64_vector -> int64 -> int -> float
 val int64_div_words : int64_vector -> int64 -> int -> float
+val int64_conversion_words : int64_vector -> int -> float
 val save : vector -> unit
 val write_saved : float -> unit
 val clear : unit -> unit

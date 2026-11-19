@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-19 (codex/1): Specialize integer conversions between boxed widths and OCaml int. The 128-element fixture went from 1539 to 3 ARC words. See [memory views](/concepts/memory-views.md).
+
 - 2026-11-19 (codex/1): Feed signed relational and three-way comparison primitives from unboxed integer Bigarray values. The int32 fixture fell from 387 to 3 ARC words for 128 elements. See [memory views](/concepts/memory-views.md).
 
 - 2026-11-19 (codex/1): Keep signed division and remainder unboxed, preserving zero-divisor exceptions and the minimum-integer overflow case. See [memory views](/concepts/memory-views.md).

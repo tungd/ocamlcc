@@ -197,6 +197,14 @@ static void check_int64_allocations(void)
     assert(full == empty);
     (void)vectors_int64_div_words(values, 0, 128, &err);
     assert(err.code && cells[0] == INT64_MIN && cells[127] == INT64_MAX - 126);
+    for (int i = 0; i < 128; ++i) cells[i] = INT64_C(4294967294) - i;
+    empty = vectors_int64_conversion_words(values, 0, &err);
+    assert(!err.code);
+    full = vectors_int64_conversion_words(values, 128, &err);
+    assert(!err.code);
+    for (int i = 0; i < 128; ++i) assert(cells[i] == -3 - i);
+    fprintf(stderr, "integer conversions allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
+    assert(full == empty);
     ocamlcc_Vectors_view_release(values);
 }
 

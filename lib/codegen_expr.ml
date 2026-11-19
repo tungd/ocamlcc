@@ -379,6 +379,35 @@ let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
       let rhs = unbox_bint b kind cv in
       compile_integer_compare b kind Three_way lhs rhs
 
+let narrow_integer b raw =
+  let word = fresh_temp b "int_word" in
+  emit b (Copy (Word, word, raw));
+  word
+
+let extend_integer b raw =
+  let long = fresh_temp b "int_long" in
+  emit b (Extsw (long, raw));
+  long
+
+let integer_of_int b kind value =
+  let raw = untag b value in
+  match kind with
+  | Lambda.Pint32 -> narrow_integer b raw
+  | Pint64 | Pnativeint -> raw
+
+let int_of_integer b kind raw =
+  let long = match kind with
+    | Lambda.Pint32 -> extend_integer b raw
+    | Pint64 | Pnativeint -> raw
+  in
+  retag b long
+
+let convert_integer b (src : Lambda.boxed_integer) (dst : Lambda.boxed_integer) raw =
+  match src, dst with
+  | Lambda.Pint32, (Pint64 | Pnativeint) -> extend_integer b raw
+  | (Pint64 | Pnativeint), Pint32 -> narrow_integer b raw
+  | _ -> raw
+
 let compile_unop hooks b (op : Anf.unop) (a : Anf.atom) : t =
   let av = compile_atom hooks b a in
   match op with
@@ -427,29 +456,8 @@ let compile_unop hooks b (op : Anf.unop) (a : Anf.atom) : t =
       let d = fresh_temp b "fabsd" in
       emit b (Cast (Double, d, masked));
       box_double b d
-  | Bint_of_int bi ->
-      let ty, _, _ = bint_spec bi in
-      let ua = untag b av in
-      let raw =
-        match ty with
-        | Word ->
-            let w = fresh_temp b "i2w" in
-            emit b (Copy (Word, w, ua));
-            w
-        | Long | Double -> ua
-      in
-      box_bint b bi raw
-  | Int_of_bint bi ->
-      let raw = unbox_bint b bi av in
-      let raw_l =
-        match bint_spec bi with
-        | Word, _, _ ->
-            let ext = fresh_temp b "w2l" in
-            emit b (Extsw (ext, raw));
-            ext
-        | (Long | Double), _, _ -> raw
-      in
-      retag b raw_l
+  | Bint_of_int kind -> box_bint b kind (integer_of_int b kind av)
+  | Int_of_bint kind -> int_of_integer b kind (unbox_bint b kind av)
   | Bint_neg bi ->
       let ty, _, _ = bint_spec bi in
       let ua = unbox_bint b bi av in
@@ -457,21 +465,8 @@ let compile_unop hooks b (op : Anf.unop) (a : Anf.atom) : t =
       emit b (Neg (ty, r, ua));
       box_bint b bi r
   | Bint_cvt (src, dst) ->
-      let u = unbox_bint b src av in
-      let dst_ty, _, _ = bint_spec dst in
-      let converted =
-        match (src, dst_ty) with
-        | Pint32, Long ->
-            let ext = fresh_temp b "cvt_ext" in
-            emit b (Extsw (ext, u));
-            ext
-        | (Pint64 | Pnativeint), Word ->
-            let w = fresh_temp b "cvt_tr" in
-            emit b (Copy (Word, w, u));
-            w
-        | _ -> u
-      in
-      box_bint b dst converted
+      let raw = unbox_bint b src av in
+      box_bint b dst (convert_integer b src dst raw)
 
 let apply_closure b clos_val (arg_vals : t list) : t =
   let n = List.length arg_vals in
@@ -957,6 +952,14 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let l = compile_scalar_operand hooks b rep lhs in
       let r = compile_scalar_operand hooks b rep rhs in
       compile_integer_compare b kind relation l r
+  | IntegerOfInt (kind, value) ->
+      integer_of_int b kind (compile_atom hooks b value)
+  | IntOfInteger (kind, value) ->
+      let raw = compile_scalar_operand hooks b (Integer_scalar kind) value in
+      int_of_integer b kind raw
+  | IntegerConvert (src, dst, value) ->
+      let raw = compile_scalar_operand hooks b (Integer_scalar src) value in
+      convert_integer b src dst raw
   | IntegerNeg (kind, value) ->
       let rep = Anf.Integer_scalar kind in
       let value = compile_scalar_operand hooks b rep value in

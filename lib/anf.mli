@@ -121,6 +121,9 @@ type cexpr =
   | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
   | IntegerBinop of Lambda.boxed_integer * integer_arithmetic * scalar_operand * scalar_operand
   | IntegerCompare of Lambda.boxed_integer * integer_relation * scalar_operand * scalar_operand
+  | IntegerOfInt of Lambda.boxed_integer * atom
+  | IntOfInteger of Lambda.boxed_integer * scalar_operand
+  | IntegerConvert of Lambda.boxed_integer * Lambda.boxed_integer * scalar_operand
   | IntegerNeg of Lambda.boxed_integer * scalar_operand
   | IntegerShift of Lambda.boxed_integer * integer_shift * scalar_operand * atom
   | CreateBytes of atom

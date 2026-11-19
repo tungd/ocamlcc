@@ -6,7 +6,7 @@ tags: [compiler, architecture, lambda, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-19T03:23:43Z
+  at: 2026-11-19T03:28:18Z
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -106,7 +106,8 @@ QBE words for int32 and longs for int64 and nativeint. A scalar-only
 conditional result uses a phi of the same width. ARC releases any boxed
 branch operand after the compiler extracts its scalar value. Signed
 relational and three-way comparisons may take raw inputs and produce
-tagged bool or int results. The
+tagged bool or int results. Integer conversions share the signed widening,
+narrowing, and tagged-int instructions used by the boxed path. The
 demand scan selects a binding only when its scalar uses agree on the
 representation and the binding has no boxed use.
 

@@ -116,6 +116,9 @@ type cexpr =
   | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
   | IntegerBinop of Lambda.boxed_integer * integer_arithmetic * scalar_operand * scalar_operand
   | IntegerCompare of Lambda.boxed_integer * integer_relation * scalar_operand * scalar_operand
+  | IntegerOfInt of Lambda.boxed_integer * atom
+  | IntOfInteger of Lambda.boxed_integer * scalar_operand
+  | IntegerConvert of Lambda.boxed_integer * Lambda.boxed_integer * scalar_operand
   | IntegerNeg of Lambda.boxed_integer * scalar_operand
   | IntegerShift of Lambda.boxed_integer * integer_shift * scalar_operand * atom
   | CreateBytes of atom
@@ -761,6 +764,8 @@ let scalar_operand_vars acc = function
   | Raw_scalar id -> Ident.Set.add id acc
 
 let cexpr_vars free_aexpr acc = function
+  | IntegerOfInt (_, value) -> atom_vars acc value
+  | IntOfInteger (_, value) | IntegerConvert (_, _, value)
   | IntegerNeg (_, value) -> scalar_operand_vars acc value
   | IntegerShift (_, _, value, count) -> scalar_operand_vars (atom_vars acc count) value
   | ScalarValue (_, a) -> scalar_operand_vars acc a
@@ -948,6 +953,14 @@ let rec specialize_scalar_chain bindings tail =
     in
     let binding, raw =
       match wanted, binding with
+      | _, Value (Unop (Int_of_bint kind, value)) ->
+          Value (IntOfInteger (kind, Boxed_scalar value)), raw
+      | Some (Integer_scalar kind), Value (Unop (Bint_of_int actual, value))
+        when actual = kind ->
+          Value (IntegerOfInt (kind, value)), Ident.Set.add id raw
+      | Some (Integer_scalar kind), Value (Unop (Bint_cvt (src, dst), value))
+        when dst = kind ->
+          Value (IntegerConvert (src, dst, Boxed_scalar value)), Ident.Set.add id raw
       | _, Value (Binop (Bint_cmp (kind, cmp), lhs, rhs)) ->
           Value (IntegerCompare (kind, Predicate cmp, Boxed_scalar lhs, Boxed_scalar rhs)), raw
       | _, Value (Binop (Compare_bints kind, lhs, rhs)) ->
@@ -980,7 +993,8 @@ let rec specialize_scalar_chain bindings tail =
       | Value (IntegerBinop (kind, _, lhs, rhs) | IntegerCompare (kind, _, lhs, rhs)) ->
           let rep = Integer_scalar kind in
           boxed, demand rep (demand rep scalar lhs) rhs
-      | Value (IntegerNeg (kind, value)) ->
+      | Value (IntegerNeg (kind, value) | IntOfInteger (kind, value)
+               | IntegerConvert (kind, _, value)) ->
           boxed, demand (Integer_scalar kind) scalar value
       | Value (IntegerShift (kind, _, value, count)) ->
           atom_vars boxed count, demand (Integer_scalar kind) scalar value
@@ -1007,6 +1021,9 @@ let rec specialize_scalar_chain bindings tail =
           Value (IntegerBinop (kind, op, operand lhs, operand rhs))
       | Value (IntegerCompare (kind, op, lhs, rhs)) ->
           Value (IntegerCompare (kind, op, operand lhs, operand rhs))
+      | Value (IntOfInteger (kind, value)) -> Value (IntOfInteger (kind, operand value))
+      | Value (IntegerConvert (src, dst, value)) ->
+          Value (IntegerConvert (src, dst, operand value))
       | Value (IntegerNeg (kind, value)) -> Value (IntegerNeg (kind, operand value))
       | Value (IntegerShift (kind, op, value, count)) ->
           Value (IntegerShift (kind, op, operand value, count))
@@ -1083,7 +1100,7 @@ and specialize_let_chain bindings = function
       let tail = specialize_scalar_bindings tail in
       if List.exists (function
         | _, Value (ScalarStore _ | FloatBinop _ | IntegerBinop _ | ScalarValue _
-                   | Binop ((Bint_cmp _ | Compare_bints _), _, _)) -> true
+                   | Binop ((Bint_cmp _ | Compare_bints _), _, _) | Unop (Int_of_bint _, _)) -> true
         | _ -> false) bindings
       then specialize_scalar_chain bindings tail
       else List.fold_left (fun body (id, binding) -> bind_scalar_chain id binding body) tail bindings

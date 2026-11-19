@@ -77,6 +77,7 @@ let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
   | BytesSet _ | ArraySet _ | Builtin _ | Assign _ ->
       true
+  | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _ -> true
   | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
   | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _
   | BigarrayAccess _ | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _ | Ccall _
@@ -117,6 +118,8 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | App (fn, args) -> (atom_vars fn, args)
   | Builtin (_, _, a) -> (atom_vars a, [])
   | ScalarValue (_, a) -> (Anf.scalar_operand_vars Ident.Set.empty a, [])
+  | IntegerOfInt (_, value) -> (atom_vars value, [])
+  | IntOfInteger (_, value) | IntegerConvert (_, _, value)
   | IntegerNeg (_, value) -> (Anf.scalar_operand_vars Ident.Set.empty value, [])
   | IntegerShift (_, _, value, count) ->
       (Anf.scalar_operand_vars (atom_vars count) value, [])
@@ -340,6 +343,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
              | FloatField _ | SetFloatField _ | OffsetRef _
              | StringGet _ | BytesSet _ | ArrayGet _ | ArraySet _
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _
+             | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
              | ScalarLoad _ | ScalarStore _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
              | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _ | MakeBlock (_, [])) as ce), body) -> (
       match inject_reuse ~in_shadow tok body with
