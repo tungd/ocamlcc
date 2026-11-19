@@ -237,10 +237,15 @@ int64_t caml_output_value_to_bytes(int64_t value, int64_t flags)
 int64_t caml_output_value_to_string(int64_t value, int64_t flags) { return caml_output_value_to_bytes(value, flags); }
 int64_t caml_output_value_to_buffer(int64_t buffer, int64_t offset, int64_t length, int64_t value, int64_t flags)
 {
+    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)buffer - 1;
+    int64_t ofs = offset >> 1;
+    int64_t len = length >> 1;
+    if (!slice_in_bounds(ofs, len, bh->reserved))
+        return m_raise("Marshal.to_buffer: index out of bounds", 1);
     MWriter w = {0}; int64_t result = 1;
     if (!m_encode(&w, value, flags)) result = m_raise(w.error, w.invalid);
-    else if (w.output.len > (uint64_t)(length >> 1)) result = m_raise("Marshal.to_buffer: buffer overflow", 0);
-    else { pal_memcpy((uint8_t *)(uintptr_t)buffer + (offset >> 1), w.output.data, w.output.len); result = tag_int(w.output.len); }
+    else if (w.output.len > (uint64_t)len) result = m_raise("Marshal.to_buffer: buffer overflow", 0);
+    else { pal_memcpy((uint8_t *)(uintptr_t)buffer + ofs, w.output.data, w.output.len); result = tag_int(w.output.len); }
     m_writer_free(&w); return result;
 }
 
@@ -319,7 +324,13 @@ static int64_t m_read_bigarray(MReader *r, uint64_t size32, uint64_t size64)
     pal_memcpy((void *)(uintptr_t)dimensions, dims, n * 8);
     int64_t value = caml_ba_create(tag_int(kind), tag_int(layout), dimensions);
     arc_release_val(dimensions);
-    if (ocamlcc_get_exn()) { r->error = "input_value: invalid bigarray"; return 1; }
+    int64_t ex = ocamlcc_get_exn();
+    if (ex) {
+        ocamlcc_set_exn(0);
+        arc_release_val(ex);
+        r->error = "input_value: invalid bigarray";
+        return 1;
+    }
     ArcBigarray *a = (void *)(uintptr_t)value;
     for (size_t i = 0; i < elements; i++) {
         uint64_t bits = m_get(r, width);
@@ -506,8 +517,36 @@ int64_t caml_input_value(int64_t channel)
     if (!m_read_header(&r, &size, &length)) return m_raise(r.error, 0);
     if (length > UINT32_MAX - n) return m_raise("input_value: object too large", 0);
     size_t total = n + (size_t)length;
-    uint8_t *data = pal_page_alloc(total); if (!data) pal_abort();
-    pal_memcpy(data, header, n); int64_t value = 1;
-    if (m_channel_read(channel, data + n, length, 0)) value = m_from_block(data, total);
-    pal_page_free(data, total); return value;
+    size_t cap = (total < 65536u) ? total : 65536u;
+    uint8_t *data = pal_page_alloc(cap);
+    if (!data) return m_raise("input_value: out of memory", 0);
+    pal_memcpy(data, header, n);
+    size_t have = n;
+    int64_t value = 1;
+    int ok = 1;
+    while (have < total) {
+        size_t want = total - have;
+        if (want > 65536u) want = 65536u;
+        if (have + want > cap) {
+            size_t new_cap = (cap <= total / 2u) ? (cap * 2u) : total;
+            if (new_cap < have + want) new_cap = have + want;
+            uint8_t *new_data = pal_page_alloc(new_cap);
+            if (!new_data) {
+                pal_page_free(data, cap);
+                return m_raise("input_value: out of memory", 0);
+            }
+            pal_memcpy(new_data, data, have);
+            pal_page_free(data, cap);
+            data = new_data;
+            cap = new_cap;
+        }
+        if (!m_channel_read(channel, data + have, want, 0)) {
+            ok = 0;
+            break;
+        }
+        have += want;
+    }
+    if (ok) value = m_from_block(data, total);
+    pal_page_free(data, cap);
+    return value;
 }

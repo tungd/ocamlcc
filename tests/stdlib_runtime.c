@@ -17,6 +17,15 @@ extern int64_t caml_ba_get_1(int64_t, int64_t);
 extern int64_t caml_obj_dup(int64_t);
 extern int64_t caml_obj_with_tag(int64_t, int64_t);
 extern int64_t caml_array_sub(int64_t, int64_t, int64_t);
+extern int64_t caml_array_blit(int64_t, int64_t, int64_t, int64_t, int64_t);
+extern int64_t caml_array_fill(int64_t, int64_t, int64_t, int64_t);
+extern int64_t caml_output_value_to_buffer(int64_t, int64_t, int64_t, int64_t, int64_t);
+extern int64_t caml_input_value(int64_t);
+extern int64_t caml_ml_open_descriptor_in(int64_t);
+extern int64_t caml_ml_open_descriptor_out(int64_t);
+extern int64_t caml_ml_close_channel(int64_t);
+extern int64_t caml_ml_output_bytes(int64_t, int64_t, int64_t, int64_t);
+extern int64_t caml_ml_input(int64_t, int64_t, int64_t, int64_t);
 
 static int64_t tagged(int64_t n) { return (int64_t)(((uint64_t)n << 1) | 1); }
 
@@ -491,6 +500,94 @@ static void test_poller_multi_waiters_and_overflow(void)
     pal_poller_close(pfd);
 }
 
+static void test_bounds_and_marshal_dos(void)
+{
+    int64_t before = arc_live_objects();
+    char *buf = arc_alloc_bytes(8);
+    memset(buf, 'A', 8);
+
+    /* 1. Marshal.to_buffer bounds: negative offset, negative length, and overflow. */
+    caml_output_value_to_buffer((int64_t)(uintptr_t)buf, tagged(-1), tagged(4), tagged(42), 1);
+    clear_exception();
+    caml_output_value_to_buffer((int64_t)(uintptr_t)buf, tagged(0), tagged(-1), tagged(42), 1);
+    clear_exception();
+    caml_output_value_to_buffer((int64_t)(uintptr_t)buf, tagged(6), tagged(4), tagged(42), 1);
+    clear_exception();
+
+    /* 2. caml_array_blit and caml_array_fill bounds. */
+    int64_t *a1 = arc_alloc_array(3, tagged(1));
+    int64_t *a2 = arc_alloc_array(3, tagged(2));
+    caml_array_blit((int64_t)(uintptr_t)a1, tagged(-1), (int64_t)(uintptr_t)a2, tagged(0), tagged(1));
+    clear_exception();
+    caml_array_blit((int64_t)(uintptr_t)a1, tagged(2), (int64_t)(uintptr_t)a2, tagged(0), tagged(2));
+    clear_exception();
+    caml_array_blit((int64_t)(uintptr_t)a1, tagged(0), (int64_t)(uintptr_t)a2, tagged(2), tagged(2));
+    clear_exception();
+    caml_array_fill((int64_t)(uintptr_t)a1, tagged(-1), tagged(1), tagged(9));
+    clear_exception();
+    caml_array_fill((int64_t)(uintptr_t)a1, tagged(2), tagged(2), tagged(9));
+    clear_exception();
+    arc_release(a1);
+    arc_release(a2);
+
+    /* 3. caml_ml_output_bytes and caml_ml_input bounds. */
+    int fds[2];
+    assert(pipe(fds) == 0);
+    int64_t ch_in = caml_ml_open_descriptor_in(tagged(fds[0]));
+    int64_t ch_out = caml_ml_open_descriptor_out(tagged(fds[1]));
+
+    caml_ml_output_bytes(ch_out, (int64_t)(uintptr_t)buf, tagged(-1), tagged(2));
+    clear_exception();
+    caml_ml_output_bytes(ch_out, (int64_t)(uintptr_t)buf, tagged(6), tagged(4));
+    clear_exception();
+    caml_ml_input(ch_in, (int64_t)(uintptr_t)buf, tagged(-1), tagged(2));
+    clear_exception();
+    caml_ml_input(ch_in, (int64_t)(uintptr_t)buf, tagged(6), tagged(4));
+    clear_exception();
+
+    /* 4. caml_input_value with a 4 GB header on a truncated pipe must not OOM/abort. */
+    uint8_t huge_hdr[20] = {
+        0x84, 0x95, 0xa6, 0xbe, /* magic */
+        0xff, 0xff, 0xff, 0x00, /* length ~= 4 GB */
+        0x00, 0x00, 0x00, 0x01, /* objects */
+        0x00, 0x00, 0x00, 0x01, /* words32 */
+        0x00, 0x00, 0x00, 0x01  /* words64 */
+    };
+    assert(write(fds[1], huge_hdr, sizeof(huge_hdr)) == (ssize_t)sizeof(huge_hdr));
+    caml_ml_close_channel(ch_out);
+    arc_release_val(ch_out);
+
+    caml_input_value(ch_in);
+    clear_exception();
+    caml_ml_close_channel(ch_in);
+    arc_release_val(ch_in);
+
+    /* 5. m_read_bigarray failure must not leak caml_ba_create's exception. */
+    uint8_t bad_ba[] = {
+        0x84, 0x95, 0xa6, 0xbe,
+        0x00, 0x00, 0x00, 0x18, /* length = 24 */
+        0x00, 0x00, 0x00, 0x01, /* objects = 1 */
+        0x00, 0x00, 0x00, 0x01, /* words32 = 1 */
+        0x00, 0x00, 0x00, 0x01, /* words64 = 1 */
+        0x12,                   /* CODE_CUSTOM */
+        '_', 'b', 'i', 'g', 'a', 'r', 'r', 'a', 'y', '\0',
+        0x00, 0x00, 0x00, 0x01, /* ndims = 1 */
+        0x00, 0x00, 0x00, 0x63, /* invalid kind = 99 (triggers caml_ba_create error if reached, or kind=0 + bad flags) */
+        0x00, 0x00, 0x00, 0x00  /* dim[0] = 0 */
+    };
+    /* Note: kind=0, layout=0x200 (invalid layout=2 -> triggers caml_ba_create exn) */
+    bad_ba[37] = 0x02;
+    bad_ba[38] = 0x00;
+    char *ba_bytes = arc_alloc_bytes(sizeof(bad_ba));
+    memcpy(ba_bytes, bad_ba, sizeof(bad_ba));
+    caml_input_value_from_bytes((int64_t)(uintptr_t)ba_bytes, tagged(0));
+    clear_exception();
+    arc_release(ba_bytes);
+
+    arc_release(buf);
+    assert(arc_live_objects() == before);
+}
+
 int main(void)
 {
     test_float_format();
@@ -498,6 +595,7 @@ int main(void)
     test_buffered_dummy_update();
     test_weak_get_copy_and_obj_dup();
     test_poller_multi_waiters_and_overflow();
+    test_bounds_and_marshal_dos();
     test_partial_cycle(); test_complete_cycle(); test_truncation_and_mutation(); test_view_lifetime();
     test_retained_c_subview();
     test_c_view_shapes();

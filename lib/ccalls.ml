@@ -147,8 +147,8 @@ let table =
     ("caml_array_sub", abi 3 true false);
     ("caml_array_append", abi 2 true false);
     ("caml_array_concat", abi 1 true false);
-    ("caml_array_blit", abi 5 false false);
-    ("caml_array_fill", abi 4 false false);
+    ("caml_array_blit", abi 5 true false);
+    ("caml_array_fill", abi 4 true false);
     ("caml_array_create_float", abi 1 true false);
     ("caml_floatarray_create", abi 1 true false);
     (* channels / I/O *)

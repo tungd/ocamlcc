@@ -2293,6 +2293,12 @@ static int bytes_compare_raw(int64_t a, int64_t b)
     return 0;
 }
 
+static inline int slice_in_bounds(int64_t ofs, int64_t len, uint64_t cap)
+{
+    return ofs >= 0 && len >= 0 && (uint64_t)ofs <= cap &&
+           (uint64_t)len <= cap - (uint64_t)ofs;
+}
+
 int64_t caml_blit_bytes(int64_t src, int64_t src_off,
                         int64_t dst, int64_t dst_off, int64_t len)
 {
@@ -2301,9 +2307,8 @@ int64_t caml_blit_bytes(int64_t src, int64_t src_off,
     int64_t soff = src_off >> 1;
     int64_t doff = dst_off >> 1;
     int64_t n = len >> 1;
-    if (soff < 0 || doff < 0 || n < 0 ||
-        (uint64_t)soff + (uint64_t)n > hs->reserved ||
-        (uint64_t)doff + (uint64_t)n > hd->reserved) {
+    if (!slice_in_bounds(soff, n, hs->reserved) ||
+        !slice_in_bounds(doff, n, hd->reserved)) {
         raise_invalid_arg_imm(g_inv_arg_oob_str.str);
         return 1;
     }
@@ -3263,7 +3268,12 @@ int64_t caml_array_blit(int64_t src, int64_t sofs_val,
     int64_t sofs = sofs_val >> 1;
     int64_t dofs = dofs_val >> 1;
     int64_t len = len_val >> 1;
-    if (len <= 0)
+    if (!slice_in_bounds(sofs, len, arr_len_of(src)) ||
+        !slice_in_bounds(dofs, len, arr_len_of(dst))) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return 1;
+    }
+    if (len == 0)
         return 1;
     if (arr_is_float(dst) && arr_is_float(src)) {
         double *dp = (double *)(uintptr_t)dst + dofs;
@@ -3303,7 +3313,11 @@ int64_t caml_array_fill(int64_t dst, int64_t ofs_val, int64_t len_val, int64_t v
 {
     int64_t ofs = ofs_val >> 1;
     int64_t len = len_val >> 1;
-    if (len <= 0)
+    if (!slice_in_bounds(ofs, len, arr_len_of(dst))) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return 1;
+    }
+    if (len == 0)
         return 1;
     if (arr_is_float(dst)) {
         double d = unbox_float(v);
@@ -3524,9 +3538,14 @@ int64_t caml_ml_output_bytes(int64_t chan_val, int64_t buf_val,
                              int64_t ofs_val, int64_t len_val)
 {
     OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)buf_val - 1;
     int64_t ofs = ofs_val >> 1;
     int64_t len = len_val >> 1;
-    if (len < 0)
+    if (!slice_in_bounds(ofs, len, bh->reserved)) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return 1;
+    }
+    if (len == 0)
         return 1;
     const uint8_t *p = (const uint8_t *)(uintptr_t)buf_val + ofs;
     (void)chan_write_bytes(ch, p, (size_t)len);
@@ -3592,9 +3611,14 @@ int64_t caml_ml_input(int64_t chan_val, int64_t buf_val,
                       int64_t ofs_val, int64_t len_val)
 {
     OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
+    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)buf_val - 1;
     int64_t ofs = ofs_val >> 1;
     int64_t len = len_val >> 1;
-    if (len <= 0)
+    if (!slice_in_bounds(ofs, len, bh->reserved)) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+        return tag_int(0);
+    }
+    if (len == 0)
         return tag_int(0);
     if (ch->cur < ch->max) {
         size_t avail = ch->max - ch->cur;
