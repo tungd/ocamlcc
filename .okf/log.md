@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-19 (codex/1): Integrate the ocpkg companion with main c7db0de. Compiler/runtime/ASan checks, 15 package tests, nine Crunch integration checks and all 71 non-Lwt checks pass. Record refreshed identities in packages/evidence/main-integration-2026-11-19.json.
+
 - 2026-11-19 (codex/1): Keep scalar-only numeric matches with a default arm unboxed. The 128-element int64 loop fell from 771 to 3 ARC words. A checked int32 load in the default arm still raises before the store. See [memory views](/concepts/memory-views.md).
 
 - 2026-11-19 (codex/1): Keep scalar-only variant match results unboxed. The four-arm int64 loop fell from 771 to 3 ARC words. See [memory views](/concepts/memory-views.md).

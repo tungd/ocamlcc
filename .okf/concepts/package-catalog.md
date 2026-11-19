@@ -84,7 +84,11 @@ and recipe changes must be visible in the lock. Updates are explicit.
 
 # Progress
 
-- Isolated branch `codex/ocpkg-mvp`, based on compiler commit `81a5644`.
+- Initially isolated on `codex/ocpkg-mvp` at compiler commit `81a5644`.
+- Rebased onto main `c7db0de` on 2026-11-19. The combined compiler, runtime/ASan,
+  15 package tests, nine Crunch integration checks and all 71 non-Lwt checks pass.
+  The stdlib rebuilt all 72 modules. Fresh identities and command results are in
+  `packages/evidence/main-integration-2026-11-19.json`; earlier receipts remain historical.
 - Verified crunch 4.1.0 release archive against the opam SHA-256.
 - Inspected upstream build and tests: executable needs Cmdliner, Ptime and Unix;
   upstream generation fixtures cover plain, extension-filtered and Lwt output.

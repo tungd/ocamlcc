@@ -1,0 +1,204 @@
+{
+  "verified_at": "2026-11-19T07:44:45+00:00",
+  "platform": "macOS-27.2-arm64-arm-64bit-Mach-O",
+  "tested_commit": "dc388b311a0df4646d927f8b348b53c41652de62",
+  "main_base": "c7db0def648aac77a07fc3ff405c4836abbcabba",
+  "compiler_sha256": "2551ce21545e479820ec40b000e38e6c48c0cda48048af5962a8469472a75096",
+  "crunch_sha256": "3fea6d0e4616ac36f787e17dc067763b86952f895e64a339dd4f037d94a1e693",
+  "snapshot_sha256": "c05d8453ae216f57046b7e96a3195bc7a8237662da6c9d94629825c9331dea67",
+  "status": "passed",
+  "commands": [
+    {
+      "command": [
+        "ninja",
+        "-j1",
+        "build/bin/ocamlcc",
+        "build/qbe/qbe",
+        "build/rt/libocamlrt.a"
+      ],
+      "exit_code": 0,
+      "seconds": 1.7058633751003072,
+      "log": "build/package-main-check/compiler.log"
+    },
+    {
+      "command": [
+        "ninja",
+        "-j1",
+        "test",
+        "asan_test"
+      ],
+      "exit_code": 0,
+      "seconds": 22.191023000050336,
+      "log": "build/package-main-check/runtime-tests.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/stdlib_compat.py",
+        "--skip-tests"
+      ],
+      "exit_code": 0,
+      "seconds": 19.5575724580558,
+      "log": "build/package-main-check/stdlib.log"
+    },
+    {
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/ocpkg",
+        "-v"
+      ],
+      "exit_code": 0,
+      "seconds": 0.7301874159602448,
+      "log": "build/package-main-check/package-tests.log"
+    },
+    {
+      "command": [
+        "python3",
+        "/Users/tung/.codex/skills/validate/scripts/okf_validate.py",
+        ".okf",
+        "--strict"
+      ],
+      "exit_code": 0,
+      "seconds": 0.07643895805813372,
+      "log": "build/package-main-check/okf.log"
+    },
+    {
+      "command": [
+        "dune",
+        "runtest",
+        "-j1"
+      ],
+      "exit_code": 0,
+      "seconds": 57.96229962504003,
+      "log": "build/package-main-check/compiler-tests.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/ocpkg.py",
+        "lock",
+        "--snapshot",
+        "packages/snapshots/crunch-mvp.json",
+        "--package",
+        "crunch",
+        "--output",
+        "build/crunch/ocpkg.lock.json"
+      ],
+      "exit_code": 0,
+      "seconds": 0.07210404193028808,
+      "log": "build/package-main-check/lock.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/ocpkg.py",
+        "vendor",
+        "--lock",
+        "build/crunch/ocpkg.lock.json",
+        "--directory",
+        "build/crunch/vendor",
+        "--offline"
+      ],
+      "exit_code": 0,
+      "seconds": 0.1322717919247225,
+      "log": "build/package-main-check/vendor.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/ocpkg.py",
+        "emit",
+        "ninja",
+        "--lock",
+        "build/crunch/ocpkg.lock.json",
+        "--vendor",
+        "build/crunch/vendor",
+        "--output",
+        "build/crunch/build.ninja",
+        "--compiler",
+        "build/bin/ocamlcc",
+        "--qbe",
+        "build/qbe/qbe",
+        "--stdlib",
+        "build/stdlib_compat/out",
+        "--runtime",
+        "runtime"
+      ],
+      "exit_code": 0,
+      "seconds": 0.12907150003593415,
+      "log": "build/package-main-check/emit.log"
+    },
+    {
+      "command": [
+        "ninja",
+        "-j1",
+        "-f",
+        "build/crunch/build.ninja"
+      ],
+      "exit_code": 0,
+      "seconds": 8.179885334102437,
+      "log": "build/package-main-check/crunch-build.log"
+    },
+    {
+      "command": [
+        "ninja",
+        "-j1",
+        "-f",
+        "build/crunch/build.ninja"
+      ],
+      "exit_code": 0,
+      "seconds": 0.1294199590338394,
+      "log": "build/package-main-check/crunch-noop.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tests/ocpkg/crunch_integration.py"
+      ],
+      "exit_code": 0,
+      "seconds": 3.6308962090406567,
+      "log": "build/package-main-check/integration.log"
+    },
+    {
+      "command": [
+        "python3",
+        "tests/ocpkg/non_lwt.py"
+      ],
+      "exit_code": 0,
+      "seconds": 128.48408883297816,
+      "log": "build/package-main-check/non-lwt.log"
+    }
+  ],
+  "results": {
+    "stdlib_modules": 72,
+    "package_tool_tests": 15,
+    "crunch_integration_checks": 9,
+    "ninja_noop_preserved_binary_mtime": true,
+    "non_lwt_checks": 71,
+    "non_lwt_passed": 71,
+    "crunch_plain_goldens": 2,
+    "cmdliner_reference_cases": 65,
+    "ptime_test_groups": 22,
+    "ptime_assertions": 900813,
+    "ptime_api_examples": "passed",
+    "negative_controls_detected": 9
+  },
+  "exclusions": [
+    "Crunch's Lwt/Mirage consumer",
+    "Ptime test_gmtime_all and min_clock (upstream run:false)"
+  ],
+  "notes": [
+    "Upstream package/test sources are unchanged.",
+    "Ptime uses a test-only B0 assertion adapter with fixed seed 20261118; loop counts remain upstream defaults.",
+    "Ptime gmtime oracle is libc gmtime_r for ARC and stock Unix.gmtime for stock OCaml."
+  ],
+  "local_receipts": [
+    "build/package-main-check/receipt.json",
+    "build/package-main-check/non-lwt-receipt.json",
+    "build/package-main-check/integration-receipt.json"
+  ]
+}
