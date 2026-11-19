@@ -250,8 +250,10 @@ def build_stage(
     statuses: list[UnitStatus] = []
 
     # 1. stdlib_compat (72 modules)
+    # Use a stage-invariant prepared-source directory so embedded [assert]
+    # [__FILE__] paths match bit-for-bit across stages.
     stdlib_dir = stage_dir / "stdlib"
-    stdlib_work_src = stage_dir / "stdlib_src"
+    stdlib_work_src = stage_dir.parent / "stdlib_src"
     if reuse_stdlib is not None and (reuse_stdlib / "libocamlstdlib_compat.a").is_file():
         print(f"[{stage_name}] Reusing stdlib_compat from {reuse_stdlib}", flush=True)
         shutil.copytree(reuse_stdlib, stdlib_dir)
@@ -715,11 +717,221 @@ def smoke_test_compiler(compiler: Path, stage_dir: Path, qbe: Path, qbe_target: 
     return True
 
 
+def validate_stage2(compiler: Path, stage2_dir: Path, qbe: Path, qbe_target: str) -> bool:
+    """Build Stage-2 stdlib/ and run the core example + ASan suite against tests/*.expected."""
+    val_dir = stage2_dir / "validate"
+    if val_dir.exists():
+        shutil.rmtree(val_dir)
+    val_dir.mkdir(parents=True, exist_ok=True)
+    runner = CommandRunner(stage2_dir / "logs" / "validate", timeout=120)
+
+    stdlib_src = ROOT / "stdlib"
+    stdlib_out = val_dir / "stdlib"
+    stdlib_out.mkdir(parents=True, exist_ok=True)
+    stdlib_mods = [
+        ("camlinternalFormatBasics", "camlinternalFormatBasics.ml", []),
+        ("stdlib__option", "stdlib__option.ml", []),
+        ("stdlib__result", "stdlib__result.ml", []),
+        ("stdlib__int32", "stdlib__int32.ml", []),
+        ("stdlib__int64", "stdlib__int64.ml", []),
+        ("stdlib__nativeint", "stdlib__nativeint.ml", []),
+        ("stdlib__bytes", "stdlib__bytes.ml", []),
+        ("stdlib__string", "stdlib__string.ml", []),
+        ("stdlib__list", "stdlib__list.ml", []),
+        ("stdlib__array", "stdlib__array.ml", []),
+        ("stdlib__buffer", "stdlib__buffer.ml", []),
+        ("stdlib__hashtbl", "stdlib__hashtbl.ml", []),
+        ("stdlib__printf", "stdlib__printf.ml", []),
+        ("stdlib__weak", "stdlib__weak.ml", []),
+        ("stdlib__fiber", "stdlib__fiber.ml", []),
+        ("stdlib", "stdlib.ml", ["--no-alias-deps"]),
+    ]
+    stdlib_objs: list[Path] = []
+    for prefix, fname, extra in stdlib_mods:
+        ssa = stdlib_out / f"{prefix}.ssa"
+        asm = stdlib_out / f"{prefix}.s"
+        obj = stdlib_out / f"{prefix}.o"
+        p1 = runner.run(
+            [
+                str(compiler), "compile", "--nostdlib", "--nopervasives",
+                "-I", str(stdlib_out), "--mod", "--emit-cmi",
+                "--cmi-prefix", str(stdlib_out / prefix),
+                *extra,
+                str(stdlib_src / fname), "-o", str(ssa),
+            ]
+        )
+        if p1.returncode != 0:
+            print(f"[validate] FAIL compile stdlib/{fname}: {first_err(p1)}", flush=True)
+            return False
+        p2 = runner.run([str(qbe), "-t", qbe_target, str(ssa)])
+        if p2.returncode != 0:
+            print(f"[validate] FAIL qbe stdlib/{prefix}: {first_err(p2)}", flush=True)
+            return False
+        asm.write_text(p2.stdout, encoding="utf-8")
+        p3 = runner.run(["cc", "-c", "-fPIC", str(asm), "-o", str(obj)])
+        if p3.returncode != 0:
+            print(f"[validate] FAIL as stdlib/{prefix}: {first_err(p3)}", flush=True)
+            return False
+        stdlib_objs.append(obj)
+    stdlib_a = stdlib_out / "libocamlstdlib.a"
+    p_ar = runner.run(["ar", "rcs", str(stdlib_a), *[str(o) for o in stdlib_objs]])
+    if p_ar.returncode != 0:
+        print(f"[validate] FAIL ar libocamlstdlib.a: {first_err(p_ar)}", flush=True)
+        return False
+
+    rt_a = ROOT / "build" / "rt" / "libocamlrt.a"
+
+    def compile_and_run_single(name: str, extra_flags: list[str], archive: Path | None) -> bool:
+        ssa = val_dir / f"{name}.ssa"
+        asm = val_dir / f"{name}.s"
+        exe = val_dir / name
+        p1 = runner.run(
+            [str(compiler), "compile", *extra_flags, str(ROOT / "examples" / f"{name}.ml"), "-o", str(ssa)]
+        )
+        if p1.returncode != 0:
+            print(f"[validate] FAIL compile {name}: {first_err(p1)}", flush=True)
+            return False
+        p2 = runner.run([str(qbe), "-t", qbe_target, str(ssa)])
+        if p2.returncode != 0:
+            print(f"[validate] FAIL qbe {name}: {first_err(p2)}", flush=True)
+            return False
+        asm.write_text(p2.stdout, encoding="utf-8")
+        libs = [str(archive)] if archive is not None else []
+        p3 = runner.run(["cc", str(asm), *libs, str(rt_a), "-lm", "-pthread", "-o", str(exe)])
+        if p3.returncode != 0:
+            print(f"[validate] FAIL link {name}: {first_err(p3)}", flush=True)
+            return False
+        p4 = runner.run([str(exe)])
+        expected = (ROOT / "tests" / f"{name}.expected").read_text(encoding="utf-8")
+        if p4.returncode != 0 or p4.stdout != expected:
+            print(f"[validate] FAIL run {name}: rc={p4.returncode} out={p4.stdout!r}", flush=True)
+            return False
+        return True
+
+    for name, flags, arc in [
+        ("hello", ["--nostdlib", "-I", str(stdlib_out)], None),
+        ("fib", ["--nostdlib", "-I", str(stdlib_out)], None),
+        ("closures", ["--nostdlib", "-I", str(stdlib_out)], stdlib_a),
+        ("exn", ["--nostdlib", "-I", str(stdlib_out)], stdlib_a),
+        ("fiber_test", ["--nostdlib", "-I", str(stdlib_out)], stdlib_a),
+        ("fiber_io", ["--nostdlib", "-I", str(stdlib_out)], stdlib_a),
+        ("primitives_test", ["--nostdlib", "-I", str(stdlib_out)], stdlib_a),
+    ]:
+        if not compile_and_run_single(name, flags, arc):
+            return False
+
+    # mod_main via `stage2/ocamlcc build` with Stage-2 stdlib
+    mod_exe = val_dir / "mod_main"
+    p_mod = runner.run(
+        [
+            str(compiler), "build",
+            "--qbe", str(qbe),
+            "--runtime-objects-dir", str(ROOT / "build" / "rt"),
+            "--stdlib-dir", str(stdlib_out),
+            str(ROOT / "examples" / "mod_lib.mli"),
+            str(ROOT / "examples" / "mod_lib.ml"),
+            str(ROOT / "examples" / "mod_main.ml"),
+            "-o", str(mod_exe),
+        ]
+    )
+    if p_mod.returncode != 0:
+        print(f"[validate] FAIL build mod_main: {first_err(p_mod)}", flush=True)
+        return False
+    p_mod_run = runner.run([str(mod_exe)])
+    if p_mod_run.returncode != 0 or p_mod_run.stdout != (ROOT / "tests" / "mod_main.expected").read_text(encoding="utf-8"):
+        print(f"[validate] FAIL run mod_main: rc={p_mod_run.returncode}", flush=True)
+        return False
+
+    # bindgen end-to-end
+    bg_cmi = runner.run(
+        [
+            str(compiler), "compile-mli", "--nostdlib", "-I", str(stdlib_out),
+            "--cmi-prefix", str(val_dir / "bindgen_lib"),
+            str(ROOT / "examples" / "bindgen_lib.mli"),
+        ]
+    )
+    if bg_cmi.returncode != 0:
+        print(f"[validate] FAIL bindgen cmi: {first_err(bg_cmi)}", flush=True)
+        return False
+    bg_ssa = val_dir / "bindgen_lib.ssa"
+    bg_asm = val_dir / "bindgen_lib.s"
+    bg_hdr = val_dir / "bindgen_lib.h"
+    bg_shim = val_dir / "bindgen_lib_shim.c"
+    bg_ml = runner.run(
+        [
+            str(compiler), "compile", "--nostdlib", "-I", str(stdlib_out),
+            "-I", str(val_dir), "--cmi-prefix", str(val_dir / "bindgen_lib"),
+            "--mod", str(ROOT / "examples" / "bindgen_lib.ml"), "-o", str(bg_ssa),
+        ]
+    )
+    if bg_ml.returncode != 0:
+        print(f"[validate] FAIL bindgen ml: {first_err(bg_ml)}", flush=True)
+        return False
+    p_bg_qbe = runner.run([str(qbe), "-t", qbe_target, str(bg_ssa)])
+    if p_bg_qbe.returncode != 0:
+        print(f"[validate] FAIL bindgen qbe: {first_err(p_bg_qbe)}", flush=True)
+        return False
+    bg_asm.write_text(p_bg_qbe.stdout, encoding="utf-8")
+    p_bg_gen = runner.run(
+        [
+            str(compiler), "bindgen", "--nostdlib", "-I", str(stdlib_out),
+            str(ROOT / "examples" / "bindgen_lib.mli"),
+            "-o", str(bg_hdr), "--shim", str(bg_shim),
+        ]
+    )
+    if p_bg_gen.returncode != 0:
+        print(f"[validate] FAIL bindgen gen: {first_err(p_bg_gen)}", flush=True)
+        return False
+    bg_exe = val_dir / "bindgen_host"
+    p_bg_cc = runner.run(
+        [
+            "cc", "-std=c99", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
+            f"-I{val_dir}", str(ROOT / "tests" / "bindgen_host.c"),
+            str(bg_shim), str(bg_asm), str(stdlib_a), str(rt_a), "-lm",
+            "-o", str(bg_exe),
+        ]
+    )
+    if p_bg_cc.returncode != 0:
+        print(f"[validate] FAIL bindgen cc: {first_err(p_bg_cc)}", flush=True)
+        return False
+    p_bg_run = runner.run([str(bg_exe)])
+    if p_bg_run.returncode != 0 or p_bg_run.stdout != (ROOT / "tests" / "bindgen_host.expected").read_text(encoding="utf-8"):
+        print(f"[validate] FAIL bindgen run: rc={p_bg_run.returncode}", flush=True)
+        return False
+
+    # ASan smoke check on Stage-2 compiled closures + exn
+    asan_rt = ROOT / "build" / "asan" / "rt" / "libocamlrt.a"
+    if asan_rt.is_file():
+        for name in ("closures", "exn"):
+            exe = val_dir / f"asan_{name}"
+            p_as = runner.run(
+                [
+                    "cc", "-std=c99", "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+                    str(val_dir / f"{name}.s"), str(stdlib_a), str(asan_rt), "-lm", "-pthread",
+                    "-o", str(exe),
+                ]
+            )
+            if p_as.returncode != 0:
+                print(f"[validate] FAIL link asan_{name}: {first_err(p_as)}", flush=True)
+                return False
+            p_arun = runner.run([str(exe)])
+            if p_arun.returncode != 0 or p_arun.stdout != (ROOT / "tests" / f"{name}.expected").read_text(encoding="utf-8"):
+                print(f"[validate] FAIL run asan_{name}: rc={p_arun.returncode}", flush=True)
+                return False
+
+    print(
+        "[validate] PASS Stage-2 suite (hello, fib, closures, exn, mod_main, "
+        "fiber_test, fiber_io, primitives_test, bindgen + ASan)",
+        flush=True,
+    )
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Self-hosted bootstrap runner for ocamlcc.")
     parser.add_argument(
         "--stage",
-        choices=["fetch", "stage1", "stage2", "verify", "all"],
+        choices=["fetch", "stage1", "stage2", "stage3", "verify", "all"],
         default="all",
     )
     parser.add_argument("--tarball", type=Path, default=None)
@@ -733,6 +945,7 @@ def main() -> int:
     src_dir = boot_dir / "src"
     stage1_dir = boot_dir / "stage1"
     stage2_dir = boot_dir / "stage2"
+    stage3_dir = boot_dir / "stage3"
 
     stage0 = ROOT / "build" / "bin" / "ocamlcc"
     qbe = ROOT / "build" / "qbe" / "qbe"
@@ -794,15 +1007,46 @@ def main() -> int:
             return 1
         if bin2 is not None and not smoke_test_compiler(bin2, stage2_dir, qbe, qbe_target):
             return 1
+        if args.stage == "stage2":
+            return 0
+
+    stage2_bin = stage2_dir / "ocamlcc"
+    if args.stage in ("stage3", "all"):
+        if not stage2_bin.is_file():
+            print(f"error: stage2 binary not found at {stage2_bin}", file=sys.stderr)
+            return 1
+        ok3, _st3, bin3 = build_stage(
+            stage_name="stage3",
+            compiler=stage2_bin,
+            qbe=qbe,
+            qbe_target=qbe_target,
+            rt_archive=rt_archive,
+            src_dir=src_dir,
+            manifest=manifest,
+            stage_dir=stage3_dir,
+            timeout=args.timeout,
+            reuse_stdlib=None,
+            stop_on_error=args.stop_on_error,
+            only_compiler_libs=args.only_compiler_libs,
+        )
+        if not ok3:
+            return 1
+        if bin3 is not None and not smoke_test_compiler(bin3, stage3_dir, qbe, qbe_target):
+            return 1
+        if args.stage == "stage3":
+            return 0
 
     if args.stage in ("verify", "all"):
-        fp_ok, _diffs = verify_fixed_point(stage1_dir, stage2_dir)
+        # Stage 0 is built by host ocamlopt (right-to-left tuple/cons evaluation order);
+        # Stage 1 and Stage 2 are both built by ocamlcc (left-to-right), so Stage 2 == Stage 3
+        # is the true bit-for-bit compiler fixed point.
+        fp_ok, _diffs = verify_fixed_point(stage2_dir, stage3_dir)
         if not fp_ok:
             return 1
-        if not smoke_test_compiler(stage2_dir / "ocamlcc", stage2_dir, qbe, qbe_target):
+        if not validate_stage2(stage2_bin, stage2_dir, qbe, qbe_target):
             return 1
 
-    print("\n=== BOOTSTRAP COMPLETE: Stage 1 == Stage 2 FIXED POINT VERIFIED ===", flush=True)
+    print("\n=== BOOTSTRAP COMPLETE: Stage 2 == Stage 3 FIXED POINT VERIFIED ===", flush=True)
     return 0
 
 

@@ -28,15 +28,23 @@ Self-hosting compiles `ocamlcc` and its entire closure into a standalone native
 binary running on `ocamlcc`'s Perceus ARC runtime (zero host OCaml runtime or
 tracing GC):
 
-1. **Stage 0** — host Dune/OCaml 5.5.0 builds `build/bin/ocamlcc`.
-2. **Stage 1** — `stage0` compiles `stdlib_compat` (72 modules), the 104-module
-   transitive subset of OCaml 5.5.0 `compiler-libs.common` (+ 4 `.mli`-only
-   interfaces, fetched on demand from a SHA-256-pinned OCaml 5.5.0 release
-   tarball), `bootstrap/unix/`, and `ocamlcc` (16 modules), linking against
-   `libocamlrt.a` and compiler-only C stubs (`bootstrap/stubs/compiler_stubs.c`
-   + `-lzstd`).
-3. **Stage 2** — `stage1` compiles the exact same ~193 modules and verifies
-   bit-for-bit `.ssa` and `.s` fixed-point equality against Stage 1.
+1. **Stage 0** — host Dune/OCaml 5.5.0 builds `build/bin/ocamlcc` (uses OCaml
+   `ocamlopt` right-to-left evaluation order on tuple/cons arguments such as
+   `Translprim.make_params`).
+2. **Stage 1** — `stage0` compiles `stdlib_compat` (72 modules from shared
+   `build/bootstrap/stdlib_src`), the 104-module transitive subset of OCaml
+   5.5.0 `compiler-libs.common` (+ 4 `.mli`-only interfaces, fetched on demand
+   from a SHA-256-pinned OCaml 5.5.0 release tarball), `bootstrap/unix/`, and
+   `ocamlcc` (16 modules), linking against `libocamlrt.a` and compiler-only C
+   stubs (`bootstrap/stubs/compiler_stubs.c` + `-lzstd`). Because `ocamlcc`
+   emits left-to-right argument evaluation, the Stage 1 binary runs with
+   `ocamlcc`'s own left-to-right semantics.
+3. **Stage 2** — `stage1` compiles the exact same ~193 modules into `stage2/`.
+4. **Stage 3 & fixed point (`ninja -j1 bootstrap`)** — `stage2` compiles the
+   same ~193 modules into `stage3/`, verifies **386/386 bit-for-bit `.ssa` and
+   `.s` equality** between `stage2` and `stage3`, and validates the Stage 2
+   compiler across `hello`, `fib`, `closures`, `exn`, `mod_main`, `fiber_test`,
+   `fiber_io`, `primitives_test`, `bindgen`, and ASan checks.
 
 # Compiler-only stubs & zstd isolation
 

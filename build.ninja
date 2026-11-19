@@ -568,3 +568,15 @@ build tsan_cc_reserved_race: run_tsan_test | $builddir/tsan/cc_reserved_race tes
 build tsan_mt_ffi: run_tsan_mt_ffi | $builddir/tsan/mt_ffi_host tests/mt_ffi.expected
 
 build tsan_test: phony tsan_cc_reserved_race tsan_mt_ffi
+
+rule run_bootstrap
+  command = python3 tools/bootstrap.py --stage $stage
+  description = BOOTSTRAP ($stage)
+  pool = console
+
+build bootstrap_fetch: run_bootstrap
+  stage = fetch
+build bootstrap_stage1: run_bootstrap | $builddir/bin/ocamlcc $builddir/qbe/qbe $builddir/rt/libocamlrt.a
+  stage = stage1
+build bootstrap: run_bootstrap | $builddir/bin/ocamlcc $builddir/qbe/qbe $builddir/rt/libocamlrt.a
+  stage = all

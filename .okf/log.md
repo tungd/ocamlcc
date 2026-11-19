@@ -1,5 +1,9 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Achieve bit-for-bit Stage 2 == Stage 3 self-hosting fixed point and wire Ninja targets (`build.ninja`, `tools/bootstrap.py`):
+  - Added `bootstrap_fetch`, `bootstrap_stage1`, and `bootstrap` phony targets to `build.ninja`.
+  - Updated `tools/bootstrap.py` to build Stage 1 -> Stage 2 -> Stage 3 using a stage-invariant `build/bootstrap/stdlib_src` directory (so `assert` `__FILE__` strings match across stages; Stage 0 `ocamlopt` evaluates `Translprim.make_params` cons cells right-to-left while self-hosted `ocamlcc` Stage 1 & Stage 2 evaluate left-to-right), verify all 386 `.ssa` and `.s` files between Stage 2 and Stage 3 (`386 checked, 0 differences`), and run the full Stage 2 validation suite (`hello`, `fib`, `closures`, `exn`, `mod_main`, `fiber_test`, `fiber_io`, `primitives_test`, `bindgen` + ASan `closures`/`exn`). See [self-hosting](/concepts/self-hosting.md).
+
 - 2026-11-19 (antigravity/1): Extend mutual tail-call SCC `@dispatch` trampolines to non-pure `let rec` closure groups (`lib/codegen_analysis.ml`, `lib/codegen_expr.ml`, `lib/codegen_fn.ml`, `test/mutrec_closure_tail_test.ml`, `examples/closures.ml`):
   - Previously only pure `let rec` definitions received `@dispatch` trampolines; non-pure mutual `let rec` closures (including `ocamllex`-generated DFAs in `Lexer` scanning multi-ten-KB table literals in `lexer.ml` and `parser.ml`) pushed native C stack frames per state transition and overflowed macOS's 8 MB stack.
   - Added optional `~arities` saturated-call matching to `Codegen_analysis.tail_callees`, factored `compile_group` into shared `compile_scc_group ~export ~with_closure` (threading `%phi_clos` and unpacking member `env` at each entry), added `emit_group_wrapper` so individual closures remain indirect-callable via `ocamlcc_apply_n`, and unified `compile_app` direct/tail-call emission for pure and closure SCCs.
