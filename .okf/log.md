@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Implement full graph traversal in `caml_obj_reachable_words` (`runtime/arc.c`) and align `docs/design.md` / `README.md` with the actual runtime architecture and unsupported OCaml feature list (`Lsend`, ephemerons, backtraces, signal handlers, `Marshal.Closures`). Regression-tested in `tests/stdlib_runtime.c` (`test_reachable_words`); `ninja test` and `ninja asan_test` pass.
+
 - 2026-11-19 (antigravity/1): Fix driver, cross-compilation, bindgen shim, and CLI issues (§4):
   - Fix inverted `--nostdlib` condition (`if cfg.nostdlib then Ok []`) in `lib/driver.ml`; replace predictable `/tmp/ocamlcc_build_<pid>` with `Filename.temp_dir` and make `rm_rf` unlink symlinks without following them (`Unix.lstat`).
   - Derive `<prefix>-ar` for cross-compilers, pass `-pthread` on Linux and omit `-lm` on Windows, isolate `-headers` for `ios-xcframework` to a dedicated directory containing only the emitted header, add `Win64` and `rv64` context-switch support in `runtime/pal_ctx.S`, and guard `_WIN32` in `caml_sys_os_type`.

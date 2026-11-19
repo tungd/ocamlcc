@@ -39,6 +39,7 @@ extern int64_t caml_md5_bytes(int64_t, int64_t, int64_t);
 extern int64_t caml_gc_full_major(int64_t);
 extern int64_t caml_final_register_called_without_value(int64_t, int64_t);
 extern int64_t ocamlcc_poll_finalizers(void);
+extern int64_t caml_obj_reachable_words(int64_t);
 
 static int64_t tagged(int64_t n) { return (int64_t)(((uint64_t)n << 1) | 1); }
 
@@ -736,6 +737,43 @@ static void test_runtime_3_3(void)
     assert(arc_live_objects() == before);
 }
 
+static void test_reachable_words(void)
+{
+    int64_t before = arc_live_objects();
+
+    /* 1. Tree: pair -> (s1, s2). */
+    char *s1 = arc_alloc_bytes(4);
+    char *s2 = arc_alloc_bytes(4);
+    int64_t *pair = arc_alloc(0, 2, 16);
+    pair[0] = (int64_t)(uintptr_t)s1;
+    pair[1] = (int64_t)(uintptr_t)s2;
+    assert((caml_obj_reachable_words((int64_t)(uintptr_t)pair) >> 1) == 10);
+
+    /* 2. Diamond DAG: pair2 -> (s1, s1) counts s1 once. */
+    int64_t *pair2 = arc_alloc(0, 2, 16);
+    arc_retain(s1);
+    arc_retain(s1);
+    pair2[0] = (int64_t)(uintptr_t)s1;
+    pair2[1] = (int64_t)(uintptr_t)s1;
+    assert((caml_obj_reachable_words((int64_t)(uintptr_t)pair2) >> 1) == 7);
+
+    /* 3. Cycle: c1 <-> c2 terminates and counts each once. */
+    int64_t *c1 = arc_alloc(0, 1, 8);
+    int64_t *c2 = arc_alloc(0, 1, 8);
+    arc_retain(c2);
+    c1[0] = (int64_t)(uintptr_t)c2;
+    arc_retain(c1);
+    c2[0] = (int64_t)(uintptr_t)c1;
+    assert((caml_obj_reachable_words((int64_t)(uintptr_t)c1) >> 1) == 6);
+
+    arc_release(pair);
+    arc_release(pair2);
+    arc_release(c1);
+    arc_release(c2);
+    assert(ocamlcc_arc_collect(1) == tagged(2));
+    assert(arc_live_objects() == before);
+}
+
 int main(void)
 {
     test_float_format();
@@ -746,6 +784,7 @@ int main(void)
     test_bounds_and_marshal_dos();
     test_fiber_robustness();
     test_runtime_3_3();
+    test_reachable_words();
     test_partial_cycle(); test_complete_cycle(); test_truncation_and_mutation(); test_view_lifetime();
     test_retained_c_subview();
     test_c_view_shapes();

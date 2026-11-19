@@ -4979,12 +4979,105 @@ int64_t caml_obj_add_offset(int64_t v, int64_t off_val)
     return (int64_t)((uintptr_t)v + (intptr_t)off);
 }
 
+static int rw_visited_insert(uintptr_t **tab, size_t *cap, size_t *alloc_bytes,
+                             size_t *used, uintptr_t key)
+{
+    if (*tab == NULL || (*used + 1u) * 2u >= *cap) {
+        size_t new_bytes = (*alloc_bytes == 0u) ? (size_t)LARGE_PAGE_ALIGN : (*alloc_bytes * 2u);
+        uintptr_t *nt = (uintptr_t *)pal_page_alloc(new_bytes);
+        if (nt == NULL)
+            return -1;
+        pal_memset(nt, 0, new_bytes);
+        size_t ncap = new_bytes / sizeof(uintptr_t);
+        if (*tab != NULL) {
+            for (size_t i = 0; i < *cap; i++) {
+                if ((*tab)[i] != 0u) {
+                    size_t idx = (size_t)((*tab)[i] >> 4) & (ncap - 1u);
+                    while (nt[idx] != 0u)
+                        idx = (idx + 1u) & (ncap - 1u);
+                    nt[idx] = (*tab)[i];
+                }
+            }
+            pal_page_free(*tab, *alloc_bytes);
+        }
+        *tab = nt;
+        *alloc_bytes = new_bytes;
+        *cap = ncap;
+    }
+    size_t mask = *cap - 1u;
+    size_t idx = (size_t)(key >> 4) & mask;
+    while ((*tab)[idx] != 0u) {
+        if ((*tab)[idx] == key)
+            return 0;
+        idx = (idx + 1u) & mask;
+    }
+    (*tab)[idx] = key;
+    (*used)++;
+    return 1;
+}
+
+static void rw_push_val(CCVec *work, uintptr_t **tab, size_t *cap,
+                        size_t *alloc_bytes, size_t *used, int64_t val)
+{
+    if (!is_heap_ptr(val))
+        return;
+    ArcHeader *h = (ArcHeader *)(uintptr_t)val - 1;
+    if (atomic_load_explicit(&h->refcount, memory_order_relaxed) == ARC_IMMORTAL)
+        return;
+    if (rw_visited_insert(tab, cap, alloc_bytes, used, (uintptr_t)h) == 1)
+        ccvec_push(work, h);
+}
+
 int64_t caml_obj_reachable_words(int64_t v)
 {
     if (!is_heap_ptr(v))
         return tag_int(0);
-    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)v - 1;
-    return tag_int((int64_t)((hdr->byte_size + 7u) / 8u + 2u));
+    ArcHeader *root = (ArcHeader *)(uintptr_t)v - 1;
+    if (atomic_load_explicit(&root->refcount, memory_order_relaxed) == ARC_IMMORTAL)
+        return tag_int(0);
+
+    CCVec work = { NULL, 0, 0, 0 };
+    uintptr_t *tab = NULL;
+    size_t cap = 0, alloc_bytes = 0, used = 0;
+    if (rw_visited_insert(&tab, &cap, &alloc_bytes, &used, (uintptr_t)root) == 1)
+        ccvec_push(&work, root);
+
+    uint64_t words = 0u;
+    while (work.len > 0u) {
+        ArcHeader *cur = work.data[--work.len];
+        words += (uint64_t)((cur->byte_size + 7u) / 8u + 2u);
+        uint16_t tag = cur->tag;
+        if (tag == (uint16_t)ARC_TAG_CLOSURE) {
+            ArcClosure *c = (ArcClosure *)(cur + 1);
+            for (uint16_t i = 0; i < cur->scan_fields; i++)
+                rw_push_val(&work, &tab, &cap, &alloc_bytes, &used, (int64_t)c->env[i]);
+        } else if (tag == (uint16_t)ARC_TAG_PAP) {
+            ArcPap *p = (ArcPap *)(cur + 1);
+            rw_push_val(&work, &tab, &cap, &alloc_bytes, &used, (int64_t)(uintptr_t)p->orig);
+            for (uint64_t i = 0; i < p->n_applied; i++)
+                rw_push_val(&work, &tab, &cap, &alloc_bytes, &used, p->args[i]);
+        } else if (tag == (uint16_t)ARC_TAG_ARRAY) {
+            int64_t *arr = (int64_t *)(cur + 1);
+            uint32_t n = cur->byte_size / 8u;
+            for (uint32_t i = 0; i < n; i++)
+                rw_push_val(&work, &tab, &cap, &alloc_bytes, &used, arr[i]);
+        } else if (tag == (uint16_t)ARC_TAG_CUSTOM &&
+                   cur->reserved == ARC_CUSTOM_BIGARRAY) {
+            ArcBigarray *a = (ArcBigarray *)(cur + 1);
+            rw_push_val(&work, &tab, &cap, &alloc_bytes, &used,
+                        (int64_t)(uintptr_t)a->backing);
+        } else if (!is_unscanned_leaf_tag(tag) &&
+                   tag != (uint16_t)ARC_TAG_FIBER) {
+            int64_t *fields = (int64_t *)(cur + 1);
+            for (uint16_t i = 0; i < cur->scan_fields; i++)
+                rw_push_val(&work, &tab, &cap, &alloc_bytes, &used, fields[i]);
+        }
+    }
+
+    ccvec_free(&work);
+    if (tab != NULL)
+        pal_page_free(tab, alloc_bytes);
+    return tag_int((int64_t)words);
 }
 
 int64_t caml_obj_raw_field(int64_t obj_val, int64_t idx_val)

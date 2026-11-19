@@ -145,18 +145,18 @@ typedef struct {
   registers file descriptors/timers with native OS primitives (kqueue/GCD on
   iOS/macOS, epoll/ALooper on Android/Linux).
 
-### 4.5 Freestanding Platform Abstraction Layer (pal.h)
+### 4.5 Platform Abstraction Layer (pal.h)
 
-The entire C runtime (~1,200 LOC) is freestanding and depends on only 6
-platform hooks:
+The C runtime (`runtime/arc.c` with `bigarray.inc` and `marshal.inc`, `runtime/fiber.c`, `runtime/closure.c`, `runtime/pal.c`, `runtime/pal_ctx.S`, `runtime/builtins.c`, `runtime/main_entry.c`) isolates OS/page/poller primitives behind 6 PAL hook groups (`pal.h`), while `runtime/builtins.c` provides POSIX/libc/libm/pthread helpers for standard-library I/O, math, sync, and crypto:
 
-1. `pal_page_alloc` / `pal_page_free` (mmap/munmap syscalls on Linux;
-   libSystem / Bionic on mobile)
-2. `pal_abort` (exit_group syscall / `__builtin_trap()`)
-3. `pal_monotonic_ns` (clock_gettime)
-4. `pal_poll_wait` (epoll / kqueue / libdispatch)
-5. `pal_memcpy` / `pal_memset` (freestanding fallback or platform libc)
-6. Minimal libm subset for floating-point intrinsics
+1. `pal_page_alloc` / `pal_page_free` / `pal_page_protect_none` (mmap/munmap/mprotect on POSIX; libSystem / Bionic on mobile)
+2. `pal_abort` (`abort()` / `__builtin_trap()`)
+3. `pal_monotonic_ns` (`clock_gettime`)
+4. `pal_poller_*` / `pal_poll_wait` (`epoll` / `kqueue`)
+5. `pal_memcpy` / `pal_memset`
+6. Minimal `libm` subset for floating-point intrinsics
+
+Unsupported OCaml language/runtime features (rejected or stubbed): objects/methods (`Lsend`), ephemerons, stack backtraces, OS signal handlers, and `Marshal.Closures`.
 
 ## 5. Cross-Compilation & Mobile FFI Workflow
 

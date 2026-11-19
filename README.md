@@ -38,7 +38,7 @@ non-pure mutual `let rec` closures, and an ARC-native core standard library
 (`stdlib/` → `build/stdlib/libocamlstdlib.a`: `Option`, `Result`, `List`,
 `Array`, `Bytes`, `String`, `Buffer`, `Hashtbl`, `Int32`, `Int64`,
 `Nativeint`, `Printf`, `Weak`, `Fiber`, `CamlinternalFormatBasics`, `Stdlib`).
-`runtime/builtins.c` and `runtime/main_entry.c` stay minimal.
+`runtime/builtins.c` provides the POSIX/libc/libm/pthread OS helpers for stdlib I/O, sync, and crypto, while `runtime/main_entry.c` stays minimal. Unsupported OCaml features include objects/methods (`Lsend`), ephemerons, backtraces, signal handlers, and `Marshal.Closures`.
 
 ## Build
 
