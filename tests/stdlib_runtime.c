@@ -12,6 +12,8 @@
 
 extern int64_t caml_input_value_from_bytes(int64_t, int64_t);
 extern int64_t caml_output_value_to_bytes(int64_t, int64_t);
+extern int64_t caml_output_value(int64_t, int64_t, int64_t);
+extern int64_t caml_marshal_data_size(int64_t, int64_t);
 extern int64_t caml_ba_create(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_sub(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_set_1(int64_t, int64_t, int64_t);
@@ -637,14 +639,14 @@ static void test_fiber_robustness(void)
     ocamlcc_fiber_fd_wait_read(tagged(-1));
     clear_exception();
 
-    /* 3. Invoking a closure with > 16 parameters must raise and not leak args. */
+    /* 3. Invoking a closure with > 32 parameters must raise and not leak args. */
     ArcClosure *big_clos = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
     big_clos->code = (void *)noop_fiber_fn;
-    big_clos->arity = 17;
-    int64_t args[17];
-    for (int i = 0; i < 17; i++)
+    big_clos->arity = 33;
+    int64_t args[33];
+    for (int i = 0; i < 33; i++)
         args[i] = (int64_t)(uintptr_t)arc_alloc_bytes(2);
-    ocamlcc_apply_n((int64_t)(uintptr_t)big_clos, 17, args);
+    ocamlcc_apply_n((int64_t)(uintptr_t)big_clos, 33, args);
     clear_exception();
     arc_release(big_clos);
 
@@ -1123,6 +1125,180 @@ static void test_bigarray_channel_io(void)
     assert(arc_live_objects() == before);
 }
 
+/* Simple deterministic RLE codec for testing 0x8495a6bd Marshal framing
+   without linking libzstd into libocamlrt.a. Format: pairs (count, byte). */
+static int test_rle_compress(const uint8_t *src, size_t src_len,
+                             uint8_t *dst, size_t dst_cap, size_t *out_len)
+{
+    size_t i = 0, o = 0;
+    while (i < src_len) {
+        uint8_t b = src[i];
+        size_t run = 1;
+        while (i + run < src_len && src[i + run] == b && run < 255u)
+            run++;
+        if (o + 2u > dst_cap)
+            return -1;
+        dst[o++] = (uint8_t)run;
+        dst[o++] = b;
+        i += run;
+    }
+    *out_len = o;
+    return 0;
+}
+
+static int test_rle_decompress(const uint8_t *src, size_t src_len,
+                               uint8_t *dst, size_t dst_len)
+{
+    if ((src_len & 1u) != 0u)
+        return -1;
+    size_t o = 0;
+    for (size_t i = 0; i < src_len; i += 2u) {
+        size_t run = src[i];
+        uint8_t b = src[i + 1u];
+        if (run == 0u || o + run > dst_len)
+            return -1;
+        memset(dst + o, b, run);
+        o += run;
+    }
+    return (o == dst_len) ? 0 : -1;
+}
+
+static void test_compressed_marshal_hooks(void)
+{
+    int64_t before = arc_live_objects();
+
+    /* Highly compressible value: (42, 200 bytes of 'Z'). */
+    int64_t *pair = arc_alloc(0u, 2u, 16u);
+    pair[0] = tagged(42);
+    char *s = arc_alloc_bytes(200);
+    memset(s, 'Z', 200);
+    pair[1] = (int64_t)(uintptr_t)s;
+
+    /* flags = [Compression] (tag/int 3 :: []). */
+    int64_t *flags = arc_alloc(0u, 2u, 16u);
+    flags[0] = tagged(3);
+    flags[1] = 1;
+
+    /* 1. Without a registered codec, Compression falls back to 0x8495a6be. */
+    ocamlcc_marshal_register_codec(NULL, NULL);
+    int64_t uncomp = caml_output_value_to_bytes((int64_t)(uintptr_t)pair,
+                                                (int64_t)(uintptr_t)flags);
+    assert(!ocamlcc_get_exn());
+    const uint8_t *ub = (const uint8_t *)(uintptr_t)uncomp;
+    assert(ub[0] == 0x84u && ub[1] == 0x95u && ub[2] == 0xa6u && ub[3] == 0xbeu);
+    arc_release_val(uncomp);
+
+    /* 2. With the RLE test codec registered, Compression emits 0x8495a6bd. */
+    ocamlcc_marshal_register_codec(test_rle_decompress, test_rle_compress);
+    int64_t comp = caml_output_value_to_bytes((int64_t)(uintptr_t)pair,
+                                              (int64_t)(uintptr_t)flags);
+    assert(!ocamlcc_get_exn());
+    size_t comp_total = ((const ArcHeader *)(uintptr_t)comp - 1)->reserved;
+    const uint8_t *cb = (const uint8_t *)(uintptr_t)comp;
+    assert(comp_total >= 16u && comp_total < 100u);
+    assert(cb[0] == 0x84u && cb[1] == 0x95u && cb[2] == 0xa6u && cb[3] == 0xbdu);
+
+    /* 3. Marshal.data_size matches total_size - 16. */
+    int64_t dsz = caml_marshal_data_size(comp, tagged(0));
+    assert(!ocamlcc_get_exn());
+    assert((dsz >> 1) + 16 == (int64_t)comp_total);
+
+    /* 4. Round-trip via caml_input_value_from_bytes. */
+    int64_t dec = caml_input_value_from_bytes(comp, tagged(0));
+    assert(!ocamlcc_get_exn());
+    assert(caml_compare(dec, (int64_t)(uintptr_t)pair) == tagged(0));
+    arc_release_val(dec);
+
+    /* 5. Round-trip via caml_output_value + caml_input_value over a pipe. */
+    int fds[2];
+    assert(pipe(fds) == 0);
+    int64_t ch_out = caml_ml_open_descriptor_out(tagged(fds[1]));
+    int64_t ch_in = caml_ml_open_descriptor_in(tagged(fds[0]));
+    caml_output_value(ch_out, (int64_t)(uintptr_t)pair, (int64_t)(uintptr_t)flags);
+    assert(!ocamlcc_get_exn());
+    caml_ml_flush(ch_out);
+    assert(!ocamlcc_get_exn());
+    int64_t dec_ch = caml_input_value(ch_in);
+    assert(!ocamlcc_get_exn());
+    assert(caml_compare(dec_ch, (int64_t)(uintptr_t)pair) == tagged(0));
+    arc_release_val(dec_ch);
+    caml_ml_close_channel(ch_out);
+    caml_ml_close_channel(ch_in);
+    arc_release_val(ch_out);
+    arc_release_val(ch_in);
+
+    /* 6. Truncations of a compressed stream all fail cleanly with zero leaks. */
+    for (size_t i = 0; i < comp_total; i++) {
+        void *p = arc_alloc_bytes(i);
+        if (i > 0) memcpy(p, cb, i);
+        caml_input_value_from_bytes((int64_t)(uintptr_t)p, tagged(0));
+        clear_exception();
+        arc_release(p);
+    }
+
+    /* 7. Corrupt header byte (top bits set / invalid length) fails cleanly. */
+    uint8_t *bad = arc_alloc_bytes(comp_total);
+    memcpy(bad, cb, comp_total);
+    bad[4] |= 0x40u;
+    caml_input_value_from_bytes((int64_t)(uintptr_t)bad, tagged(0));
+    clear_exception();
+    bad[4] = 9u;
+    caml_input_value_from_bytes((int64_t)(uintptr_t)bad, tagged(0));
+    clear_exception();
+    arc_release(bad);
+
+    /* 8. With codec cleared, decoding a 0x8495a6bd stream fails cleanly. */
+    ocamlcc_marshal_register_codec(NULL, NULL);
+    caml_input_value_from_bytes(comp, tagged(0));
+    clear_exception();
+
+    arc_release_val(comp);
+    arc_release(flags);
+    arc_release(pair);
+    ocamlcc_arc_collect(1);
+    assert(arc_live_objects() == before);
+}
+
+static int64_t sum20_fn(int64_t clos,
+                        int64_t a0, int64_t a1, int64_t a2, int64_t a3,
+                        int64_t a4, int64_t a5, int64_t a6, int64_t a7,
+                        int64_t a8, int64_t a9, int64_t a10, int64_t a11,
+                        int64_t a12, int64_t a13, int64_t a14, int64_t a15,
+                        int64_t a16, int64_t a17, int64_t a18, int64_t a19)
+{
+    (void)clos;
+    int64_t sum = (a0 >> 1) + (a1 >> 1) + (a2 >> 1) + (a3 >> 1)
+                + (a4 >> 1) + (a5 >> 1) + (a6 >> 1) + (a7 >> 1)
+                + (a8 >> 1) + (a9 >> 1) + (a10 >> 1) + (a11 >> 1)
+                + (a12 >> 1) + (a13 >> 1) + (a14 >> 1) + (a15 >> 1)
+                + (a16 >> 1) + (a17 >> 1) + (a18 >> 1) + (a19 >> 1);
+    return tagged(sum);
+}
+
+static void test_high_arity_closure(void)
+{
+    int64_t before = arc_live_objects();
+    ArcClosure *c = arc_alloc(ARC_TAG_CLOSURE, 0u, (uint32_t)sizeof(ArcClosure));
+    c->code = (void *)(uintptr_t)sum20_fn;
+    c->arity = 20u;
+    int64_t args[20];
+    for (int i = 0; i < 20; i++)
+        args[i] = tagged(i + 1);
+    /* Direct apply_n with 20 args: 1+2+...+20 = 210. */
+    int64_t r1 = ocamlcc_apply_n((int64_t)(uintptr_t)c, 20, args);
+    assert(!ocamlcc_get_exn());
+    assert(r1 == tagged(210));
+    /* Partial application (12 args) followed by remaining 8 args. */
+    int64_t pap = ocamlcc_apply_n((int64_t)(uintptr_t)c, 12, args);
+    assert(!ocamlcc_get_exn());
+    int64_t r2 = ocamlcc_apply_n(pap, 8, args + 12);
+    assert(!ocamlcc_get_exn());
+    assert(r2 == tagged(210));
+    arc_release_val(pap);
+    arc_release(c);
+    assert(arc_live_objects() == before);
+}
+
 int main(void)
 {
     test_float_format();
@@ -1143,6 +1319,8 @@ int main(void)
     test_destroy_waiter_cleanup();
     test_poller_unwatch_waiter();
     test_tls_cleanup_queued_fibers();
+    test_compressed_marshal_hooks();
+    test_high_arity_closure();
     puts("stdlib runtime: formats, malformed cleanup, cycles, truncation, views");
     return 0;
 }

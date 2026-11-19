@@ -1,5 +1,17 @@
-/* OCaml's uncompressed Marshal wire format, interpreted over ArcHeader.
+/* OCaml's Marshal wire format (uncompressed 0x8495a6be/0x8495a6bf and
+ * optional hook-backed compressed 0x8495a6bd), interpreted over ArcHeader.
  * All traversal state is local. No object header is modified while encoding. */
+static ocamlcc_marshal_decompress_fn g_marshal_decompress = NULL;
+static ocamlcc_marshal_compress_fn   g_marshal_compress = NULL;
+
+void ocamlcc_marshal_register_codec(
+    ocamlcc_marshal_decompress_fn decompress_fn,
+    ocamlcc_marshal_compress_fn compress_fn)
+{
+    g_marshal_decompress = decompress_fn;
+    g_marshal_compress = compress_fn;
+}
+
 typedef struct MBuffer { uint8_t *data; size_t len, cap; } MBuffer;
 typedef struct MEntry { uintptr_t key; size_t index; } MEntry;
 typedef struct MMap { MEntry *data; size_t cap, used; } MMap;
@@ -9,7 +21,7 @@ typedef struct MWriter {
     MMap seen;
     MTask *tasks; size_t count, cap;
     uint64_t objects, words32, words64;
-    int no_sharing, compat32, invalid;
+    int no_sharing, compat32, compress, invalid;
     const char *error;
 } MWriter;
 
@@ -207,16 +219,58 @@ static int64_t m_raise(const char *message, int invalid)
     size_t n = 0; while (message[n]) n++;
     raise_failure_cstr(message, n); return 1;
 }
+static size_t m_encode_vlq(uint64_t v, uint8_t *out)
+{
+    uint8_t tmp[10];
+    size_t n = 0;
+    tmp[n++] = (uint8_t)(v & 0x7fu);
+    v >>= 7;
+    while (v != 0u) {
+        tmp[n++] = (uint8_t)((v & 0x7fu) | 0x80u);
+        v >>= 7;
+    }
+    for (size_t i = 0; i < n; i++)
+        out[i] = tmp[n - 1u - i];
+    return n;
+}
 static int m_encode(MWriter *w, int64_t value, int64_t flags)
 {
     for (int64_t cur = flags; cur != 1; cur = ((int64_t *)(uintptr_t)cur)[1]) {
         int flag = ((int64_t *)(uintptr_t)cur)[0] >> 1;
         if (flag == 0) w->no_sharing = 1;
         if (flag == 2) w->compat32 = 1;
+        if (flag == 3) w->compress = 1;
     }
     for (int i = 0; i < 20; i++) m_put(w, 0, 1);
     m_write_value(w, value);
     if (w->error) return 0;
+    size_t payload_len = w->output.len - 20u;
+    if (w->compress && g_marshal_compress != NULL && payload_len >= 16u) {
+        uint8_t *comp = pal_page_alloc(payload_len);
+        if (comp != NULL) {
+            size_t comp_len = 0;
+            int ok = g_marshal_compress(w->output.data + 20u, payload_len, comp, payload_len, &comp_len);
+            if (ok == 0 && comp_len > 0u && comp_len < payload_len) {
+                uint8_t hdr[64];
+                size_t hp = 5u;
+                hp += m_encode_vlq((uint64_t)comp_len, hdr + hp);
+                hp += m_encode_vlq((uint64_t)payload_len, hdr + hp);
+                hp += m_encode_vlq(w->objects, hdr + hp);
+                hp += m_encode_vlq(w->words32, hdr + hp);
+                hp += m_encode_vlq(w->words64, hdr + hp);
+                if (hp <= 63u && hp + comp_len < 20u + payload_len) {
+                    hdr[0] = 0x84u; hdr[1] = 0x95u; hdr[2] = 0xa6u; hdr[3] = 0xbdu;
+                    hdr[4] = (uint8_t)hp;
+                    pal_memcpy(w->output.data, hdr, hp);
+                    pal_memcpy(w->output.data + hp, comp, comp_len);
+                    w->output.len = hp + comp_len;
+                    pal_page_free(comp, payload_len);
+                    return 1;
+                }
+            }
+            pal_page_free(comp, payload_len);
+        }
+    }
     if (w->output.len > UINT32_MAX || w->words32 > UINT32_MAX || w->words64 > UINT32_MAX) {
         w->error = "output_value: object too big"; return 0;
     }
@@ -285,14 +339,51 @@ static uint64_t m_float_bits(MReader *r, int little)
     if (little) { uint64_t rev = 0; for (int i = 0; i < 8; i++) { rev = rev << 8 | (n & 255); n >>= 8; } return rev; }
     return n;
 }
-static int m_read_header(MReader *r, size_t *header, uint64_t *length)
+static uint64_t m_get_vlq(MReader *r, size_t limit)
 {
+    uint64_t v = 0;
+    for (int count = 0; count < 10; count++) {
+        if (r->pos >= limit) { r->error = "input_value: bad object"; return 0; }
+        uint8_t b = r->data[r->pos++];
+        if (v > (UINT64_MAX >> 7)) { r->error = "input_value: bad object"; return 0; }
+        v = (v << 7) | (uint64_t)(b & 0x7fu);
+        if ((b & 0x80u) == 0u) return v;
+    }
+    r->error = "input_value: bad object";
+    return 0;
+}
+static int m_read_header(MReader *r, size_t *header, uint64_t *length,
+                         uint64_t *uncompressed, int *compressed)
+{
+    *compressed = 0;
+    *uncompressed = 0;
     uint64_t magic = m_get(r, 4);
     if (r->error) return 0;
     if (magic == UINT32_C(0x8495a6be)) {
         *length = m_get(r, 4); r->expected = m_get(r, 4); m_get(r, 4); m_get(r, 4); *header = 20;
     } else if (magic == UINT32_C(0x8495a6bf)) {
         m_get(r, 4); *length = m_get(r, 8); r->expected = m_get(r, 8); m_get(r, 8); *header = 32;
+    } else if (magic == UINT32_C(0x8495a6bd)) {
+        uint64_t hb = m_get(r, 1);
+        if (r->error) return 0;
+        if ((hb & 0xc0u) != 0u || hb < 10u || hb > 63u) {
+            r->error = "input_value: bad object"; return 0;
+        }
+        size_t hlen = (size_t)hb;
+        if (hlen > r->end) { r->error = "input_value: truncated object"; return 0; }
+        uint64_t comp_len = m_get_vlq(r, hlen);
+        uint64_t uncomp_len = m_get_vlq(r, hlen);
+        r->expected = m_get_vlq(r, hlen);
+        (void)m_get_vlq(r, hlen);
+        (void)m_get_vlq(r, hlen);
+        if (r->error || r->pos != hlen) {
+            if (!r->error) r->error = "input_value: bad object";
+            return 0;
+        }
+        *header = hlen;
+        *length = comp_len;
+        *uncompressed = uncomp_len;
+        *compressed = 1;
     } else { r->error = "input_value: bad object"; return 0; }
     return !r->error;
 }
@@ -462,19 +553,39 @@ int64_t caml_marshal_data_size(int64_t buffer, int64_t offset)
     const ArcHeader *h = (ArcHeader *)(uintptr_t)buffer - 1; int64_t o = offset >> 1;
     if (o < 0 || (uint64_t)o > h->reserved) return m_raise("Marshal.data_size", 1);
     MReader r = {.data = (uint8_t *)(uintptr_t)buffer + o, .end = h->reserved - (size_t)o};
-    size_t header = 0; uint64_t length = 0;
-    if (!m_read_header(&r, &header, &length)) return m_raise(r.error, 0);
+    size_t header = 0; uint64_t length = 0, uncompressed = 0; int compressed = 0;
+    if (!m_read_header(&r, &header, &length, &uncompressed, &compressed)) return m_raise(r.error, 0);
     if (length > (uint64_t)(INT64_MAX >> 1) - header) return m_raise("input_value: object too large", 0);
     /* Marshal.header_size is 16; data_size includes the remaining header. */
-    return tag_int((int64_t)(length + header - 16));
+    return tag_int((int64_t)(length + header) - 16);
 }
 static int64_t m_from_block(const uint8_t *data, size_t available)
 {
-    MReader r = {.data = data, .end = available}; size_t header = 0; uint64_t length = 0;
-    if (!m_read_header(&r, &header, &length)) return m_raise(r.error, 0);
+    MReader r = {.data = data, .end = available};
+    size_t header = 0; uint64_t length = 0, uncompressed = 0; int compressed = 0;
+    if (!m_read_header(&r, &header, &length, &uncompressed, &compressed)) return m_raise(r.error, 0);
     if (length > available - header) return m_raise("input_value: truncated object", 0);
-    r.end = header + length;
+    uint8_t *uncomp_buf = NULL;
+    if (compressed) {
+        if (g_marshal_decompress == NULL)
+            return m_raise("input_value: compressed object, zstd unavailable", 0);
+        if (uncompressed == 0u || uncompressed > UINT32_MAX)
+            return m_raise("input_value: object too large", 0);
+        uncomp_buf = pal_page_alloc((size_t)uncompressed);
+        if (!uncomp_buf)
+            return m_raise("input_value: out of memory", 0);
+        if (g_marshal_decompress(data + header, (size_t)length, uncomp_buf, (size_t)uncompressed) != 0) {
+            pal_page_free(uncomp_buf, (size_t)uncompressed);
+            return m_raise("input_value: decompression error", 0);
+        }
+        r.data = uncomp_buf;
+        r.pos = 0;
+        r.end = (size_t)uncompressed;
+    } else {
+        r.end = header + (size_t)length;
+    }
     int64_t value = m_decode(&r); m_reader_free(&r);
+    if (uncomp_buf) pal_page_free(uncomp_buf, (size_t)uncompressed);
     if (r.error) return m_raise(r.error, 0);
     return value;
 }
@@ -509,12 +620,26 @@ static int m_channel_read(int64_t channel, uint8_t *buffer, size_t n, int initia
 }
 int64_t caml_input_value(int64_t channel)
 {
-    uint8_t header[32];
-    if (!m_channel_read(channel, header, 20, 1)) return 1;
-    size_t n = header[3] == 0xbf ? 32 : 20;
-    if (n == 32 && !m_channel_read(channel, header + 20, 12, 0)) return 1;
-    MReader r = {.data = header, .end = n}; size_t size = 0; uint64_t length = 0;
-    if (!m_read_header(&r, &size, &length)) return m_raise(r.error, 0);
+    uint8_t header[64];
+    if (!m_channel_read(channel, header, 5, 1)) return 1;
+    uint32_t magic = ((uint32_t)header[0] << 24) | ((uint32_t)header[1] << 16)
+                   | ((uint32_t)header[2] << 8)  | (uint32_t)header[3];
+    size_t n = 0;
+    if (magic == UINT32_C(0x8495a6be)) {
+        n = 20;
+    } else if (magic == UINT32_C(0x8495a6bf)) {
+        n = 32;
+    } else if (magic == UINT32_C(0x8495a6bd)) {
+        if ((header[4] & 0xc0u) != 0u || header[4] < 10u || header[4] > 63u)
+            return m_raise("input_value: bad object", 0);
+        n = (size_t)header[4];
+    } else {
+        return m_raise("input_value: bad object", 0);
+    }
+    if (!m_channel_read(channel, header + 5, n - 5, 0)) return 1;
+    MReader r = {.data = header, .end = n};
+    size_t size = 0; uint64_t length = 0, uncompressed = 0; int compressed = 0;
+    if (!m_read_header(&r, &size, &length, &uncompressed, &compressed)) return m_raise(r.error, 0);
     if (length > UINT32_MAX - n) return m_raise("input_value: object too large", 0);
     size_t total = n + (size_t)length;
     size_t cap = (total < 65536u) ? total : 65536u;

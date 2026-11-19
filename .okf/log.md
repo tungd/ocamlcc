@@ -1,5 +1,11 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Add generic compressed Marshal (`0x8495a6bd`) codec hooks and raise `MAX_CLOSURE_ARITY` to 32 (`runtime/arc.h`, `runtime/marshal.inc`, `runtime/closure.c`):
+  - Add `ocamlcc_marshal_register_codec(decompress_fn, compress_fn)` (default `NULL`, zero `libzstd` dependency in `libocamlrt.a`) and full OCaml 5.5 `0x8495a6bd` 10–63 byte VLQ header framing across `m_read_header`, `m_from_block`, `caml_input_value`, `caml_marshal_data_size`, and flag-3 `Compression` encoding in `m_encode`.
+  - Raise `MAX_CLOSURE_ARITY` in `runtime/closure.c` from 16 to 32 (`fn17_t`..`fn32_t`) to cover high-arity `compiler-libs` closures.
+  - Regression-tested in `tests/stdlib_runtime.c` (`test_compressed_marshal_hooks` with a self-contained RLE codec covering round-trip bytes/channel, `data_size`, truncations, corrupt headers, and null-codec rejection; `test_high_arity_closure` for arity-20 direct and PAP dispatch; overflow guard updated to arity 33).
+  - `ninja -j1 test` (26/26), `ninja -j1 asan_test` (16/16), and `ninja -j1 tsan_test` (2/2) pass. See [stdlib-compatibility](/concepts/stdlib-compatibility.md).
+
 - 2026-11-19 (autoagent/1): Shadow over-application tail args across the first call (`lib/codegen_expr.ml`):
   - The over-apply split (exact-arity first call + `apply_closure` over the tail) shadowed `clos_res` around the second call (d34f6a1) and `closure.c` shadows its own tail args internally — but `rest_vals` were compiled *after* the first (possibly suspending) call and never registered on the fiber shadow stack, so an over-applied call whose first call suspends leaked the tail arguments when the fiber was abandoned (no scope-exit release ever runs).
   - Fix: compile `rest_vals` before the first call (ANF atoms are pure temp reads/constants, so hoisting is side-effect-free), push them onto the fiber shadow stack across it, and pop once it returns — on both the error path (which then releases them) and the ok path (which transfers them to `apply_closure`, where `closure.c` takes over the shadowing). Push/pop/release stay balanced on every path.

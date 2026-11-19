@@ -61,8 +61,11 @@ live in `runtime/bigarray.inc`, included by `arc.c`. C callers can retain a
 subview with its data and dimensions across collection. The public interface
 is documented in [memory views](/concepts/memory-views.md).
 The native stdlib build now compiles all 72/72 modules. Marshal supports
-uncompressed standard streams for integers, ordinary blocks, strings, floats,
-float arrays, and boxed integers, via strings/bytes/buffers/channels. The
+uncompressed standard streams (`0x8495a6be`/`0x8495a6bf`) and optional
+hook-backed compressed streams (`0x8495a6bd` with 10–63 byte VLQ headers via
+`ocamlcc_marshal_register_codec`, keeping `libocamlrt.a` zstd-free unless a
+host/compiler registers a codec) for integers, ordinary blocks, strings,
+floats, float arrays, and boxed integers, via strings/bytes/buffers/channels. The
 encoder uses an external pointer table and an explicit work stack. The decoder
 registers objects before their fields, retains each backpatch, and owns partial
 nodes until successful return or cleanup. Arrays and ordinary tag-zero blocks
