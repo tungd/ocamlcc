@@ -770,7 +770,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let consts' = List.map (fun (k, a) -> (k, transform_branch env a)) sw.consts in
       let blocks' = List.map (fun (k, a) -> (k, transform_branch env a)) sw.blocks in
       let fail' = Option.map (transform_branch env) sw.fail in
-      Switch (scrut, { consts = consts'; blocks = blocks'; fail = fail' })
+      Switch (scrut, { sw with consts = consts'; blocks = blocks'; fail = fail' })
   | StringSwitch (scrut, cases, fail) ->
       let cases' = List.map (fun (s, a) -> (s, transform_branch env a)) cases in
       let fail' = Option.map (transform_branch env) fail in

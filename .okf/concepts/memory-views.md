@@ -6,7 +6,7 @@ tags: [memory, bigarray, ffi, compiler, performance]
 status: draft
 generated:
   by: codex/1
-  at: 2026-11-19T03:28:18Z
+  at: 2026-11-19T03:30:38Z
 sources:
   - id: scope
     resource: Conversation on 2026-11-18 about ARC, Bigarray, memory views, and desktop target scope
@@ -275,8 +275,9 @@ Bounds exceptions and boxed values that escape through ordinary OCaml calls
 or captures keep their usual semantics. All three 128-element loops fell from
 1539 to 3 ARC words, matching the empty-loop counter overhead.
 The compiler joins int32 conditional results as QBE words and int64 or
-nativeint results as longs. The selected arm can return a boxed value from
-a generic call. A checked failure skips the store. Complex and other
+nativeint results as longs. Variant switches also join scalar-only results at their element
+width. The 128-element four-arm int64 match fell from 771 to 3 ARC words.
+The selected arm can return a boxed value from a generic call or payload. A checked failure skips the store. Complex and other
 unspecialized kinds use the generic path.
 
 The compiler specializes the load, multiply, and store in this loop:

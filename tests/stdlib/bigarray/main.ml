@@ -72,6 +72,17 @@ let convert_through_native (a : integers) i =
 let round_trip_ocaml_int (a : integers) i =
   a.{i} <- Int64.of_int (Int64.to_int a.{i})
 
+type int32_choice = Literal of int32 | Load of int | Increment | Minimum
+
+let match_int32 (a : (int32, int32_elt, fortran_layout) Array1.t) choice =
+  let value = match choice with
+    | Literal v -> v
+    | Load i -> a.{i}
+    | Increment -> Int32.add a.{1} 1l
+    | Minimum -> Int32.min_int
+  in
+  a.{2} <- value
+
 let add_nativeint (a : (nativeint, nativeint_elt, fortran_layout) Array1.t) i j delta =
   let value = a.{i} in
   a.{j} <- Nativeint.add value delta
@@ -147,6 +158,16 @@ let () =
   assert (narrow.{2} = Int32.min_int);
   assert (try div_rem_int32 narrow 1 0l; false with Division_by_zero -> true);
   assert (narrow.{1} = -3l);
+  match_int32 narrow (Literal (-7l));
+  assert (narrow.{2} = -7l);
+  match_int32 narrow Increment;
+  assert (narrow.{2} = -2l);
+  match_int32 narrow Minimum;
+  assert (narrow.{2} = Int32.min_int);
+  match_int32 narrow (Load 1);
+  assert (narrow.{2} = -3l);
+  assert (try match_int32 narrow (Load 0); false with Invalid_argument _ -> true);
+  assert (narrow.{2} = -3l);
   let native = Array1.of_array nativeint fortran_layout [|Nativeint.max_int; 7n|] in
   add_nativeint native 1 2 1n;
   assert (native.{2} = Nativeint.min_int);

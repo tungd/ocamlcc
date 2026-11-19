@@ -168,6 +168,7 @@ and aexpr =
   | ShadowPop of int * int * aexpr
 
 and switch_cases = {
+  result_rep : scalar_rep option;
   consts : (int * aexpr) list;
   blocks : (int * aexpr) list;
   fail : aexpr option;
@@ -700,8 +701,8 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
         conv_expr scrut (fun sa ->
             Switch
               ( sa,
-                { consts =
-                    List.map (fun (n, arm) -> (n, conv_tail arm)) sw.sw_consts;
+                { result_rep = None;
+                  consts = List.map (fun (n, arm) -> (n, conv_tail arm)) sw.sw_consts;
                   blocks =
                     List.map (fun (t, arm) -> (t, conv_tail arm)) sw.sw_blocks;
                   fail = Option.map conv_tail sw.sw_failaction } ))
@@ -897,15 +898,15 @@ let rec free_vars (e : aexpr) : Ident.Set.t =
 
 type scalar_binding = Value of cexpr | Join of aexpr
 
-let rec boxed_conditional = function
-  | Let (_, _, body) -> boxed_conditional body
-  | If _ -> true
+let rec boxed_branch = function
+  | Let (_, _, body) -> boxed_branch body
+  | If _ | Switch (_, { result_rep = None; _ }) -> true
   | _ -> false
 
 (* Conditional tests may bind temporaries before the branch itself. *)
 let rec returns_scalar = function
   | Let (_, _, body) -> returns_scalar body
-  | ScalarIf _ -> true
+  | ScalarIf _ | Switch (_, { result_rep = Some _; _ }) -> true
   | _ -> false
 
 let bind_scalar_chain id binding body =
@@ -979,7 +980,7 @@ let rec specialize_scalar_chain bindings tail =
            | Some ce -> Value ce, Ident.Set.add id raw
            | None -> binding, raw)
       | Some rep, Join rhs ->
-          Join (specialize_conditional rep rhs), Ident.Set.add id raw
+          Join (specialize_branch rep rhs), Ident.Set.add id raw
       | _ -> binding, raw
     in
     let boxed = Ident.Set.remove id boxed and scalar = Ident.Map.remove id scalar in
@@ -1032,15 +1033,22 @@ let rec specialize_scalar_chain bindings tail =
     in
     bind_scalar_chain id binding body) code tail
 
-and specialize_conditional rep = function
-  | Let (id, ce, body) -> Let (id, ce, specialize_conditional rep body)
+and specialize_branch rep = function
+  | Let (id, ce, body) -> Let (id, ce, specialize_branch rep body)
   | If (cond, yes, no) ->
       ScalarIf (rep, cond, specialize_scalar_arm rep [] yes, specialize_scalar_arm rep [] no)
+  | Switch (scrutinee, cases) ->
+      let arm (tag, body) = tag, specialize_scalar_arm rep [] body in
+      Switch (scrutinee,
+              { result_rep = Some rep;
+                consts = List.map arm cases.consts;
+                blocks = List.map arm cases.blocks;
+                fail = Option.map (specialize_scalar_arm rep []) cases.fail })
   | _ -> assert false
 
 and specialize_scalar_arm rep bindings = function
   | Let (id, ce, body) -> specialize_scalar_arm rep ((id, Value ce) :: bindings) body
-  | LetJoin (id, rhs, body) when boxed_conditional rhs ->
+  | LetJoin (id, rhs, body) when boxed_branch rhs ->
       specialize_scalar_arm rep ((id, Join rhs) :: bindings) body
   | Halt value ->
       let id = Ident.create_local "scalar" in
@@ -1056,7 +1064,7 @@ and specialize_scalar_arm rep bindings = function
 
 let rec specialize_scalar_bindings = function
   | Let _ as expr -> specialize_let_chain [] expr
-  | LetJoin (_, rhs, _) as expr when boxed_conditional rhs ->
+  | LetJoin (_, rhs, _) as expr when boxed_branch rhs ->
       specialize_let_chain [] expr
   | MutLet (id, ce, body) ->
       MutLet (id, ce, specialize_scalar_bindings body)
@@ -1072,7 +1080,7 @@ let rec specialize_scalar_bindings = function
   | ScalarIf (rep, v, yes, no) ->
       ScalarIf (rep, v, specialize_scalar_bindings yes, specialize_scalar_bindings no)
   | Switch (v, cases) ->
-      Switch (v, { consts = List.map specialize_scalar_case cases.consts;
+      Switch (v, { cases with consts = List.map specialize_scalar_case cases.consts;
                    blocks = List.map specialize_scalar_case cases.blocks;
                    fail = Option.map specialize_scalar_bindings cases.fail })
   | StringSwitch (v, cases, fail) ->
@@ -1093,7 +1101,7 @@ and specialize_let_chain bindings = function
   | Let (id, ce, body) ->
       let ce = match ce with Fun lf -> Fun (specialize_scalar_function lf) | _ -> ce in
       specialize_let_chain ((id, Value ce) :: bindings) body
-  | LetJoin (id, rhs, body) when boxed_conditional rhs ->
+  | LetJoin (id, rhs, body) when boxed_branch rhs ->
       let rhs = specialize_scalar_bindings rhs in
       specialize_let_chain ((id, Join rhs) :: bindings) body
   | tail ->

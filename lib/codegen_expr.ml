@@ -1356,7 +1356,8 @@ and compile_switch hooks b tail (scrut : Anf.atom) (sw : Anf.switch_cases) =
   | [] -> unit_const
   | _ ->
       start_block b lepi;
-      emit b (Phi (Long, res, List.rev !preds));
+      let result_ty = Option.fold ~none:Long ~some:scalar_type sw.result_rep in
+      emit b (Phi (result_ty, res, List.rev !preds));
       res
 
 and compile_stringswitch hooks b tail (scrut : Anf.atom) cases fail =

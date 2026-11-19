@@ -173,6 +173,7 @@ and aexpr =
   | ShadowPop of int * int * aexpr
 
 and switch_cases = {
+  result_rep : scalar_rep option;
   consts : (int * aexpr) list;
   blocks : (int * aexpr) list;
   fail : aexpr option;

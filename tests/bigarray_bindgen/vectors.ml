@@ -106,6 +106,27 @@ let int64_conversion_words (a : int64_vector) n =
     a.{i} <- Int64.of_int32 (Int32.of_int (tagged - 1))
   done;
   Gc.minor_words () -. before
+
+type arithmetic_case = Increment | Decrement | Triple | Negate
+
+let arithmetic_case i =
+  if i land 2 = 0 then
+    if i land 1 = 0 then Increment else Decrement
+  else if i land 1 = 0 then Triple else Negate
+
+let int64_match_words (a : int64_vector) n =
+  let before = Gc.minor_words () in
+  for i = 0 to n - 1 do
+    let value =
+      match arithmetic_case i with
+      | Increment -> Int64.add a.{i} 1L
+      | Decrement -> Int64.sub a.{i} 2L
+      | Triple -> Int64.mul a.{i} 3L
+      | Negate -> Int64.neg a.{i}
+    in
+    a.{i} <- value
+  done;
+  Gc.minor_words () -. before
 let nativeint_words (a : (nativeint, nativeint_elt, c_layout) Array1.t) delta n =
   let before = Gc.minor_words () in
   for i = 0 to n - 1 do
