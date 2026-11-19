@@ -138,10 +138,11 @@ let box_bint b bi (raw : t) : t =
            args = [ (Long, Int (Int64.of_int32 kind)); (Long, bits) ] } ));
   dst
 
-let compile_bint_div_mod b bi qop (av : t) (cv : t) : t =
+let compile_bint_div_mod b ~boxed bi qop ua uc : t =
   let ty, _, _ = bint_spec bi in
-  let ua = unbox_bint b bi av in
-  let uc = unbox_bint b bi cv in
+  let wrap raw = if boxed then box_bint b bi raw else raw in
+  let result_ty = if boxed then Long else ty in
+  let failure = if boxed then unit_const else Int 0L in
   let lok = fresh_label b "bdiv_ok" in
   let lcheck = fresh_label b "bdiv_chk" in
   let lneg1 = fresh_label b "bdiv_m1" in
@@ -157,7 +158,7 @@ let compile_bint_div_mod b bi qop (av : t) (cv : t) : t =
   start_block b lok;
   let raw_ok = fresh_temp b "bdivr" in
   emit b (Binop (qop, ty, raw_ok, ua, uc));
-  let res_ok = box_bint b bi raw_ok in
+  let res_ok = wrap raw_ok in
   let lok_end = b.cur_fn.open_label in
   close_block b (Jmp ldone);
   start_block b lneg1;
@@ -166,8 +167,8 @@ let compile_bint_div_mod b bi qop (av : t) (cv : t) : t =
     | Binop.Div ->
         let neg_a = fresh_temp b "bdivneg" in
         emit b (Binop (Binop.Sub, ty, neg_a, Int 0L, ua));
-        box_bint b bi neg_a
-    | _ -> box_bint b bi (Int 0L)
+        wrap neg_a
+    | _ -> wrap (Int 0L)
   in
   let lm1_end = b.cur_fn.open_label in
   close_block b (Jmp ldone);
@@ -181,9 +182,9 @@ let compile_bint_div_mod b bi qop (av : t) (cv : t) : t =
   let dst = fresh_temp b "bdivv" in
   emit b
     (Phi
-       ( Long,
+       ( result_ty,
          dst,
-         [ (lok_end, res_ok); (lm1_end, res_m1); (lzero_end, unit_const) ] ));
+         [ (lok_end, res_ok); (lm1_end, res_m1); (lzero_end, failure) ] ));
   dst
 
 let compile_raw_bint_shift b bi qop ua cv : t =
@@ -340,8 +341,11 @@ let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
       let res = fresh_temp b "bop" in
       emit b (Binop (qop, ty, res, ua, uc));
       box_bint b bi res
-  | Bint_div bi -> compile_bint_div_mod b bi Div av cv
-  | Bint_mod bi -> compile_bint_div_mod b bi Rem av cv
+  | (Bint_div bi | Bint_mod bi) ->
+      let lhs = unbox_bint b bi av in
+      let rhs = unbox_bint b bi cv in
+      let qop = match op with Bint_div _ -> Binop.Div | _ -> Binop.Rem in
+      compile_bint_div_mod b ~boxed:true bi qop lhs rhs
   | Bint_lsl bi -> compile_bint_shift b bi Shl av cv
   | Bint_lsr bi -> compile_bint_shift b bi Shr av cv
   | Bint_asr bi -> compile_bint_shift b bi Sar av cv
@@ -944,11 +948,15 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let r = compile_scalar_operand hooks b rep rhs in
       let qop = match op with
         | Add_int -> Binop.Add | Sub_int -> Binop.Sub | Mul_int -> Binop.Mul
+        | Div_int -> Binop.Div | Rem_int -> Binop.Rem
         | And_int -> Binop.And | Or_int -> Binop.Or | Xor_int -> Binop.Xor
       in
-      let dst = fresh_temp b "integer_op" in
-      emit b (Binop (qop, scalar_type rep, dst, l, r));
-      dst
+      (match op with
+       | Div_int | Rem_int -> compile_bint_div_mod b ~boxed:false kind qop l r
+       | _ ->
+           let dst = fresh_temp b "integer_op" in
+           emit b (Binop (qop, scalar_type rep, dst, l, r));
+           dst)
   | IntegerNeg (kind, value) ->
       let rep = Anf.Integer_scalar kind in
       let value = compile_scalar_operand hooks b rep value in

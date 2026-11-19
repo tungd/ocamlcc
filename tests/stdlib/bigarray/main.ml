@@ -55,6 +55,11 @@ let high_bits (a : integers) =
   let sign = Int64.shift_right_logical a.{2} 63 in
   a.{3} <- Int64.logxor sign (Int64.shift_left 1L 63)
 
+let div_rem_int32 (a : (int32, int32_elt, fortran_layout) Array1.t) i divisor =
+  let x = a.{i} in
+  let quotient = Int32.div x divisor in
+  a.{i} <- Int32.add quotient (Int32.rem x divisor)
+
 let add_nativeint (a : (nativeint, nativeint_elt, fortran_layout) Array1.t) i j delta =
   let value = a.{i} in
   a.{j} <- Nativeint.add value delta
@@ -114,6 +119,14 @@ let () =
   assert (try conditional_int32 narrow true 0 (fun () -> assert false);
     false with Invalid_argument _ -> true);
   assert (narrow.{2} = -3l);
+  narrow.{1} <- -5l;
+  div_rem_int32 narrow 1 3l;
+  assert (narrow.{1} = -3l);
+  narrow.{2} <- Int32.min_int;
+  div_rem_int32 narrow 2 (-1l);
+  assert (narrow.{2} = Int32.min_int);
+  assert (try div_rem_int32 narrow 1 0l; false with Division_by_zero -> true);
+  assert (narrow.{1} = -3l);
   let native = Array1.of_array nativeint fortran_layout [|Nativeint.max_int; 7n|] in
   add_nativeint native 1 2 1n;
   assert (native.{2} = Nativeint.min_int);

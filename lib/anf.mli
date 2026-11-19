@@ -91,7 +91,7 @@ type bigarray_access = {
 (* Unboxed scalars are compiler temporaries. Only scalar operations can consume them. *)
 type scalar_rep = Double_scalar | Integer_scalar of Lambda.boxed_integer
 
-type integer_arithmetic = Add_int | Sub_int | Mul_int | And_int | Or_int | Xor_int
+type integer_arithmetic = Add_int | Sub_int | Mul_int | Div_int | Rem_int | And_int | Or_int | Xor_int
 type integer_shift = Left_shift | Logical_right | Arithmetic_right
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t

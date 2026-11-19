@@ -86,7 +86,7 @@ type bigarray_access = {
 (* Unboxed scalars are compiler temporaries. Only scalar operations can consume them. *)
 type scalar_rep = Double_scalar | Integer_scalar of Lambda.boxed_integer
 
-type integer_arithmetic = Add_int | Sub_int | Mul_int | And_int | Or_int | Xor_int
+type integer_arithmetic = Add_int | Sub_int | Mul_int | Div_int | Rem_int | And_int | Or_int | Xor_int
 type integer_shift = Left_shift | Logical_right | Arithmetic_right
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
@@ -917,6 +917,8 @@ let specialize_integer_binop kind op lhs rhs =
   | Bint_add k -> binary k Add_int
   | Bint_sub k -> binary k Sub_int
   | Bint_mul k -> binary k Mul_int
+  | Bint_div k -> binary k Div_int
+  | Bint_mod k -> binary k Rem_int
   | Bint_and k -> binary k And_int
   | Bint_or k -> binary k Or_int
   | Bint_xor k -> binary k Xor_int

@@ -132,7 +132,8 @@ let is_yielding_ccall name = (Ccalls.find name).Ccalls.yields
 
 let ce_may_raise_fn = function
   | Anf.App _ -> true
-  | Binop ((Div | Mod | Bint_div _ | Bint_mod _), _, _) -> true
+  | Binop ((Div | Mod | Bint_div _ | Bint_mod _), _, _)
+  | IntegerBinop (_, (Div_int | Rem_int), _, _) -> true
   | StringGet (true, _, _)
   | BytesSet (true, _, _, _)
   | ArrayGet (true, _, _, _)

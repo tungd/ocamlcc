@@ -77,6 +77,15 @@ let int64_words (a : int64_vector) delta n =
     a.{i} <- Int64.sub (Int64.mul sum 3L) 1L
   done;
   Gc.minor_words () -. before
+
+let int64_div_words (a : int64_vector) divisor n =
+  let before = Gc.minor_words () in
+  for i = 0 to n - 1 do
+    let x = a.{i} in
+    let quotient = Int64.div x divisor in
+    a.{i} <- Int64.add quotient (Int64.rem x divisor)
+  done;
+  Gc.minor_words () -. before
 let nativeint_words (a : (nativeint, nativeint_elt, c_layout) Array1.t) delta n =
   let before = Gc.minor_words () in
   for i = 0 to n - 1 do

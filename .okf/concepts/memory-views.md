@@ -258,7 +258,10 @@ rounding at the store, signed zero, NaN, and a bounds exception.
 For a known C or Fortran layout, int32, int64, and nativeint Array1 stores can consume
 unboxed loads, addition, subtraction, multiplication, negation, bitwise
 and/or/xor, and shifts. The 128-element int32 bitwise and shift fixture fell
-from 3075 to 3 ARC words.
+from 3075 to 3 ARC words. Signed division and remainder also keep raw
+results, including the minimum integer divided by minus one. A zero
+divisor raises before the store. The int64 division and remainder fixture
+fell from 1155 to 3 ARC words.
 The arithmetic wraps at 32 or 64 bits according to the element kind.
 Nativeint uses 64 bits on the supported targets.
 Bounds exceptions and boxed values that escape through ordinary OCaml calls
