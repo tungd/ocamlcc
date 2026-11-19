@@ -151,7 +151,7 @@ and aexpr =
   | ScalarIf of scalar_rep * atom * aexpr * aexpr
   | Switch of atom * switch_cases
   | StringSwitch of atom * (string * aexpr) list * aexpr option
-  | StaticCatch of aexpr * int * Ident.t list * aexpr
+  | StaticCatch of aexpr * int * Ident.t list * aexpr * scalar_rep option
   | StaticRaise of int * atom list
   | While of aexpr * aexpr
   | For of Ident.t * atom * atom * Asttypes.direction_flag * aexpr
@@ -720,7 +720,7 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
   | Lstaticcatch (body, (id, binders), handler) ->
       let e =
         StaticCatch
-          (conv_tail body, id, List.map fst binders, conv_tail handler)
+          (conv_tail body, id, List.map fst binders, conv_tail handler, None)
       in
       wrap_or_tail e k
   | Lstaticraise (id, args) ->
@@ -864,7 +864,7 @@ let rec free_vars (e : aexpr) : Ident.Set.t =
       (match fail with
       | Some f -> Ident.Set.union acc (free_vars f)
       | None -> acc)
-  | StaticCatch (body, _, binders, handler) ->
+  | StaticCatch (body, _, binders, handler, _) ->
       let f_h =
         List.fold_left
           (fun s id -> Ident.Set.remove id s)
@@ -900,13 +900,14 @@ type scalar_binding = Value of cexpr | Join of aexpr
 
 let rec boxed_branch = function
   | Let (_, _, body) -> boxed_branch body
-  | If _ | Switch (_, { result_rep = None; _ }) -> true
+  | If _ | Switch (_, { result_rep = None; _ }) | StaticCatch (_, _, _, _, None) -> true
   | _ -> false
 
 (* Conditional tests may bind temporaries before the branch itself. *)
 let rec returns_scalar = function
   | Let (_, _, body) -> returns_scalar body
-  | ScalarIf _ | Switch (_, { result_rep = Some _; _ }) -> true
+  | ScalarIf _ | Switch (_, { result_rep = Some _; _ })
+  | StaticCatch (_, _, _, _, Some _) -> true
   | _ -> false
 
 let bind_scalar_chain id binding body =
@@ -1044,6 +1045,9 @@ and specialize_branch rep = function
                 consts = List.map arm cases.consts;
                 blocks = List.map arm cases.blocks;
                 fail = Option.map (specialize_scalar_arm rep []) cases.fail })
+  | StaticCatch (body, label, params, handler, _) ->
+      StaticCatch (specialize_scalar_arm rep [] body, label, params,
+                   specialize_scalar_arm rep [] handler, Some rep)
   | _ -> assert false
 
 and specialize_scalar_arm rep bindings = function
@@ -1054,6 +1058,11 @@ and specialize_scalar_arm rep bindings = function
       let id = Ident.create_local "scalar" in
       let bindings = (id, Value (ScalarValue (rep, Boxed_scalar value))) :: bindings in
       specialize_scalar_chain bindings (HaltScalar id)
+  | (StaticRaise _ | Raise _) as exit -> specialize_scalar_chain bindings exit
+  | branch when boxed_branch branch ->
+      let id = Ident.create_local "scalar" in
+      let tail = LetJoin (id, specialize_branch rep branch, HaltScalar id) in
+      specialize_scalar_chain bindings tail
   | expr ->
       (* A complex arm computes an ordinary OCaml value before unboxing. *)
       let boxed = Ident.create_local "boxed_arm" in
@@ -1086,9 +1095,9 @@ let rec specialize_scalar_bindings = function
   | StringSwitch (v, cases, fail) ->
       StringSwitch (v, List.map specialize_scalar_case cases,
                     Option.map specialize_scalar_bindings fail)
-  | StaticCatch (body, label, params, handler) ->
+  | StaticCatch (body, label, params, handler, result_rep) ->
       StaticCatch (specialize_scalar_bindings body, label, params,
-                   specialize_scalar_bindings handler)
+                   specialize_scalar_bindings handler, result_rep)
   | TryWith (body, exn, handler) ->
       TryWith (specialize_scalar_bindings body, exn, specialize_scalar_bindings handler)
   | While (cond, body) ->
@@ -1200,7 +1209,7 @@ let pure_defs (e : aexpr) : (Ident.t * lfunction) list =
           List.fold_left (fun acc (_, arm) -> go known acc arm) acc cases
         in
         (match fail with Some f -> go known acc f | None -> acc)
-    | StaticCatch (body, _, _, handler) ->
+    | StaticCatch (body, _, _, handler, _) ->
         go known (go known acc body) handler
     | TryWith (body, _, handler) -> go known (go known acc body) handler
     | While (cond, body) | CheckExn (cond, body) ->

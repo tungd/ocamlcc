@@ -176,7 +176,7 @@ let compute_yield_info (e : Anf.aexpr) : Ident.Set.t * Ident.Set.t =
           bindings;
         collect body
     | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) | While (a, b)
-    | StaticCatch (a, _, _, b) | TryWith (a, _, b) ->
+    | StaticCatch (a, _, _, b, _) | TryWith (a, _, b) ->
         collect a;
         collect b
     | Switch (_, sw) ->
@@ -208,7 +208,7 @@ let compute_yield_info (e : Anf.aexpr) : Ident.Set.t * Ident.Set.t =
     | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
         body_yields yielding body
     | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) | While (a, b)
-    | StaticCatch (a, _, _, b) | TryWith (a, _, b) ->
+    | StaticCatch (a, _, _, b, _) | TryWith (a, _, b) ->
         body_yields yielding a || body_yields yielding b
     | Switch (_, sw) ->
         List.exists (fun (_, arm) -> body_yields yielding arm) sw.consts
@@ -257,7 +257,7 @@ let rec can_raise (e : Anf.aexpr) : bool =
   | StringSwitch (_, cases, fail) ->
       List.exists (fun (_, arm) -> can_raise arm) cases
       || Option.fold ~none:false ~some:can_raise fail
-  | StaticCatch (body, _, _, handler) ->
+  | StaticCatch (body, _, _, handler, _) ->
       can_raise body || can_raise handler
   | TryWith (_, _, handler) -> can_raise handler
 
@@ -299,7 +299,7 @@ let rec reachable_raises (e : Anf.aexpr) : IntSet.t =
       (match fail with
       | Some f -> IntSet.union acc (reachable_raises f)
       | None -> acc)
-  | StaticCatch (body, id, _, handler) ->
+  | StaticCatch (body, id, _, handler, _) ->
       let rb = IntSet.remove id (reachable_raises body) in
       IntSet.union rb (reachable_raises handler)
 
@@ -332,7 +332,7 @@ let rec has_static_raise = function
   | StringSwitch (_, cs, fail) ->
       List.exists (fun (_, a) -> has_static_raise a) cs
       || Option.fold ~none:false ~some:has_static_raise fail
-  | StaticCatch (b, _, _, h) -> has_static_raise b || has_static_raise h
+  | StaticCatch (b, _, _, h, _) -> has_static_raise b || has_static_raise h
 
 let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
     Anf.aexpr option =
@@ -775,7 +775,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let cases' = List.map (fun (s, a) -> (s, transform_branch env a)) cases in
       let fail' = Option.map (transform_branch env) fail in
       StringSwitch (scrut, cases', fail')
-  | StaticCatch (body, hid, binders, handler) ->
+  | StaticCatch (body, hid, binders, handler, result_rep) ->
       let base_fh =
         List.fold_left
           (fun s b -> Ident.Set.remove b s)
@@ -802,7 +802,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
             owned = Ident.Set.diff handler_owned_list dead_at_handler }
           handler
       in
-      StaticCatch (body', hid, binders, emit_drops env dead_at_handler handler')
+      StaticCatch (body', hid, binders, emit_drops env dead_at_handler handler', result_rep)
   | StaticRaise (hid, args) ->
       let target_owned, target_muts =
         match Hashtbl.find_opt env.handlers hid with

@@ -39,7 +39,7 @@ let rec dump (e : Anf.aexpr) : string =
   | Anf.CheckExn (a, b) -> Printf.sprintf "(checkexn %s %s)" (dump a) (dump b)
   | Anf.TryWith (body, x, h) ->
       Printf.sprintf "(try %s %s %s)" (dump body) (dump_ident x) (dump h)
-  | Anf.StaticCatch (body, hid, _, h) ->
+  | Anf.StaticCatch (body, hid, _, h, _) ->
       Printf.sprintf "(catch %d %s %s)" hid (dump body) (dump h)
   | Anf.StaticRaise (hid, args) ->
       Printf.sprintf "(sraise %d [%s])" hid
@@ -201,7 +201,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
         (fun acc (_, a) -> acc + count_release_mut id a)
         (match fail with Some f -> count_release_mut id f | None -> 0)
         cases
-  | Anf.StaticCatch (body, _, _, handler) ->
+  | Anf.StaticCatch (body, _, _, handler, _) ->
       count_release_mut id body + count_release_mut id handler
   | Anf.StaticRaise (_, args) -> List.fold_left count_atom 0 args
   | Anf.CheckExn (unwind, ok) ->

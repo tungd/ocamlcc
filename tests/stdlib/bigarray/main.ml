@@ -83,6 +83,13 @@ let match_int32 (a : (int32, int32_elt, fortran_layout) Array1.t) choice =
   in
   a.{2} <- value
 
+let match_default_int32 (a : (int32, int32_elt, fortran_layout) Array1.t) choice i =
+  a.{2} <- (match choice with
+    | 0 -> 0l
+    | 1 -> -11l
+    | 2 -> Int32.min_int
+    | _ -> Int32.add a.{i} 1l)
+
 let add_nativeint (a : (nativeint, nativeint_elt, fortran_layout) Array1.t) i j delta =
   let value = a.{i} in
   a.{j} <- Nativeint.add value delta
@@ -168,6 +175,12 @@ let () =
   assert (narrow.{2} = -3l);
   assert (try match_int32 narrow (Load 0); false with Invalid_argument _ -> true);
   assert (narrow.{2} = -3l);
+  match_default_int32 narrow 1 0;
+  assert (narrow.{2} = -11l);
+  match_default_int32 narrow 8 1;
+  assert (narrow.{2} = -2l);
+  assert (try match_default_int32 narrow 8 0; false with Invalid_argument _ -> true);
+  assert (narrow.{2} = -2l);
   let native = Array1.of_array nativeint fortran_layout [|Nativeint.max_int; 7n|] in
   add_nativeint native 1 2 1n;
   assert (native.{2} = Nativeint.min_int);

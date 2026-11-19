@@ -214,6 +214,14 @@ static void check_int64_allocations(void)
     for (int i = 0; i < 128; ++i) assert(cells[i] == expected[i & 3]);
     fprintf(stderr, "int64 match allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
     assert(full == empty);
+    for (int i = 0; i < 128; ++i) cells[i] = 5;
+    empty = vectors_int64_match_default_words(values, 0, &err);
+    assert(!err.code);
+    full = vectors_int64_match_default_words(values, 128, &err);
+    assert(!err.code);
+    for (int i = 0; i < 128; ++i) assert(cells[i] == expected[i & 3]);
+    fprintf(stderr, "int64 match with default allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
+    assert(full == empty);
     ocamlcc_Vectors_view_release(values);
 }
 

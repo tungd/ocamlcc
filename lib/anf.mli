@@ -156,7 +156,7 @@ and aexpr =
   | ScalarIf of scalar_rep * atom * aexpr * aexpr
   | Switch of atom * switch_cases
   | StringSwitch of atom * (string * aexpr) list * aexpr option
-  | StaticCatch of aexpr * int * Ident.t list * aexpr
+  | StaticCatch of aexpr * int * Ident.t list * aexpr * scalar_rep option
   | StaticRaise of int * atom list
   | While of aexpr * aexpr
   | For of Ident.t * atom * atom * Asttypes.direction_flag * aexpr

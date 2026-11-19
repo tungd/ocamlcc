@@ -24,7 +24,7 @@ let rec dump (e : Anf.aexpr) : string =
       Printf.sprintf "(join %s %s %s)" (Ident.name id) (dump rhs) (dump body)
   | Anf.StaticRaise (i, args) ->
       Printf.sprintf "(exit %d [%s])" i (String.concat "," (List.map dump_atom args))
-  | Anf.StaticCatch (body, hid, binders, h) ->
+  | Anf.StaticCatch (body, hid, binders, h, _) ->
       Printf.sprintf "(catch %s with (%d [%s]) %s)" (dump body) hid
         (String.concat "," (List.map Ident.name binders)) (dump h)
   | Anf.Release (id, cont) ->
@@ -86,7 +86,7 @@ let () =
             ( Anf.Let (init, Anf.Atom (Anf.Int 1), Anf.StaticRaise (7, [ Anf.Var a' ])),
               7,
               [ binder ],
-              handler )
+              handler, None )
           when Ident.same a' a && Ident.same init a && Ident.same binder a ->
             (* the handler must still be present and lowered *)
             (match handler with
@@ -115,7 +115,7 @@ let () =
     | Ok anf -> (
         match anf.Anf.code with
         | Anf.StaticCatch
-            (Anf.Let (_, Anf.Atom (Anf.Int 1), Anf.StaticRaise (8, [])), 8, _, _)
+            (Anf.Let (_, Anf.Atom (Anf.Int 1), Anf.StaticRaise (8, [])), 8, _, _, None)
           ->
             true
         | _ -> false)
@@ -148,7 +148,7 @@ let () =
                ( _,
                  Anf.Binop (Anf.Add, Anf.Int 1, Anf.Int 2),
                  Anf.StaticRaise (9, [ Anf.Var _ ]) ),
-             9, _, _) ->
+             9, _, _, None) ->
             true
         | _ -> false)
     | Error _ -> false

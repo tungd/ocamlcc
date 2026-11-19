@@ -1075,8 +1075,9 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   | Switch (scrut, sw) -> compile_switch hooks b tail scrut sw
   | StringSwitch (scrut, cases, fail) ->
       compile_stringswitch hooks b tail scrut cases fail
-  | StaticCatch (body, id, binders, handler) ->
-      staticcatch hooks b tail id binders body handler
+  | StaticCatch (body, id, binders, handler, result_rep) ->
+      let result_ty = Option.fold ~none:Long ~some:scalar_type result_rep in
+      staticcatch hooks b tail result_ty id binders body handler
   | StaticRaise (id, args) -> (
       match Hashtbl.find_opt b.cur_fn.handlers id with
       | Some h ->
@@ -1448,7 +1449,7 @@ and compile_stringswitch hooks b tail (scrut : Anf.atom) cases fail =
       emit b (Phi (Long, res, List.rev !preds));
       res
 
-and staticcatch hooks b tail id binder_idents body handler =
+and staticcatch hooks b tail result_ty id binder_idents body handler =
   let h =
     { hlabel = fresh_label b "catch";
       hbinders = binder_idents;
@@ -1490,5 +1491,5 @@ and staticcatch hooks b tail id binder_idents body handler =
   | [] -> unit_const
   | _ ->
       start_block b ljoin;
-      emit b (Phi (Long, res, List.rev !preds));
+      emit b (Phi (result_ty, res, List.rev !preds));
       res

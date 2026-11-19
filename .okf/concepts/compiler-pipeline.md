@@ -6,7 +6,7 @@ tags: [compiler, architecture, lambda, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-19T03:30:38Z
+  at: 2026-11-19T03:35:08Z
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -102,9 +102,11 @@ result out of ARC ownership tracking. See [memory views](/concepts/memory-views.
 Int32, int64, and nativeint Array1 stores also propagate scalar demand through
 straight-line loads, wrapping arithmetic, negation, bitwise operations, and
 shifts, signed division, and remainder. These produce
-QBE words for int32 and longs for int64 and nativeint. A scalar-only
-conditional or variant switch result uses a phi of the same width. ARC releases any boxed
-branch operand after the compiler extracts its scalar value. Signed
+QBE words for int32 and longs for int64 and nativeint. Scalar-only
+conditionals, variant switches, and static catches join results using a phi
+of the same width. Static catch arguments retain the ordinary OCaml value
+ABI. ARC releases any boxed branch operand after the compiler extracts
+its scalar value. Signed
 relational and three-way comparisons may take raw inputs and produce
 tagged bool or int results. Integer conversions share the signed widening,
 narrowing, and tagged-int instructions used by the boxed path. The

@@ -127,6 +127,19 @@ let int64_match_words (a : int64_vector) n =
     a.{i} <- value
   done;
   Gc.minor_words () -. before
+
+let int64_match_default_words (a : int64_vector) n =
+  let before = Gc.minor_words () in
+  for i = 0 to n - 1 do
+    let value = match i land 3 with
+      | 0 -> Int64.add a.{i} 1L
+      | 1 -> Int64.sub a.{i} 2L
+      | 2 -> Int64.mul a.{i} 3L
+      | _ -> Int64.neg a.{i}
+    in
+    a.{i} <- value
+  done;
+  Gc.minor_words () -. before
 let nativeint_words (a : (nativeint, nativeint_elt, c_layout) Array1.t) delta n =
   let before = Gc.minor_words () in
   for i = 0 to n - 1 do

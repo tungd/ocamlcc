@@ -50,7 +50,7 @@ let rec tail_callees (e : Anf.aexpr) : Ident.Set.t =
       (match fail with
       | Some f -> Ident.Set.union acc (tail_callees f)
       | None -> acc)
-  | StaticCatch (body, _, _, handler)
+  | StaticCatch (body, _, _, handler, _)
   | TryWith (body, _, handler) ->
       Ident.Set.union (tail_callees body) (tail_callees handler)
   | CheckExn (_, on_ok) -> tail_callees on_ok
@@ -116,7 +116,7 @@ let collect_globals self_sym (e : Anf.aexpr) : string list =
         scan_cexpr ce;
         scan_aexpr body
     | LetJoin (_, rhs, body)
-    | StaticCatch (rhs, _, _, body)
+    | StaticCatch (rhs, _, _, body, _)
     | While (rhs, body) | CheckExn (rhs, body) | TryWith (rhs, _, body) ->
         scan_aexpr rhs;
         scan_aexpr body

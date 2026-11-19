@@ -39,7 +39,7 @@ let count_release id (e : Anf.aexpr) : int =
         List.fold_left
           (fun acc (_, a) -> acc + go a)
           (match fail with Some f -> go f | None -> 0) cases
-    | Anf.StaticCatch (body, _, _, handler) -> go body + go handler
+    | Anf.StaticCatch (body, _, _, handler, _) -> go body + go handler
     | Anf.StaticRaise (_, _) -> 0
     | Anf.While (cond, body) | Anf.CheckExn (cond, body) -> go cond + go body
     | Anf.For (_, _, _, _, body) -> go body
@@ -113,7 +113,7 @@ let static_fun_ids (e : Anf.aexpr) : Ident.Set.t =
           List.fold_left (fun acc (_, a) -> go extra acc a) acc cases
         in
         (match fail with Some f -> go extra acc f | None -> acc)
-    | Anf.StaticCatch (body, _, _, handler) ->
+    | Anf.StaticCatch (body, _, _, handler, _) ->
         go extra (go extra acc body) handler
     | Anf.While (cond, b) | Anf.CheckExn (cond, b) ->
         go extra (go extra acc cond) b
