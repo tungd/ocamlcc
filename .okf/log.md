@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-19 (autoagent/1): Fix deterministic segfault / OOB read in `In_channel.input_bigarray` / `Out_channel.output_bigarray` (`runtime/arc.c`):
+  - `caml_ml_input_bigarray` / `caml_ml_output_bigarray` passed raw `ArcBigarray.data` (a PAL mmap page or foreign C pointer with no `ArcHeader`) as a `Bytes`-shaped `buf_val` into `caml_ml_input` / `caml_ml_output_bytes`, whose 86f028f bounds hardening reads `((ArcHeader *)buf_val - 1)->reserved` — 16 bytes before the data: an immediate fault on page-aligned Bigarray buffers and an OOB read on foreign buffers.
+  - Split the byte movement out of the header-checked entry points: `caml_ml_input` now delegates to a raw `chan_read_raw` helper (alongside the existing raw `chan_write_bytes`), keeps the `ArcHeader.reserved` slice check for `Bytes` buffers, and `caml_ml_input_bigarray` / `caml_ml_output_bigarray` validate the slice with `ba_channel_range` and call the raw helpers directly.
+  - Regression-tested in `tests/stdlib_runtime.c` (`test_bigarray_channel_io`: round-trip, sub-range writes, out-of-range `Invalid_argument`); `ninja test` (51/51), `ninja asan_test` (34/34), and `dune runtest` pass. See [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-19 (autoagent/1): Fix self-deadlock on mutual module initialization (`runtime/arc.c`):
   - `ocamlcc_init_try_enter` spun forever when a same-thread re-entrant init call hit its own `-2` claim — `.mli`-mediated mutually dependent units (`mut_app` in `test/driver_test.ml`) recurse `ocamlcc_init_A → ocamlcc_init_B → ocamlcc_init_A` while the outer initializer is in flight. It now tracks active init slots in a `_Thread_local` stack (`tls_init_slots`, depth ≤ 64), returns `0` for re-entrant same-thread calls, keeps the spin only for slots claimed by *other* threads, and `ocamlcc_init_finish` pops the claim after publishing the value.
   - `run_capture` in `test/driver_test.ml` enforces a 60 s timeout and SIGKILLs hung children, so a startup deadlock fails the suite (`mli-mediated mutual deps: FAIL`) instead of hanging `dune runtest` forever.

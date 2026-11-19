@@ -27,6 +27,9 @@ extern int64_t caml_ml_open_descriptor_out(int64_t);
 extern int64_t caml_ml_close_channel(int64_t);
 extern int64_t caml_ml_output_bytes(int64_t, int64_t, int64_t, int64_t);
 extern int64_t caml_ml_input(int64_t, int64_t, int64_t, int64_t);
+extern int64_t caml_ml_flush(int64_t);
+extern int64_t caml_ml_input_bigarray(int64_t, int64_t, int64_t, int64_t);
+extern int64_t caml_ml_output_bigarray(int64_t, int64_t, int64_t, int64_t);
 extern int64_t ocamlcc_fiber_create(int64_t);
 extern int64_t ocamlcc_fiber_resume(int64_t, int64_t);
 extern int64_t ocamlcc_fiber_fd_wait_read(int64_t);
@@ -774,6 +777,81 @@ static void test_reachable_words(void)
     assert(arc_live_objects() == before);
 }
 
+static void test_bigarray_channel_io(void)
+{
+    int64_t before = arc_live_objects();
+    int fds[2];
+    assert(pipe(fds) == 0);
+    int64_t ch_in = caml_ml_open_descriptor_in(tagged(fds[0]));
+    int64_t ch_out = caml_ml_open_descriptor_out(tagged(fds[1]));
+
+    /* 1. output_bigarray writes the array bytes (data has no ArcHeader). */
+    int64_t *dims = arc_alloc_array(1, tagged(8));
+    int64_t ba = caml_ba_create(tagged(OCAMLCC_BA_CHAR), tagged(OCAMLCC_BA_C_LAYOUT),
+                                (int64_t)(uintptr_t)dims);
+    arc_release(dims);
+    OcamlccBigarrayView *fill = ocamlcc_bigarray_view_acquire(ba);
+    assert(fill != NULL);
+    OcamlccBigarrayInfo fi = ocamlcc_bigarray_view_info(fill);
+    assert(fi.kind == OCAMLCC_BA_CHAR && fi.byte_length == 8);
+    memcpy(fi.data, "helloBA!", 8);
+    ocamlcc_bigarray_view_release(fill);
+
+    caml_ml_output_bigarray(ch_out, ba, tagged(0), tagged(8));
+    assert(!ocamlcc_get_exn());
+    caml_ml_flush(ch_out);
+
+    /* 2. A valid sub-range writes only that slice. */
+    caml_ml_output_bigarray(ch_out, ba, tagged(2), tagged(3));
+    assert(!ocamlcc_get_exn());
+    caml_ml_flush(ch_out);
+
+    /* 3. Out-of-range slices raise Invalid_argument, not UB. */
+    caml_ml_output_bigarray(ch_out, ba, tagged(7), tagged(4));
+    clear_exception();
+    caml_ml_output_bigarray(ch_out, ba, tagged(-1), tagged(2));
+    clear_exception();
+
+    /* 4. input_bigarray reads back what output wrote (page-aligned data:
+       no header probe at data-16). */
+    int64_t *dims2 = arc_alloc_array(1, tagged(8));
+    int64_t ba2 = caml_ba_create(tagged(OCAMLCC_BA_CHAR), tagged(OCAMLCC_BA_C_LAYOUT),
+                                 (int64_t)(uintptr_t)dims2);
+    arc_release(dims2);
+    int64_t n = caml_ml_input_bigarray(ch_in, ba2, tagged(0), tagged(8));
+    assert(!ocamlcc_get_exn());
+    assert(n == tagged(8));
+    OcamlccBigarrayView *check = ocamlcc_bigarray_view_acquire(ba2);
+    assert(check != NULL);
+    OcamlccBigarrayInfo ci = ocamlcc_bigarray_view_info(check);
+    assert(memcmp(ci.data, "helloBA!", 8) == 0);
+    ocamlcc_bigarray_view_release(check);
+
+    /* 5. The sub-range write lands "llo". */
+    int64_t n2 = caml_ml_input_bigarray(ch_in, ba2, tagged(0), tagged(8));
+    assert(!ocamlcc_get_exn());
+    assert(n2 == tagged(3));
+    check = ocamlcc_bigarray_view_acquire(ba2);
+    ci = ocamlcc_bigarray_view_info(check);
+    assert(memcmp(ci.data, "llo", 3) == 0);
+    ocamlcc_bigarray_view_release(check);
+
+    /* 6. Out-of-range input slices raise Invalid_argument. */
+    caml_ml_input_bigarray(ch_in, ba2, tagged(0), tagged(9));
+    clear_exception();
+    caml_ml_input_bigarray(ch_in, ba2, tagged(-1), tagged(2));
+    clear_exception();
+
+    caml_ml_close_channel(ch_out);
+    arc_release_val(ch_out);
+    caml_ml_close_channel(ch_in);
+    arc_release_val(ch_in);
+    arc_release_val(ba);
+    arc_release_val(ba2);
+    ocamlcc_arc_collect(1);
+    assert(arc_live_objects() == before);
+}
+
 int main(void)
 {
     test_float_format();
@@ -789,6 +867,7 @@ int main(void)
     test_retained_c_subview();
     test_c_view_shapes();
     test_import_contract();
+    test_bigarray_channel_io();
     puts("stdlib runtime: formats, malformed cleanup, cycles, truncation, views");
     return 0;
 }

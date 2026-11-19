@@ -3720,6 +3720,47 @@ int64_t caml_ml_input_char(int64_t chan_val)
     return tag_int((int64_t)b);
 }
 
+/* Raw channel read into a caller-owned buffer: no slice bounds check against
+ * an ArcHeader (the caller validates its own buffer shape). Raises on closed
+ * channel / read error; returns the number of bytes read (>= 0) or -1 after
+ * raising. */
+static int64_t chan_read_raw(OcamlccChannel *ch, uint8_t *dst, int64_t ofs,
+                             int64_t len)
+{
+    if (len == 0)
+        return 0;
+    if (ch->cur < ch->max) {
+        size_t avail = ch->max - ch->cur;
+        size_t take = ((size_t)len < avail) ? (size_t)len : avail;
+        pal_memcpy(dst + ofs, ch->buf + ch->cur, take);
+        ch->cur += take;
+        return (int64_t)take;
+    }
+    int err = 0;
+    if (ch->closed) {
+        raise_sys_error_cstr("Bad file descriptor");
+        return -1;
+    }
+    if ((size_t)len >= OCAMLC_CHAN_BUFSZ) {
+        int64_t r = ocamlcc_c_fd_read_raw(ch->fd, dst + ofs, (size_t)len, &err);
+        if (r < 0) {
+            raise_sys_error_errno(err);
+            return -1;
+        }
+        return r;
+    }
+    int r = chan_refill(ch, &err);
+    if (r < 0) {
+        raise_sys_error_errno(err);
+        return -1;
+    }
+    size_t take = ((size_t)len < ch->max) ? (size_t)len : ch->max;
+    if (take > 0u)
+        pal_memcpy(dst + ofs, ch->buf, take);
+    ch->cur = take;
+    return (int64_t)take;
+}
+
 int64_t caml_ml_input(int64_t chan_val, int64_t buf_val,
                       int64_t ofs_val, int64_t len_val)
 {
@@ -3731,39 +3772,11 @@ int64_t caml_ml_input(int64_t chan_val, int64_t buf_val,
         raise_invalid_arg_imm(g_inv_arg_oob_str.str);
         return tag_int(0);
     }
-    if (len == 0)
-        return tag_int(0);
-    if (ch->cur < ch->max) {
-        size_t avail = ch->max - ch->cur;
-        size_t take = ((size_t)len < avail) ? (size_t)len : avail;
-        pal_memcpy((uint8_t *)(uintptr_t)buf_val + ofs, ch->buf + ch->cur, take);
-        ch->cur += take;
-        return tag_int((int64_t)take);
-    }
-    int err = 0;
-    if (ch->closed) {
-        raise_sys_error_cstr("Bad file descriptor");
-        return 1;
-    }
-    if ((size_t)len >= OCAMLC_CHAN_BUFSZ) {
-        int64_t r = ocamlcc_c_fd_read_raw(
-            ch->fd, (uint8_t *)(uintptr_t)buf_val + ofs, (size_t)len, &err);
-        if (r < 0) {
-            raise_sys_error_errno(err);
-            return 1;
-        }
-        return tag_int(r);
-    }
-    int r = chan_refill(ch, &err);
-    if (r < 0) {
-        raise_sys_error_errno(err);
-        return 1;
-    }
-    size_t take = ((size_t)len < ch->max) ? (size_t)len : ch->max;
-    if (take > 0u)
-        pal_memcpy((uint8_t *)(uintptr_t)buf_val + ofs, ch->buf, take);
-    ch->cur = take;
-    return tag_int((int64_t)take);
+    int64_t got =
+        chan_read_raw(ch, (uint8_t *)(uintptr_t)buf_val, ofs, len);
+    if (got < 0)
+        return 1; /* exception raised by chan_read_raw */
+    return tag_int(got);
 }
 
 int64_t caml_ml_input_int(int64_t chan_val)
@@ -4817,12 +4830,23 @@ static int ba_channel_range(int64_t ba, int64_t offset, int64_t length)
 int64_t caml_ml_input_bigarray(int64_t c, int64_t ba, int64_t o, int64_t l)
 {
     if (!ba_channel_range(ba, o, l)) return 1;
-    return caml_ml_input(c, (int64_t)(uintptr_t)((ArcBigarray *)(uintptr_t)ba)->data, o, l);
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)c;
+    const ArcBigarray *a = (const ArcBigarray *)(uintptr_t)ba;
+    /* ba->data is a raw PAL page or foreign pointer with no ArcHeader in
+     * front, so go through the raw helper: the slice was validated against
+     * the array extent by ba_channel_range above. */
+    int64_t got = chan_read_raw(ch, (uint8_t *)(uintptr_t)a->data, o >> 1, l >> 1);
+    if (got < 0) return 1; /* exception raised by chan_read_raw */
+    return tag_int(got);
 }
 int64_t caml_ml_output_bigarray(int64_t c, int64_t ba, int64_t o, int64_t l)
 {
     if (!ba_channel_range(ba, o, l)) return 1;
-    return caml_ml_output(c, (int64_t)(uintptr_t)((ArcBigarray *)(uintptr_t)ba)->data, o, l);
+    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)c;
+    const ArcBigarray *a = (const ArcBigarray *)(uintptr_t)ba;
+    (void)chan_write_bytes(ch, (const uint8_t *)(uintptr_t)a->data + (o >> 1),
+                           (size_t)(l >> 1));
+    return 1;
 }
 
 
