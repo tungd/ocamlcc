@@ -1,3 +1,7 @@
+;; Generated build artifacts may contain vendored projects with their own dune
+;; files. They belong to the package executor, not this compiler's workspace.
+(dirs :standard \ build)
+
 ;; Private compiler inputs used for native and cross builds.
 (install
  (section lib)

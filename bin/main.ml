@@ -10,7 +10,8 @@
 let usage =
   "usage: ocamlcc build [--target t] [--shared|--static|--exe|-c|-S] \
    [--emit-header h] [-I dir] [--nostdlib] [--nopervasives] [--no-main] \
-   [--qbe path] [--cc path] [--sysroot path] [-v] <files...> -o <out>\n\
+   [--qbe path] [--cc path] [--sysroot path] [--runtime-objects-dir dir] \
+   [-v] <files...> -o <out>\n\
    \       ocamlcc compile [-I dir] [--nostdlib] [--nopervasives] [--emit-cmi] \
    [--cmi-prefix p] [--mod] <file.ml> [-o <out.ssa>]\n\
    \       ocamlcc compile-mli [-I dir] [--nostdlib] [--nopervasives] \
@@ -40,6 +41,7 @@ type cli_opts = {
   ar_path : string option;
   sysroot : string option;
   runtime_dir : string option;
+  runtime_objects_dir : string option;
   stdlib_dir : string option;
   work_dir : string option;
   extra_cflags : string list;
@@ -68,6 +70,7 @@ let default_opts =
     ar_path = None;
     sysroot = None;
     runtime_dir = None;
+    runtime_objects_dir = None;
     stdlib_dir = None;
     work_dir = None;
     extra_cflags = [];
@@ -112,6 +115,8 @@ let parse_opts args =
     | "--sysroot" :: p :: rest -> go { opts with sysroot = Some p } rest
     | "--runtime-dir" :: p :: rest ->
         go { opts with runtime_dir = Some p } rest
+    | "--runtime-objects-dir" :: p :: rest ->
+        go { opts with runtime_objects_dir = Some p } rest
     | "--stdlib-dir" :: p :: rest ->
         go { opts with stdlib_dir = Some p } rest
     | "--work-dir" :: p :: rest -> go { opts with work_dir = Some p } rest
@@ -281,6 +286,7 @@ let build opts =
         ar_path = opts.ar_path;
         sysroot = opts.sysroot;
         runtime_dir = opts.runtime_dir;
+        prebuilt_rt_dir = opts.runtime_objects_dir;
         prebuilt_stdlib_dir = opts.stdlib_dir;
         work_dir = opts.work_dir;
         extra_cflags = opts.extra_cflags;

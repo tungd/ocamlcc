@@ -29,6 +29,8 @@ links into the concepts below.
 
 | [/concepts/stdlib-compatibility.md](/concepts/stdlib-compatibility.md) | stable | Upstream stdlib overlays and native test execution. |
 
+| [/concepts/package-catalog.md](/concepts/package-catalog.md) | draft | Curated package sources, vendoring and generated rules; ocaml-crunch MVP. |
+
 ## Maintenance
 
 This bundle is maintained in-repo: when code changes, update the affected

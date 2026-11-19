@@ -6,7 +6,7 @@ tags: [build, ninja, dune, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-18T18:02:08Z
+  at: 2026-11-19T07:37:37+00:00
 sources:
   - id: build-ninja
     resource: ../build.ninja
@@ -112,3 +112,11 @@ The Ninja shared-library rule links libm for the math primitives it includes. It
 # Verified on Linux and macOS (2026-11-18)
 
 The 14 Dune suites, 26 Ninja checks, 16 ASan/UBSan checks and installed core-stdlib driver smoke test pass on Ubuntu 24.04 arm64 with OCaml 5.5.2 and on macOS arm64 with OCaml 5.5.0. The macOS installed driver also passes the three-module Map.Make(String) registration test with the compatibility stdlib.
+
+# Package companion
+
+The [package catalog](/concepts/package-catalog.md) describes `tools/ocpkg.py`,
+which vendors locked package sources and emits a separate Ninja file. Dune
+excludes the generated `build/` tree, including vendored upstream projects.
+The compiler CLI exposes `--runtime-objects-dir` to select a prebuilt runtime
+directory explicitly; an empty directory forces compilation from runtime sources.

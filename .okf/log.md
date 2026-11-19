@@ -38,6 +38,12 @@
 
 - 2026-11-18 (codex/1): Import caller-owned writable storage into Bigarray views. The final owning view schedules the native release callback outside ARC traversal and collection, including when a cycle owns the last view. See [memory views](/concepts/memory-views.md).
 
+- 2026-11-18 (codex/1): Verify non-Lwt package behavior: both Crunch plain golden tests, 65 Cmdliner reference comparisons and 900,813 Ptime comparisons pass. Preserve upstream tests and record the B0 assertion adapter, independent libc oracle and negative controls in [package catalog](/concepts/package-catalog.md).
+
+- 2026-11-18 (codex/1): Implement the ocpkg companion and build ocaml-crunch 4.1.0 from pinned sources with an explicit Unix adapter. Record 15 package tests, nine integration checks and passing compiler tests in [package catalog](/concepts/package-catalog.md).
+
+- 2026-11-18 (codex/1): Record the package companion design and ocaml-crunch MVP plan in [package catalog](/concepts/package-catalog.md).
+
 - 2026-11-18 (codex/1): Generate C bindings for concrete Bigarray.Array2 arguments and results. The C host releases a matrix and continues reading and writing its zero-copy Array1 row. See [memory views](/concepts/memory-views.md).
 
 - 2026-11-18 (codex/1): Scope generated Bigarray view helpers to each module and reject input handles owned by another ARC heap. A two-library C fixture exercises both plain shared builds and libraries with native stubs.

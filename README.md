@@ -149,3 +149,11 @@ build/bin/ocamlcc compile --nostdlib -I build/stdlib examples/stdlib_test.ml -o 
 build/bin/ocamlcc compile-mli examples/mod_lib.mli -o build/mod_lib.cmi
 build/bin/ocamlcc dump-lambda examples/hello.ml
 ```
+
+## Package companion MVP
+
+[`ocpkg`](packages/README.md) vendors a curated, hash-pinned package closure,
+queries its metadata, and emits Ninja rules. Its first target builds
+`ocaml-crunch` 4.1.0 with ocamlcc from upstream sources plus an explicit Unix
+adapter. See the [design and plan](.okf/concepts/package-catalog.md) and
+[macOS arm64 compatibility evidence](packages/evidence/crunch-macos-arm64.json).

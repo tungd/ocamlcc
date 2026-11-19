@@ -1,0 +1,185 @@
+{
+  "artifacts": {
+    "binary": "build/crunch/ocaml-crunch",
+    "build_plan": "build/crunch/ocpkg-plan.json",
+    "build_receipt": "build/ocpkg-final-2/receipt.json",
+    "integration_receipt": "build/crunch/integration/receipt.json"
+  },
+  "binary_sha256": "eb365c59bb06114d7be9b576898f20ff752953253590b66ea1bb5f9c9a16bf80",
+  "checks": [
+    {
+      "name": "version",
+      "passed": true
+    },
+    {
+      "name": "help",
+      "passed": true
+    },
+    {
+      "name": "t1_plain.ml matches upstream",
+      "passed": true
+    },
+    {
+      "name": "t1_plain_ext.ml matches upstream",
+      "passed": true
+    },
+    {
+      "name": "t1.ml matches upstream",
+      "passed": true
+    },
+    {
+      "name": "t1.mli matches upstream",
+      "passed": true
+    },
+    {
+      "name": "roundtrip-0",
+      "passed": true
+    },
+    {
+      "name": "roundtrip-17",
+      "passed": true
+    },
+    {
+      "name": "live clock output",
+      "passed": true
+    }
+  ],
+  "command_outcomes": [
+    {
+      "exit_code": 0,
+      "name": "version",
+      "timed_out": false
+    },
+    {
+      "exit_code": 0,
+      "name": "help",
+      "timed_out": false
+    },
+    {
+      "exit_code": 124,
+      "name": "invalid-option",
+      "timed_out": false
+    },
+    {
+      "exit_code": 0,
+      "name": "plain",
+      "timed_out": false
+    },
+    {
+      "exit_code": 0,
+      "name": "extension",
+      "timed_out": false
+    },
+    {
+      "exit_code": 0,
+      "name": "lwt",
+      "timed_out": false
+    },
+    {
+      "exit_code": 0,
+      "name": "roundtrip-generate-0",
+      "timed_out": false
+    },
+    {
+      "exit_code": 0,
+      "name": "roundtrip-compile-0",
+      "timed_out": false
+    },
+    {
+      "exit_code": 0,
+      "name": "roundtrip-run-0",
+      "timed_out": false
+    },
+    {
+      "exit_code": 0,
+      "name": "roundtrip-generate-17",
+      "timed_out": false
+    },
+    {
+      "exit_code": 0,
+      "name": "roundtrip-compile-17",
+      "timed_out": false
+    },
+    {
+      "exit_code": 0,
+      "name": "roundtrip-run-17",
+      "timed_out": false
+    },
+    {
+      "exit_code": 0,
+      "name": "live-clock",
+      "timed_out": false
+    }
+  ],
+  "companion_sha256": "df8b4bdb873453eb20fa46bb4e3295646ffcd457c954c9cc25ab378c939b0f6c",
+  "compiler_base_commit": "81a56449cf85f64e7364b35e0ce080c6b0b88a33",
+  "compiler_changes": [
+    "Expose existing Driver.config.prebuilt_rt_dir as --runtime-objects-dir"
+  ],
+  "compiler_cli_source_sha256": "5eaaa9ee14603a822b25832d9ef8205156fac259a1bb0f8fd539d9f5b556d99b",
+  "compiler_sha256": "40d79f18b57ed87a8f352b165f9dc1d8d5cccdee49bbd97dc1662384c55fae3e",
+  "exclusions": [
+    "Lwt/Mirage generated-code consumer suite",
+    "upstream Cmdliner and Ptime suites",
+    "Other operating systems and architectures",
+    "Snapshot signature verification",
+    "Whole-toolchain hermeticity or binary reproducibility"
+  ],
+  "notes": [
+    "Invalid-option command intentionally exits 124 (Cmdliner usage error); timed_out is false.",
+    "Upstream Crunch, Cmdliner and Ptime sources are unchanged. crunch-unix is an explicit limited ARC adapter.",
+    "No-change Ninja invocation preserved the binary modification time."
+  ],
+  "ocaml_frontend": "5.5.0",
+  "packages": [
+    {
+      "name": "cmdliner",
+      "source": {
+        "root": "cmdliner-1.3.0",
+        "sha256": "8e8180f573b440f6a7a8c208dab2cae4a82384fec732d22784d1bb6e64168cbb",
+        "tree_sha256": "045b4e32b7ce6c25e064821666db158b114ce1e13e66afdb22eb80e13afb6208",
+        "url": "https://erratique.ch/software/cmdliner/releases/cmdliner-1.3.0.tbz"
+      },
+      "version": "1.3.0"
+    },
+    {
+      "name": "ptime",
+      "source": {
+        "root": "ptime-1.2.0",
+        "sha256": "9616747fdf490ec36e8024cab27ee01e3a0af577d8a23226638fa4034de73ab0",
+        "tree_sha256": "28aad28c1cc5646cc1d076a77329473ba865186a86e6fc605704d9849ffc3489",
+        "url": "https://erratique.ch/software/ptime/releases/ptime-1.2.0.tbz"
+      },
+      "version": "1.2.0"
+    },
+    {
+      "name": "crunch-unix",
+      "source": {
+        "local": "packages/ports/crunch-unix",
+        "tree_sha256": "aa783f9007406132b2374abf17e9561b7e9dc33c542a2dd432dfa2b7dfb92705"
+      },
+      "version": "0.1"
+    },
+    {
+      "name": "crunch",
+      "source": {
+        "root": "crunch-4.1.0",
+        "sha256": "b7775d6fb6e6094a8c31fdbf2127501d99ed8ceeac40271055dd52c79a3e17e7",
+        "tree_sha256": "58b876c2f5a37971f3a9d2aba70edaa7ae955545743ab56d443f1bf2ac0a60f8",
+        "url": "https://github.com/mirage/ocaml-crunch/releases/download/v4.1.0/crunch-4.1.0.tbz"
+      },
+      "version": "4.1.0"
+    }
+  ],
+  "qbe_sha256": "a14d22d6b162a99cffa5f1c3bf6d980b3df0b843dab974ee918280e47fb34104",
+  "recorded_at": "2026-11-18T07:19:05+00:00",
+  "runtime_source_sha256": "8b0a0fbdfbeab9f105f523211679c603ed487feb29c8c9f141d8083637208ca6",
+  "schema": 1,
+  "snapshot_sha256": "c05d8453ae216f57046b7e96a3195bc7a8237662da6c9d94629825c9331dea67",
+  "status": "passed",
+  "stdlib_artifacts_sha256": "6e7b259b9dc246f8fcfe16bb06dad9b7d1a853c4b06113a9478bb31fa819c202",
+  "target": "macos-arm64",
+  "warnings": [
+    "Three Cmdliner mutually recursive closure groups produce ARC-cycle warnings; memory-leak coverage not asserted."
+  ]
+}

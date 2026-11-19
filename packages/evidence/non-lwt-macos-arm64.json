@@ -1,0 +1,441 @@
+{
+  "checks": [
+    {
+      "detail": "",
+      "name": "Crunch plain upstream golden",
+      "passed": true
+    },
+    {
+      "detail": "",
+      "name": "Crunch plain-extension upstream golden",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner chorus --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner chorus --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner chorus (default)",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner chorus --count 2 hello",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner cp_ex --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner cp_ex --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner cp_ex a b",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner darcs_ex --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner darcs_ex --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner darcs_ex initialize",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner darcs_ex record --all",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner revolt --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner revolt --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner revolt (default)",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner rm_ex --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner rm_ex --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner rm_ex --force a b",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner tail_ex --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner tail_ex --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner tail_ex -n 3 a",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_dupe_stdopts old --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_dupe_stdopts new --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_dupe_stdopts old sub",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_dupe_stdopts new sub",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_man --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_man --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_man (default)",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_man_utf8 --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_man_utf8 --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_man_utf8 (default)",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_nest --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_nest --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_nest birds fly eagle --speed 5",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_nest camels --bactrian",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_nest unknown",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_opt_req --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_opt_req --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_opt_req (default)",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_opt_req --req value",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_pos --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos (default)",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos a b c d",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos_all --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_pos_all --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos_all (default)",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos_all a b c",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos_left --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_pos_left --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos_left (default)",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_pos_left a b c d",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos_req --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_pos_req --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_pos_req (default)",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos_req a b c d",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos_rev --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_pos_rev --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos_rev (default)",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_pos_rev a b c d",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_term_dups --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_term_dups --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_term_dups value --flag",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_with_used_args --help=plain",
+      "passed": true
+    },
+    {
+      "detail": "exit=124, stock=124; stdout/stderr compared",
+      "name": "Cmdliner test_with_used_args --ocpkg-invalid",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0; stdout/stderr compared",
+      "name": "Cmdliner test_with_used_args -a -b value x --other",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0",
+      "name": "Ptime test_ptime",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0",
+      "name": "Ptime test_gmtime",
+      "passed": true
+    },
+    {
+      "detail": "exit=0, stock=0",
+      "name": "Ptime examples",
+      "passed": true
+    }
+  ],
+  "compiler_sha256": "40d79f18b57ed87a8f352b165f9dc1d8d5cccdee49bbd97dc1662384c55fae3e",
+  "counts": {
+    "cmdliner_invocations": 65,
+    "cmdliner_programs": 18,
+    "crunch_golden": 2,
+    "harness_deliberate_failures_detected": 9,
+    "ptime_comparisons": 900813,
+    "ptime_examples": 1,
+    "ptime_groups": 22
+  },
+  "exclusions": [
+    "Crunch's Lwt/Mirage consumer",
+    "Ptime test_gmtime_all and min_clock (upstream run:false)"
+  ],
+  "harness_checks": [
+    {
+      "detail": "exit=0, stock=0",
+      "name": "Ptime assertions",
+      "passed": true
+    }
+  ],
+  "harness_sources": {
+    "assertions.ml": "01d0aa71980321b0d48b8c08fb1bfcee71bef0ed655c06fc37e317b39b335a9b",
+    "b0_std.ml": "2ec6c009794d4a35c9a3893a4ae73d51118d4b206414f26dd980add7aff117ee",
+    "b0_testing.ml": "e7bdf060adc1e25c357e641a809790dad019c88f546dda1febc078cb4effad7c",
+    "gmtime_stubs.c": "3d0a4bce84952245069a8cbb0d0c8a44d0d2dec20836664e8a2708790fdde202",
+    "unix.ml": "58bfbab7fcd8c9b608ba5fc6fbc45934963310a9f28df8636d812271b5ef77a3"
+  },
+  "notes": [
+    "Upstream package/test sources are unchanged.",
+    "Ptime uses a test-only B0 assertion adapter with fixed seed 20261118; loop counts remain upstream defaults.",
+    "Ptime gmtime oracle is libc gmtime_r for ARC and stock Unix.gmtime for stock OCaml."
+  ],
+  "ptime": [
+    {
+      "checks": 700809,
+      "failed": 0,
+      "name": "test_ptime-arc",
+      "output": [
+        "random seed: 20261118",
+        "PASS span constants and conversions (30 checks)",
+        "PASS span predicates (16 checks)",
+        "PASS span arithmetic (7 checks)",
+        "PASS span rounding (188 checks)",
+        "PASS span retty printing (119 checks)",
+        "PASS stamp constants and base constructors (22 checks)",
+        "PASS stamp predicates (18 checks)",
+        "PASS stamp POSIX arithmetic (11 checks)",
+        "PASS stamp truncation (195 checks)",
+        "PASS calendar date field bounds (76 checks)",
+        "PASS random valid dates to stamps round trips (100000 checks)",
+        "PASS date-time time field bounds (19 checks)",
+        "PASS testing date-time time zone calculations (11 checks)",
+        "PASS subsecond stamp to date-time (6 checks)",
+        "PASS testing leap second date-times (7 checks)",
+        "PASS random stamps to date-time round trips (200000 checks)",
+        "PASS random valid date-times to stamp round trips (100000 checks)",
+        "PASS Ptime.{weekday_num,weekday} (10 checks)",
+        "PASS stamp to RFC 3339 conversions (28 checks)",
+        "PASS RFC 3339 to stamp conversions (46 checks)",
+        "PASS random stamps to RFC 3339 round trips (300000 checks)",
+        "RESULT passed=21 failed=0 checks=700809"
+      ],
+      "passed": 21
+    },
+    {
+      "checks": 200004,
+      "failed": 0,
+      "name": "test_gmtime-arc",
+      "output": [
+        "random seed: 20261118",
+        "PASS random Ptime-valid stamps to date-time (200004 checks)",
+        "RESULT passed=1 failed=0 checks=200004"
+      ],
+      "passed": 1
+    }
+  ],
+  "receipts": [
+    "build/crunch/non-lwt/all-receipt.json",
+    "build/crunch/non-lwt/harness-receipt.json"
+  ],
+  "recorded_at": "2026-11-18T07:31:41+00:00",
+  "runner": "tests/ocpkg/non_lwt.py",
+  "schema": 1,
+  "snapshot_sha256": "c05d8453ae216f57046b7e96a3195bc7a8237662da6c9d94629825c9331dea67",
+  "status": "passed",
+  "target": "macos-arm64"
+}
