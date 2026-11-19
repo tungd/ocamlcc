@@ -13,6 +13,11 @@
  (modules anf_unused_alias_test)
  (libraries ocamlcc compiler-libs.common))
 
+(test
+ (name arc_checkexn_join_test)
+ (modules arc_checkexn_join_test)
+ (libraries ocamlcc))
+
 (executable
  (name phi_split_test)
  (modules phi_split_test)

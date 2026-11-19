@@ -40,6 +40,10 @@ type state = {
   try_owned : Ident.Set.t;
   try_muts : Ident.Set.t;
   try_depth : int;
+  (* True only at a function/toplevel tail return position. [Halt]s ending a
+     [LetJoin] rhs, [TryWith] body, or loop flow into a join/handler and must
+     not elide [CheckExn] or [ShadowPush]/[ShadowPop]. *)
+  in_tail : bool;
 }
 
 let is_borrowed (env : state) (id : Ident.t) : bool =
@@ -731,6 +735,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           let body' = transform_aexpr env_body body in
           let body_with_dead_after = emit_drops env dead_after body' in
           let is_pure_tail =
+            env.in_tail
+            &&
             match body with
             | Halt (Var v) when Ident.same id v ->
                 env.try_depth = 0
@@ -801,7 +807,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
         { env with
           owned = owned_for_rhs;
           frame_borrowed = Ident.Set.union env.frame_borrowed shared;
-          no_release_muts = env.muts }
+          no_release_muts = env.muts;
+          in_tail = false }
       in
       let rhs' = transform_aexpr env_rhs rhs in
       let imm =
@@ -962,7 +969,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
         { env with
           try_owned = Ident.Set.union catch_owned env.frame_borrowed;
           try_muts = env.muts;
-          try_depth = env.try_depth + 1 }
+          try_depth = env.try_depth + 1;
+          in_tail = false }
       in
       let body' = transform_aexpr body_env body in
       let handler_env =
@@ -975,7 +983,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
         { env with
           owned = Ident.Set.empty;
           frame_borrowed = Ident.Set.union env.frame_borrowed env.owned;
-          no_release_muts = env.muts }
+          no_release_muts = env.muts;
+          in_tail = false }
       in
       let cond' = transform_aexpr loop_env cond in
       let body' = transform_aexpr loop_env body in
@@ -995,7 +1004,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           owned = Ident.Set.empty;
           frame_borrowed = Ident.Set.union env.frame_borrowed env.owned;
           imm = Ident.Set.add idx env.imm;
-          no_release_muts = env.muts }
+          no_release_muts = env.muts;
+          in_tail = false }
       in
       let body' = transform_aexpr loop_env body in
       if Ident.Set.is_empty env.owned && Ident.Set.is_empty env.muts then
@@ -1054,7 +1064,8 @@ and transform_fun (env : state) ~self_id ~has_closure (lf : Anf.lfunction) :
       imm = Ident.Set.union (Ident.Set.diff env.imm params_set) (imm_params_of lf);
       try_owned = Ident.Set.empty;
       try_muts = Ident.Set.empty;
-      try_depth = 0 }
+      try_depth = 0;
+      in_tail = true }
   in
   let live_body = Anf.free_vars lf.body in
   let dead_params = Ident.Set.diff params_set live_body in
@@ -1098,6 +1109,7 @@ let run (prog : Anf.program) : Anf.program =
       handlers = Hashtbl.create 8;
       try_owned = Ident.Set.empty;
       try_muts = Ident.Set.empty;
-      try_depth = 0 }
+      try_depth = 0;
+      in_tail = true }
   in
   { prog with code = transform_aexpr init_env prog.code }

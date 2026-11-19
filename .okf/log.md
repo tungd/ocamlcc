@@ -1,5 +1,15 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Track `env.in_tail` in `Arc_pass` so non-tail join branches never elide `CheckExn` (`lib/arc_pass.ml`, `test/arc_checkexn_join_test.ml`):
+  - `is_pure_tail` previously checked only `body = Halt (Var v)` and `env.try_depth = 0`, which also matched calls at the end of a `LetJoin` rhs / `If` branch / loop body whose `Halt` flows into a join phi instead of returning from the function. When `Typecore.type_expect` raised inside such an `if` branch, execution continued into the join block with dummy result `1` and crashed.
+  - Added `in_tail : bool` to `Arc_pass.state` (`false` in `LetJoin` rhs, `TryWith` body, and `While`/`For` loops) and gated `is_pure_tail` on `env.in_tail`.
+  - TDD-verified in `test/arc_checkexn_join_test.ml` and `dune runtest -j1`. See [perceus-arc](/concepts/perceus-arc.md).
+
+- 2026-11-19 (antigravity/1): Accept negative prefixed literals (`-0x...`, `-0o...`, `-0b...`, `-0u...`) in `ocamlcc_c_int_of_string` (`runtime/builtins.c`, `tests/stdlib_runtime.c`):
+  - `Misc.Int_literal_converter.int` converts positive hex/oct/bin literals such as `"0x30"` by calling `int_of_string "-0x30"`, which `ocamlcc_c_int_of_string` rejected because it tested signed `v < 0` instead of checking magnitude `<= INT64_MAX`.
+  - Replaced the check with magnitude bounds checking (`mag = is_neg ? 0ULL - (uint64_t)v : (uint64_t)v; mag <= (uint64_t)INT64_MAX`) plus 63-bit sign extension.
+  - TDD-verified in `tests/stdlib_runtime.c` (`test_int_of_string_literals`), `ninja -j1 test` (26/26), and `ninja -j1 asan_stdlib_runtime`. See [stdlib-compatibility](/concepts/stdlib-compatibility.md).
+
 - 2026-11-19 (antigravity/1): Stage 1 self-hosted compiler builds and passes smoke suite (`tools/fetch-ocaml-compiler-libs.py`, `tools/bootstrap.py`):
   - Extended `tools/fetch-ocaml-compiler-libs.py` (`MANIFEST.json`) to emit topologically sorted `mli_order` (108 `.mli` interfaces, covering 4 `.mli`-only units via `.depend`) and rewrite internal `MenhirLib` references in `parser.{ml,mli}` to `CamlinternalMenhirLib` (matching the 104-module `compiler-libs.common` closure).
   - Added `tools/bootstrap.py` orchestrating `fetch`, `stage1`, `stage2`, `verify` (bit-for-bit `.ssa`/`.s` diff), and `all`: compiles `stdlib_compat` (72 modules), `compiler-libs.common` (108 `.mli` + 104 `.ml`), `bootstrap/unix/`, and `ocamlcc` (16 modules), linked with `libocamlrt.a` + `bootstrap/stubs/compiler_stubs.c` + `-lzstd`.
