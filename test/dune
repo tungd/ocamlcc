@@ -58,6 +58,24 @@
   (diff pure_nested_test.expected pure_nested_test.actual)))
 
 (executable
+ (name yield_imm_test)
+ (modules yield_imm_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps yield_imm_test.exe yield_imm_test.expected)
+ (action
+  (with-stdout-to yield_imm_test.actual
+   (run ./yield_imm_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps yield_imm_test.actual yield_imm_test.expected)
+ (action
+  (diff yield_imm_test.expected yield_imm_test.actual)))
+
+(executable
  (name ccalls_test)
  (modules ccalls_test)
  (libraries ocamlcc))

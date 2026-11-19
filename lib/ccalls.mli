@@ -17,3 +17,7 @@ val find : string -> abi
 val is_known : string -> bool
 (** [true] iff [name] is registered. Unknown [caml_*] primitives must not be
     lowered to [Ccall]. *)
+
+val returns_imm : string -> bool
+(** [true] iff [name] is guaranteed to return a tagged immediate value
+    (integer, boolean, or unit). *)

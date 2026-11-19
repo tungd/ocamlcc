@@ -29,6 +29,7 @@ type state = {
   pure : Ident.Set.t;
   known_funs : Ident.Set.t;
   yielding_funs : Ident.Set.t;
+  imm_funs : int Ident.Map.t;
   muts : Ident.Set.t;
   (* Mutable slots that stay in scope after the current join point or loop
      exit ([LetJoin] rhs, [While]/[For] condition and body). Their single
@@ -79,10 +80,133 @@ let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
       true
   | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _ -> true
   | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
+  | Ccall (name, _) -> Ccalls.returns_imm name
+  | App (Var fn, args) -> (
+      match Ident.Map.find_opt fn env.imm_funs with
+      | Some arity -> List.length args = arity
+      | None -> false)
   | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _
-  | BigarrayAccess _ | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _ | Ccall _
+  | BigarrayAccess _ | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _
   | GetGlobal _ | Fun _ ->
       false
+
+let imm_params_of (lf : Anf.lfunction) : Ident.Set.t =
+  List.fold_left
+    (fun s (p, vk) ->
+      match vk with Lambda.Pintval -> Ident.Set.add p s | _ -> s)
+    Ident.Set.empty lf.params
+
+let rec aexpr_returns_imm ~pure ~imm_funs (imm : Ident.Set.t) (e : Anf.aexpr) :
+    bool =
+  let atom_imm = function
+    | Anf.Int _ | Char _ | Unit | String _ | Float _ | Int32 _ | Int64 _
+    | Nativeint _ | ConstFloatArray _ | ConstBlock _ ->
+        true
+    | Var id -> Ident.Set.mem id imm || Ident.Set.mem id pure
+    | MutVar _ -> false
+  in
+  let ce_imm = function
+    | Anf.Atom a -> atom_imm a
+    | Binop (op, _, _) -> is_imm_binop op
+    | Unop (op, _) -> is_imm_unop op
+    | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
+    | BytesSet _ | ArraySet _ | Builtin _ | Assign _
+    | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
+    | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _
+    | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
+    | ScalarStore _ ->
+        true
+    | Ccall (name, _) -> Ccalls.returns_imm name
+    | App (Var fn, args) -> (
+        match Ident.Map.find_opt fn imm_funs with
+        | Some arity -> List.length args = arity
+        | None -> false)
+    | _ -> false
+  in
+  match e with
+  | Halt a -> atom_imm a
+  | HaltScalar _ | Raise _ | Unwind | StaticRaise _ | While _ | For _ -> true
+  | Let (id, ce, body) | MutLet (id, ce, body) ->
+      let imm' =
+        if ce_imm ce then Ident.Set.add id imm else Ident.Set.remove id imm
+      in
+      aexpr_returns_imm ~pure ~imm_funs imm' body
+  | LetJoin (id, rhs, body) ->
+      let imm' =
+        if Anf.returns_scalar rhs || aexpr_returns_imm ~pure ~imm_funs imm rhs
+        then Ident.Set.add id imm
+        else Ident.Set.remove id imm
+      in
+      aexpr_returns_imm ~pure ~imm_funs imm' body
+  | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) ->
+      aexpr_returns_imm ~pure ~imm_funs imm a
+      && aexpr_returns_imm ~pure ~imm_funs imm b
+  | TryWith (a, _, b) ->
+      aexpr_returns_imm ~pure ~imm_funs imm a
+      && aexpr_returns_imm ~pure ~imm_funs imm b
+  | StaticCatch (a, _, _, b, _) ->
+      aexpr_returns_imm ~pure ~imm_funs imm a
+      && aexpr_returns_imm ~pure ~imm_funs imm b
+  | Switch (_, sw) ->
+      List.for_all (fun (_, arm) -> aexpr_returns_imm ~pure ~imm_funs imm arm) sw.consts
+      && List.for_all (fun (_, arm) -> aexpr_returns_imm ~pure ~imm_funs imm arm) sw.blocks
+      && Option.fold ~none:true ~some:(aexpr_returns_imm ~pure ~imm_funs imm) sw.fail
+  | StringSwitch (_, cases, fail) ->
+      List.for_all (fun (_, arm) -> aexpr_returns_imm ~pure ~imm_funs imm arm) cases
+      && Option.fold ~none:true ~some:(aexpr_returns_imm ~pure ~imm_funs imm) fail
+  | LetRec (_, body)
+  | Retain (_, body) | Release (_, body) | ReleaseMut (_, body)
+  | DropReuse (_, _, body) | FreeReuse (_, body)
+  | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
+      aexpr_returns_imm ~pure ~imm_funs imm body
+
+let compute_imm_funs ~pure (e : Anf.aexpr) : int Ident.Map.t =
+  let funs = ref [] in
+  let rec collect = function
+    | Anf.Let (id, Fun lf, body) ->
+        funs := (id, lf) :: !funs;
+        collect lf.body;
+        collect body
+    | Let (_, _, body) | MutLet (_, _, body) -> collect body
+    | LetRec (rbs, body) ->
+        List.iter
+          (fun (rb : Anf.rec_binding) ->
+            funs := (rb.id, rb.def) :: !funs;
+            collect rb.def.body)
+          rbs;
+        collect body
+    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b)
+    | CheckExn (a, b) | While (a, b) | StaticCatch (a, _, _, b, _)
+    | TryWith (a, _, b) ->
+        collect a;
+        collect b
+    | For (_, _, _, _, body) | Retain (_, body) | Release (_, body)
+    | ReleaseMut (_, body) | DropReuse (_, _, body) | FreeReuse (_, body)
+    | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
+        collect body
+    | Switch (_, sw) ->
+        List.iter (fun (_, arm) -> collect arm) sw.consts;
+        List.iter (fun (_, arm) -> collect arm) sw.blocks;
+        Option.iter collect sw.fail
+    | StringSwitch (_, cases, fail) ->
+        List.iter (fun (_, arm) -> collect arm) cases;
+        Option.iter collect fail
+    | Halt _ | HaltScalar _ | StaticRaise _ | Raise _ | Unwind -> ()
+  in
+  collect e;
+  let rec fix imm_funs =
+    let next, changed =
+      List.fold_left
+        (fun (acc, ch) (id, (lf : Anf.lfunction)) ->
+          if Ident.Map.mem id acc then (acc, ch)
+          else if aexpr_returns_imm ~pure ~imm_funs (imm_params_of lf) lf.body
+          then (Ident.Map.add id (List.length lf.params) acc, true)
+          else (acc, ch))
+        (imm_funs, false) !funs
+    in
+    if changed then fix next else next
+  in
+  fix Ident.Map.empty
 
 let atom_vars (a : Anf.atom) : Ident.Set.t =
   match a with
@@ -679,7 +803,10 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       in
       let rhs' = transform_aexpr env_rhs rhs in
       let imm =
-        if Anf.returns_scalar rhs then Ident.Set.add id env.imm else env.imm
+        if Anf.returns_scalar rhs
+           || aexpr_returns_imm ~pure:env.pure ~imm_funs:env.imm_funs env.imm rhs
+        then Ident.Set.add id env.imm
+        else Ident.Set.remove id env.imm
       in
       let env_body = { env with owned = Ident.Set.add id shared; imm } in
       let body' = transform_aexpr env_body body in
@@ -911,7 +1038,7 @@ and transform_fun (env : state) ~self_id ~has_closure (lf : Anf.lfunction) :
       muts = Ident.Set.empty;
       no_release_muts = Ident.Set.empty;
       handlers = Hashtbl.create 8;
-      imm = Ident.Set.diff env.imm params_set;
+      imm = Ident.Set.union (Ident.Set.diff env.imm params_set) (imm_params_of lf);
       try_owned = Ident.Set.empty;
       try_muts = Ident.Set.empty;
       try_depth = 0 }
@@ -943,6 +1070,7 @@ let run (prog : Anf.program) : Anf.program =
     Anf.pure_defs prog.code |> List.map fst |> Ident.Set.of_list
   in
   let known_funs, yielding_funs = compute_yield_info prog.code in
+  let imm_funs = compute_imm_funs ~pure prog.code in
   let init_env =
     { owned = Ident.Set.empty;
       borrowed = Ident.Set.empty;
@@ -951,6 +1079,7 @@ let run (prog : Anf.program) : Anf.program =
       pure;
       known_funs;
       yielding_funs;
+      imm_funs;
       muts = Ident.Set.empty;
       no_release_muts = Ident.Set.empty;
       handlers = Hashtbl.create 8;

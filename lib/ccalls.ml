@@ -355,7 +355,7 @@ let table =
     ("caml_gc_get", abi 1 false false);
     ("caml_gc_set", abi 1 false false);
     ("ocamlcc_finalizers_due", abi 0 false false);
-    ("ocamlcc_poll_finalizers", abi 0 true true);
+    ("ocamlcc_poll_finalizers", abi 0 true false);
     ("caml_gc_minor", abi 1 true false);
     ("caml_gc_major_slice", abi 1 true false);
     ("caml_gc_major", abi 1 true true);
@@ -387,3 +387,27 @@ let find name =
       { argc = 0; raises = true; yields = false }
 
 let is_known name = List.mem_assoc name table
+
+let returns_imm = function
+  | "ocamlcc_finalizers_due" | "ocamlcc_poll_finalizers"
+  | "caml_gc_minor" | "caml_gc_major_slice" | "caml_gc_major"
+  | "caml_gc_full_major" | "caml_gc_compaction" | "caml_get_minor_free"
+  | "caml_final_register" | "caml_final_register_called_without_value"
+  | "caml_final_release"
+  | "caml_string_length" | "caml_bytes_length" | "caml_array_length"
+  | "caml_array_blit" | "caml_array_fill"
+  | "caml_blit_bytes" | "caml_blit_string" | "caml_fill_bytes"
+  | "caml_int_compare" | "caml_equal" | "caml_notequal" | "caml_compare"
+  | "caml_lessthan" | "caml_lessequal" | "caml_greaterthan" | "caml_greaterequal"
+  | "caml_string_equal" | "caml_string_notequal" | "caml_string_compare"
+  | "caml_bytes_equal" | "caml_bytes_notequal" | "caml_bytes_compare"
+  | "caml_obj_tag" | "caml_obj_size" | "caml_obj_is_int" | "caml_obj_set_tag"
+  | "caml_ml_output" | "caml_ml_output_bytes" | "caml_ml_output_char"
+  | "caml_ml_output_int" | "caml_ml_input" | "caml_ml_input_char"
+  | "caml_ml_input_int" | "caml_ml_flush" | "caml_ml_close_channel"
+  | "ocamlcc_arc_live" | "ocamlcc_arc_reuse" | "ocamlcc_arc_collect"
+  | "ocamlcc_arc_slab_count"
+  | "caml_ba_dim" | "caml_ba_num_dims" | "caml_ba_kind" | "caml_ba_layout"
+  | "caml_ba_set_1" | "caml_ba_set_2" | "caml_ba_set_3" | "caml_ba_set_generic" ->
+      true
+  | _ -> false
