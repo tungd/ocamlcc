@@ -43,6 +43,10 @@ let store_and_capture_integer (a : integers) =
   a.{2} <- value;
   value, (fun () -> value)
 
+let add_int32 (a : (int32, int32_elt, fortran_layout) Array1.t) i j delta =
+  let value = a.{i} in
+  a.{j} <- Int32.add value delta
+
 let () =
   let values = Array1.of_array float64 c_layout [|1.; 2.; 3.; 4.|] in
   let src = Array1.sub values 0 3 and dst = Array1.sub values 1 3 in
@@ -86,6 +90,11 @@ let () =
   let value, capture = store_and_capture_integer integers in
   Gc.full_major ();
   assert (value = Int64.min_int && integers.{2} = value && capture () == value);
+  let narrow = Array1.of_array int32 fortran_layout [|Int32.max_int; 7l|] in
+  add_int32 narrow 1 2 1l;
+  assert (Int32.to_int narrow.{2} = -2147483648);
+  assert (try add_int32 narrow 0 1 1l; false with Invalid_argument _ -> true);
+  assert (narrow.{1} = Int32.max_int);
   let col = Array1.of_array float64 fortran_layout [|-0.; nan; infinity|] in
   scale_column col col 1 3 2.;
   assert (Int64.bits_of_float col.{3} = Int64.bits_of_float (-0.));

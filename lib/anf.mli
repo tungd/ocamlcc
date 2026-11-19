@@ -89,9 +89,9 @@ type bigarray_access = {
 }
 
 (* Unboxed scalars are compiler temporaries. Only scalar operations can consume them. *)
-type scalar_rep = Double_scalar | Int64_scalar
+type scalar_rep = Double_scalar | Integer_scalar of Lambda.boxed_integer
 
-type int64_arithmetic = Add64 | Sub64 | Mul64
+type wrapping_arithmetic = Add_int | Sub_int | Mul_int
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
@@ -116,7 +116,7 @@ type cexpr =
   | ScalarStore of bigarray_access * atom * atom * scalar_operand
   | FloatValue of scalar_operand
   | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
-  | Int64Binop of int64_arithmetic * scalar_operand * scalar_operand
+  | IntegerBinop of Lambda.boxed_integer * wrapping_arithmetic * scalar_operand * scalar_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list

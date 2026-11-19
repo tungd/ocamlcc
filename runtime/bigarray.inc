@@ -269,6 +269,20 @@ void ocamlcc_ba_set_float32_1(int64_t value, int64_t index, double x)
     if (ba_offset(a, 1, &index, &offset)) ((float *)a->data)[offset] = (float)x;
 }
 
+int32_t ocamlcc_ba_get_int32_1(int64_t value, int64_t index)
+{
+    ArcBigarray *a = (void *)(uintptr_t)value;
+    size_t offset;
+    return ba_offset(a, 1, &index, &offset) ? ((const int32_t *)a->data)[offset] : 0;
+}
+
+void ocamlcc_ba_set_int32_1(int64_t value, int64_t index, int32_t x)
+{
+    ArcBigarray *a = (void *)(uintptr_t)value;
+    size_t offset;
+    if (ba_offset(a, 1, &index, &offset)) ((int32_t *)a->data)[offset] = x;
+}
+
 int64_t ocamlcc_ba_get_int64_1(int64_t value, int64_t index)
 {
     ArcBigarray *a = (void *)(uintptr_t)value;

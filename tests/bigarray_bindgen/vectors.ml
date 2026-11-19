@@ -2,6 +2,7 @@ open Bigarray
 type vector = (float, float64_elt, c_layout) Array1.t
 type single_vector = (float, float32_elt, c_layout) Array1.t
 type int64_vector = (int64, int64_elt, c_layout) Array1.t
+type int32_vector = (int32, int32_elt, c_layout) Array1.t
 type matrix = (float, float64_elt, c_layout) Array2.t
 type cube = (float, float64_elt, c_layout) Array3.t
 type generic = (float, float64_elt, c_layout) Genarray.t
@@ -41,6 +42,16 @@ let single_words (a : single_vector) n =
 
 let create_singles n = Array1.create float32 c_layout n
 let create_int64 n = Array1.create int64 c_layout n
+let create_int32 n = Array1.create int32 c_layout n
+
+let int32_words (a : int32_vector) delta n =
+  let before = Gc.minor_words () in
+  for i = 0 to n - 1 do
+    let x = a.{i} in
+    let sum = Int32.add x delta in
+    a.{i} <- Int32.sub (Int32.mul sum 3l) 1l
+  done;
+  Gc.minor_words () -. before
 
 let int64_words (a : int64_vector) delta n =
   let before = Gc.minor_words () in

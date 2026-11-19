@@ -84,9 +84,9 @@ type bigarray_access = {
 }
 
 (* Unboxed scalars are compiler temporaries. Only scalar operations can consume them. *)
-type scalar_rep = Double_scalar | Int64_scalar
+type scalar_rep = Double_scalar | Integer_scalar of Lambda.boxed_integer
 
-type int64_arithmetic = Add64 | Sub64 | Mul64
+type wrapping_arithmetic = Add_int | Sub_int | Mul_int
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
@@ -111,7 +111,7 @@ type cexpr =
   | ScalarStore of bigarray_access * atom * atom * scalar_operand
   | FloatValue of scalar_operand
   | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
-  | Int64Binop of int64_arithmetic * scalar_operand * scalar_operand
+  | IntegerBinop of Lambda.boxed_integer * wrapping_arithmetic * scalar_operand * scalar_operand
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
@@ -260,7 +260,8 @@ let scalar_layout = function
 
 let scalar_rep = function
   | Lambda.Pbigarray_float32 | Pbigarray_float64 -> Some Double_scalar
-  | Pbigarray_int64 -> Some Int64_scalar
+  | Pbigarray_int32 -> Some (Integer_scalar Pint32)
+  | Pbigarray_int64 -> Some (Integer_scalar Pint64)
   | _ -> None
 
 let rec conv_tail (lam : Lambda.lambda) : aexpr =
@@ -394,9 +395,9 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
                      layout; checked = not unsafe } in
       conv_expr arr (fun a -> conv_expr index (fun i ->
         conv_float_operand value (fun v -> emit_cexpr (ScalarStore (access, a, i, v)))))
-  | Lprim (Pbigarrayset (unsafe, 1, Pbigarray_int64, layout), [arr; index; value], _)
+  | Lprim (Pbigarrayset (unsafe, 1, ((Pbigarray_int32 | Pbigarray_int64) as kind), layout), [arr; index; value], _)
     when scalar_layout layout ->
-      let access = { operation = `Set; rank = 1; kind = Pbigarray_int64;
+      let access = { operation = `Set; rank = 1; kind;
                      layout; checked = not unsafe } in
       conv_atoms [arr; index; value] (function
         | [a; i; v] -> emit_cexpr (ScalarStore (access, a, i, Boxed_scalar v))
@@ -754,7 +755,7 @@ let cexpr_vars free_aexpr acc = function
   | FloatValue a -> scalar_operand_vars acc a
   | ScalarLoad (_, a, i) -> atom_vars (atom_vars acc a) i
   | ScalarStore (_, a, i, v) -> scalar_operand_vars (atom_vars (atom_vars acc a) i) v
-  | FloatBinop (_, a, b) | Int64Binop (_, a, b) -> scalar_operand_vars (scalar_operand_vars acc a) b
+  | FloatBinop (_, a, b) | IntegerBinop (_, _, a, b) -> scalar_operand_vars (scalar_operand_vars acc a) b
   | Atom a -> atom_vars acc a
   | Binop (_, a, b) -> atom_vars (atom_vars acc a) b
   | Unop (_, a) -> atom_vars acc a
@@ -920,13 +921,19 @@ let rec specialize_scalar_chain bindings tail =
           Value (ScalarLoad (access, arr, index)), Ident.Set.add id raw
       | Some Double_scalar, Value (Binop (Float_arithmetic op, lhs, rhs)) ->
           Value (FloatBinop (op, Boxed_scalar lhs, Boxed_scalar rhs)), Ident.Set.add id raw
-      | Some Int64_scalar, Value (Binop
-          (((Bint_add Pint64 | Bint_sub Pint64 | Bint_mul Pint64) as op), lhs, rhs)) ->
-          let op = match op with
-            | Bint_add _ -> Add64 | Bint_sub _ -> Sub64 | Bint_mul _ -> Mul64
-            | _ -> assert false
+      | Some (Integer_scalar kind), Value (Binop (op, lhs, rhs)) ->
+          let wrapping_op =
+            match op with
+            | Bint_add k when k = kind -> Some Add_int
+            | Bint_sub k when k = kind -> Some Sub_int
+            | Bint_mul k when k = kind -> Some Mul_int
+            | _ -> None
           in
-          Value (Int64Binop (op, Boxed_scalar lhs, Boxed_scalar rhs)), Ident.Set.add id raw
+          (match wrapping_op with
+           | Some op ->
+               Value (IntegerBinop (kind, op, Boxed_scalar lhs, Boxed_scalar rhs)),
+               Ident.Set.add id raw
+           | None -> binding, raw)
       | Some Double_scalar, Join rhs ->
           Join (specialize_conditional rhs), Ident.Set.add id raw
       | _ -> binding, raw
@@ -939,8 +946,9 @@ let rec specialize_scalar_chain bindings tail =
           atom_vars (atom_vars boxed arr) index, demand rep scalar v
       | Value (FloatBinop (_, lhs, rhs)) ->
           boxed, demand Double_scalar (demand Double_scalar scalar lhs) rhs
-      | Value (Int64Binop (_, lhs, rhs)) ->
-          boxed, demand Int64_scalar (demand Int64_scalar scalar lhs) rhs
+      | Value (IntegerBinop (kind, _, lhs, rhs)) ->
+          let rep = Integer_scalar kind in
+          boxed, demand rep (demand rep scalar lhs) rhs
       | Value (FloatValue value) -> boxed, demand Double_scalar scalar value
       | Value ce -> cexpr_vars free_vars boxed ce, scalar
       | Join rhs -> Ident.Set.union boxed (free_vars rhs), scalar
@@ -960,7 +968,8 @@ let rec specialize_scalar_chain bindings tail =
       | Value (ScalarStore (access, arr, index, v)) ->
           Value (ScalarStore (access, arr, index, operand v))
       | Value (FloatBinop (op, lhs, rhs)) -> Value (FloatBinop (op, operand lhs, operand rhs))
-      | Value (Int64Binop (op, lhs, rhs)) -> Value (Int64Binop (op, operand lhs, operand rhs))
+      | Value (IntegerBinop (kind, op, lhs, rhs)) ->
+          Value (IntegerBinop (kind, op, operand lhs, operand rhs))
       | Value (FloatValue v) -> Value (FloatValue (operand v))
       | _ -> binding
     in
@@ -1033,7 +1042,7 @@ and specialize_let_chain bindings = function
   | tail ->
       let tail = specialize_scalar_bindings tail in
       if List.exists (function
-        | _, Value (ScalarStore _ | FloatBinop _ | Int64Binop _ | FloatValue _) -> true
+        | _, Value (ScalarStore _ | FloatBinop _ | IntegerBinop _ | FloatValue _) -> true
         | _ -> false) bindings
       then specialize_scalar_chain bindings tail
       else List.fold_left (fun body (id, binding) -> bind_scalar_chain id binding body) tail bindings

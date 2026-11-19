@@ -190,6 +190,23 @@ static void check_int64_allocations(void)
     ocamlcc_Vectors_view_release(values);
 }
 
+static void check_int32_allocations(void)
+{
+    ocamlcc_error_t err = {0};
+    OcamlccBigarrayView *values = vectors_create_int32(128, &err);
+    assert(values && !err.code);
+    int32_t *cells = ocamlcc_Vectors_view_info(values).data;
+    for (int i = 0; i < 128; ++i) cells[i] = INT32_MAX - i;
+    double empty = vectors_int32_words(values, 1, 0, &err);
+    assert(!err.code);
+    double full = vectors_int32_words(values, 1, 128, &err);
+    assert(!err.code);
+    for (int i = 0; i < 128; ++i) assert(cells[i] == INT32_MAX - 3 * i);
+    fprintf(stderr, "int32 arithmetic allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
+    assert(full == empty);
+    ocamlcc_Vectors_view_release(values);
+}
+
 int main(void)
 {
     ocamlcc_error_t err = {0};
@@ -203,6 +220,7 @@ int main(void)
     check_scale_allocations();
     check_single_allocations();
     check_int64_allocations();
+    check_int32_allocations();
     OcamlccBigarrayView *matrix = vectors_native_buffer(2);
     assert(matrix && vectors_sub(matrix, 0, 1, &err) == NULL && err.code);
     ocamlcc_Vectors_view_release(matrix);

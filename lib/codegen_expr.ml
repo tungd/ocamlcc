@@ -635,13 +635,14 @@ let compile_scalar_operand hooks b rep = function
       let boxed = compile_atom hooks b a in
       match rep with
       | Anf.Double_scalar -> load_double b boxed
-      | Int64_scalar -> unbox_bint b Pint64 boxed
+      | Integer_scalar kind -> unbox_bint b kind boxed
 
 let scalar_access_symbol op (access : Anf.bigarray_access) =
   let kind =
     match access.kind with
     | Lambda.Pbigarray_float32 -> "float32"
     | Pbigarray_float64 -> "float64"
+    | Pbigarray_int32 -> "int32"
     | Pbigarray_int64 -> "int64"
     | _ -> assert false
   in
@@ -649,7 +650,7 @@ let scalar_access_symbol op (access : Anf.bigarray_access) =
 
 let scalar_type = function
   | Anf.Double_scalar -> Double
-  | Int64_scalar -> Long
+  | Integer_scalar kind -> let ty, _, _ = bint_spec kind in ty
 
 let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   match ce with
@@ -935,12 +936,15 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let l = compile_scalar_operand hooks b Double_scalar lhs in
       let r = compile_scalar_operand hooks b Double_scalar rhs in
       compile_float_arithmetic b op l r
-  | Int64Binop (op, lhs, rhs) ->
-      let l = compile_scalar_operand hooks b Int64_scalar lhs in
-      let r = compile_scalar_operand hooks b Int64_scalar rhs in
-      let qop = match op with Add64 -> Binop.Add | Sub64 -> Binop.Sub | Mul64 -> Binop.Mul in
-      let dst = fresh_temp b "i64op" in
-      emit b (Binop (qop, Long, dst, l, r));
+  | IntegerBinop (kind, op, lhs, rhs) ->
+      let rep = Anf.Integer_scalar kind in
+      let l = compile_scalar_operand hooks b rep lhs in
+      let r = compile_scalar_operand hooks b rep rhs in
+      let qop = match op with
+        | Add_int -> Binop.Add | Sub_int -> Binop.Sub | Mul_int -> Binop.Mul
+      in
+      let dst = fresh_temp b "integer_op" in
+      emit b (Binop (qop, scalar_type rep, dst, l, r));
       dst
   | ScalarStore (access, arr, index, value) ->
       let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
