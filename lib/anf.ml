@@ -1223,6 +1223,115 @@ let pure_defs (e : aexpr) : (Ident.t * lfunction) list =
   in
   List.rev (go Ident.Set.empty [] e)
 
+(* Drop zero-occurrence [Alias] and [StrictOpt] let bindings before ANF
+   lowering. [Matching] shares catch arms across constructors with different
+   field arities and emits [Llet (Alias, _, w, Pfield i p, body)] for unused
+   wildcard bindings; per [lambda.mli], 0-occurrence [Alias] / [StrictOpt]
+   bindings must be discarded rather than evaluated out of bounds. *)
+let drop_unused_alias_lets (lam : Lambda.lambda) : Lambda.lambda =
+  let rec go (lam : Lambda.lambda) : Lambda.lambda * Ident.Set.t =
+    match lam with
+    | Lambda.Lvar id | Lambda.Lmutvar id -> (lam, Ident.Set.singleton id)
+    | Lambda.Lconst _ -> (lam, Ident.Set.empty)
+    | Lambda.Llet (((Lambda.Alias | Lambda.StrictOpt) as kind), vk, id, arg, body) ->
+        let body', body_fvs = go body in
+        if not (Ident.Set.mem id body_fvs) then (body', body_fvs)
+        else
+          let arg', arg_fvs = go arg in
+          ( Lambda.Llet (kind, vk, id, arg', body'),
+            Ident.Set.union arg_fvs (Ident.Set.remove id body_fvs) )
+    | Lambda.Llet (Lambda.Strict, vk, id, arg, body) ->
+        let arg', arg_fvs = go arg in
+        let body', body_fvs = go body in
+        ( Lambda.Llet (Lambda.Strict, vk, id, arg', body'),
+          Ident.Set.union arg_fvs (Ident.Set.remove id body_fvs) )
+    | Lambda.Lmutlet (vk, id, arg, body) ->
+        let arg', arg_fvs = go arg in
+        let body', body_fvs = go body in
+        ( Lambda.Lmutlet (vk, id, arg', body'),
+          Ident.Set.union arg_fvs (Ident.Set.remove id body_fvs) )
+    | Lambda.Lletrec (decls, body) ->
+        let fvs = ref Ident.Set.empty in
+        let decls' =
+          List.map
+            (fun (rb : Lambda.rec_binding) ->
+              let def =
+                Lambda.map_lfunction
+                  (fun b ->
+                    let b', bfvs = go b in
+                    let bfvs =
+                      List.fold_left
+                        (fun s (p, _) -> Ident.Set.remove p s)
+                        bfvs rb.def.params
+                    in
+                    fvs := Ident.Set.union !fvs bfvs;
+                    b')
+                  rb.def
+              in
+              { rb with Lambda.def })
+            decls
+        in
+        let body', body_fvs = go body in
+        let all_fvs = Ident.Set.union !fvs body_fvs in
+        let all_fvs =
+          List.fold_left
+            (fun s (rb : Lambda.rec_binding) -> Ident.Set.remove rb.id s)
+            all_fvs decls
+        in
+        (Lambda.Lletrec (decls', body'), all_fvs)
+    | Lambda.Lfunction lf ->
+        let body_fvs = ref Ident.Set.empty in
+        let def =
+          Lambda.map_lfunction
+            (fun b ->
+              let b', bfvs = go b in
+              body_fvs := bfvs;
+              b')
+            lf
+        in
+        let fvs =
+          List.fold_left
+            (fun s (p, _) -> Ident.Set.remove p s)
+            !body_fvs lf.params
+        in
+        (Lambda.Lfunction def, fvs)
+    | Lambda.Lstaticcatch (body, (id, params), handler) ->
+        let body', body_fvs = go body in
+        let handler', handler_fvs = go handler in
+        let handler_fvs =
+          List.fold_left
+            (fun s (p, _) -> Ident.Set.remove p s)
+            handler_fvs params
+        in
+        ( Lambda.Lstaticcatch (body', (id, params), handler'),
+          Ident.Set.union body_fvs handler_fvs )
+    | Lambda.Ltrywith (body, param, handler) ->
+        let body', body_fvs = go body in
+        let handler', handler_fvs = go handler in
+        ( Lambda.Ltrywith (body', param, handler'),
+          Ident.Set.union body_fvs (Ident.Set.remove param handler_fvs) )
+    | Lambda.Lfor (v, lo, hi, dir, body) ->
+        let lo', lo_fvs = go lo in
+        let hi', hi_fvs = go hi in
+        let body', body_fvs = go body in
+        ( Lambda.Lfor (v, lo', hi', dir, body'),
+          Ident.Set.union lo_fvs
+            (Ident.Set.union hi_fvs (Ident.Set.remove v body_fvs)) )
+    | Lambda.Lassign (id, rhs) ->
+        let rhs', rhs_fvs = go rhs in
+        (Lambda.Lassign (id, rhs'), Ident.Set.add id rhs_fvs)
+    | _ ->
+        let fvs = ref Ident.Set.empty in
+        let child sub =
+          let sub', sub_fvs = go sub in
+          fvs := Ident.Set.union !fvs sub_fvs;
+          sub'
+        in
+        let lam' = Lambda.shallow_map child lam in
+        (lam', !fvs)
+  in
+  fst (go lam)
+
 let of_lambda ?(use_builtins = true) ?(include_dirs = [])
     (program : Lambda.program) : (program, string) result =
   let saved = !builtins_table in
@@ -1232,6 +1341,7 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = [])
     ~finally:(fun () -> builtins_table := saved)
     (fun () ->
       try
-        let code = conv_tail program.code |> specialize_scalar_bindings in
+        let cleaned = drop_unused_alias_lets program.code in
+        let code = conv_tail cleaned |> specialize_scalar_bindings in
         Ok { module_ident = program.module_ident; code }
       with Unsupported what -> Error what)

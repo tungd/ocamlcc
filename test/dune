@@ -8,6 +8,11 @@
  (modules open_modules_test)
  (libraries ocamlcc compiler-libs.common))
 
+(test
+ (name anf_unused_alias_test)
+ (modules anf_unused_alias_test)
+ (libraries ocamlcc compiler-libs.common))
+
 (executable
  (name phi_split_test)
  (modules phi_split_test)

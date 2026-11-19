@@ -1,5 +1,15 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Stage 1 self-hosted compiler builds and passes smoke suite (`tools/fetch-ocaml-compiler-libs.py`, `tools/bootstrap.py`):
+  - Extended `tools/fetch-ocaml-compiler-libs.py` (`MANIFEST.json`) to emit topologically sorted `mli_order` (108 `.mli` interfaces, covering 4 `.mli`-only units via `.depend`) and rewrite internal `MenhirLib` references in `parser.{ml,mli}` to `CamlinternalMenhirLib` (matching the 104-module `compiler-libs.common` closure).
+  - Added `tools/bootstrap.py` orchestrating `fetch`, `stage1`, `stage2`, `verify` (bit-for-bit `.ssa`/`.s` diff), and `all`: compiles `stdlib_compat` (72 modules), `compiler-libs.common` (108 `.mli` + 104 `.ml`), `bootstrap/unix/`, and `ocamlcc` (16 modules), linked with `libocamlrt.a` + `bootstrap/stubs/compiler_stubs.c` + `-lzstd`.
+  - Stage 1 (`build/bootstrap/stage1/ocamlcc`, 19.4 MiB) builds cleanly and passes all 3 Stage 1 smoke checks (`hello.ml`, multi-module `Driver.build` on `examples/mod_lib.{mli,ml}` + `examples/mod_main.ml`, and reading host zstd-compressed `stdlib.cmi`). See [self-hosting](/concepts/self-hosting.md).
+
+- 2026-11-19 (antigravity/1): Drop zero-occurrence `Alias` / `StrictOpt` bindings before ANF lowering (`lib/anf.ml`, `test/anf_unused_alias_test.ml`):
+  - OCaml's pattern matcher shares catch arms across constructors of different payload sizes (exposed by `Typedtree.shallow_iter_pattern_desc` combining 5-field `Tpat_alias` with 1-field `Tpat_lazy` / `Tpat_value` / `Tpat_exception`), emitting `Llet (Alias, _, w, Pfield i param, body)` for unused wildcards and relying on dead `Alias` bindings not being evaluated out of bounds.
+  - Added `drop_unused_alias_lets` in `lib/anf.ml` before `conv_tail`, pruning 0-occurrence `Alias` / `StrictOpt` bindings (including transitive chains) while keeping `Strict` bindings intact.
+  - TDD-verified in `test/anf_unused_alias_test.ml`, `dune runtest -j1`, and `ninja -j1 test` (26/26). See [compiler-pipeline](/concepts/compiler-pipeline.md).
+
 - 2026-11-19 (antigravity/1): Fix compressed Marshal (`0x8495a6bd`) shared-reference indexing (`runtime/marshal.inc`, `tests/stdlib_runtime.c`):
   - OCaml 5.5's compressed Marshal format (`extern.c`/`intern.c` #4056) encodes `CODE_SHARED*` as 0-based absolute object IDs (`r->objects[n]`) rather than uncompressed backward distances (`r->objects[r->count - n]`).
   - Updated `m_write_value`/`m_encode` (emitting absolute IDs whenever `Compression` is active with a registered codec, without falling back to `0x8495a6be` mid-encode) and `MReader`/`m_decode` (decoding `r->objects[n]` when `r->compressed` is set).

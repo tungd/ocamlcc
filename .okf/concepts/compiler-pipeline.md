@@ -136,7 +136,13 @@ Pattern compilation in translmod produces two shapes:
   chain used as a binding RHS; `Anf.conv_bind` lowers it as a terminator
   (bare `StaticRaise`, unreachable continuation dropped) exactly like
   `conv_expr` does in tail position — regression-tested in
-  `test/anf_staticraise_test.ml`.
+  `test/anf_staticraise_test.ml`. Shared multi-constructor catch arms whose
+  constructors have different payload arities (e.g. `Typedtree`'s
+  `shallow_iter_pattern_desc`) also emit 0-occurrence `Llet(Alias, _, w,
+  Pfield i param, ...)` wildcard bindings; `Anf.drop_unused_alias_lets` prunes
+  zero-occurrence `Alias`/`StrictOpt` bindings before ANF lowering so higher
+  field indices are never loaded out of bounds from smaller constructors
+  (regression-tested in `test/anf_unused_alias_test.ml`).
 
 # Self tail-calls
 
