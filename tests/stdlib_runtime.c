@@ -1397,10 +1397,56 @@ static void test_string_bytes_rel_compare(void)
     assert(arc_live_objects() == before);
 }
 
+extern int64_t caml_int_of_string(int64_t s_val);
+
+static void test_int_of_string_literals(void)
+{
+    int64_t before = arc_live_objects();
+    const struct {
+        const char *str;
+        int ok;
+        int64_t expected;
+    } cases[] = {
+        {"0x30", 1, 48},
+        {"-0x30", 1, -48},
+        {"+0x30", 1, 48},
+        {"-0o77", 1, -63},
+        {"-0b1010", 1, -10},
+        {"-0u10", 1, -10},
+        {"0x3fffffffffffffff", 1, (1LL << 62) - 1LL},
+        {"-0x3fffffffffffffff", 1, -((1LL << 62) - 1LL)},
+        {"0x4000000000000000", 1, -(1LL << 62)},
+        {"-0x4000000000000000", 1, -(1LL << 62)},
+        {"0x7fffffffffffffff", 1, -1},
+        {"-0x7fffffffffffffff", 1, 1},
+        {"-0x4000000000000001", 1, (1LL << 62) - 1LL},
+        {"0x8000000000000000", 0, 0},
+        {"-0x8000000000000000", 0, 0},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        size_t len = strlen(cases[i].str);
+        char *buf = arc_alloc_bytes(len);
+        memcpy(buf, cases[i].str, len);
+        int64_t s = (int64_t)(uintptr_t)buf;
+        int64_t res = caml_int_of_string(s);
+        if (cases[i].ok) {
+            assert(!ocamlcc_get_exn());
+            assert((res & 1LL) == 1LL);
+            assert((res >> 1) == cases[i].expected);
+        } else {
+            assert(ocamlcc_get_exn() != 0);
+            clear_exception();
+        }
+        arc_release_val(s);
+    }
+    assert(arc_live_objects() == before);
+}
+
 int main(void)
 {
     test_float_format();
     test_integer_format();
+    test_int_of_string_literals();
     test_buffered_dummy_update();
     test_weak_get_copy_and_obj_dup();
     test_poller_multi_waiters_and_overflow();

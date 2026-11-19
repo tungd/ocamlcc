@@ -286,9 +286,12 @@ int ocamlcc_c_int_of_string(const char *s, size_t len, int64_t *out)
         *out = v;
         return 1;
     }
-    /* Unsigned literals up to 2^63 - 1 are accepted in 63-bit OCaml and
-       truncated to 63 bits with sign extension from bit 62. */
-    if (v < 0)
+    /* Unsigned literals with magnitude up to 2^63 - 1 are accepted in 63-bit
+       OCaml (including negative "-0x..." forms from Int_literal_converter)
+       and truncated to 63 bits with sign extension from bit 62. */
+    int is_neg = (len > 0u && s[0] == '-');
+    uint64_t mag = is_neg ? (0ULL - (uint64_t)v) : (uint64_t)v;
+    if (mag > (uint64_t)INT64_MAX)
         return 0;
     *out = (int64_t)((uint64_t)v << 1) >> 1;
     return 1;
