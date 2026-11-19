@@ -28,6 +28,8 @@ sources:
     resource: runtime/builtins.c
   - id: int-fmt
     resource: stdlib/camlinternalIntFmt.ml
+  - id: bulk-ops
+    resource: stdlib/camlinternalBulkOps.ml
   - id: runtime-tests
     resource: tests/stdlib_runtime.c
 ---
@@ -45,6 +47,8 @@ against that archive and our ARC runtime. It does not use the host OCaml runtime
 `build/stdlib_compat/report.md` records module and test outcomes.[^runner]
 
 `stdlib/camlinternalIntFmt.ml` (`--nopervasives`, compiled right after `CamlinternalFormatBasics`) implements integer parsing and formatting (`format_int`, `format_int32`, `format_int64`, `format_nativeint`, `parse_int`, `parse_int32`, `parse_int64`, `parse_nativeint`) in pure OCaml, replacing the C `caml_*format*` / `caml_*_of_string` implementations previously in `runtime/builtins.c`/`runtime/arc.c`. It handles 63-bit signed decimal bounds (`[-(1<<62), (1<<62)-1]`), signed/unsigned base-prefixed literals (`"-0x30"`, `"0x7fffffffffffffff"` -> `-1`, magnitude `<= INT64_MAX`, sign-extending bit 62) matching `Misc.Int_literal_converter.int`, 32/64-bit parsing, and `%[flags][width][.prec][l|ll|L|n][d|i|u|x|X|o]` formatting.[^int-fmt]
+
+`stdlib/camlinternalBulkOps.ml` (`--nopervasives`, compiled right after `CamlinternalIntFmt`) implements `blit_bytes`, `blit_string`, `fill_bytes`, `string_equal`, `bytes_equal`, `string_compare`, `bytes_compare`, `string_hash`, `array_sub`, `array_append`, `array_concat`, `array_blit`, `array_fill`, `array_create_float`, and `floatarray_{create,make,sub,append,concat,blit,fill}` in pure OCaml (reusing `%opaque` casts over `ARC_TAG_FLOAT_ARRAY` / `ARC_TAG_ARRAY`), removing those C implementations and `caml_bswap*` / `caml_bytes_{get,set}{16,32,64}_*` from `runtime/arc.c` (`runtime/arc.h`, `lib/ccalls.ml`).[^bulk-ops]
 
 The Lexing overlay implements both DFA engines in OCaml, including signed
 16-bit transitions, unsigned memory-code offsets, captures, backtracking,

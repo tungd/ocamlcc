@@ -737,6 +737,7 @@ let compile_runtime_objs ~verbose (tc : toolchain) ~include_main runtime_dir
 let stdlib_ordered_units =
   [ "camlinternalFormatBasics.ml";
     "camlinternalIntFmt.ml";
+    "camlinternalBulkOps.ml";
     "stdlib__option.ml";
     "stdlib__result.ml";
     "stdlib__bytes.ml";

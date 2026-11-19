@@ -790,6 +790,119 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
         let len = string_len_raw b bsv in
         compile_bounds_guarded b ui len do_write
       else do_write ()
+  | BytesGetN (safe, width, bs, idx) ->
+      let bsv = compile_atom hooks b bs in
+      let iv = compile_atom hooks b idx in
+      let ui = untag b iv in
+      let do_read () =
+        let addr = fresh_temp b "bgptr" in
+        emit b (Binop (Add, Long, addr, bsv, ui));
+        match width with
+        | 2 ->
+            let raw = fresh_temp b "bg16" in
+            emit b (Load (Loaduh, Long, raw, addr));
+            retag b raw
+        | 4 ->
+            let raw = fresh_temp b "bg32" in
+            emit b (Load (Loadw, Word, raw, addr));
+            box_bint b Pint32 raw
+        | 8 ->
+            let raw = fresh_temp b "bg64" in
+            emit b (Load (Loadl, Long, raw, addr));
+            box_bint b Pint64 raw
+        | w -> failwith (Printf.sprintf "unsupported BytesGetN width %d" w)
+      in
+      if safe then
+        let len = string_len_raw b bsv in
+        compile_bytes_slice_bounds_guarded b ui len width do_read
+      else do_read ()
+  | BytesSetN (safe, width, bs, idx, v) ->
+      let bsv = compile_atom hooks b bs in
+      let iv = compile_atom hooks b idx in
+      let vv = compile_atom hooks b v in
+      let ui = untag b iv in
+      let do_write () =
+        let addr = fresh_temp b "bsptr" in
+        emit b (Binop (Add, Long, addr, bsv, ui));
+        (match width with
+        | 2 ->
+            let uv = untag b vv in
+            emit b (Store (Storeh, uv, addr))
+        | 4 ->
+            let raw = unbox_bint b Pint32 vv in
+            emit b (Store (Storew, raw, addr))
+        | 8 ->
+            let raw = unbox_bint b Pint64 vv in
+            emit b (Store (Storel, raw, addr))
+        | w -> failwith (Printf.sprintf "unsupported BytesSetN width %d" w));
+        unit_const
+      in
+      if safe then
+        let len = string_len_raw b bsv in
+        compile_bytes_slice_bounds_guarded b ui len width do_write
+      else do_write ()
+  | Bswap16 a ->
+      let av = compile_atom hooks b a in
+      let u = untag b av in
+      let lo = fresh_temp b "bs16lo" in
+      emit b (Binop (And, Long, lo, u, Int 0xffL));
+      let slo = fresh_temp b "bs16slo" in
+      emit b (Binop (Shl, Long, slo, lo, Int 8L));
+      let shi = fresh_temp b "bs16shi" in
+      emit b (Binop (Shr, Long, shi, u, Int 8L));
+      let hi = fresh_temp b "bs16hi" in
+      emit b (Binop (And, Long, hi, shi, Int 0xffL));
+      let res = fresh_temp b "bs16" in
+      emit b (Binop (Or, Long, res, slo, hi));
+      retag b res
+  | BswapBint (bi, a) ->
+      let av = compile_atom hooks b a in
+      let u = unbox_bint b bi av in
+      let mask_shift ty v mask shift_op amount name =
+        let t = fresh_temp b name in
+        (match mask with
+        | None -> emit b (Binop (shift_op, ty, t, v, Int amount))
+        | Some m ->
+            let mtmp = fresh_temp b (name ^ "_m") in
+            emit b (Binop (And, ty, mtmp, v, Int m));
+            emit b (Binop (shift_op, ty, t, mtmp, Int amount)));
+        t
+      in
+      let swapped =
+        match bi with
+        | Pint32 ->
+            let b0 = mask_shift Word u (Some 0xffL) Shl 24L "bs32_0" in
+            let b1 = mask_shift Word u (Some 0xff00L) Shl 8L "bs32_1" in
+            let b2s = mask_shift Word u None Shr 8L "bs32_2s" in
+            let b2 = fresh_temp b "bs32_2" in
+            emit b (Binop (And, Word, b2, b2s, Int 0xff00L));
+            let b3 = mask_shift Word u None Shr 24L "bs32_3" in
+            let o1 = fresh_temp b "bs32_o1" in
+            emit b (Binop (Or, Word, o1, b0, b1));
+            let o2 = fresh_temp b "bs32_o2" in
+            emit b (Binop (Or, Word, o2, b2, b3));
+            let o3 = fresh_temp b "bs32_o3" in
+            emit b (Binop (Or, Word, o3, o1, o2));
+            o3
+        | Pint64 | Pnativeint ->
+            let swar_step x mask amt name =
+              let left = mask_shift Long x (Some mask) Shl amt (name ^ "l") in
+              let rs = mask_shift Long x None Shr amt (name ^ "rs") in
+              let right = fresh_temp b (name ^ "r") in
+              emit b (Binop (And, Long, right, rs, Int mask));
+              let out = fresh_temp b name in
+              emit b (Binop (Or, Long, out, left, right));
+              out
+            in
+            let x1 = swar_step u 0x00FF00FF00FF00FFL 8L "bs64_1" in
+            let x2 = swar_step x1 0x0000FFFF0000FFFFL 16L "bs64_2" in
+            let hi = mask_shift Long x2 None Shl 32L "bs64_3h" in
+            let lo = mask_shift Long x2 None Shr 32L "bs64_3l" in
+            let out = fresh_temp b "bs64_3" in
+            emit b (Binop (Or, Long, out, hi, lo));
+            out
+      in
+      box_bint b bi swapped
   | ArrayGet (safe, kind, arr, idx) -> (
       let av = compile_atom hooks b arr in
       let iv = compile_atom hooks b idx in

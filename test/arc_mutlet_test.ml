@@ -156,13 +156,14 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.MakeArray (_, args) ->
         List.fold_left count_atom acc args
     | Anf.Field (_, a) | Anf.FloatField (_, a) | Anf.OffsetRef (_, a)
-    | Anf.CreateBytes a ->
+    | Anf.CreateBytes a | Anf.Bswap16 a | Anf.BswapBint (_, a) ->
         count_atom acc a
     | Anf.SetField (_, a, b) | Anf.SetFloatField (_, a, b) ->
         count_atom (count_atom acc a) b
-    | Anf.StringGet (_, a, b) | Anf.ArrayGet (_, _, a, b) ->
+    | Anf.StringGet (_, a, b) | Anf.BytesGetN (_, _, a, b)
+    | Anf.ArrayGet (_, _, a, b) ->
         count_atom (count_atom acc a) b
-    | Anf.BytesSet (_, a, b, c) ->
+    | Anf.BytesSet (_, a, b, c) | Anf.BytesSetN (_, _, a, b, c) ->
         count_atom (count_atom (count_atom acc a) b) c
     | Anf.ArraySet (_, _, a, b, c) ->
         count_atom (count_atom (count_atom acc a) b) c

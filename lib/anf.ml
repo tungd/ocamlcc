@@ -107,6 +107,10 @@ type cexpr =
   | OffsetRef of int * atom
   | StringGet of bool * atom * atom
   | BytesSet of bool * atom * atom * atom
+  | BytesGetN of bool * int * atom * atom
+  | BytesSetN of bool * int * atom * atom * atom
+  | Bswap16 of atom
+  | BswapBint of Lambda.boxed_integer * atom
   | ArrayGet of bool * Lambda.array_kind * atom * atom
   | ArraySet of bool * Lambda.array_kind * atom * atom * atom
   | BigarrayAccess of bigarray_access * atom list
@@ -476,6 +480,20 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
               conv_expr init (fun ia -> emit_cexpr (MakeArrayInit (la, ia))))
       | "caml_fresh_oo_id", [ arg ] ->
           conv_expr arg (fun a -> emit_cexpr (Ccall ("caml_fresh_oo_id", [ a ])))
+      | ( "caml_string_equal" | "caml_bytes_equal" ), args ->
+          conv_atoms args (fun vs -> emit_cexpr (Ccall ("caml_equal", vs)))
+      | ( "caml_string_notequal" | "caml_bytes_notequal" ), args ->
+          conv_atoms args (fun vs -> emit_cexpr (Ccall ("caml_notequal", vs)))
+      | ( "caml_string_compare" | "caml_bytes_compare" ), args ->
+          conv_atoms args (fun vs -> emit_cexpr (Ccall ("caml_compare", vs)))
+      | ( "caml_string_lessthan" | "caml_bytes_lessthan" ), args ->
+          conv_atoms args (fun vs -> emit_cexpr (Ccall ("caml_lessthan", vs)))
+      | ( "caml_string_lessequal" | "caml_bytes_lessequal" ), args ->
+          conv_atoms args (fun vs -> emit_cexpr (Ccall ("caml_lessequal", vs)))
+      | ( "caml_string_greaterthan" | "caml_bytes_greaterthan" ), args ->
+          conv_atoms args (fun vs -> emit_cexpr (Ccall ("caml_greaterthan", vs)))
+      | ( "caml_string_greaterequal" | "caml_bytes_greaterequal" ), args ->
+          conv_atoms args (fun vs -> emit_cexpr (Ccall ("caml_greaterequal", vs)))
       | sym, args
         when pd.Primitive.prim_arity = List.length args
              && List.length args <= 6 -> (
@@ -565,43 +583,33 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
       conv_expr ptr (fun p ->
           emit_cexpr (Ccall ("caml_atomic_load_field", [ p; Int 0 ])))
   | Lprim (Pbswap16, [ a ], _) ->
-      conv_expr a (fun av -> emit_cexpr (Ccall ("caml_bswap16", [ av ])))
-  | Lprim (Pbbswap Pint32, [ a ], _) ->
-      conv_expr a (fun av -> emit_cexpr (Ccall ("caml_int32_bswap", [ av ])))
-  | Lprim (Pbbswap Pint64, [ a ], _) ->
-      conv_expr a (fun av -> emit_cexpr (Ccall ("caml_int64_bswap", [ av ])))
-  | Lprim (Pbbswap Pnativeint, [ a ], _) ->
-      conv_expr a (fun av -> emit_cexpr (Ccall ("caml_nativeint_bswap", [ av ])))
+      conv_expr a (fun av -> emit_cexpr (Bswap16 av))
+  | Lprim (Pbbswap bi, [ a ], _) ->
+      conv_expr a (fun av -> emit_cexpr (BswapBint (bi, av)))
   | Lprim ((Pstring_load_16 unsafe | Pbytes_load_16 unsafe), [ s; i ], _) ->
-      let sym =
-        if unsafe then "caml_bytes_get16_unsafe" else "caml_bytes_get16_safe"
-      in
-      conv_atoms [ s; i ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+      conv_atoms [ s; i ] (function
+        | [ sa; ia ] -> emit_cexpr (BytesGetN (not unsafe, 2, sa, ia))
+        | _ -> assert false)
   | Lprim ((Pstring_load_32 unsafe | Pbytes_load_32 unsafe), [ s; i ], _) ->
-      let sym =
-        if unsafe then "caml_bytes_get32_unsafe" else "caml_bytes_get32_safe"
-      in
-      conv_atoms [ s; i ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+      conv_atoms [ s; i ] (function
+        | [ sa; ia ] -> emit_cexpr (BytesGetN (not unsafe, 4, sa, ia))
+        | _ -> assert false)
   | Lprim ((Pstring_load_64 unsafe | Pbytes_load_64 unsafe), [ s; i ], _) ->
-      let sym =
-        if unsafe then "caml_bytes_get64_unsafe" else "caml_bytes_get64_safe"
-      in
-      conv_atoms [ s; i ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+      conv_atoms [ s; i ] (function
+        | [ sa; ia ] -> emit_cexpr (BytesGetN (not unsafe, 8, sa, ia))
+        | _ -> assert false)
   | Lprim (Pbytes_set_16 unsafe, [ b; i; v ], _) ->
-      let sym =
-        if unsafe then "caml_bytes_set16_unsafe" else "caml_bytes_set16_safe"
-      in
-      conv_atoms [ b; i; v ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+      conv_atoms [ b; i; v ] (function
+        | [ ba; ia; va ] -> emit_cexpr (BytesSetN (not unsafe, 2, ba, ia, va))
+        | _ -> assert false)
   | Lprim (Pbytes_set_32 unsafe, [ b; i; v ], _) ->
-      let sym =
-        if unsafe then "caml_bytes_set32_unsafe" else "caml_bytes_set32_safe"
-      in
-      conv_atoms [ b; i; v ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+      conv_atoms [ b; i; v ] (function
+        | [ ba; ia; va ] -> emit_cexpr (BytesSetN (not unsafe, 4, ba, ia, va))
+        | _ -> assert false)
   | Lprim (Pbytes_set_64 unsafe, [ b; i; v ], _) ->
-      let sym =
-        if unsafe then "caml_bytes_set64_unsafe" else "caml_bytes_set64_safe"
-      in
-      conv_atoms [ b; i; v ] (fun vs -> emit_cexpr (Ccall (sym, vs)))
+      conv_atoms [ b; i; v ] (function
+        | [ ba; ia; va ] -> emit_cexpr (BytesSetN (not unsafe, 8, ba, ia, va))
+        | _ -> assert false)
   | Lprim (Pctconst c, _, _) ->
       let atom =
         match c with
@@ -780,15 +788,17 @@ let cexpr_vars free_aexpr acc = function
       List.fold_left atom_vars acc args
   | AllocReuse (tok, _, args) ->
       Ident.Set.add tok (List.fold_left atom_vars acc args)
-  | Field (_, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a ->
+  | Field (_, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
+  | Bswap16 a | BswapBint (_, a) ->
       atom_vars acc a
   | SetField (_, a, b)
   | SetFloatField (_, a, b)
   | StringGet (_, a, b)
+  | BytesGetN (_, _, a, b)
   | ArrayGet (_, _, a, b)
   | MakeArrayInit (a, b) ->
       atom_vars (atom_vars acc a) b
-  | BytesSet (_, a, b, c) | ArraySet (_, _, a, b, c) ->
+  | BytesSet (_, a, b, c) | BytesSetN (_, _, a, b, c) | ArraySet (_, _, a, b, c) ->
       atom_vars (atom_vars (atom_vars acc a) b) c
   | App (fn, args) ->
       List.fold_left atom_vars (atom_vars acc fn) args

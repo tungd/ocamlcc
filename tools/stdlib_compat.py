@@ -162,6 +162,176 @@ _COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
             'external int_of_string : string -> int = "caml_int_of_string"',
             "let int_of_string = CamlinternalIntFmt.parse_int",
         ),
+        (
+            'external string_blit : string -> int -> bytes -> int -> int -> unit\n'
+            '                     = "caml_blit_string" [@@noalloc]\n'
+            'external bytes_blit : bytes -> int -> bytes -> int -> int -> unit\n'
+            '                        = "caml_blit_bytes" [@@noalloc]',
+            "let string_blit = CamlinternalBulkOps.blit_string\n"
+            "let bytes_blit = CamlinternalBulkOps.blit_bytes",
+        ),
+    ],
+    "bytes.mli": [
+        (
+            'external unsafe_blit :\n'
+            '  bytes -> int -> bytes -> int -> int ->\n'
+            '    unit = "caml_blit_bytes" [@@noalloc]\n'
+            'external unsafe_blit_string :\n'
+            '  string -> int -> bytes -> int -> int -> unit\n'
+            '  = "caml_blit_string" [@@noalloc]\n'
+            'external unsafe_fill :\n'
+            '  bytes -> int -> int -> char -> unit = "caml_fill_bytes" [@@noalloc]',
+            "val unsafe_blit : bytes -> int -> bytes -> int -> int -> unit\n"
+            "val unsafe_blit_string : string -> int -> bytes -> int -> int -> unit\n"
+            "val unsafe_fill : bytes -> int -> int -> char -> unit",
+        ),
+    ],
+    "bytesLabels.mli": [
+        (
+            'external unsafe_blit :\n'
+            '  src:bytes -> src_pos:int -> dst:bytes -> dst_pos:int -> len:int ->\n'
+            '    unit = "caml_blit_bytes" [@@noalloc]\n'
+            'external unsafe_blit_string :\n'
+            '  src:string -> src_pos:int -> dst:bytes -> dst_pos:int -> len:int -> unit\n'
+            '  = "caml_blit_string" [@@noalloc]\n'
+            'external unsafe_fill :\n'
+            '  bytes -> pos:int -> len:int -> char -> unit = "caml_fill_bytes" [@@noalloc]',
+            "val unsafe_blit : src:bytes -> src_pos:int -> dst:bytes -> dst_pos:int -> len:int -> unit\n"
+            "val unsafe_blit_string : src:string -> src_pos:int -> dst:bytes -> dst_pos:int -> len:int -> unit\n"
+            "val unsafe_fill : bytes -> pos:int -> len:int -> char -> unit",
+        ),
+    ],
+    "string.mli": [
+        (
+            'external unsafe_blit :\n'
+            '  string -> int -> bytes -> int -> int ->\n'
+            '    unit = "caml_blit_string" [@@noalloc]',
+            "val unsafe_blit : string -> int -> bytes -> int -> int -> unit",
+        ),
+    ],
+    "stringLabels.mli": [
+        (
+            'external unsafe_blit :\n'
+            '  src:string -> src_pos:int -> dst:bytes -> dst_pos:int -> len:int ->\n'
+            '    unit = "caml_blit_string" [@@noalloc]',
+            "val unsafe_blit : src:string -> src_pos:int -> dst:bytes -> dst_pos:int -> len:int -> unit",
+        ),
+    ],
+    "array.mli": [
+        (
+            'external create_float: int -> float array = "caml_array_create_float"',
+            "val create_float: int -> float array",
+        ),
+        (
+            '  external create : int -> floatarray = "caml_floatarray_create"',
+            "  val create : int -> floatarray",
+        ),
+    ],
+    "arrayLabels.mli": [
+        (
+            'external create_float: int -> float array = "caml_array_create_float"',
+            "val create_float: int -> float array",
+        ),
+        (
+            '  external create : int -> floatarray = "caml_floatarray_create"',
+            "  val create : int -> floatarray",
+        ),
+    ],
+    "bytes.ml": [
+        (
+            'external unsafe_fill : bytes -> int -> int -> char -> unit\n'
+            '                     = "caml_fill_bytes" [@@noalloc]',
+            "let unsafe_fill = CamlinternalBulkOps.fill_bytes",
+        ),
+        (
+            'external unsafe_blit : bytes -> int -> bytes -> int -> int -> unit\n'
+            '                     = "caml_blit_bytes" [@@noalloc]\n'
+            'external unsafe_blit_string : string -> int -> bytes -> int -> int -> unit\n'
+            '                     = "caml_blit_string" [@@noalloc]',
+            "let unsafe_blit = CamlinternalBulkOps.blit_bytes\n"
+            "let unsafe_blit_string = CamlinternalBulkOps.blit_string",
+        ),
+        (
+            'external equal : t -> t -> bool = "caml_bytes_equal" [@@noalloc]',
+            "let equal = CamlinternalBulkOps.bytes_equal",
+        ),
+    ],
+    "string.ml": [
+        (
+            'external unsafe_blit : string -> int ->  bytes -> int -> int -> unit\n'
+            '                     = "caml_blit_string" [@@noalloc]',
+            "let unsafe_blit = CamlinternalBulkOps.blit_string",
+        ),
+        (
+            'external seeded_hash : int -> string -> int = "caml_string_hash" [@@noalloc]',
+            "let seeded_hash = CamlinternalBulkOps.string_hash",
+        ),
+        (
+            'external equal : string -> string -> bool = "caml_string_equal" [@@noalloc]',
+            "let equal = CamlinternalBulkOps.string_equal",
+        ),
+    ],
+    "array.ml": [
+        (
+            'external unsafe_sub : \'a array -> int -> int -> \'a array = "caml_array_sub"\n'
+            'external append_prim : \'a array -> \'a array -> \'a array = "caml_array_append"\n'
+            'external concat : \'a array list -> \'a array = "caml_array_concat"\n'
+            'external unsafe_blit :\n'
+            '  \'a array -> int -> \'a array -> int -> int -> unit = "caml_array_blit"\n'
+            'external unsafe_fill :\n'
+            '  \'a array -> int -> int -> \'a -> unit = "caml_array_fill"\n'
+            'external create_float: int -> float array = "caml_array_create_float"\n\n'
+            'module Floatarray = struct\n'
+            '  external create : int -> floatarray = "caml_floatarray_create"',
+            "let unsafe_sub = CamlinternalBulkOps.array_sub\n"
+            "let append_prim = CamlinternalBulkOps.array_append\n"
+            "let concat = CamlinternalBulkOps.array_concat\n"
+            "let unsafe_blit = CamlinternalBulkOps.array_blit\n"
+            "let unsafe_fill = CamlinternalBulkOps.array_fill\n"
+            "let create_float = CamlinternalBulkOps.array_create_float\n\n"
+            "module Floatarray = struct\n"
+            "  let create = CamlinternalBulkOps.floatarray_create",
+        ),
+    ],
+    "iarray.ml": [
+        (
+            'external concat : \'a iarray list -> \'a iarray = "caml_array_concat"\n\n'
+            'external append_prim : \'a iarray -> \'a iarray -> \'a iarray = "caml_array_append"\n'
+            'external unsafe_sub : \'a iarray -> int -> int -> \'a iarray = "caml_array_sub"',
+            "external opaque_cast : 'a -> 'b = \"%opaque\"\n"
+            "let concat (lst : 'a iarray list) : 'a iarray =\n"
+            "  opaque_cast (CamlinternalBulkOps.array_concat (opaque_cast lst))\n"
+            "let append_prim (a : 'a iarray) (b : 'a iarray) : 'a iarray =\n"
+            "  opaque_cast (CamlinternalBulkOps.array_append (opaque_cast a) (opaque_cast b))\n"
+            "let unsafe_sub (a : 'a iarray) (o : int) (l : int) : 'a iarray =\n"
+            "  opaque_cast (CamlinternalBulkOps.array_sub (opaque_cast a) o l)",
+        ),
+    ],
+    "float.ml": [
+        (
+            '  external create : int -> t = "caml_floatarray_create"\n'
+            '  external unsafe_get : t -> int -> float = "%floatarray_unsafe_get"\n'
+            '  external unsafe_set : t -> int -> float -> unit = "%floatarray_unsafe_set"\n\n'
+            '  external make : (int[@untagged]) -> (float[@unboxed]) -> t =\n'
+            '    "caml_floatarray_make" "caml_floatarray_make_unboxed"\n\n'
+            '  external unsafe_fill\n'
+            '    : t -> (int[@untagged]) -> (int[@untagged]) -> (float[@unboxed]) -> unit\n'
+            '    = "caml_floatarray_fill" "caml_floatarray_fill_unboxed" [@@noalloc]\n\n'
+            '  external unsafe_blit: t -> int -> t -> int -> int -> unit =\n'
+            '    "caml_floatarray_blit" [@@noalloc]\n\n'
+            '  external unsafe_sub : t -> int -> int -> t = "caml_floatarray_sub"\n'
+            '  external append_prim : t -> t -> t = "caml_floatarray_append"\n'
+            '  external concat : t list -> t = "caml_floatarray_concat"',
+            '  let create = CamlinternalBulkOps.floatarray_create\n'
+            '  external unsafe_get : t -> int -> float = "%floatarray_unsafe_get"\n'
+            '  external unsafe_set : t -> int -> float -> unit = "%floatarray_unsafe_set"\n\n'
+            '  let make = CamlinternalBulkOps.floatarray_make\n'
+            '  let unsafe_fill = CamlinternalBulkOps.floatarray_fill\n'
+            '  let unsafe_blit = CamlinternalBulkOps.floatarray_blit\n'
+            '  let unsafe_sub = CamlinternalBulkOps.floatarray_sub\n'
+            '  let append_prim = CamlinternalBulkOps.floatarray_append\n'
+            '  let concat = CamlinternalBulkOps.floatarray_concat',
+        ),
     ],
     "int.ml": [
         (
@@ -251,6 +421,9 @@ def materialize_sources(
     if "camlinternalFormatBasics" in modules and "camlinternalIntFmt" not in modules:
         idx = modules.index("camlinternalFormatBasics") + 1
         modules.insert(idx, "camlinternalIntFmt")
+    if "camlinternalIntFmt" in modules and "camlinternalBulkOps" not in modules:
+        idx = modules.index("camlinternalIntFmt") + 1
+        modules.insert(idx, "camlinternalBulkOps")
     if (vendor_src / "std_exit.ml").exists() or (overlay_dir / "std_exit.ml").exists():
         if "std_exit" not in modules:
             modules.append("std_exit")
@@ -318,7 +491,7 @@ def materialize_sources(
 
 def compflags_for(base: str, ext: str) -> list[str]:
     flags: list[str] = []
-    if base in ("camlinternalFormatBasics", "camlinternalIntFmt", "stdlib"):
+    if base in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "stdlib"):
         flags.append("--nopervasives")
     if base == "stdlib" or base.endswith("Labels") or base == "float":
         flags.append("--no-alias-deps")
@@ -355,9 +528,9 @@ def parse_cmi_deps(depend_path: Path, bases: list[str]) -> list[str]:
                         if dep_base not in deps[target_base]:
                             deps[target_base].append(dep_base)
 
-    # Every module besides camlinternalFormatBasics, camlinternalIntFmt, and stdlib implicitly opens Stdlib
+    # Every module besides camlinternalFormatBasics, camlinternalIntFmt, camlinternalBulkOps, and stdlib implicitly opens Stdlib
     for b in bases:
-        if b not in ("camlinternalFormatBasics", "camlinternalIntFmt", "stdlib") and "stdlib" in deps:
+        if b not in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "stdlib") and "stdlib" in deps:
             if "stdlib" not in deps[b]:
                 deps[b].append("stdlib")
     if "stdlib" in deps and "camlinternalFormatBasics" in deps:
@@ -366,6 +539,9 @@ def parse_cmi_deps(depend_path: Path, bases: list[str]) -> list[str]:
     if "stdlib" in deps and "camlinternalIntFmt" in deps:
         if "camlinternalIntFmt" not in deps["stdlib"]:
             deps["stdlib"].append("camlinternalIntFmt")
+    if "stdlib" in deps and "camlinternalBulkOps" in deps:
+        if "camlinternalBulkOps" not in deps["stdlib"]:
+            deps["stdlib"].append("camlinternalBulkOps")
 
     order: list[str] = []
     state: dict[str, int] = {}  # 0=unseen, 1=visiting, 2=done

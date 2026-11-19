@@ -13,9 +13,9 @@ external ( || ) : bool -> bool -> bool = "%sequor"
 external length : string -> int = "%string_length"
 external get : string -> int -> char = "%string_safe_get"
 external unsafe_get : string -> int -> char = "%string_unsafe_get"
-external blit : string -> int -> bytes -> int -> int -> unit = "caml_blit_string"
-external equal : string -> string -> bool = "caml_string_equal"
-external compare : string -> string -> int = "caml_string_compare"
+let blit = CamlinternalBulkOps.blit_string
+let equal = CamlinternalBulkOps.string_equal
+let compare = CamlinternalBulkOps.string_compare
 
 module B = Stdlib__bytes
 

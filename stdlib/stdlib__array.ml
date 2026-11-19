@@ -115,18 +115,7 @@ let fill a ofs len v =
       unsafe_set a i v
     done
 
-let blit a1 ofs1 a2 ofs2 len =
-  if len < 0 || ofs1 < 0 || ofs1 > length a1 - len
-     || ofs2 < 0 || ofs2 > length a2 - len
-  then invalid_arg "Array.blit"
-  else if ofs1 < ofs2 then
-    for i = len - 1 downto 0 do
-      unsafe_set a2 (ofs2 + i) (unsafe_get a1 (ofs1 + i))
-    done
-  else
-    for i = 0 to len - 1 do
-      unsafe_set a2 (ofs2 + i) (unsafe_get a1 (ofs1 + i))
-    done
+let blit = CamlinternalBulkOps.array_blit
 
 let to_list a =
   let rec tolist i res =

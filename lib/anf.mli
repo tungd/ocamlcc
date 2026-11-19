@@ -112,6 +112,10 @@ type cexpr =
   | OffsetRef of int * atom
   | StringGet of bool * atom * atom
   | BytesSet of bool * atom * atom * atom
+  | BytesGetN of bool * int * atom * atom
+  | BytesSetN of bool * int * atom * atom * atom
+  | Bswap16 of atom
+  | BswapBint of Lambda.boxed_integer * atom
   | ArrayGet of bool * Lambda.array_kind * atom * atom
   | ArraySet of bool * Lambda.array_kind * atom * atom * atom
   | BigarrayAccess of bigarray_access * atom list

@@ -731,6 +731,7 @@ def validate_stage2(compiler: Path, stage2_dir: Path, qbe: Path, qbe_target: str
     stdlib_mods = [
         ("camlinternalFormatBasics", "camlinternalFormatBasics.ml", []),
         ("camlinternalIntFmt", "camlinternalIntFmt.ml", []),
+        ("camlinternalBulkOps", "camlinternalBulkOps.ml", []),
         ("stdlib__option", "stdlib__option.ml", []),
         ("stdlib__result", "stdlib__result.ml", []),
         ("stdlib__int32", "stdlib__int32.ml", []),

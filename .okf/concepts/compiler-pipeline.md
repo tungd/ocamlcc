@@ -47,9 +47,12 @@ The pipeline has four stages[^design-doc]:
    target assembly (including void `arc_retain_val` calls on `GetGlobal`,
    exception/intermediate-closure cleanup on direct over-application,
    explicit zero-divisor guards raising `Division_by_zero` on `Div`/`Mod`,
-   `compile_bounds_guarded` raising `Invalid_argument` via
+   `compile_bounds_guarded` / `compile_bytes_slice_bounds_guarded` raising `Invalid_argument` via
    `ocamlcc_raise_invalid_arg_oob`—with consumed RHS release on failed
-   `ArraySet`—on out-of-range indexing instead of aborting, overflow-safe
+   `ArraySet`—on out-of-range indexing instead of aborting, inline QBE lowering
+   for `BytesGetN`/`BytesSetN` (unaligned 16/32/64-bit loads/stores) and
+   `Bswap16`/`BswapBint`, `caml_string_*`/`caml_bytes_*` comparison mapping to
+   `caml_{equal,notequal,compare,lessthan,lessequal,greaterthan,greaterequal}`, overflow-safe
    `For` loops that check `iv < ev` / `iv > ev` before stepping, and
    `b.term = None` guards after compiling `While` conditions).
 4. **Linking & packaging** — `dune` exposes the `ocamlcc` public executable,

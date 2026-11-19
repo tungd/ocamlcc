@@ -152,24 +152,6 @@ int64_t caml_greaterthan(int64_t a, int64_t b);
 int64_t caml_greaterequal(int64_t a, int64_t b);
 int64_t caml_hash(int64_t count, int64_t limit, int64_t seed, int64_t obj);
 
-int64_t caml_blit_bytes(int64_t src, int64_t src_off, int64_t dst, int64_t dst_off, int64_t len);
-int64_t caml_blit_string(int64_t src, int64_t src_off, int64_t dst, int64_t dst_off, int64_t len);
-int64_t caml_fill_bytes(int64_t dst, int64_t off, int64_t len, int64_t ch);
-int64_t caml_string_equal(int64_t a, int64_t b);
-int64_t caml_string_notequal(int64_t a, int64_t b);
-int64_t caml_bytes_equal(int64_t a, int64_t b);
-int64_t caml_bytes_notequal(int64_t a, int64_t b);
-int64_t caml_string_compare(int64_t a, int64_t b);
-int64_t caml_bytes_compare(int64_t a, int64_t b);
-int64_t caml_string_lessthan(int64_t a, int64_t b);
-int64_t caml_string_lessequal(int64_t a, int64_t b);
-int64_t caml_string_greaterthan(int64_t a, int64_t b);
-int64_t caml_string_greaterequal(int64_t a, int64_t b);
-int64_t caml_bytes_lessthan(int64_t a, int64_t b);
-int64_t caml_bytes_lessequal(int64_t a, int64_t b);
-int64_t caml_bytes_greaterthan(int64_t a, int64_t b);
-int64_t caml_bytes_greaterequal(int64_t a, int64_t b);
-
 int64_t ocamlcc_apply1(int64_t clos, int64_t a0);
 int64_t ocamlcc_apply2(int64_t clos, int64_t a0, int64_t a1);
 int64_t ocamlcc_apply3(int64_t clos, int64_t a0, int64_t a1, int64_t a2);

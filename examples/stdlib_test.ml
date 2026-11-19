@@ -2,8 +2,7 @@ external arc_live : unit -> int = "ocamlcc_arc_live"
 external arc_collect : unit -> int = "ocamlcc_arc_collect"
 external ocamlcc_pipe : unit -> int * int = "ocamlcc_pipe"
 external ocamlcc_fd_read : int -> bytes -> int -> int -> int = "ocamlcc_fd_read"
-external fa_fill : float array -> int -> int -> float -> unit
-  = "caml_floatarray_fill"
+let fa_fill = Array.fill
 
 type cyc = { mutable cnxt : cyc option; cv : int }
 

@@ -20,9 +20,6 @@ extern int64_t caml_ba_set_1(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_get_1(int64_t, int64_t);
 extern int64_t caml_obj_dup(int64_t);
 extern int64_t caml_obj_with_tag(int64_t, int64_t);
-extern int64_t caml_array_sub(int64_t, int64_t, int64_t);
-extern int64_t caml_array_blit(int64_t, int64_t, int64_t, int64_t, int64_t);
-extern int64_t caml_array_fill(int64_t, int64_t, int64_t, int64_t);
 extern int64_t caml_output_value_to_buffer(int64_t, int64_t, int64_t, int64_t, int64_t);
 extern int64_t caml_input_value(int64_t);
 extern int64_t caml_ml_open_descriptor_in(int64_t);
@@ -396,13 +393,16 @@ static void test_weak_get_copy_and_obj_dup(void)
     arc_release(pap);
     arc_release(clos);
 
-    /* 4. Array from caml_array_sub (scan_fields == 0) holding heap strings. */
+    /* 4. Array with scan_fields == 0 holding heap strings. */
     char *elem = arc_alloc_bytes(4);
     memcpy(elem, "elem", 4);
-    int64_t *arr = arc_alloc_array(2, (int64_t)(uintptr_t)elem);
+    int64_t *sub_arr = (int64_t *)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 16u);
+    sub_arr[0] = (int64_t)(uintptr_t)elem;
+    sub_arr[1] = (int64_t)(uintptr_t)elem;
+    arc_retain_val((int64_t)(uintptr_t)elem);
+    arc_retain_val((int64_t)(uintptr_t)elem);
     arc_release(elem);
-    int64_t sub = caml_array_sub((int64_t)(uintptr_t)arr, tagged(0), tagged(2));
-    arc_release(arr);
+    int64_t sub = (int64_t)(uintptr_t)sub_arr;
     some[0] = sub;
     ocamlcc_weak_set(w, tagged(3), (int64_t)(uintptr_t)some);
     cp_opt = ocamlcc_weak_get_copy(w, tagged(3));
@@ -509,23 +509,7 @@ static void test_bounds_and_marshal_dos(void)
     caml_output_value_to_buffer((int64_t)(uintptr_t)buf, tagged(6), tagged(4), tagged(42), 1);
     clear_exception();
 
-    /* 2. caml_array_blit and caml_array_fill bounds. */
-    int64_t *a1 = arc_alloc_array(3, tagged(1));
-    int64_t *a2 = arc_alloc_array(3, tagged(2));
-    caml_array_blit((int64_t)(uintptr_t)a1, tagged(-1), (int64_t)(uintptr_t)a2, tagged(0), tagged(1));
-    clear_exception();
-    caml_array_blit((int64_t)(uintptr_t)a1, tagged(2), (int64_t)(uintptr_t)a2, tagged(0), tagged(2));
-    clear_exception();
-    caml_array_blit((int64_t)(uintptr_t)a1, tagged(0), (int64_t)(uintptr_t)a2, tagged(2), tagged(2));
-    clear_exception();
-    caml_array_fill((int64_t)(uintptr_t)a1, tagged(-1), tagged(1), tagged(9));
-    clear_exception();
-    caml_array_fill((int64_t)(uintptr_t)a1, tagged(2), tagged(2), tagged(9));
-    clear_exception();
-    arc_release(a1);
-    arc_release(a2);
-
-    /* 3. caml_ml_output_bytes and caml_ml_input bounds. */
+    /* 2. caml_ml_output_bytes and caml_ml_input bounds. */
     int fds[2];
     assert(pipe(fds) == 0);
     int64_t ch_in = caml_ml_open_descriptor_in(tagged(fds[0]));
@@ -1328,22 +1312,19 @@ static void test_string_bytes_rel_compare(void)
     int64_t va = (int64_t)(uintptr_t)a;
     int64_t vb = (int64_t)(uintptr_t)b;
 
-    assert(caml_string_lessthan(va, vb) == tagged(1));
-    assert(caml_string_lessthan(va, va) == tagged(0));
-    assert(caml_string_lessthan(vb, va) == tagged(0));
-    assert(caml_string_lessequal(va, vb) == tagged(1));
-    assert(caml_string_lessequal(va, va) == tagged(1));
-    assert(caml_string_lessequal(vb, va) == tagged(0));
-    assert(caml_string_greaterthan(vb, va) == tagged(1));
-    assert(caml_string_greaterthan(va, va) == tagged(0));
-    assert(caml_string_greaterequal(vb, va) == tagged(1));
-    assert(caml_string_greaterequal(va, va) == tagged(1));
-    assert(caml_string_greaterequal(va, vb) == tagged(0));
-
-    assert(caml_bytes_lessthan(va, vb) == tagged(1));
-    assert(caml_bytes_lessequal(va, va) == tagged(1));
-    assert(caml_bytes_greaterthan(vb, va) == tagged(1));
-    assert(caml_bytes_greaterequal(va, vb) == tagged(0));
+    assert(caml_lessthan(va, vb) == tagged(1));
+    assert(caml_lessthan(va, va) == tagged(0));
+    assert(caml_lessthan(vb, va) == tagged(0));
+    assert(caml_lessequal(va, vb) == tagged(1));
+    assert(caml_lessequal(va, va) == tagged(1));
+    assert(caml_lessequal(vb, va) == tagged(0));
+    assert(caml_greaterthan(vb, va) == tagged(1));
+    assert(caml_greaterthan(va, va) == tagged(0));
+    assert(caml_greaterequal(vb, va) == tagged(1));
+    assert(caml_greaterequal(va, va) == tagged(1));
+    assert(caml_greaterequal(va, vb) == tagged(0));
+    assert(caml_equal(va, va) == tagged(1));
+    assert(caml_equal(va, vb) == tagged(0));
 
     arc_release(a);
     arc_release(b);

@@ -509,6 +509,38 @@ let compile_bounds_guarded b ?drop_on_oob idx_untagged len_val
   emit b (Phi (Long, dst, [ (lok_end, ok_res); (loob_end, unit_const) ]));
   dst
 
+let compile_bytes_slice_bounds_guarded b idx_untagged len_val (width : int)
+    (on_ok : unit -> Qbe_il.t) : Qbe_il.t =
+  if width <= 1 then compile_bounds_guarded b idx_untagged len_val on_ok
+  else
+    let has_room = fresh_temp b "sroom" in
+    emit b (Cmp (Sge, Long, has_room, len_val, Int (Int64.of_int width)));
+    let lroom = fresh_label b "sroom_ok" in
+    let lok = fresh_label b "sbnd_ok" in
+    let loob = fresh_label b "sbnd_oob" in
+    let ldone = fresh_label b "sbnd_done" in
+    close_block b (Br (has_room, lroom, loob));
+    start_block b lroom;
+    let limit = fresh_temp b "slim" in
+    emit b
+      (Binop (Sub, Long, limit, len_val, Int (Int64.of_int (width - 1))));
+    let ok = fresh_temp b "sbnd" in
+    emit b (Cmp (Ult, Long, ok, idx_untagged, limit));
+    close_block b (Br (ok, lok, loob));
+    start_block b lok;
+    let ok_res = on_ok () in
+    let lok_end = b.cur_fn.open_label in
+    close_block b (Jmp ldone);
+    start_block b loob;
+    emit b
+      (Call_void { fn = Global "ocamlcc_raise_invalid_arg_oob"; args = [] });
+    let loob_end = b.cur_fn.open_label in
+    close_block b (Jmp ldone);
+    start_block b ldone;
+    let dst = fresh_temp b "sbndv" in
+    emit b (Phi (Long, dst, [ (lok_end, ok_res); (loob_end, unit_const) ]));
+    dst
+
 let string_len_raw b sv =
   let addr = fresh_temp b "slenp" in
   emit b (Binop (Sub, Long, addr, sv, Int 4L));

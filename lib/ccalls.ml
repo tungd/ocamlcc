@@ -77,24 +77,6 @@ let table =
     ("caml_greaterthan", abi 2 true false);
     ("caml_greaterequal", abi 2 true false);
     ("caml_hash", abi 4 false false);
-    (* bytes / strings *)
-    ("caml_blit_bytes", abi 5 true false);
-    ("caml_blit_string", abi 5 true false);
-    ("caml_fill_bytes", abi 4 true false);
-    ("caml_string_equal", abi 2 false false);
-    ("caml_string_notequal", abi 2 false false);
-    ("caml_bytes_equal", abi 2 false false);
-    ("caml_bytes_notequal", abi 2 false false);
-    ("caml_string_compare", abi 2 false false);
-    ("caml_bytes_compare", abi 2 false false);
-    ("caml_string_lessthan", abi 2 false false);
-    ("caml_string_lessequal", abi 2 false false);
-    ("caml_string_greaterthan", abi 2 false false);
-    ("caml_string_greaterequal", abi 2 false false);
-    ("caml_bytes_lessthan", abi 2 false false);
-    ("caml_bytes_lessequal", abi 2 false false);
-    ("caml_bytes_greaterthan", abi 2 false false);
-    ("caml_bytes_greaterequal", abi 2 false false);
     (* value let rec dummy allocation/backpatch *)
     ("caml_alloc_dummy", abi 1 false false);
     ("caml_alloc_dummy_float", abi 1 false false);
@@ -120,37 +102,13 @@ let table =
     ("caml_fmod_float", abi 2 false false);
     ("caml_copysign_float", abi 2 false false);
     ("caml_classify_float", abi 1 false false);
-    (* atomics, stdlib core, bytes 16/32/64, bswap *)
+    (* atomics, stdlib core *)
     ("caml_atomic_load_field", abi 2 false false);
     ("caml_atomic_cas_field", abi 4 false false);
     ("caml_atomic_exchange_field", abi 3 false false);
     ("caml_atomic_fetch_add_field", abi 3 false false);
     ("caml_register_named_value", abi 2 false false);
     ("caml_sys_exit", abi 1 false false);
-    ("caml_bswap16", abi 1 false false);
-    ("caml_int32_bswap", abi 1 false false);
-    ("caml_int64_bswap", abi 1 false false);
-    ("caml_nativeint_bswap", abi 1 false false);
-    ("caml_bytes_get16_unsafe", abi 2 false false);
-    ("caml_bytes_get16_safe", abi 2 true false);
-    ("caml_bytes_get32_unsafe", abi 2 false false);
-    ("caml_bytes_get32_safe", abi 2 true false);
-    ("caml_bytes_get64_unsafe", abi 2 false false);
-    ("caml_bytes_get64_safe", abi 2 true false);
-    ("caml_bytes_set16_unsafe", abi 3 false false);
-    ("caml_bytes_set16_safe", abi 3 true false);
-    ("caml_bytes_set32_unsafe", abi 3 false false);
-    ("caml_bytes_set32_safe", abi 3 true false);
-    ("caml_bytes_set64_unsafe", abi 3 false false);
-    ("caml_bytes_set64_safe", abi 3 true false);
-    (* arrays *)
-    ("caml_array_sub", abi 3 true false);
-    ("caml_array_append", abi 2 true false);
-    ("caml_array_concat", abi 1 true false);
-    ("caml_array_blit", abi 5 true false);
-    ("caml_array_fill", abi 4 true false);
-    ("caml_array_create_float", abi 1 true false);
-    ("caml_floatarray_create", abi 1 true false);
     (* channels / I/O *)
     ("caml_sys_open", abi 3 true false);
     ("caml_ml_open_descriptor_in", abi 1 true false);
@@ -185,9 +143,8 @@ let table =
     ("caml_marshal_data_size", abi 2 true false);
     ("caml_output_value", abi 3 true false);
     ("caml_input_value", abi 1 true false);
-    (* obj / string hash / hex float / atomic contended *)
+    (* obj / hex float / atomic contended *)
     ("caml_obj_tag", abi 1 false false);
-    ("caml_string_hash", abi 2 false false);
     ("caml_hexstring_of_float", abi 3 false false);
     ("caml_atomic_make_contended", abi 1 false false);
     (* backtraces *)
@@ -241,13 +198,7 @@ let table =
     ("caml_ml_condition_wait", abi 2 true false);
     ("caml_ml_condition_signal", abi 1 false false);
     ("caml_ml_condition_broadcast", abi 1 false false);
-    (* floatarray & libm float math *)
-    ("caml_floatarray_sub", abi 3 true false);
-    ("caml_floatarray_append", abi 2 true false);
-    ("caml_floatarray_concat", abi 1 true false);
-    ("caml_floatarray_blit", abi 5 true false);
-    ("caml_floatarray_fill", abi 4 true false);
-    ("caml_floatarray_make", abi 2 true false);
+    (* libm float math *)
     ("caml_exp_float", abi 1 false false);
     ("caml_exp2_float", abi 1 false false);
     ("caml_expm1_float", abi 1 false false);
@@ -391,17 +342,9 @@ let returns_imm = function
   | "caml_final_register" | "caml_final_register_called_without_value"
   | "caml_final_release"
   | "caml_string_length" | "caml_bytes_length" | "caml_array_length"
-  | "caml_array_blit" | "caml_array_fill"
-  | "caml_floatarray_blit" | "caml_floatarray_fill"
-  | "caml_blit_bytes" | "caml_blit_string" | "caml_fill_bytes"
   | "caml_int_compare" | "caml_equal" | "caml_notequal" | "caml_compare"
   | "caml_lessthan" | "caml_lessequal" | "caml_greaterthan" | "caml_greaterequal"
-  | "caml_string_equal" | "caml_string_notequal" | "caml_string_compare"
-  | "caml_bytes_equal" | "caml_bytes_notequal" | "caml_bytes_compare"
-  | "caml_string_lessthan" | "caml_string_lessequal"
-  | "caml_string_greaterthan" | "caml_string_greaterequal"
-  | "caml_bytes_lessthan" | "caml_bytes_lessequal"
-  | "caml_bytes_greaterthan" | "caml_bytes_greaterequal"
+  | "caml_hash"
   | "caml_obj_tag" | "caml_obj_size" | "caml_obj_is_int" | "caml_obj_set_tag"
   | "caml_ml_output" | "caml_ml_output_bytes" | "caml_ml_output_char"
   | "caml_ml_output_int" | "caml_ml_input" | "caml_ml_input_char"

@@ -137,6 +137,11 @@ build $stdlibdir/camlinternalIntFmt.ssa | $stdlibdir/camlinternalIntFmt.cmi: oca
 build $stdlibdir/camlinternalIntFmt.s: qbe_ssa $stdlibdir/camlinternalIntFmt.ssa | $builddir/qbe/qbe
 build $stdlibdir/camlinternalIntFmt.o: as_obj $stdlibdir/camlinternalIntFmt.s
 
+build $stdlibdir/camlinternalBulkOps.ssa | $stdlibdir/camlinternalBulkOps.cmi: ocamlcc_ssa stdlib/camlinternalBulkOps.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/camlinternalBulkOps
+build $stdlibdir/camlinternalBulkOps.s: qbe_ssa $stdlibdir/camlinternalBulkOps.ssa | $builddir/qbe/qbe
+build $stdlibdir/camlinternalBulkOps.o: as_obj $stdlibdir/camlinternalBulkOps.s
+
 build $stdlibdir/stdlib__option.ssa | $stdlibdir/stdlib__option.cmi: ocamlcc_ssa stdlib/stdlib__option.ml | $builddir/bin/ocamlcc
   flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__option
 build $stdlibdir/stdlib__option.s: qbe_ssa $stdlibdir/stdlib__option.ssa | $builddir/qbe/qbe
@@ -147,12 +152,12 @@ build $stdlibdir/stdlib__result.ssa | $stdlibdir/stdlib__result.cmi: ocamlcc_ssa
 build $stdlibdir/stdlib__result.s: qbe_ssa $stdlibdir/stdlib__result.ssa | $builddir/qbe/qbe
 build $stdlibdir/stdlib__result.o: as_obj $stdlibdir/stdlib__result.s
 
-build $stdlibdir/stdlib__bytes.ssa | $stdlibdir/stdlib__bytes.cmi: ocamlcc_ssa stdlib/stdlib__bytes.ml | $builddir/bin/ocamlcc
+build $stdlibdir/stdlib__bytes.ssa | $stdlibdir/stdlib__bytes.cmi: ocamlcc_ssa stdlib/stdlib__bytes.ml | $builddir/bin/ocamlcc $stdlibdir/camlinternalBulkOps.cmi
   flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__bytes
 build $stdlibdir/stdlib__bytes.s: qbe_ssa $stdlibdir/stdlib__bytes.ssa | $builddir/qbe/qbe
 build $stdlibdir/stdlib__bytes.o: as_obj $stdlibdir/stdlib__bytes.s
 
-build $stdlibdir/stdlib__string.ssa | $stdlibdir/stdlib__string.cmi: ocamlcc_ssa stdlib/stdlib__string.ml | $builddir/bin/ocamlcc $stdlibdir/stdlib__bytes.cmi
+build $stdlibdir/stdlib__string.ssa | $stdlibdir/stdlib__string.cmi: ocamlcc_ssa stdlib/stdlib__string.ml | $builddir/bin/ocamlcc $stdlibdir/camlinternalBulkOps.cmi $stdlibdir/stdlib__bytes.cmi
   flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__string
 build $stdlibdir/stdlib__string.s: qbe_ssa $stdlibdir/stdlib__string.ssa | $builddir/qbe/qbe
 build $stdlibdir/stdlib__string.o: as_obj $stdlibdir/stdlib__string.s
@@ -162,7 +167,7 @@ build $stdlibdir/stdlib__list.ssa | $stdlibdir/stdlib__list.cmi: ocamlcc_ssa std
 build $stdlibdir/stdlib__list.s: qbe_ssa $stdlibdir/stdlib__list.ssa | $builddir/qbe/qbe
 build $stdlibdir/stdlib__list.o: as_obj $stdlibdir/stdlib__list.s
 
-build $stdlibdir/stdlib__array.ssa | $stdlibdir/stdlib__array.cmi: ocamlcc_ssa stdlib/stdlib__array.ml | $builddir/bin/ocamlcc $stdlibdir/stdlib__list.cmi
+build $stdlibdir/stdlib__array.ssa | $stdlibdir/stdlib__array.cmi: ocamlcc_ssa stdlib/stdlib__array.ml | $builddir/bin/ocamlcc $stdlibdir/camlinternalBulkOps.cmi $stdlibdir/stdlib__list.cmi
   flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__array
 build $stdlibdir/stdlib__array.s: qbe_ssa $stdlibdir/stdlib__array.ssa | $builddir/qbe/qbe
 build $stdlibdir/stdlib__array.o: as_obj $stdlibdir/stdlib__array.s
@@ -207,12 +212,12 @@ build $stdlibdir/stdlib__nativeint.ssa | $stdlibdir/stdlib__nativeint.cmi: ocaml
 build $stdlibdir/stdlib__nativeint.s: qbe_ssa $stdlibdir/stdlib__nativeint.ssa | $builddir/qbe/qbe
 build $stdlibdir/stdlib__nativeint.o: as_obj $stdlibdir/stdlib__nativeint.s
 
-build $stdlibdir/stdlib.ssa | $stdlibdir/stdlib.cmi: ocamlcc_ssa stdlib/stdlib.ml | $builddir/bin/ocamlcc $stdlibdir/camlinternalFormatBasics.cmi $stdlibdir/camlinternalIntFmt.cmi $stdlibdir/stdlib__option.cmi $stdlibdir/stdlib__result.cmi $stdlibdir/stdlib__int32.cmi $stdlibdir/stdlib__int64.cmi $stdlibdir/stdlib__nativeint.cmi $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi $stdlibdir/stdlib__list.cmi $stdlibdir/stdlib__array.cmi $stdlibdir/stdlib__buffer.cmi $stdlibdir/stdlib__hashtbl.cmi $stdlibdir/stdlib__printf.cmi $stdlibdir/stdlib__weak.cmi $stdlibdir/stdlib__fiber.cmi
+build $stdlibdir/stdlib.ssa | $stdlibdir/stdlib.cmi: ocamlcc_ssa stdlib/stdlib.ml | $builddir/bin/ocamlcc $stdlibdir/camlinternalFormatBasics.cmi $stdlibdir/camlinternalIntFmt.cmi $stdlibdir/camlinternalBulkOps.cmi $stdlibdir/stdlib__option.cmi $stdlibdir/stdlib__result.cmi $stdlibdir/stdlib__int32.cmi $stdlibdir/stdlib__int64.cmi $stdlibdir/stdlib__nativeint.cmi $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi $stdlibdir/stdlib__list.cmi $stdlibdir/stdlib__array.cmi $stdlibdir/stdlib__buffer.cmi $stdlibdir/stdlib__hashtbl.cmi $stdlibdir/stdlib__printf.cmi $stdlibdir/stdlib__weak.cmi $stdlibdir/stdlib__fiber.cmi
   flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib
 build $stdlibdir/stdlib.s: qbe_ssa $stdlibdir/stdlib.ssa | $builddir/qbe/qbe
 build $stdlibdir/stdlib.o: as_obj $stdlibdir/stdlib.s
 
-build $stdlibdir/libocamlstdlib.a: ar $stdlibdir/camlinternalFormatBasics.o $stdlibdir/camlinternalIntFmt.o $stdlibdir/stdlib__option.o $stdlibdir/stdlib__result.o $stdlibdir/stdlib__int32.o $stdlibdir/stdlib__int64.o $stdlibdir/stdlib__nativeint.o $stdlibdir/stdlib__bytes.o $stdlibdir/stdlib__string.o $stdlibdir/stdlib__list.o $stdlibdir/stdlib__array.o $stdlibdir/stdlib__buffer.o $stdlibdir/stdlib__hashtbl.o $stdlibdir/stdlib__printf.o $stdlibdir/stdlib__weak.o $stdlibdir/stdlib__fiber.o $stdlibdir/stdlib.o
+build $stdlibdir/libocamlstdlib.a: ar $stdlibdir/camlinternalFormatBasics.o $stdlibdir/camlinternalIntFmt.o $stdlibdir/camlinternalBulkOps.o $stdlibdir/stdlib__option.o $stdlibdir/stdlib__result.o $stdlibdir/stdlib__int32.o $stdlibdir/stdlib__int64.o $stdlibdir/stdlib__nativeint.o $stdlibdir/stdlib__bytes.o $stdlibdir/stdlib__string.o $stdlibdir/stdlib__list.o $stdlibdir/stdlib__array.o $stdlibdir/stdlib__buffer.o $stdlibdir/stdlib__hashtbl.o $stdlibdir/stdlib__printf.o $stdlibdir/stdlib__weak.o $stdlibdir/stdlib__fiber.o $stdlibdir/stdlib.o
 
 # ------------------------------------------------------------ examples ----
 

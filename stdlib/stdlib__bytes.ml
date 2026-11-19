@@ -21,13 +21,13 @@ external string_unsafe_get : string -> int -> char = "%string_unsafe_get"
 external set : bytes -> int -> char -> unit = "%bytes_safe_set"
 external unsafe_set : bytes -> int -> char -> unit = "%bytes_unsafe_set"
 external create : int -> bytes = "caml_create_bytes"
-external unsafe_blit : bytes -> int -> bytes -> int -> int -> unit = "caml_blit_bytes"
-external unsafe_blit_string : string -> int -> bytes -> int -> int -> unit = "caml_blit_string"
-external unsafe_fill : bytes -> int -> int -> char -> unit = "caml_fill_bytes"
+let unsafe_blit = CamlinternalBulkOps.blit_bytes
+let unsafe_blit_string = CamlinternalBulkOps.blit_string
+let unsafe_fill = CamlinternalBulkOps.fill_bytes
 external unsafe_to_string : bytes -> string = "%bytes_to_string"
 external unsafe_of_string : string -> bytes = "%bytes_of_string"
-external equal : bytes -> bytes -> bool = "caml_bytes_equal"
-external compare : bytes -> bytes -> int = "caml_bytes_compare"
+let equal = CamlinternalBulkOps.bytes_equal
+let compare = CamlinternalBulkOps.bytes_compare
 
 let invalid_arg s = raise (Invalid_argument s)
 

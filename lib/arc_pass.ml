@@ -80,8 +80,10 @@ let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
   | Binop (op, _, _) -> is_imm_binop op
   | Unop (op, _) -> is_imm_unop op
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
-  | BytesSet _ | ArraySet _ | Builtin _ | Assign _ ->
+  | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ ->
       true
+  | BytesGetN (_, 2, _, _) -> true
+  | BytesGetN _ | BswapBint _ -> false
   | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _ -> true
   | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
   | Ccall (name, _) -> Ccalls.returns_imm name
@@ -114,7 +116,8 @@ let rec aexpr_returns_imm ~pure ~imm_funs (imm : Ident.Set.t) (e : Anf.aexpr) :
     | Binop (op, _, _) -> is_imm_binop op
     | Unop (op, _) -> is_imm_unop op
     | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
-    | BytesSet _ | ArraySet _ | Builtin _ | Assign _
+    | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _
+    | BytesGetN (_, 2, _, _)
     | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
     | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _
     | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
@@ -230,14 +233,15 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | Unop (_, a) -> (atom_vars a, [])
   | MakeBlock (_, args) | AllocReuse (_, _, args) | MakeArray (_, args) ->
       (Ident.Set.empty, args)
-  | Field (_, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a ->
+  | Field (_, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
+  | Bswap16 a | BswapBint (_, a) ->
       (atom_vars a, [])
   | SetField (_, a, rhs) -> (atom_vars a, [ rhs ])
   | SetFloatField (_, a, rhs) ->
       (Ident.Set.union (atom_vars a) (atom_vars rhs), [])
-  | StringGet (_, a, b) | ArrayGet (_, _, a, b) ->
+  | StringGet (_, a, b) | BytesGetN (_, _, a, b) | ArrayGet (_, _, a, b) ->
       (Ident.Set.union (atom_vars a) (atom_vars b), [])
-  | BytesSet (_, a, b, c) ->
+  | BytesSet (_, a, b, c) | BytesSetN (_, _, a, b, c) ->
       ( Ident.Set.union (atom_vars a) (Ident.Set.union (atom_vars b) (atom_vars c)),
         [] )
   | ArraySet (_, _, arr, idx, v) ->
@@ -267,6 +271,8 @@ let ce_may_raise_fn = function
   | IntegerBinop (_, (Div_int | Rem_int), _, _) -> true
   | StringGet (true, _, _)
   | BytesSet (true, _, _, _)
+  | BytesGetN (true, _, _, _)
+  | BytesSetN (true, _, _, _, _)
   | ArrayGet (true, _, _, _)
   | ArraySet (true, _, _, _, _)
   | CreateBytes _ | MakeArrayInit _ ->
@@ -471,7 +477,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
       Some (Let (res, AllocReuse (tok, tag, args), next))
   | Let (x, ((Atom _ | Binop _ | Unop _ | Field _ | SetField _
              | FloatField _ | SetFloatField _ | OffsetRef _
-             | StringGet _ | BytesSet _ | ArrayGet _ | ArraySet _
+             | StringGet _ | BytesSet _ | BytesGetN _ | BytesSetN _ | Bswap16 _ | BswapBint _ | ArrayGet _ | ArraySet _
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _
              | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
              | ScalarLoad _ | ScalarStore _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
