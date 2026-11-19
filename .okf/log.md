@@ -1,5 +1,12 @@
 # Change Log
 
+- 2026-11-19 (autoagent/1): Fix dead-code poller unwatch and waiter UAF in `fiber_destroy` (`runtime/fiber.c`, `runtime/pal.c`, `runtime/pal.h`):
+  - `fiber_destroy` called `sched_remove_io(f)` (which zeroes `wait_fd`/`wait_events`) *before* the `pal_poller_unwatch` guard on those fields — dead code, so a destroyed fiber's waiter entry stayed in the live poller queue as a freed-fiber udata.
+  - The coarse `pal_poller_unwatch` was also the wrong tool: it clears *every* waiter on the (fd, direction) queue, breaking other fibers awaiting the same fd, and operates on the calling thread's poller.
+  - An awaiting fiber destroyed while queued on `target->waiter_head` was never unlinked, leaving a dangling entry that the target's completion wake would dereference.
+  - Fix: new `pal_poller_unwatch_waiter(pfd, fd, events, udata)` removes a single waiter entry (kernel registration and watch dropped only when the last waiter goes); `sched_remove_io` reports whether the fiber was parked on the destroying thread's io list, and `fiber_destroy` captures the watch key before unlinking, unwaits just that fiber, and unlinks itself from `f->awaiting->waiter_head` before anything can wake or free the target.
+  - Regression-tested in `tests/stdlib_runtime.c` (`test_destroy_waiter_cleanup`: an awaiter torn down collector-style must vanish from `target->waiter_head` and the target must still wake cleanly; `test_poller_unwatch_waiter`: targeted removal preserves peers and a last-waiter removal unregisters the fd). `ninja test` (51/51), `ninja asan_test` (37/37), `ninja tsan_test` (race-free), and `dune runtest` pass. See [wren-fibers](/concepts/wren-fibers.md).
+
 - 2026-11-19 (autoagent/1): Fix unsound suspension window from finalizer dispatch (`runtime/fiber.c`):
   - `ocamlcc_poll_finalizers` is marked `yields = false` (the fast non-yielding codegen), but nothing prevented a finalizer callback from suspending the dispatching fiber via `Fiber.yield`, `suspend`, `sleep_ms`, `fd_wait_*`, or `await` — if the fiber was later abandoned, every live local in unshadowed caller frames leaked (no `ShadowPush`/`ShadowPop` window exists around the non-yielding call).
   - Every suspension entry point in `runtime/fiber.c` now checks `owns_finalizer_dispatch` (set by `run_finalizers` around callback dispatch) and raises `Invalid_argument` instead of yielding.

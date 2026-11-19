@@ -837,6 +837,119 @@ static void test_finalizer_no_suspend(void)
     assert(arc_live_objects() == before);
 }
 
+static int64_t g_test_rfd = 0;
+
+static int64_t fd_wait_body_fn(int64_t clos, int64_t arg)
+{
+    (void)clos;
+    (void)arg;
+    ocamlcc_fiber_fd_wait_read(tagged(g_test_rfd));
+    return 1;
+}
+
+static int64_t g_await_target = 0;
+
+static int64_t await_body_fn(int64_t clos, int64_t arg)
+{
+    (void)clos;
+    (void)arg;
+    ocamlcc_fiber_await(g_await_target);
+    return 1;
+}
+
+static void run_one_ready_fiber(void)
+{
+    /* Run exactly one queued fiber until it parks or completes. */
+    ocamlcc_fiber_yield(1);
+}
+
+static void test_destroy_waiter_cleanup(void)
+{
+    int64_t before = arc_live_objects();
+    int fds[2];
+    assert(pipe(fds) == 0);
+    g_test_rfd = (int64_t)fds[0];
+
+    /* fB parks on the pipe fd. */
+    ArcClosure *bodB = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
+    bodB->code = (void *)fd_wait_body_fn;
+    bodB->arity = 1;
+    int64_t fB = ocamlcc_fiber_spawn((int64_t)(uintptr_t)bodB);
+    arc_release(bodB);
+    run_one_ready_fiber();
+    const Fiber *fbobj = (const Fiber *)(uintptr_t)fB;
+    assert(fbobj->state == FIBER_WAITING_IO);
+
+    /* fA awaits fB: it sits on fB->waiter_head. */
+    g_await_target = fB;
+    ArcClosure *bodA = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
+    bodA->code = (void *)await_body_fn;
+    bodA->arity = 1;
+    int64_t fA = ocamlcc_fiber_spawn((int64_t)(uintptr_t)bodA);
+    arc_release(bodA);
+    run_one_ready_fiber();
+    const Fiber *faobj = (const Fiber *)(uintptr_t)fA;
+    assert(faobj->state == FIBER_WAITING_IO);
+    assert(fbobj->waiter_head == (Fiber *)(uintptr_t)fA);
+
+    /* Collector-style teardown of the abandoned awaiter: it must be
+       unlinked from fB's waiter list, or fB's later completion wakes a
+       freed fiber. */
+    fiber_destroy((Fiber *)(uintptr_t)fA);
+    assert(fbobj->waiter_head == NULL);
+
+    /* fB still completes and wakes on data; the destroyed awaiter must not
+       be touched. */
+    assert(write(fds[1], "x", 1) == 1);
+    run_one_ready_fiber();
+    assert(((const Fiber *)(uintptr_t)fB)->state == FIBER_DONE);
+
+    /* The scheduler's spawn pin for the manually destroyed fA is settled by
+       hand (fiber_destroy stood in for the completion path). */
+    arc_release((Fiber *)(uintptr_t)fA);
+    arc_release_val(fB);
+    arc_release_val(fA);
+    close(fds[0]);
+    close(fds[1]);
+    ocamlcc_arc_collect(1);
+    assert(arc_live_objects() == before);
+}
+
+static void test_poller_unwatch_waiter(void)
+{
+    int pfd = pal_poller_create();
+    assert(pfd >= 0);
+    int fds[2];
+    assert(pipe(fds) == 0);
+    int x = 1;
+    int y = 2;
+
+    /* Two waiters on the same (fd, READ): removing one must leave the other
+       registered (pal_poller_unwatch would clear both). */
+    assert(pal_poller_watch(pfd, fds[0], PAL_POLL_READ, &x) == 0);
+    assert(pal_poller_watch(pfd, fds[0], PAL_POLL_READ, &y) == 0);
+    assert(pal_poller_unwatch_waiter(pfd, fds[0], PAL_POLL_READ, &x) == 0);
+    assert(pal_poller_unwatch_waiter(pfd, fds[0], PAL_POLL_READ, &x) == -1);
+    assert(write(fds[1], "a", 1) == 1);
+    PalPollEvent evs[8];
+    int n = pal_poller_wait(pfd, evs, 8, 100);
+    assert(n == 1 && evs[0].udata == &y);
+
+    /* A fresh single waiter: removing it unregisters the fd entirely (the
+       earlier ONESHOT fire already consumed and freed the old watch). */
+    int z = 3;
+    assert(pal_poller_watch(pfd, fds[0], PAL_POLL_READ, &z) == 0);
+    assert(pal_poller_unwatch_waiter(pfd, fds[0], PAL_POLL_READ, &z) == 0);
+    assert(write(fds[1], "b", 1) == 1);
+    n = pal_poller_wait(pfd, evs, 8, 10);
+    assert(n == 0);
+    assert(pal_poller_unwatch_waiter(pfd, fds[0], PAL_POLL_READ, &z) == -1);
+
+    close(fds[0]);
+    close(fds[1]);
+    pal_poller_close(pfd);
+}
+
 static void test_reachable_words(void)
 {
     int64_t before = arc_live_objects();
@@ -966,6 +1079,8 @@ int main(void)
     test_import_contract();
     test_bigarray_channel_io();
     test_finalizer_no_suspend();
+    test_destroy_waiter_cleanup();
+    test_poller_unwatch_waiter();
     puts("stdlib runtime: formats, malformed cleanup, cycles, truncation, views");
     return 0;
 }

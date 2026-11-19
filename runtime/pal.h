@@ -38,6 +38,11 @@ int  pal_poller_create(void);
 void pal_poller_close(int pfd);
 int  pal_poller_watch(int pfd, int fd, uint32_t events, void *udata);
 int  pal_poller_unwatch(int pfd, int fd, uint32_t events);
+/* Remove a single waiter previously registered with pal_poller_watch on
+ * (pfd, fd, events); other waiters on the same fd keep their registration.
+ * Returns 0 if the waiter was found and removed, -1 otherwise. Removing the
+ * last waiter unregisters the fd from the poller. */
+int  pal_poller_unwatch_waiter(int pfd, int fd, uint32_t events, void *udata);
 int  pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms);
 
 /* 5. Fiber context switching and non-blocking fd helpers. */

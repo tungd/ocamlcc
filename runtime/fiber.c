@@ -194,18 +194,46 @@ void arc_fiber_pop_reuse(int64_t n)
 }
 
 static void sched_push_ready(Fiber *f);
-static void sched_remove_io(Fiber *f);
+static int sched_remove_io(Fiber *f);
 static void sched_remove_timer(Fiber *f);
 
 void fiber_destroy(Fiber *f)
 {
     if (f == NULL || (tls_state != NULL && f == &tls_state->main_fiber))
         return;
+    /* Unlink from an awaited target's waiter list first: a fiber destroyed
+     * while queued on target->waiter_head would otherwise leave a dangling
+     * pointer that the target's completion (or destroy) wake would
+     * dereference. */
+    if (f->awaiting != NULL) {
+        Fiber **pp = &f->awaiting->waiter_head;
+        while (*pp != NULL) {
+            if (*pp == f) {
+                *pp = f->sched_next;
+                break;
+            }
+            pp = &(*pp)->sched_next;
+        }
+        f->awaiting = NULL;
+        f->sched_next = NULL;
+    }
     if (f->state == FIBER_WAITING_IO) {
+        /* Capture the watch key before unlinking: sched_remove_io clears
+         * wait_fd/wait_events, which made the old unwatch below it dead
+         * code and left a stale (freed-fiber) waiter entry in the poller. */
+        int wfd = f->wait_fd;
+        uint32_t wev = f->wait_events;
+        int queued = 0;
         if (tls_state != NULL)
-            sched_remove_io(f);
-        if (f->wait_fd >= 0 && tls_state != NULL && tls_state->sched.poller_fd >= 0)
-            (void)pal_poller_unwatch(tls_state->sched.poller_fd, f->wait_fd, f->wait_events);
+            queued = sched_remove_io(f);
+        /* Only this thread's poller can hold the watch: a parked fiber is
+         * pinned by its scheduler, so a same-thread destroy is the only
+         * sound teardown. Remove just this fiber's waiter entry —
+         * pal_poller_unwatch would drop other fibers waiting on the same
+         * fd. */
+        if (queued && tls_state != NULL && tls_state->sched.poller_fd >= 0)
+            (void)pal_poller_unwatch_waiter(tls_state->sched.poller_fd, wfd,
+                                            wev, f);
         f->wait_fd = -1;
         f->wait_events = 0;
     } else if (f->state == FIBER_WAITING_TIMER) {
@@ -305,11 +333,22 @@ static void sched_unlink(Fiber **pp, Fiber *target)
     }
 }
 
-static void sched_remove_io(Fiber *target)
+static int sched_remove_io(Fiber *target)
 {
-    sched_unlink(&tls_sched.io_head, target);
+    int found = 0;
+    Fiber **pp = &tls_sched.io_head;
+    while (*pp != NULL) {
+        if (*pp == target) {
+            *pp = target->sched_next;
+            target->sched_next = NULL;
+            found = 1;
+            break;
+        }
+        pp = &(*pp)->sched_next;
+    }
     target->wait_fd = -1;
     target->wait_events = 0;
+    return found;
 }
 
 static void sched_remove_timer(Fiber *target)

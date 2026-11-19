@@ -123,6 +123,33 @@ static void waiter_clear(int *head, int *tail)
         ;
 }
 
+/* Remove every entry matching udata from one direction's queue.
+ * Returns 1 if anything was removed. */
+static int waiter_remove_udata(int *head, int *tail, void *udata)
+{
+    int removed = 0;
+    int prev = -1;
+    int cur = *head;
+    while (cur >= 0) {
+        int next = g_waiters[cur].next;
+        if (g_waiters[cur].udata == udata) {
+            if (prev >= 0)
+                g_waiters[prev].next = next;
+            else
+                *head = next;
+            if (*tail == cur)
+                *tail = prev;
+            g_waiters[cur].in_use = 0;
+            g_waiters[cur].next = -1;
+            removed = 1;
+        } else {
+            prev = cur;
+        }
+        cur = next;
+    }
+    return removed;
+}
+
 static void waiter_remove_idx(int *head, int *tail, int target_idx)
 {
     if (target_idx < 0)
@@ -404,6 +431,68 @@ int pal_poller_unwatch(int pfd, int fd, uint32_t events)
     (void)pfd;
     (void)fd;
     (void)events;
+    return -1;
+#endif
+}
+
+int pal_poller_unwatch_waiter(int pfd, int fd, uint32_t events, void *udata)
+{
+#if defined(PAL_USE_KQUEUE) || defined(PAL_USE_EPOLL)
+    if (udata == NULL)
+        return -1;
+    watch_lock();
+    PalWatch *w = watch_find(pfd, fd);
+    if (w == NULL) {
+        watch_unlock();
+        return -1;
+    }
+    int had_read = (w->read_head >= 0);
+    int had_write = (w->write_head >= 0);
+    int found = 0;
+    if (events & PAL_POLL_READ)
+        found |= waiter_remove_udata(&w->read_head, &w->read_tail, udata);
+    if (events & PAL_POLL_WRITE)
+        found |= waiter_remove_udata(&w->write_head, &w->write_tail, udata);
+    if (!found) {
+        watch_unlock();
+        return -1;
+    }
+    int rc = 0;
+#if defined(PAL_USE_KQUEUE)
+    if (w->read_head < 0 && w->write_head < 0) {
+        struct kevent kevs[2];
+        int n = 0;
+        if (had_read) {
+            EV_SET(&kevs[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+        }
+        if (had_write) {
+            EV_SET(&kevs[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+        }
+        if (n > 0)
+            rc = kevent(pfd, kevs, n, NULL, 0, NULL);
+        watch_free(w);
+    }
+    /* Otherwise the surviving direction keeps its registration; a pending
+       ONESHOT fire for the emptied direction pops nothing and is not
+       re-armed. */
+#elif defined(PAL_USE_EPOLL)
+    if (w->read_head < 0 && w->write_head < 0) {
+        rc = epoll_ctl(pfd, EPOLL_CTL_DEL, fd, NULL);
+        watch_free(w);
+    } else {
+        struct epoll_event ev;
+        ev.events = watch_events_of(w);
+        ev.data.u64 = watch_encode(w);
+        rc = epoll_ctl(pfd, EPOLL_CTL_MOD, fd, &ev);
+    }
+#endif
+    watch_unlock();
+    return rc;
+#else
+    (void)pfd;
+    (void)fd;
+    (void)events;
+    (void)udata;
     return -1;
 #endif
 }
