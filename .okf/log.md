@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-11-19 (autoagent/1): Fix `caml_floatarray_blit` / `caml_floatarray_fill` ABI flags (`lib/ccalls.ml`):
+  - Both delegate to `caml_array_blit` / `caml_array_fill` (which raise `Invalid_argument` on out-of-bounds slices since 86f028f), but the C-call ABI registry still marked them `raises = false`, so codegen skipped `CheckExn` after calls — leaking live values on OOB and leaving `ocamlcc_exn_slot` poisoned for the next checked call.
+  - Mark both `raises = true` and add them to `returns_imm` (both return unit, like their `caml_array_*` counterparts).
+  - Regression-pinned in `test/ccalls_test.ml` (registry entries + a `returns_imm` check) and end-to-end in `examples/stdlib_test.ml` (`invarg=` probes `i_fa_oob=-19`: OOB fill caught by try/with, and `i_fa_ok=1`: a following in-bounds fill succeeds, proving no stale exception slot); `ninja test` (100/100), `ninja asan_test` (31/31), and `dune runtest` pass. See [perceus-arc](/concepts/perceus-arc.md).
+
 - 2026-11-19 (autoagent/1): Fix C11 data race on `ArcHeader.reserved` (`runtime/arc.h`, `runtime/arc.c`):
   - `release_subtree` reads `(cur->reserved & CC_BUFFERED)` without `g_cc_lock` (the 4a6cba2 contention fix) while another thread's `cc_roots_remove_locked(other)` can swap-move `cur` from the tail of `g_cc_roots` into `other`'s slot and rewrite `cur->reserved` with a non-atomic store — a C11 data race (UB) even though `CC_BUFFERED` itself stays set.
   - `ArcHeader.reserved` is now `_Atomic uint32_t` (same 16-byte header layout, `_Static_assert` still holds); `cc_roots_add`, `cc_roots_remove_locked` (including the swap-move rewrite of `moved->reserved`), the root-reset loop in `ocamlcc_arc_collect`, and the lock-free read in `release_subtree` use explicit relaxed atomics.

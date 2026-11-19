@@ -67,6 +67,10 @@ let stdlib_abis =
     ("caml_hash", 4, false, false);
     ("caml_blit_bytes", 5, true, false);
     ("caml_blit_string", 5, true, false);
+    (* floatarray blit/fill delegate to caml_array_blit/caml_array_fill, which
+       raise Invalid_argument on out-of-bounds slices, and return unit. *)
+    ("caml_floatarray_blit", 5, true, false);
+    ("caml_floatarray_fill", 4, true, false);
     ("caml_fill_bytes", 4, true, false);
     ("caml_string_equal", 2, false, false);
     ("caml_string_notequal", 2, false, false);
@@ -118,6 +122,18 @@ let () =
   else begin
     Printf.printf "unknown external default: FAIL got {raises=%b; yields=%b}\n"
       unknown.Ccalls.raises unknown.Ccalls.yields;
+    incr failures
+  end;
+  (* Unit-returning floatarray blit/fill share caml_array_blit/fill's ABI:
+     immediate (unit) returns, so call sites skip retain/release bookkeeping. *)
+  let imm_ok =
+    Ccalls.returns_imm "caml_floatarray_blit"
+    && Ccalls.returns_imm "caml_floatarray_fill"
+    && not (Ccalls.returns_imm "caml_floatarray_sub")
+  in
+  if imm_ok then Printf.printf "floatarray unit ccalls imm: PASS\n"
+  else begin
+    Printf.printf "floatarray unit ccalls imm: FAIL\n";
     incr failures
   end;
   if Ccalls.is_known "ocamlcc_weak_get" && not (Ccalls.is_known "my_user_ffi")

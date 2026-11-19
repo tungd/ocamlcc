@@ -254,8 +254,8 @@ let table =
     ("caml_floatarray_sub", abi 3 true false);
     ("caml_floatarray_append", abi 2 true false);
     ("caml_floatarray_concat", abi 1 true false);
-    ("caml_floatarray_blit", abi 5 false false);
-    ("caml_floatarray_fill", abi 4 false false);
+    ("caml_floatarray_blit", abi 5 true false);
+    ("caml_floatarray_fill", abi 4 true false);
     ("caml_floatarray_make", abi 2 true false);
     ("caml_exp_float", abi 1 false false);
     ("caml_exp2_float", abi 1 false false);
@@ -396,6 +396,7 @@ let returns_imm = function
   | "caml_final_release"
   | "caml_string_length" | "caml_bytes_length" | "caml_array_length"
   | "caml_array_blit" | "caml_array_fill"
+  | "caml_floatarray_blit" | "caml_floatarray_fill"
   | "caml_blit_bytes" | "caml_blit_string" | "caml_fill_bytes"
   | "caml_int_compare" | "caml_equal" | "caml_notequal" | "caml_compare"
   | "caml_lessthan" | "caml_lessequal" | "caml_greaterthan" | "caml_greaterequal"

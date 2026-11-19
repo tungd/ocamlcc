@@ -2,6 +2,8 @@ external arc_live : unit -> int = "ocamlcc_arc_live"
 external arc_collect : unit -> int = "ocamlcc_arc_collect"
 external ocamlcc_pipe : unit -> int * int = "ocamlcc_pipe"
 external ocamlcc_fd_read : int -> bytes -> int -> int -> int = "ocamlcc_fd_read"
+external fa_fill : float array -> int -> int -> float -> unit
+  = "caml_floatarray_fill"
 
 type cyc = { mutable cnxt : cyc option; cv : int }
 
@@ -224,8 +226,22 @@ let run () =
     try Bytes.unsafe_fill bsrc 6 4 'z'; 0
     with Invalid_argument _ -> -18
   in
-  Printf.printf "invarg=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n"
-    i1 i2 i3 i4 i5 i6 i7 i8 i9 i10 i11 i12 i13 i14 i15 i16 i_un i_blit i_fill;
+  (* floatarray blit/fill are registered raising ccalls: an out-of-bounds
+     fill must be caught by the enclosing try/with (CheckExn emitted), and
+     must not poison the exception slot for the next checked call (the
+     in-bounds fill below must succeed). *)
+  let fa = [| 1.0; 2.0; 3.0 |] in
+  let i_fa_oob =
+    try fa_fill fa 1 5 9.0; 0
+    with Invalid_argument _ -> -19
+  in
+  let i_fa_ok =
+    try fa_fill fa 0 3 1.5; 1
+    with Invalid_argument _ -> -20
+  in
+  Printf.printf "invarg=%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n"
+    i1 i2 i3 i4 i5 i6 i7 i8 i9 i10 i11 i12 i13 i14 i15 i16 i_un i_blit i_fill
+    i_fa_oob i_fa_ok;
 
   (* compare contract: cyclic structures raise Invalid_argument instead of
      recursing forever; exception constructor ids compare structurally

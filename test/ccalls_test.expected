@@ -37,6 +37,8 @@ caml_greaterequal: registered
 caml_hash: registered
 caml_blit_bytes: registered
 caml_blit_string: registered
+caml_floatarray_blit: registered
+caml_floatarray_fill: registered
 caml_fill_bytes: registered
 caml_string_equal: registered
 caml_string_notequal: registered
@@ -75,4 +77,5 @@ caml_fmod_float: registered
 caml_copysign_float: registered
 caml_classify_float: registered
 unknown external default: PASS
+floatarray unit ccalls imm: PASS
 is_known: PASS
