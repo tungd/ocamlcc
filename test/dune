@@ -76,6 +76,24 @@
   (diff yield_imm_test.expected yield_imm_test.actual)))
 
 (executable
+ (name alloc8_hoist_test)
+ (modules alloc8_hoist_test)
+ (libraries ocamlcc))
+
+(rule
+ (alias runtest)
+ (deps alloc8_hoist_test.exe alloc8_hoist_test.expected)
+ (action
+  (with-stdout-to alloc8_hoist_test.actual
+   (run ./alloc8_hoist_test.exe))))
+
+(rule
+ (alias runtest)
+ (deps alloc8_hoist_test.actual alloc8_hoist_test.expected)
+ (action
+  (diff alloc8_hoist_test.expected alloc8_hoist_test.actual)))
+
+(executable
  (name ccalls_test)
  (modules ccalls_test)
  (libraries ocamlcc))

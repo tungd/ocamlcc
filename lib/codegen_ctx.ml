@@ -34,6 +34,7 @@ type handler = {
 type fn_state = {
   mutable open_label : string;
   mutable insts : inst list;   (* reversed *)
+  mutable start_allocs : inst list; (* reversed, hoisted to @start *)
   mutable term : term option;
   mutable blocks : block list; (* reversed, closed blocks *)
   mutable fn_params : (ty * string) list;
@@ -68,6 +69,7 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
     ?(in_init = false) () =
   { open_label = "start";
     insts = [];
+    start_allocs = [];
     term = None;
     blocks = [];
     fn_params = [];
@@ -159,6 +161,24 @@ let fresh_label b base =
 let emit b inst =
   if b.cur_fn.term <> None then invalid_arg "codegen: instruction after terminator";
   b.cur_fn.insts <- inst :: b.cur_fn.insts
+
+(* Hoist fixed-size alloc8 slots to @start so QBE treats them as static frame
+   slots rather than dynamic alloca inside loops or tail-recursive @loop. *)
+let emit_start_alloc b dst bytes =
+  b.cur_fn.start_allocs <-
+    Alloc8 (dst, Int (Int64.of_int bytes)) :: b.cur_fn.start_allocs
+
+let finish_blocks b =
+  let allocs = List.rev b.cur_fn.start_allocs in
+  let blocks = List.rev b.cur_fn.blocks in
+  if allocs = [] then blocks
+  else
+    List.map
+      (fun blk ->
+        if String.equal blk.label "start" then
+          { blk with insts = allocs @ blk.insts }
+        else blk)
+      blocks
 
 let close_block b term =
   match b.cur_fn.term with

@@ -488,7 +488,7 @@ let apply_closure b clos_val (arg_vals : t list) : t =
   | 4 -> call_helper "ocamlcc_apply4" arg_vals
   | _ ->
       let arr = fresh_temp b "argv" in
-      emit b (Alloc8 (arr, Int (Int64.of_int (8 * n))));
+      emit_start_alloc b arr (8 * n);
       List.iteri
         (fun i v ->
           let addr = ptr_offset b arr (8 * i) "argp" in
@@ -683,7 +683,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
           arr
       | Lambda.Pgenarray when n > 0 ->
           let buf = fresh_temp b "gbuf" in
-          emit b (Alloc8 (buf, Int (Int64.of_int (8 * n))));
+          emit_start_alloc b buf (8 * n);
           List.iteri
             (fun i v ->
               let addr = ptr_offset b buf (8 * i) "gbufp" in
@@ -1053,7 +1053,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   | MutLet (id, ce, body) ->
       let v = compile_cexpr hooks b ~tail:false ce in
       let slot = fresh_temp b "mslot" in
-      emit b (Alloc8 (slot, Int 8L));
+      emit_start_alloc b slot 8;
       emit b (Store (Storel, v, slot));
       Hashtbl.replace b.mut_vars id slot;
       let res = compile_aexpr hooks b tail body in

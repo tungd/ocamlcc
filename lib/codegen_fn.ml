@@ -169,7 +169,7 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
               export = not has_closure;
               retty = Some Long;
               params = b.cur_fn.fn_params;
-              blocks = List.rev b.cur_fn.blocks }
+              blocks = finish_blocks b }
           in
           b.funcs <- func :: b.funcs));
   g
@@ -242,7 +242,7 @@ let compile_group compile_aexpr b gname (members : (Ident.t * Anf.lfunction) lis
           export = true;
           retty = Some Long;
           params = b.cur_fn.fn_params;
-          blocks = List.rev b.cur_fn.blocks }
+          blocks = finish_blocks b }
       in
       b.funcs <- func :: b.funcs)
 

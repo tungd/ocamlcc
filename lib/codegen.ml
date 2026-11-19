@@ -105,7 +105,7 @@ let compile_program ?(emit_entry = true) (program : Anf.program) :
       export = true;
       retty = None;
       params = [];
-      blocks = List.rev b.cur_fn.blocks }
+      blocks = finish_blocks b }
   in
   let funcs =
     if emit_entry then
