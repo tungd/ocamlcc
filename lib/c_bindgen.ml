@@ -254,17 +254,26 @@ let translate_signature ~modname sg env =
   let local_types : (string, c_type) Hashtbl.t = Hashtbl.create 16 in
   let decls_rev = ref [] in
   let seen_header_decls = Hashtbl.create 16 in
+  let seen_types = Hashtbl.create 16 in
+  let seen_vals = Hashtbl.create 16 in
+  let check_unique tbl kind name =
+    if Hashtbl.mem tbl name then
+      failwith (Printf.sprintf "C identifier collision for %s `%s`" kind name);
+    Hashtbl.add tbl name ()
+  in
   let header_decls_rev = ref [] in
   let rec register_decl = function
     | CT_opaque cname ->
         if not (Hashtbl.mem seen_header_decls cname) then begin
           Hashtbl.add seen_header_decls cname ();
+          check_unique seen_types "type" cname;
           header_decls_rev := HD_opaque cname :: !header_decls_rev
         end
     | CT_record r ->
         if not (Hashtbl.mem seen_header_decls r.ri_cname) then begin
           List.iter (fun rf -> register_decl rf.rf_type) r.ri_fields;
           Hashtbl.add seen_header_decls r.ri_cname ();
+          check_unique seen_types "type" r.ri_cname;
           header_decls_rev := HD_record r :: !header_decls_rev
         end
     | CT_option inner ->
@@ -409,8 +418,10 @@ let translate_signature ~modname sg env =
             List.iter register_decl params;
             let ret = resolve_type ~direct:true ~ctx raw_ret in
             register_decl ret;
+            let cname = sanitize_c vname in
+            check_unique seen_vals "value" cname;
             vals_rev :=
-              { ev_name = sanitize_c vname;
+              { ev_name = cname;
                 ev_slot = cur_slot;
                 ev_params = params;
                 ev_ret = ret;
@@ -547,7 +558,7 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
   let p fmt = Printf.bprintf b fmt in
   let mod_sym = sanitize_c modname in
   p "#include \"%s\"\n" header_include;
-  p "#include <stdlib.h>\n#include <string.h>\n\n";
+  p "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n";
   p "#if defined(__GNUC__) || defined(__clang__)\n";
   p "#define OCAMLCC_UNUSED __attribute__((unused))\n";
   p "#else\n#define OCAMLCC_UNUSED\n#endif\n\n";
@@ -574,6 +585,9 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
   p "extern int64_t ocamlcc_apply_n(int64_t clos, int64_t argc, int64_t *argv);\n\n";
   p "extern void ocamlcc_init_%s(void);\n" mod_sym;
   p "extern int64_t ocamlcc_global_%s;\n\n" mod_sym;
+  p "OCAMLCC_UNUSED static inline int ocamlcc_shim_int_fits(int64_t n) {\n";
+  p "    return n >= -(INT64_C(1) << 62) && n <= ((INT64_C(1) << 62) - 1);\n";
+  p "}\n\n";
   p "static inline int64_t ocamlcc_shim_tag_int(int64_t n) {\n";
   p "    return (int64_t)(((uint64_t)n << 1) | 1ull);\n";
   p "}\n\n";
@@ -811,15 +825,30 @@ let emit_shim ~uses_views ~modname ~mod_prefix ~header_include decls vals =
       p "%s %s_%s(%s) {\n" (c_type_ret ev.ev_ret) mod_prefix ev.ev_name
         (String.concat ", " args);
       p "    int _entered = arc_mutator_enter();\n";
-      p "    const int64_t *mod = (const int64_t *)(uintptr_t)ocamlcc_global_%s;\n"
-        mod_sym;
       let return_error () =
         p "        arc_mutator_leave(_entered);\n";
         match ev.ev_ret with
         | CT_unit -> p "        return;\n"
         | t -> p "        return (%s)%s;\n" (c_type_ret t) (zero_expr t)
       in
+      p "    if (ocamlcc_global_%s == 0 || ocamlcc_global_%s == -2) {\n" mod_sym mod_sym;
+      p "        if (err != NULL) {\n";
+      p "            err->code = 1;\n";
+      p "            snprintf(err->message, sizeof(err->message), \"%s_init() must be called first\");\n" mod_prefix;
+      p "        }\n";
+      return_error ();
+      p "    }\n";
+      p "    const int64_t *mod = (const int64_t *)(uintptr_t)ocamlcc_global_%s;\n"
+        mod_sym;
       List.iteri (fun i -> function
+        | CT_int ->
+            p "    if (!ocamlcc_shim_int_fits(a%d)) {\n" i;
+            p "        if (err != NULL) {\n";
+            p "            err->code = 1;\n";
+            p "            snprintf(err->message, sizeof(err->message), \"argument %d out of 63-bit OCaml int range\");\n" i;
+            p "        }\n";
+            return_error ();
+            p "    }\n"
         | CT_bigarray { rank; kind; layout } ->
             p "    if (!ocamlcc_bigarray_view_matches(a%d, %d, %s, %s)) {\n"
               i (bigarray_rank_arg rank) kind layout;

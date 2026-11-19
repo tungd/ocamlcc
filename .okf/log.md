@@ -1,5 +1,12 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Fix driver, cross-compilation, bindgen shim, and CLI issues (§4):
+  - Fix inverted `--nostdlib` condition (`if cfg.nostdlib then Ok []`) in `lib/driver.ml`; replace predictable `/tmp/ocamlcc_build_<pid>` with `Filename.temp_dir` and make `rm_rf` unlink symlinks without following them (`Unix.lstat`).
+  - Derive `<prefix>-ar` for cross-compilers, pass `-pthread` on Linux and omit `-lm` on Windows, isolate `-headers` for `ios-xcframework` to a dedicated directory containing only the emitted header, add `Win64` and `rv64` context-switch support in `runtime/pal_ctx.S`, and guard `_WIN32` in `caml_sys_os_type`.
+  - Guard uninitialized `ocamlcc_global_<Mod>` and 63-bit `CT_int` range (`ocamlcc_shim_int_fits`) in `lib/c_bindgen.ml`, and reject colliding sanitized C identifiers.
+  - Catch `Sys_error` in `dump_lambda` (`bin/main.ml`).
+  `ninja test` and `ninja asan_test` pass. See [build-pipeline](/concepts/build-pipeline.md).
+
 - 2026-11-19 (antigravity/1): Fix finalizer dispatch stranding, spinlock contention, and runtime edge cases (`runtime/arc.c`, `runtime/builtins.c`, `runtime/bigarray.inc`):
   - Preserve `DISPATCH_READY` in `run_finalizers` when an exception breaks the loop with `pending_finalizers != NULL`.
   - Skip `g_cc_lock` in `release_subtree` when `g_cc_active == 0` and `CC_BUFFERED` is clear; snapshot/retain live channels under `g_chan_lock` in `chan_flush_all_out` and flush outside the lock.

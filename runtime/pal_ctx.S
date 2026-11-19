@@ -38,6 +38,37 @@ CSYM(pal_ctx_swap):
     ldp d14, d15, [x1, #152]
     ret
 
+#elif defined(__x86_64__) && defined(_WIN32)
+    .text
+    .p2align 4
+    .globl CSYM(pal_ctx_swap)
+CSYM(pal_ctx_swap):
+    /* %rcx = PalContext *from, %rdx = PalContext *to (Win64 ABI) */
+    movq %rbx, 0(%rcx)
+    movq %rbp, 8(%rcx)
+    movq %rdi, 16(%rcx)
+    movq %rsi, 24(%rcx)
+    movq %r12, 32(%rcx)
+    movq %r13, 40(%rcx)
+    movq %r14, 48(%rcx)
+    movq %r15, 56(%rcx)
+    leaq 8(%rsp), %rax
+    movq %rax, 64(%rcx)
+    movq 0(%rsp), %rax
+    movq %rax, 72(%rcx)
+
+    movq 0(%rdx), %rbx
+    movq 8(%rdx), %rbp
+    movq 16(%rdx), %rdi
+    movq 24(%rdx), %rsi
+    movq 32(%rdx), %r12
+    movq 40(%rdx), %r13
+    movq 48(%rdx), %r14
+    movq 56(%rdx), %r15
+    movq 64(%rdx), %rsp
+    movq 72(%rdx), %rax
+    jmpq *%rax
+
 #elif defined(__x86_64__)
     .text
     .p2align 4
@@ -64,6 +95,67 @@ CSYM(pal_ctx_swap):
     movq 48(%rsi), %rsp
     movq 56(%rsi), %rcx
     jmpq *%rcx
+
+#elif defined(__riscv) && (__riscv_xlen == 64)
+    .text
+    .p2align 2
+    .globl CSYM(pal_ctx_swap)
+CSYM(pal_ctx_swap):
+    /* a0 = PalContext *from, a1 = PalContext *to */
+    sd s0,   0(a0)
+    sd s1,   8(a0)
+    sd s2,  16(a0)
+    sd s3,  24(a0)
+    sd s4,  32(a0)
+    sd s5,  40(a0)
+    sd s6,  48(a0)
+    sd s7,  56(a0)
+    sd s8,  64(a0)
+    sd s9,  72(a0)
+    sd s10, 80(a0)
+    sd s11, 88(a0)
+    sd ra,  96(a0)
+    sd sp, 104(a0)
+    fsd fs0,  112(a0)
+    fsd fs1,  120(a0)
+    fsd fs2,  128(a0)
+    fsd fs3,  136(a0)
+    fsd fs4,  144(a0)
+    fsd fs5,  152(a0)
+    fsd fs6,  160(a0)
+    fsd fs7,  168(a0)
+    fsd fs8,  176(a0)
+    fsd fs9,  184(a0)
+    fsd fs10, 192(a0)
+    fsd fs11, 200(a0)
+
+    ld s0,   0(a1)
+    ld s1,   8(a1)
+    ld s2,  16(a1)
+    ld s3,  24(a1)
+    ld s4,  32(a1)
+    ld s5,  40(a1)
+    ld s6,  48(a1)
+    ld s7,  56(a1)
+    ld s8,  64(a1)
+    ld s9,  72(a1)
+    ld s10, 80(a1)
+    ld s11, 88(a1)
+    ld ra,  96(a1)
+    ld sp, 104(a1)
+    fld fs0,  112(a1)
+    fld fs1,  120(a1)
+    fld fs2,  128(a1)
+    fld fs3,  136(a1)
+    fld fs4,  144(a1)
+    fld fs5,  152(a1)
+    fld fs6,  160(a1)
+    fld fs7,  168(a1)
+    fld fs8,  176(a1)
+    fld fs9,  184(a1)
+    fld fs10, 192(a1)
+    fld fs11, 200(a1)
+    ret
 #else
 #error "pal_ctx_swap unsupported architecture"
 #endif

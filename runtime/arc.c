@@ -4185,7 +4185,11 @@ int64_t caml_sys_get_config(int64_t ignored)
 {
     (void)ignored;
     int64_t *blk = (int64_t *)arc_alloc(0u, 3u, 24u);
+#if defined(_WIN32)
+    blk[0] = alloc_cstr_z("Win32");
+#else
     blk[0] = alloc_cstr_z("Unix");
+#endif
     blk[1] = tag_int(64);
     blk[2] = 1; /* big_endian = false */
     return (int64_t)(uintptr_t)blk;

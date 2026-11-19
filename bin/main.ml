@@ -216,19 +216,23 @@ let dump_lambda opts =
       2
   | Some file -> (
       let modname = Pipeline.module_name_of_file file in
-      let source = read_file file in
-      match
-        Frontend.compile_implementation ~include_dirs:opts.include_dirs
-          ~nopervasives:opts.nopervasives ~nostdlib:opts.nostdlib
-          ~filename:file ~modname source
-      with
-      | Error { msg } ->
+      match read_file file with
+      | exception Sys_error msg ->
           prerr_endline ("ocamlcc: error: " ^ msg);
           2
-      | Ok program ->
-          Printlambda.lambda Format.std_formatter program.Lambda.code;
-          Format.pp_print_newline Format.std_formatter ();
-          0)
+      | source -> (
+          match
+            Frontend.compile_implementation ~include_dirs:opts.include_dirs
+              ~nopervasives:opts.nopervasives ~nostdlib:opts.nostdlib
+              ~filename:file ~modname source
+          with
+          | Error { msg } ->
+              prerr_endline ("ocamlcc: error: " ^ msg);
+              2
+          | Ok program ->
+              Printlambda.lambda Format.std_formatter program.Lambda.code;
+              Format.pp_print_newline Format.std_formatter ();
+              0))
 
 let bindgen opts =
   match single_input opts with

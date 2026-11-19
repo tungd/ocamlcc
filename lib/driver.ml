@@ -95,12 +95,12 @@ let rec mkdir_p dir =
   end
 
 let rec rm_rf path =
-  if Sys.file_exists path then
-    if Sys.is_directory path then begin
+  match Unix.lstat path with
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
+  | { Unix.st_kind = Unix.S_DIR; _ } ->
       Array.iter (fun e -> rm_rf (Filename.concat path e)) (Sys.readdir path);
-      Sys.rmdir path
-    end
-    else Sys.remove path
+      Unix.rmdir path
+  | _ -> Unix.unlink path
 
 let capture_process prog args stream =
   let read_fd, write_fd = Unix.pipe ~cloexec:true () in
@@ -598,7 +598,26 @@ type toolchain = {
 
 let resolve_toolchain cfg (t : target_spec) : (toolchain, string) result =
   let ar_prog =
-    match cfg.ar_path with Some a -> a | None -> "ar"
+    match cfg.ar_path with
+    | Some a -> a
+    | None -> (
+        match cfg.cc_path with
+        | Some cc ->
+            let base = Filename.basename cc in
+            let dir = Filename.dirname cc in
+            let derive suffix =
+              if String.ends_with ~suffix base then
+                let prefix = String.sub base 0 (String.length base - String.length suffix) in
+                let cand = if dir = "." then prefix ^ "ar" else Filename.concat dir (prefix ^ "ar") in
+                if Sys.file_exists cand then Some cand
+                else find_in_path (prefix ^ "ar")
+              else None
+            in
+            let derived =
+              List.find_map derive [ "-gcc"; "-clang"; "gcc"; "clang" ]
+            in
+            Option.value derived ~default:"ar"
+        | None -> "ar")
   in
   match cfg.cc_path with
   | Some cc ->
@@ -1191,7 +1210,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                                   ~qbe_target:target.qbe_target
                                                   pairs
                                             | Stdlib_none ->
-                                                if not cfg.nostdlib then Ok []
+                                                if cfg.nostdlib then Ok []
                                                 else if
                                                   is_host_default_toolchain cfg
                                                     target
@@ -1415,11 +1434,17 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                                   match vis_res with
                                                   | Error _ as e -> e
                                                   | Ok (link_objs, vis_flags) -> (
+                                                      let os_link_flags =
+                                                        match target.os with
+                                                        | Windows -> []
+                                                        | Linux -> [ "-lm"; "-pthread" ]
+                                                        | Darwin | Ios | Ios_sim | Android -> [ "-lm" ]
+                                                      in
                                                       let link_args =
                                                         tc.cc_base_args
                                                         @ [ "-shared" ]
                                                         @ link_objs @ vis_flags
-                                                        @ [ "-lm" ]
+                                                        @ os_link_flags
                                                         @ cfg.extra_ldflags
                                                         @ [ "-o"; out_path ]
                                                       in
@@ -1430,9 +1455,15 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                                       | Error _ as e -> e
                                                       | Ok () -> Ok out_path))
                                               | Kind_exe -> (
+                                                  let os_link_flags =
+                                                    match target.os with
+                                                    | Windows -> []
+                                                    | Linux -> [ "-lm"; "-pthread" ]
+                                                    | Darwin | Ios | Ios_sim | Android -> [ "-lm" ]
+                                                  in
                                                   let link_args =
                                                     tc.cc_base_args @ all_objs
-                                                    @ [ "-lm" ]
+                                                    @ os_link_flags
                                                     @ cfg.extra_ldflags
                                                     @ [ "-o"; out_path ]
                                                   in
@@ -1454,10 +1485,7 @@ and build (cfg : config) : (string, string) result =
     match cfg.work_dir with
     | Some d -> (d, false)
     | None ->
-        let tmp =
-          Filename.concat (Filename.get_temp_dir_name ())
-            (Printf.sprintf "ocamlcc_build_%d" (Unix.getpid ()))
-        in
+        let tmp = Filename.temp_dir "ocamlcc_build_" "" in
         (tmp, true)
   in
   Fun.protect
@@ -1523,7 +1551,12 @@ and build (cfg : config) : (string, string) result =
                 if Sys.file_exists out_xcf then rm_rf out_xcf;
                 let hdr_args =
                   match eff_emit_header with
-                  | Some h -> [ "-headers"; Filename.dirname h ]
+                  | Some h ->
+                      let xcf_hdr_dir = Filename.concat work_dir "xcf_headers" in
+                      mkdir_p xcf_hdr_dir;
+                      let dst = Filename.concat xcf_hdr_dir (Filename.basename h) in
+                      write_file dst (read_file h);
+                      [ "-headers"; xcf_hdr_dir ]
                   | None -> []
                 in
                 let xcb_args =
