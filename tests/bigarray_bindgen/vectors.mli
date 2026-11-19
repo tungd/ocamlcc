@@ -22,6 +22,7 @@ val nativeint_words : (nativeint, Bigarray.nativeint_elt, Bigarray.c_layout) Big
 val create_int64 : int -> int64_vector
 val create_int32 : int -> int32_vector
 val int32_words : int32_vector -> int32 -> int -> float
+val int32_bit_words : int32_vector -> int -> float
 val int64_words : int64_vector -> int64 -> int -> float
 val save : vector -> unit
 val write_saved : float -> unit

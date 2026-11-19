@@ -221,6 +221,14 @@ static void check_int32_allocations(void)
     for (int i = 0; i < 128; ++i) assert(cells[i] == INT32_MAX - 3 * (i - (i & 1)));
     fprintf(stderr, "int32 arithmetic allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
     assert(full == empty);
+    for (int i = 0; i < 128; ++i) cells[i] = -8;
+    empty = vectors_int32_bit_words(values, 0, &err);
+    assert(!err.code);
+    full = vectors_int32_bit_words(values, 128, &err);
+    assert(!err.code);
+    for (int i = 0; i < 128; ++i) assert(cells[i] == -766);
+    fprintf(stderr, "int32 bit operations allocated words: empty %.0f, 128 elements %.0f\n", empty, full);
+    assert(full == empty);
     ocamlcc_Vectors_view_release(values);
 }
 

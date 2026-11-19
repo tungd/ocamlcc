@@ -86,7 +86,8 @@ type bigarray_access = {
 (* Unboxed scalars are compiler temporaries. Only scalar operations can consume them. *)
 type scalar_rep = Double_scalar | Integer_scalar of Lambda.boxed_integer
 
-type wrapping_arithmetic = Add_int | Sub_int | Mul_int
+type integer_arithmetic = Add_int | Sub_int | Mul_int | And_int | Or_int | Xor_int
+type integer_shift = Left_shift | Logical_right | Arithmetic_right
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
@@ -111,7 +112,9 @@ type cexpr =
   | ScalarStore of bigarray_access * atom * atom * scalar_operand
   | ScalarValue of scalar_rep * scalar_operand
   | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
-  | IntegerBinop of Lambda.boxed_integer * wrapping_arithmetic * scalar_operand * scalar_operand
+  | IntegerBinop of Lambda.boxed_integer * integer_arithmetic * scalar_operand * scalar_operand
+  | IntegerNeg of Lambda.boxed_integer * scalar_operand
+  | IntegerShift of Lambda.boxed_integer * integer_shift * scalar_operand * atom
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
@@ -755,6 +758,8 @@ let scalar_operand_vars acc = function
   | Raw_scalar id -> Ident.Set.add id acc
 
 let cexpr_vars free_aexpr acc = function
+  | IntegerNeg (_, value) -> scalar_operand_vars acc value
+  | IntegerShift (_, _, value, count) -> scalar_operand_vars (atom_vars acc count) value
   | ScalarValue (_, a) -> scalar_operand_vars acc a
   | ScalarLoad (_, a, i) -> atom_vars (atom_vars acc a) i
   | ScalarStore (_, a, i, v) -> scalar_operand_vars (atom_vars (atom_vars acc a) i) v
@@ -900,6 +905,26 @@ let bind_scalar_chain id binding body =
   | Value ce -> Let (id, ce, body)
   | Join rhs -> LetJoin (id, rhs, body)
 
+let specialize_integer_binop kind op lhs rhs =
+  let value = Boxed_scalar lhs in
+  let binary actual op =
+    if actual = kind then Some (IntegerBinop (kind, op, value, Boxed_scalar rhs)) else None
+  in
+  let shift actual op =
+    if actual = kind then Some (IntegerShift (kind, op, value, rhs)) else None
+  in
+  match op with
+  | Bint_add k -> binary k Add_int
+  | Bint_sub k -> binary k Sub_int
+  | Bint_mul k -> binary k Mul_int
+  | Bint_and k -> binary k And_int
+  | Bint_or k -> binary k Or_int
+  | Bint_xor k -> binary k Xor_int
+  | Bint_lsl k -> shift k Left_shift
+  | Bint_lsr k -> shift k Logical_right
+  | Bint_asr k -> shift k Arithmetic_right
+  | _ -> None
+
 (* Walk backwards from scalar consumers. Uses that cross a control-flow
    boundary or need an OCaml value keep the binding boxed. Conflicting
    scalar representations are recorded as a present demand with no choice. *)
@@ -924,18 +949,12 @@ let rec specialize_scalar_chain bindings tail =
           Value (ScalarLoad (access, arr, index)), Ident.Set.add id raw
       | Some Double_scalar, Value (Binop (Float_arithmetic op, lhs, rhs)) ->
           Value (FloatBinop (op, Boxed_scalar lhs, Boxed_scalar rhs)), Ident.Set.add id raw
+      | Some (Integer_scalar kind), Value (Unop (Bint_neg actual, value))
+        when actual = kind ->
+          Value (IntegerNeg (kind, Boxed_scalar value)), Ident.Set.add id raw
       | Some (Integer_scalar kind), Value (Binop (op, lhs, rhs)) ->
-          let wrapping_op =
-            match op with
-            | Bint_add k when k = kind -> Some Add_int
-            | Bint_sub k when k = kind -> Some Sub_int
-            | Bint_mul k when k = kind -> Some Mul_int
-            | _ -> None
-          in
-          (match wrapping_op with
-           | Some op ->
-               Value (IntegerBinop (kind, op, Boxed_scalar lhs, Boxed_scalar rhs)),
-               Ident.Set.add id raw
+          (match specialize_integer_binop kind op lhs rhs with
+           | Some ce -> Value ce, Ident.Set.add id raw
            | None -> binding, raw)
       | Some rep, Join rhs ->
           Join (specialize_conditional rep rhs), Ident.Set.add id raw
@@ -952,6 +971,10 @@ let rec specialize_scalar_chain bindings tail =
       | Value (IntegerBinop (kind, _, lhs, rhs)) ->
           let rep = Integer_scalar kind in
           boxed, demand rep (demand rep scalar lhs) rhs
+      | Value (IntegerNeg (kind, value)) ->
+          boxed, demand (Integer_scalar kind) scalar value
+      | Value (IntegerShift (kind, _, value, count)) ->
+          atom_vars boxed count, demand (Integer_scalar kind) scalar value
       | Value (ScalarValue (rep, value)) -> boxed, demand rep scalar value
       | Value ce -> cexpr_vars free_vars boxed ce, scalar
       | Join rhs -> Ident.Set.union boxed (free_vars rhs), scalar
@@ -973,6 +996,9 @@ let rec specialize_scalar_chain bindings tail =
       | Value (FloatBinop (op, lhs, rhs)) -> Value (FloatBinop (op, operand lhs, operand rhs))
       | Value (IntegerBinop (kind, op, lhs, rhs)) ->
           Value (IntegerBinop (kind, op, operand lhs, operand rhs))
+      | Value (IntegerNeg (kind, value)) -> Value (IntegerNeg (kind, operand value))
+      | Value (IntegerShift (kind, op, value, count)) ->
+          Value (IntegerShift (kind, op, operand value, count))
       | Value (ScalarValue (rep, v)) -> Value (ScalarValue (rep, operand v))
       | _ -> binding
     in

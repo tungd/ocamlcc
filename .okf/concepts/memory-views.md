@@ -256,7 +256,9 @@ because the intermediate is a double. With 128 elements it measured 3 ARC
 words after specialization, down from 1155. The Fortran test also checks
 rounding at the store, signed zero, NaN, and a bounds exception.
 For a known C or Fortran layout, int32, int64, and nativeint Array1 stores can consume
-unboxed loads and straight-line addition, subtraction, and multiplication.
+unboxed loads, addition, subtraction, multiplication, negation, bitwise
+and/or/xor, and shifts. The 128-element int32 bitwise and shift fixture fell
+from 3075 to 3 ARC words.
 The arithmetic wraps at 32 or 64 bits according to the element kind.
 Nativeint uses 64 bits on the supported targets.
 Bounds exceptions and boxed values that escape through ordinary OCaml calls

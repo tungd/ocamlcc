@@ -186,9 +186,8 @@ let compile_bint_div_mod b bi qop (av : t) (cv : t) : t =
          [ (lok_end, res_ok); (lm1_end, res_m1); (lzero_end, unit_const) ] ));
   dst
 
-let compile_bint_shift b bi qop av cv : t =
+let compile_raw_bint_shift b bi qop ua cv : t =
   let ty, _, mask = bint_spec bi in
-  let ua = unbox_bint b bi av in
   let uc = untag b cv in
   let shw = fresh_temp b "shw" in
   emit b (Copy (Word, shw, uc));
@@ -196,7 +195,10 @@ let compile_bint_shift b bi qop av cv : t =
   emit b (Binop (And, Word, shm, shw, Int mask));
   let res = fresh_temp b "bsh" in
   emit b (Binop (qop, ty, res, ua, shm));
-  box_bint b bi res
+  res
+
+let compile_bint_shift b bi qop av cv =
+  box_bint b bi (compile_raw_bint_shift b bi qop (unbox_bint b bi av) cv)
 
 let compile_fcmp b (cmp : Lambda.float_comparison) da db : t =
   let fop, negate =
@@ -942,10 +944,27 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let r = compile_scalar_operand hooks b rep rhs in
       let qop = match op with
         | Add_int -> Binop.Add | Sub_int -> Binop.Sub | Mul_int -> Binop.Mul
+        | And_int -> Binop.And | Or_int -> Binop.Or | Xor_int -> Binop.Xor
       in
       let dst = fresh_temp b "integer_op" in
       emit b (Binop (qop, scalar_type rep, dst, l, r));
       dst
+  | IntegerNeg (kind, value) ->
+      let rep = Anf.Integer_scalar kind in
+      let value = compile_scalar_operand hooks b rep value in
+      let dst = fresh_temp b "integer_neg" in
+      emit b (Binop (Sub, scalar_type rep, dst, Int 0L, value));
+      dst
+  | IntegerShift (kind, op, value, count) ->
+      let value = compile_scalar_operand hooks b (Integer_scalar kind) value in
+      let count = compile_atom hooks b count in
+      let qop =
+        match op with
+        | Left_shift -> Binop.Shl
+        | Logical_right -> Binop.Shr
+        | Arithmetic_right -> Binop.Sar
+      in
+      compile_raw_bint_shift b kind qop value count
   | ScalarStore (access, arr, index, value) ->
       let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
       let rep = Option.get (Anf.scalar_rep access.kind) in

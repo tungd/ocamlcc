@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-19 (codex/1): Specialize negation, bitwise operations, and all three shift forms for integer Array1 expressions. The int32 fixture fell from 3075 to 3 ARC words. See [memory views](/concepts/memory-views.md).
+
 - 2026-11-19 (codex/1): Join scalar int32, int64, and nativeint conditional results at their machine widths. The 128-element loops match the three-word empty-loop control. See [memory views](/concepts/memory-views.md).
 
 - 2026-11-19 (codex/1): Specialize nativeint Array1 loads, stores, and wrapping arithmetic on 64-bit targets. The 128-element loop fell from 1539 to 3 ARC words. See [memory views](/concepts/memory-views.md).

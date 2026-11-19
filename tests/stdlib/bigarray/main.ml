@@ -51,6 +51,10 @@ let conditional_int32 (a : (int32, int32_elt, fortran_layout) Array1.t)
     take_load i fallback =
   a.{2} <- (if take_load then Int32.add a.{i} 1l else fallback ())
 
+let high_bits (a : integers) =
+  let sign = Int64.shift_right_logical a.{2} 63 in
+  a.{3} <- Int64.logxor sign (Int64.shift_left 1L 63)
+
 let add_nativeint (a : (nativeint, nativeint_elt, fortran_layout) Array1.t) i j delta =
   let value = a.{i} in
   a.{j} <- Nativeint.add value delta
@@ -98,6 +102,8 @@ let () =
   let value, capture = store_and_capture_integer integers in
   Gc.full_major ();
   assert (value = Int64.min_int && integers.{2} = value && capture () == value);
+  high_bits integers;
+  assert (integers.{3} = Int64.succ Int64.min_int);
   let narrow = Array1.of_array int32 fortran_layout [|Int32.max_int; 7l|] in
   add_int32 narrow 1 2 1l;
   assert (Int32.to_int narrow.{2} = -2147483648);

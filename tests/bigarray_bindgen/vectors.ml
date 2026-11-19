@@ -57,6 +57,16 @@ let int32_words (a : int32_vector) delta n =
   done;
   Gc.minor_words () -. before
 
+let int32_bit_words (a : int32_vector) n =
+  let before = Gc.minor_words () in
+  for i = 0 to n - 1 do
+    let x = a.{i} in
+    let low = Int32.logand (Int32.shift_right x 2) 255l in
+    let high = Int32.logxor (Int32.shift_right_logical x 30) 1l in
+    a.{i} <- Int32.neg (Int32.logor low (Int32.shift_left high 8))
+  done;
+  Gc.minor_words () -. before
+
 let int64_words (a : int64_vector) delta n =
   let before = Gc.minor_words () in
   for i = 0 to n - 1 do

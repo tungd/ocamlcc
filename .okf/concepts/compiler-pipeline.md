@@ -100,7 +100,8 @@ the typed load and store helpers. Float32 converts at the buffer boundary. Inlin
 result out of ARC ownership tracking. See [memory views](/concepts/memory-views.md).
 
 Int32, int64, and nativeint Array1 stores also propagate scalar demand through
-straight-line loads and wrapping add, subtract, and multiply. These produce
+straight-line loads, wrapping arithmetic, negation, bitwise operations, and
+shifts. These produce
 QBE words for int32 and longs for int64 and nativeint. A scalar-only
 conditional result uses a phi of the same width. ARC releases any boxed
 branch operand after the compiler extracts its scalar value. The
