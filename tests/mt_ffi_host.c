@@ -2,11 +2,13 @@
  * OCaml functions sharing a closure, allocating/dropping ARC objects,
  * using Weak.t, raising/catching exceptions, and running fibers. */
 #include "../runtime/arc.h"
+#include <assert.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <unistd.h>
 
 extern void ocamlcc_init_Stdlib(void);
 extern void ocamlcc_init_Mt_ffi_lib(void);
@@ -345,6 +347,46 @@ cleanup:
     arc_mutator_leave(entered);
 }
 
+extern void arc_fiber_push(int64_t);
+extern void arc_fiber_pop(int64_t);
+extern void arc_fiber_push_reuse(void *);
+extern void arc_fiber_pop_reuse(int64_t);
+extern int64_t ocamlcc_fiber_sleep_ms(int64_t);
+
+static void *tls_exit_worker(void *p)
+{
+    (void)p;
+    arc_fiber_push(1);
+    arc_fiber_pop(1);
+    arc_fiber_push_reuse(NULL);
+    arc_fiber_pop_reuse(1);
+    ocamlcc_fiber_sleep_ms((1ll << 1) | 1ll);
+    return NULL;
+}
+
+static int test_thread_exit_tls_cleanup(void)
+{
+    int base_fd = dup(0);
+    if (base_fd < 0)
+        return 0;
+    close(base_fd);
+
+    for (int i = 0; i < 32; i++) {
+        pthread_t th;
+        if (pthread_create(&th, NULL, tls_exit_worker, NULL) != 0)
+            return 0;
+        pthread_join(th, NULL);
+    }
+
+    int after_fd = dup(0);
+    if (after_fd < 0)
+        return 0;
+    close(after_fd);
+    if (after_fd >= base_fd + 8)
+        fprintf(stderr, "base_fd=%d after_fd=%d\n", base_fd, after_fd);
+    return after_fd < base_fd + 8;
+}
+
 int main(void)
 {
     ocamlcc_init_Stdlib();
@@ -371,6 +413,11 @@ int main(void)
 
     test_custom_leaf_collect_race();
     test_mutex_cond_collect_race();
+
+    if (!test_thread_exit_tls_cleanup()) {
+        fputs("worker thread exit leaked poller fd\n", stderr);
+        return 1;
+    }
 
     _Atomic int stop_collector = 0;
     pthread_t collector;

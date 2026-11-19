@@ -6,6 +6,9 @@
 
 #include "arc.h"
 
+#include <pthread.h>
+#include <stdlib.h>
+
 #define FIBER_STACK_BYTES (256u * 1024u)
 #define SHADOW_INIT_BYTES (16u * 1024u)
 
@@ -19,28 +22,83 @@ typedef struct SchedState {
     int    main_io_ready;
 } SchedState;
 
-static _Thread_local Fiber tls_main_fiber = {
-    .c_stack = NULL,
-    .c_stack_bytes = 0,
-    .shadow_base = NULL,
-    .shadow_sp = NULL,
-    .shadow_end = NULL,
-    .caller = NULL,
-    .entry_closure = 0,
-    .result = 0,
-    .exn_slot = 0,
-    .pending_exn = 0,
-    .wake_ns = 0,
-    .wait_fd = -1,
-    .wait_events = 0,
-    .is_scheduled = 0,
-    .waiter_head = NULL,
-    .sched_next = NULL,
-    .state = FIBER_RUNNING
-};
+typedef struct FiberThreadState {
+    Fiber      main_fiber;
+    SchedState sched;
+} FiberThreadState;
 
-static _Thread_local Fiber     *tls_current_fiber = NULL;
-static _Thread_local SchedState tls_sched = { NULL, NULL, NULL, NULL, -1, 0, 0 };
+static _Thread_local FiberThreadState *tls_state = NULL;
+static _Thread_local Fiber            *tls_current_fiber = NULL;
+
+static pthread_once_t g_fiber_tls_once = PTHREAD_ONCE_INIT;
+static pthread_key_t  g_fiber_tls_key;
+static int            g_fiber_tls_key_ok = 0;
+
+static void fiber_free_buffers(Fiber *f)
+{
+    if (f->reuse_base != NULL) {
+        while (f->reuse_sp > f->reuse_base) {
+            f->reuse_sp--;
+            arc_free_reuse(*f->reuse_sp);
+        }
+        size_t rbytes = (size_t)(f->reuse_end - f->reuse_base) * sizeof(void *);
+        pal_page_free(f->reuse_base, rbytes);
+        f->reuse_base = NULL;
+        f->reuse_sp = NULL;
+        f->reuse_end = NULL;
+    }
+    if (f->shadow_base != NULL) {
+        while (f->shadow_sp > f->shadow_base) {
+            f->shadow_sp--;
+            arc_release_val((int64_t)*f->shadow_sp);
+        }
+        size_t sbytes = (size_t)(f->shadow_end - f->shadow_base) * sizeof(uint64_t);
+        pal_page_free(f->shadow_base, sbytes);
+        f->shadow_base = NULL;
+        f->shadow_sp = NULL;
+        f->shadow_end = NULL;
+    }
+}
+
+static void fiber_tls_cleanup(void *arg)
+{
+    FiberThreadState *s = (FiberThreadState *)arg;
+    if (s == NULL)
+        return;
+    fiber_free_buffers(&s->main_fiber);
+    if (s->sched.poller_fd >= 0) {
+        pal_poller_close(s->sched.poller_fd);
+        s->sched.poller_fd = -1;
+    }
+    free(s);
+}
+
+static void fiber_tls_key_init(void)
+{
+    if (pthread_key_create(&g_fiber_tls_key, fiber_tls_cleanup) == 0)
+        g_fiber_tls_key_ok = 1;
+}
+
+static FiberThreadState *fiber_thread_state(void)
+{
+    FiberThreadState *s = tls_state;
+    if (s != NULL)
+        return s;
+    s = (FiberThreadState *)calloc(1, sizeof(FiberThreadState));
+    if (s == NULL)
+        pal_abort();
+    s->main_fiber.wait_fd = -1;
+    s->main_fiber.state = FIBER_RUNNING;
+    s->sched.poller_fd = -1;
+    tls_state = s;
+    pthread_once(&g_fiber_tls_once, fiber_tls_key_init);
+    if (g_fiber_tls_key_ok)
+        (void)pthread_setspecific(g_fiber_tls_key, s);
+    return s;
+}
+
+#define tls_main_fiber (fiber_thread_state()->main_fiber)
+#define tls_sched      (fiber_thread_state()->sched)
 
 Fiber *arc_fiber_current(void)
 {
@@ -138,28 +196,7 @@ void fiber_destroy(Fiber *f)
 {
     if (f == NULL || f == &tls_main_fiber)
         return;
-    if (f->reuse_base != NULL) {
-        while (f->reuse_sp > f->reuse_base) {
-            f->reuse_sp--;
-            arc_free_reuse(*f->reuse_sp);
-        }
-        size_t rbytes = (size_t)(f->reuse_end - f->reuse_base) * sizeof(void *);
-        pal_page_free(f->reuse_base, rbytes);
-        f->reuse_base = NULL;
-        f->reuse_sp = NULL;
-        f->reuse_end = NULL;
-    }
-    if (f->shadow_base != NULL) {
-        while (f->shadow_sp > f->shadow_base) {
-            f->shadow_sp--;
-            arc_release_val((int64_t)*f->shadow_sp);
-        }
-        size_t sbytes = (size_t)(f->shadow_end - f->shadow_base) * sizeof(uint64_t);
-        pal_page_free(f->shadow_base, sbytes);
-        f->shadow_base = NULL;
-        f->shadow_sp = NULL;
-        f->shadow_end = NULL;
-    }
+    fiber_free_buffers(f);
     if (f->entry_closure != 0) {
         int64_t clos = f->entry_closure;
         f->entry_closure = 0;

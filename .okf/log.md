@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-19 (antigravity/1): Fix per-thread `mmap` and poller fd leaks on OS thread exit (`runtime/fiber.c`): move `tls_main_fiber` and `tls_sched` into a `FiberThreadState` registered with a `pthread_key_create` destructor (`fiber_tls_cleanup`) so exiting worker threads free `shadow_base`/`reuse_base` and close `poller_fd` without touching `_Thread_local` after TLS teardown. Regression-tested in `tests/mt_ffi_host.c` (`test_thread_exit_tls_cleanup`); `ninja test` and `ninja asan_test` pass. See [wren-fibers](/concepts/wren-fibers.md).
+
 - 2026-11-19 (antigravity/1): Fix ARC ownership leaks in `arc_pass.ml`, over-application, and module init:
   (1) release `env.muts - env.no_release_muts` on tail-position `While`/`For` exits;
   (2) track `target_live` in `StaticCatch` and drop dead `frame_borrowed` variables at `StaticRaise`;
