@@ -298,6 +298,26 @@ def build_stage(
 
     # 2. compiler-libs.common (108 .mli + 104 .ml)
     comp_src = src_dir / "compiler-libs"
+    comp_ml = comp_src / "compression.ml"
+    if comp_ml.exists():
+        ctxt = comp_ml.read_text(encoding="utf-8")
+        needle = "let compression_supported = zstd_initialize ()"
+        if needle in ctxt and "CamlinternalMarshal.register_codec" not in ctxt:
+            comp_ml.write_text(
+                ctxt.replace(
+                    needle,
+                    'external ocamlcc_zstd_compress_bytes : bytes -> bytes -> int = "ocamlcc_zstd_compress_bytes"\n'
+                    'external ocamlcc_zstd_decompress_bytes : bytes -> int -> int -> bytes -> int = "ocamlcc_zstd_decompress_bytes"\n\n'
+                    "let compression_supported =\n"
+                    "  let ok = zstd_initialize () in\n"
+                    "  if ok then\n"
+                    "    CamlinternalMarshal.register_codec\n"
+                    "      ~compress:(fun src _len dst -> ocamlcc_zstd_compress_bytes src dst)\n"
+                    "      ~decompress:ocamlcc_zstd_decompress_bytes;\n"
+                    "  ok",
+                ),
+                encoding="utf-8",
+            )
     comp_out = stage_dir / "compiler-libs"
     comp_out.mkdir(parents=True, exist_ok=True)
     mli_order: list[str] = manifest["mli_order"]
@@ -732,6 +752,7 @@ def validate_stage2(compiler: Path, stage2_dir: Path, qbe: Path, qbe_target: str
         ("camlinternalFormatBasics", "camlinternalFormatBasics.ml", []),
         ("camlinternalIntFmt", "camlinternalIntFmt.ml", []),
         ("camlinternalBulkOps", "camlinternalBulkOps.ml", []),
+        ("camlinternalMarshal", "camlinternalMarshal.ml", []),
         ("stdlib__option", "stdlib__option.ml", []),
         ("stdlib__result", "stdlib__result.ml", []),
         ("stdlib__int32", "stdlib__int32.ml", []),

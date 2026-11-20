@@ -523,3 +523,43 @@ static uint32_t ba_hash(const ArcBigarray *a)
     }
     return h;
 }
+
+int64_t ocamlcc_ba_info(int64_t ba_val)
+{
+    const ArcBigarray *a = (const ArcBigarray *)(uintptr_t)ba_val;
+    int64_t *dims = (int64_t *)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, (uint32_t)(a->ndims * 8));
+    for (int i = 0; i < a->ndims; i++)
+        dims[i] = tag_int(a->dims[i]);
+    int64_t *tup = (int64_t *)arc_alloc(0u, 3u, 24u);
+    tup[0] = tag_int((int64_t)a->kind);
+    tup[1] = tag_int((int64_t)a->layout);
+    tup[2] = (int64_t)(uintptr_t)dims;
+    return (int64_t)(uintptr_t)tup;
+}
+
+int64_t ocamlcc_ba_read_bytes(int64_t ba_val)
+{
+    const ArcBigarray *a = (const ArcBigarray *)(uintptr_t)ba_val;
+    size_t n = ba_count(a) * (size_t)ba_sizes[a->kind];
+    char *buf = (char *)arc_alloc_bytes((uint64_t)n);
+    if (n > 0u)
+        pal_memcpy(buf, a->data, n);
+    return (int64_t)(uintptr_t)buf;
+}
+
+int64_t ocamlcc_ba_of_bytes(int64_t kind_val, int64_t layout_val, int64_t dims_val, int64_t raw_val)
+{
+    int64_t ba = caml_ba_create(kind_val, layout_val, dims_val);
+    if (ocamlcc_get_exn() != 0)
+        return 1;
+    ArcBigarray *a = (ArcBigarray *)(uintptr_t)ba;
+    const ArcHeader *rh = (const ArcHeader *)(uintptr_t)raw_val - 1;
+    size_t need = ba_count(a) * (size_t)ba_sizes[a->kind];
+    if ((size_t)rh->reserved != need) {
+        arc_release_val(ba);
+        return ba_invalid("Marshal.from_bytes: bigarray byte length mismatch");
+    }
+    if (need > 0u)
+        pal_memcpy(a->data, (const void *)(uintptr_t)raw_val, need);
+    return ba;
+}

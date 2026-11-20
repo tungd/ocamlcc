@@ -6,6 +6,90 @@ let fa_fill = Array.fill
 
 type cyc = { mutable cnxt : cyc option; cv : int }
 
+let test_marshal_hardening () =
+  let rle_compress src len dst =
+    let i = ref 0 in
+    let o = ref 0 in
+    let dcap = Bytes.length dst in
+    let ok = ref true in
+    while !ok && !i < len do
+      let b = Bytes.unsafe_get src !i in
+      let run = ref 1 in
+      while !i + !run < len && Bytes.unsafe_get src (!i + !run) = b && !run < 255 do
+        incr run
+      done;
+      if !o + 2 > dcap then ok := false
+      else begin
+        Bytes.unsafe_set dst !o (char_of_int !run);
+        Bytes.unsafe_set dst (!o + 1) b;
+        o := !o + 2;
+        i := !i + !run
+      end
+    done;
+    if !ok then !o else -1
+  in
+  let rle_decompress src ofs slen dst =
+    if slen land 1 <> 0 then -1
+    else
+      let dlen = Bytes.length dst in
+      let o = ref 0 in
+      let ok = ref true in
+      let i = ref 0 in
+      while !ok && !i < slen do
+        let run = int_of_char (Bytes.unsafe_get src (ofs + !i)) in
+        let b = Bytes.unsafe_get src (ofs + !i + 1) in
+        if run = 0 || !o + run > dlen then ok := false
+        else begin
+          Bytes.fill dst !o run b;
+          o := !o + run;
+          i := !i + 2
+        end
+      done;
+      if !ok && !o = dlen then 0 else -1
+  in
+  let shared = String.make 64 'A' in
+  let pair = ((shared, shared), String.make 200 'Z') in
+  CamlinternalMarshal.clear_codec ();
+  let uncomp = CamlinternalMarshal.to_bytes pair [ 3 ] in
+  assert (int_of_char (Bytes.get uncomp 3) = 0xbe);
+  CamlinternalMarshal.register_codec ~compress:rle_compress ~decompress:rle_decompress;
+  let comp = CamlinternalMarshal.to_bytes pair [ 3 ] in
+  let clen = Bytes.length comp in
+  assert (clen >= 16 && clen < 100 && int_of_char (Bytes.get comp 3) = 0xbd);
+  assert (CamlinternalMarshal.data_size_unsafe comp 0 + 16 = clen);
+  let ((d1, d2), dz) = CamlinternalMarshal.from_bytes_unsafe comp 0 in
+  assert (d1 == d2 && dz = snd pair);
+  (* Absolute 0-based IDs in compressed 0x8495a6bd stream *)
+  let raw_dag = Bytes.of_string "\xa0\x24ABCD\x04\x01" in
+  let cbuf = Bytes.create 64 in
+  let cpay = rle_compress raw_dag (Bytes.length raw_dag) cbuf in
+  assert (cpay > 0);
+  let wire = Bytes.create (10 + cpay) in
+  Bytes.blit_string "\x84\x95\xa6\xbd\x0a" 0 wire 0 5;
+  Bytes.set wire 5 (char_of_int cpay);
+  Bytes.set wire 6 (char_of_int (Bytes.length raw_dag));
+  Bytes.set wire 7 '\002';
+  Bytes.set wire 8 '\006';
+  Bytes.set wire 9 '\006';
+  Bytes.blit cbuf 0 wire 10 cpay;
+  let (s1, s2) = CamlinternalMarshal.from_bytes_unsafe wire 0 in
+  assert (s1 == s2 && s1 = "ABCD");
+  (* Truncations & corrupt headers fail cleanly with zero leaks *)
+  for i = 0 to clen - 1 do
+    let sub = Bytes.sub comp 0 i in
+    try ignore (CamlinternalMarshal.from_bytes_unsafe sub 0); assert false
+    with Failure _ | Invalid_argument _ -> ()
+  done;
+  CamlinternalMarshal.clear_codec ();
+  (try ignore (CamlinternalMarshal.from_bytes_unsafe comp 0); assert false
+   with Failure _ -> ());
+  (* No_sharing rejects cycles instead of infinite recursion *)
+  let cyc = { cnxt = None; cv = 7 } in
+  cyc.cnxt <- Some cyc;
+  (try ignore (CamlinternalMarshal.to_bytes cyc [ 0 ]); assert false
+   with Invalid_argument _ -> ());
+  cyc.cnxt <- None
+
 let run () =
   (* Option *)
   let o1 = Option.bind (Option.map (fun x -> x * 3) (Some 7)) (fun x -> Some (x + 1)) in
@@ -317,6 +401,7 @@ let run () =
     'a' '\'' '"' '\\' '\n' '\255'
     "a\"'\\\n\t\r\b\000\255" "a\nb";
   Printf.eprintf "err=%d,%s\n" 42 "ok";
+  test_marshal_hardening ();
   print_string "nul:a\000b\n";
   print_char '\000';
   print_endline "after-nul-char"

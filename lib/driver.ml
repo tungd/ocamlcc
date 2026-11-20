@@ -738,6 +738,7 @@ let stdlib_ordered_units =
   [ "camlinternalFormatBasics.ml";
     "camlinternalIntFmt.ml";
     "camlinternalBulkOps.ml";
+    "camlinternalMarshal.ml";
     "stdlib__option.ml";
     "stdlib__result.ml";
     "stdlib__bytes.ml";

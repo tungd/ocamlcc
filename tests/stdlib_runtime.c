@@ -10,18 +10,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-extern int64_t caml_input_value_from_bytes(int64_t, int64_t);
-extern int64_t caml_output_value_to_bytes(int64_t, int64_t);
-extern int64_t caml_output_value(int64_t, int64_t, int64_t);
-extern int64_t caml_marshal_data_size(int64_t, int64_t);
 extern int64_t caml_ba_create(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_sub(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_set_1(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_get_1(int64_t, int64_t);
 extern int64_t caml_obj_dup(int64_t);
 extern int64_t caml_obj_with_tag(int64_t, int64_t);
-extern int64_t caml_output_value_to_buffer(int64_t, int64_t, int64_t, int64_t, int64_t);
-extern int64_t caml_input_value(int64_t);
 extern int64_t caml_ml_open_descriptor_in(int64_t);
 extern int64_t caml_ml_open_descriptor_out(int64_t);
 extern int64_t caml_ml_close_channel(int64_t);
@@ -96,61 +90,6 @@ static void clear_exception(void)
 {
     int64_t ex = ocamlcc_get_exn(); assert(ex);
     ocamlcc_set_exn(0); arc_release_val(ex);
-}
-static int64_t stream(const unsigned char *payload, size_t n, unsigned objects)
-{
-    unsigned char *p = arc_alloc_bytes(20 + n);
-    memset(p, 0, 20);
-    p[0] = 0x84; p[1] = 0x95; p[2] = 0xa6; p[3] = 0xbe;
-    p[7] = (unsigned char)n; p[11] = (unsigned char)objects;
-    p[15] = 8; p[19] = 8;
-    memcpy(p + 20, payload, n);
-    return (int64_t)(uintptr_t)p;
-}
-static void test_partial_cycle(void)
-{
-    int64_t before = arc_live_objects();
-    /* tuple(ref(self), <invalid code pointer>) creates a cycle before error */
-    const unsigned char payload[] = {0xa0, 0x90, 0x04, 0x01, 0x10};
-    int64_t bytes = stream(payload, sizeof(payload), 2);
-    caml_input_value_from_bytes(bytes, 1); clear_exception();
-    arc_release_val(bytes);
-    assert(arc_live_objects() == before);
-}
-static void test_complete_cycle(void)
-{
-    int64_t before = arc_live_objects();
-    const unsigned char payload[] = {0x90, 0x04, 0x01};
-    int64_t bytes = stream(payload, sizeof(payload), 1);
-    int64_t v = caml_input_value_from_bytes(bytes, 1);
-    assert(!ocamlcc_get_exn()); assert(((int64_t *)(uintptr_t)v)[0] == v);
-    arc_release_val(bytes); arc_release_val(v);
-    ocamlcc_arc_collect(1);
-    assert(arc_live_objects() == before);
-}
-static void test_truncation_and_mutation(void)
-{
-    int64_t before = arc_live_objects();
-    int64_t *root = arc_alloc_array(2, 1);
-    root[0] = tagged(42); root[1] = (int64_t)(uintptr_t)arc_alloc_bytes(50);
-    memset((void *)(uintptr_t)root[1], 'a', 50);
-    int64_t good = caml_output_value_to_bytes((int64_t)(uintptr_t)root, 1);
-    assert(!ocamlcc_get_exn());
-    size_t n = ((ArcHeader *)(uintptr_t)good - 1)->reserved;
-    for (size_t i = 0; i < n; i++) {
-        void *p = arc_alloc_bytes(i); memcpy(p, (void *)(uintptr_t)good, i);
-        caml_input_value_from_bytes((int64_t)(uintptr_t)p, 1); clear_exception(); arc_release(p);
-    }
-    for (size_t i = 20; i < n; i++) {
-        for (unsigned byte = 0; byte < 256; byte += 17) {
-            unsigned char *p = arc_alloc_bytes(n); memcpy(p, (void *)(uintptr_t)good, n); p[i] = byte;
-            int64_t value = caml_input_value_from_bytes((int64_t)(uintptr_t)p, 1);
-            if (ocamlcc_get_exn()) clear_exception(); else arc_release_val(value);
-            arc_release(p);
-        }
-    }
-    arc_release_val(good); arc_release(root); ocamlcc_arc_collect(1);
-    assert(arc_live_objects() == before);
 }
 static void test_view_lifetime(void)
 {
@@ -501,15 +440,7 @@ static void test_bounds_and_marshal_dos(void)
     char *buf = arc_alloc_bytes(8);
     memset(buf, 'A', 8);
 
-    /* 1. Marshal.to_buffer bounds: negative offset, negative length, and overflow. */
-    caml_output_value_to_buffer((int64_t)(uintptr_t)buf, tagged(-1), tagged(4), tagged(42), 1);
-    clear_exception();
-    caml_output_value_to_buffer((int64_t)(uintptr_t)buf, tagged(0), tagged(-1), tagged(42), 1);
-    clear_exception();
-    caml_output_value_to_buffer((int64_t)(uintptr_t)buf, tagged(6), tagged(4), tagged(42), 1);
-    clear_exception();
-
-    /* 2. caml_ml_output_bytes and caml_ml_input bounds. */
+    /* caml_ml_output_bytes and caml_ml_input bounds. */
     int fds[2];
     assert(pipe(fds) == 0);
     int64_t ch_in = caml_ml_open_descriptor_in(tagged(fds[0]));
@@ -524,44 +455,10 @@ static void test_bounds_and_marshal_dos(void)
     caml_ml_input(ch_in, (int64_t)(uintptr_t)buf, tagged(6), tagged(4));
     clear_exception();
 
-    /* 4. caml_input_value with a 4 GB header on a truncated pipe must not OOM/abort. */
-    uint8_t huge_hdr[20] = {
-        0x84, 0x95, 0xa6, 0xbe, /* magic */
-        0xff, 0xff, 0xff, 0x00, /* length ~= 4 GB */
-        0x00, 0x00, 0x00, 0x01, /* objects */
-        0x00, 0x00, 0x00, 0x01, /* words32 */
-        0x00, 0x00, 0x00, 0x01  /* words64 */
-    };
-    assert(write(fds[1], huge_hdr, sizeof(huge_hdr)) == (ssize_t)sizeof(huge_hdr));
     caml_ml_close_channel(ch_out);
     arc_release_val(ch_out);
-
-    caml_input_value(ch_in);
-    clear_exception();
     caml_ml_close_channel(ch_in);
     arc_release_val(ch_in);
-
-    /* 5. m_read_bigarray failure must not leak caml_ba_create's exception. */
-    uint8_t bad_ba[] = {
-        0x84, 0x95, 0xa6, 0xbe,
-        0x00, 0x00, 0x00, 0x18, /* length = 24 */
-        0x00, 0x00, 0x00, 0x01, /* objects = 1 */
-        0x00, 0x00, 0x00, 0x01, /* words32 = 1 */
-        0x00, 0x00, 0x00, 0x01, /* words64 = 1 */
-        0x12,                   /* CODE_CUSTOM */
-        '_', 'b', 'i', 'g', 'a', 'r', 'r', 'a', 'y', '\0',
-        0x00, 0x00, 0x00, 0x01, /* ndims = 1 */
-        0x00, 0x00, 0x00, 0x63, /* invalid kind = 99 (triggers caml_ba_create error if reached, or kind=0 + bad flags) */
-        0x00, 0x00, 0x00, 0x00  /* dim[0] = 0 */
-    };
-    /* Note: kind=0, layout=0x200 (invalid layout=2 -> triggers caml_ba_create exn) */
-    bad_ba[37] = 0x02;
-    bad_ba[38] = 0x00;
-    char *ba_bytes = arc_alloc_bytes(sizeof(bad_ba));
-    memcpy(ba_bytes, bad_ba, sizeof(bad_ba));
-    caml_input_value_from_bytes((int64_t)(uintptr_t)ba_bytes, tagged(0));
-    clear_exception();
-    arc_release(ba_bytes);
 
     arc_release(buf);
     assert(arc_live_objects() == before);
@@ -1062,208 +959,6 @@ static void test_bigarray_channel_io(void)
     assert(arc_live_objects() == before);
 }
 
-/* Simple deterministic RLE codec for testing 0x8495a6bd Marshal framing
-   without linking libzstd into libocamlrt.a. Format: pairs (count, byte). */
-static int test_rle_compress(const uint8_t *src, size_t src_len,
-                             uint8_t *dst, size_t dst_cap, size_t *out_len)
-{
-    size_t i = 0, o = 0;
-    while (i < src_len) {
-        uint8_t b = src[i];
-        size_t run = 1;
-        while (i + run < src_len && src[i + run] == b && run < 255u)
-            run++;
-        if (o + 2u > dst_cap)
-            return -1;
-        dst[o++] = (uint8_t)run;
-        dst[o++] = b;
-        i += run;
-    }
-    *out_len = o;
-    return 0;
-}
-
-static int test_rle_decompress(const uint8_t *src, size_t src_len,
-                               uint8_t *dst, size_t dst_len)
-{
-    if ((src_len & 1u) != 0u)
-        return -1;
-    size_t o = 0;
-    for (size_t i = 0; i < src_len; i += 2u) {
-        size_t run = src[i];
-        uint8_t b = src[i + 1u];
-        if (run == 0u || o + run > dst_len)
-            return -1;
-        memset(dst + o, b, run);
-        o += run;
-    }
-    return (o == dst_len) ? 0 : -1;
-}
-
-static void test_compressed_marshal_hooks(void)
-{
-    int64_t before = arc_live_objects();
-
-    /* Highly compressible value with shared sub-objects: ((s, s), 200 bytes of 'Z'). */
-    char *shared_s = arc_alloc_bytes(64);
-    memset(shared_s, 'A', 64);
-    int64_t *inner = arc_alloc(0u, 2u, 16u);
-    arc_retain(shared_s);
-    arc_retain(shared_s);
-    inner[0] = (int64_t)(uintptr_t)shared_s;
-    inner[1] = (int64_t)(uintptr_t)shared_s;
-    arc_release(shared_s);
-
-    int64_t *pair = arc_alloc(0u, 2u, 16u);
-    pair[0] = (int64_t)(uintptr_t)inner;
-    char *s = arc_alloc_bytes(200);
-    memset(s, 'Z', 200);
-    pair[1] = (int64_t)(uintptr_t)s;
-
-    /* flags = [Compression] (tag/int 3 :: []). */
-    int64_t *flags = arc_alloc(0u, 2u, 16u);
-    flags[0] = tagged(3);
-    flags[1] = 1;
-
-    /* 1. Without a registered codec, Compression falls back to 0x8495a6be. */
-    ocamlcc_marshal_register_codec(NULL, NULL);
-    int64_t uncomp = caml_output_value_to_bytes((int64_t)(uintptr_t)pair,
-                                                (int64_t)(uintptr_t)flags);
-    assert(!ocamlcc_get_exn());
-    const uint8_t *ub = (const uint8_t *)(uintptr_t)uncomp;
-    assert(ub[0] == 0x84u && ub[1] == 0x95u && ub[2] == 0xa6u && ub[3] == 0xbeu);
-    arc_release_val(uncomp);
-
-    /* 2. With the RLE test codec registered, Compression emits 0x8495a6bd. */
-    ocamlcc_marshal_register_codec(test_rle_decompress, test_rle_compress);
-    int64_t comp = caml_output_value_to_bytes((int64_t)(uintptr_t)pair,
-                                              (int64_t)(uintptr_t)flags);
-    assert(!ocamlcc_get_exn());
-    size_t comp_total = ((const ArcHeader *)(uintptr_t)comp - 1)->reserved;
-    const uint8_t *cb = (const uint8_t *)(uintptr_t)comp;
-    assert(comp_total >= 16u && comp_total < 100u);
-    assert(cb[0] == 0x84u && cb[1] == 0x95u && cb[2] == 0xa6u && cb[3] == 0xbdu);
-
-    /* 3. Marshal.data_size matches total_size - 16. */
-    int64_t dsz = caml_marshal_data_size(comp, tagged(0));
-    assert(!ocamlcc_get_exn());
-    assert((dsz >> 1) + 16 == (int64_t)comp_total);
-
-    /* 4. Round-trip via caml_input_value_from_bytes (and verify sharing preserved). */
-    int64_t dec = caml_input_value_from_bytes(comp, tagged(0));
-    assert(!ocamlcc_get_exn());
-    assert(caml_compare(dec, (int64_t)(uintptr_t)pair) == tagged(0));
-    int64_t *dec_pair = (int64_t *)(uintptr_t)dec;
-    int64_t *dec_inner = (int64_t *)(uintptr_t)dec_pair[0];
-    assert(dec_inner[0] == dec_inner[1]);
-    arc_release_val(dec);
-
-    /* 4b. Compressed format must use 0-based absolute object IDs (per OCaml 5.5
-       intern.c #4056): decode an OCaml 5.5 compressed stream of (s, s) where
-       the second reference is CODE_SHARED8(1), NOT relative distance 1; and a
-       root self-cycle CODE_SHARED8(0) must decode to itself. */
-    {
-        /* Uncompressed payload for (x, x) with x = "ABCD" using absolute id 1:
-           0xa0 (block tag=0, size=2 -> id 0),
-           0x24 'A' 'B' 'C' 'D' (small string len 4 -> id 1),
-           0x04 0x01 (CODE_SHARED8 absolute id 1). */
-        const uint8_t raw_dag[] = { 0xa0u, 0x24u, 'A', 'B', 'C', 'D', 0x04u, 0x01u };
-        uint8_t comp_pay[64];
-        size_t comp_pay_len = 0;
-        assert(test_rle_compress(raw_dag, sizeof(raw_dag), comp_pay, sizeof(comp_pay), &comp_pay_len) == 0);
-        size_t hdr_len = 10u; /* 5 + 5 single-byte VLQs */
-        uint8_t *wire = arc_alloc_bytes(hdr_len + comp_pay_len);
-        wire[0] = 0x84u; wire[1] = 0x95u; wire[2] = 0xa6u; wire[3] = 0xbdu;
-        wire[4] = (uint8_t)hdr_len;
-        wire[5] = (uint8_t)comp_pay_len;
-        wire[6] = (uint8_t)sizeof(raw_dag);
-        wire[7] = 2u;  /* num_objects */
-        wire[8] = 6u;  /* words32 */
-        wire[9] = 6u;  /* words64 */
-        memcpy(wire + hdr_len, comp_pay, comp_pay_len);
-
-        int64_t dag = caml_input_value_from_bytes((int64_t)(uintptr_t)wire, tagged(0));
-        assert(!ocamlcc_get_exn());
-        int64_t *dp = (int64_t *)(uintptr_t)dag;
-        assert(dp[0] == dp[1]);
-        const ArcHeader *sh = (const ArcHeader *)(uintptr_t)dp[0] - 1;
-        assert(sh->tag == ARC_TAG_STRING && sh->reserved == 4u);
-        assert(memcmp((const void *)(uintptr_t)dp[0], "ABCD", 4) == 0);
-        arc_release_val(dag);
-        arc_release(wire);
-
-        /* Self-cycle compressed payload: ref(self) using absolute id 0:
-           0x90 (block tag=0, size=1 -> id 0), 0x04 0x00 (CODE_SHARED8 id 0). */
-        const uint8_t raw_cyc[] = { 0x90u, 0x04u, 0x00u };
-        assert(test_rle_compress(raw_cyc, sizeof(raw_cyc), comp_pay, sizeof(comp_pay), &comp_pay_len) == 0);
-        uint8_t *cwire = arc_alloc_bytes(hdr_len + comp_pay_len);
-        cwire[0] = 0x84u; cwire[1] = 0x95u; cwire[2] = 0xa6u; cwire[3] = 0xbdu;
-        cwire[4] = (uint8_t)hdr_len;
-        cwire[5] = (uint8_t)comp_pay_len;
-        cwire[6] = (uint8_t)sizeof(raw_cyc);
-        cwire[7] = 1u;
-        cwire[8] = 2u;
-        cwire[9] = 2u;
-        memcpy(cwire + hdr_len, comp_pay, comp_pay_len);
-
-        int64_t cyc = caml_input_value_from_bytes((int64_t)(uintptr_t)cwire, tagged(0));
-        assert(!ocamlcc_get_exn());
-        assert(((int64_t *)(uintptr_t)cyc)[0] == cyc);
-        arc_release_val(cyc);
-        arc_release(cwire);
-        ocamlcc_arc_collect(1);
-    }
-
-    /* 5. Round-trip via caml_output_value + caml_input_value over a pipe. */
-    int fds[2];
-    assert(pipe(fds) == 0);
-    int64_t ch_out = caml_ml_open_descriptor_out(tagged(fds[1]));
-    int64_t ch_in = caml_ml_open_descriptor_in(tagged(fds[0]));
-    caml_output_value(ch_out, (int64_t)(uintptr_t)pair, (int64_t)(uintptr_t)flags);
-    assert(!ocamlcc_get_exn());
-    caml_ml_flush(ch_out);
-    assert(!ocamlcc_get_exn());
-    int64_t dec_ch = caml_input_value(ch_in);
-    assert(!ocamlcc_get_exn());
-    assert(caml_compare(dec_ch, (int64_t)(uintptr_t)pair) == tagged(0));
-    arc_release_val(dec_ch);
-    caml_ml_close_channel(ch_out);
-    caml_ml_close_channel(ch_in);
-    arc_release_val(ch_out);
-    arc_release_val(ch_in);
-
-    /* 6. Truncations of a compressed stream all fail cleanly with zero leaks. */
-    for (size_t i = 0; i < comp_total; i++) {
-        void *p = arc_alloc_bytes(i);
-        if (i > 0) memcpy(p, cb, i);
-        caml_input_value_from_bytes((int64_t)(uintptr_t)p, tagged(0));
-        clear_exception();
-        arc_release(p);
-    }
-
-    /* 7. Corrupt header byte (top bits set / invalid length) fails cleanly. */
-    uint8_t *bad = arc_alloc_bytes(comp_total);
-    memcpy(bad, cb, comp_total);
-    bad[4] |= 0x40u;
-    caml_input_value_from_bytes((int64_t)(uintptr_t)bad, tagged(0));
-    clear_exception();
-    bad[4] = 9u;
-    caml_input_value_from_bytes((int64_t)(uintptr_t)bad, tagged(0));
-    clear_exception();
-    arc_release(bad);
-
-    /* 8. With codec cleared, decoding a 0x8495a6bd stream fails cleanly. */
-    ocamlcc_marshal_register_codec(NULL, NULL);
-    caml_input_value_from_bytes(comp, tagged(0));
-    clear_exception();
-
-    arc_release_val(comp);
-    arc_release(flags);
-    arc_release(pair);
-    ocamlcc_arc_collect(1);
-    assert(arc_live_objects() == before);
-}
-
 static int64_t sum20_fn(int64_t clos,
                         int64_t a0, int64_t a1, int64_t a2, int64_t a3,
                         int64_t a4, int64_t a5, int64_t a6, int64_t a7,
@@ -1341,7 +1036,7 @@ int main(void)
     test_fiber_robustness();
     test_runtime_3_3();
     test_reachable_words();
-    test_partial_cycle(); test_complete_cycle(); test_truncation_and_mutation(); test_view_lifetime();
+    test_view_lifetime();
     test_retained_c_subview();
     test_c_view_shapes();
     test_import_contract();
@@ -1350,7 +1045,6 @@ int main(void)
     test_destroy_waiter_cleanup();
     test_poller_unwatch_waiter();
     test_tls_cleanup_queued_fibers();
-    test_compressed_marshal_hooks();
     test_high_arity_closure();
     test_string_bytes_rel_compare();
     puts("stdlib runtime: formats, malformed cleanup, cycles, truncation, views");

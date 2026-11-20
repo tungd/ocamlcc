@@ -19,7 +19,7 @@ sources:
   - id: bigarray-runtime
     resource: runtime/bigarray.inc
   - id: marshal-runtime
-    resource: runtime/marshal.inc
+    resource: stdlib/camlinternalMarshal.ml
   - id: api-regressions
     resource: tools/stdlib_regressions.py
   - id: runtime
@@ -72,17 +72,22 @@ and shared sub/slice/reshape/layout views. These helpers
 live in `runtime/bigarray.inc`, included by `arc.c`. C callers can retain a
 subview with its data and dimensions across collection. The public interface
 is documented in [memory views](/concepts/memory-views.md).
-The native stdlib build now compiles all 72/72 modules. Marshal supports
+The native stdlib build now compiles all 75/75 modules. `stdlib/camlinternalMarshal.ml`
+(`--nopervasives`, compiled right after `CamlinternalBulkOps`) implements Marshal
+in pure OCaml over tiny object/bigarray metadata helpers (`ocamlcc_ptr_id`,
+`ocamlcc_marshal_kind`, `ocamlcc_ba_info`/`read_bytes`/`of_bytes`), supporting
 uncompressed standard streams (`0x8495a6be`/`0x8495a6bf`, relative sharing
-distances) and optional hook-backed compressed streams (`0x8495a6bd` with
+distances) and optional OCaml-hook-backed compressed streams (`0x8495a6bd` with
 10–63 byte VLQ headers and 0-based absolute sharing indices per OCaml 5.5
-`extern.c`/`intern.c` via `ocamlcc_marshal_register_codec`, keeping
-`libocamlrt.a` zstd-free unless a host/compiler registers a codec) for integers,
+`extern.c`/`intern.c` via `CamlinternalMarshal.register_codec`, registered by
+`compiler-libs`'s `Compression` over `ocamlcc_zstd_{compress,decompress}_bytes`
+while keeping `libocamlrt.a` zstd-free) for integers,
 ordinary blocks, strings, floats, float arrays, and boxed integers, via
-strings/bytes/buffers/channels. The
-encoder uses an external pointer table and an explicit work stack. The decoder
-registers objects before their fields, retains each backpatch, and owns partial
-nodes until successful return or cleanup. Arrays and ordinary tag-zero blocks
+strings/bytes/buffers/channels (reading channels in bounded 64 KiB chunks so
+malformed multi-GB headers fail cleanly on EOF without OOM). The
+encoder uses an open-addressed pointer map and explicit work stack. The decoder
+registers objects before their fields, severs partial cyclic block edges before
+dropping `owners` on error so ARC reclaims partial graphs without leaks. Arrays and ordinary tag-zero blocks
 share OCaml structural comparison/hash semantics despite their ARC tags.
 Functional values raise `Invalid_argument`, including when `Closures` is set;
 there is no portable native code-pointer registry.

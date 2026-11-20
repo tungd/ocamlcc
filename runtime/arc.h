@@ -166,16 +166,4 @@ int64_t ocamlcc_apply_n_raw(int64_t clos, int64_t argc, int64_t *argv);
 int  arc_mutator_enter(void);
 void arc_mutator_leave(int entered);
 
-/* Optional Marshal compression codec hooks (0x8495a6bd frames).
-   Default NULL keeps libocamlrt.a freestanding with zero zstd dependency;
-   compiler binaries register libzstd codecs at Compression module init. */
-typedef int (*ocamlcc_marshal_decompress_fn)(
-    const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_len);
-typedef int (*ocamlcc_marshal_compress_fn)(
-    const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap, size_t *out_len);
-
-void ocamlcc_marshal_register_codec(
-    ocamlcc_marshal_decompress_fn decompress_fn,
-    ocamlcc_marshal_compress_fn compress_fn);
-
 #endif /* OCAMLCC_ARC_H */

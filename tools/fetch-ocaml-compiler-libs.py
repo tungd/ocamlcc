@@ -347,6 +347,24 @@ def extract_sources(tarball: Path, out_dir: Path) -> dict:
                     read_member(tf, f"{TARBALL_PREFIX}/parsing/lexer.mli")
                 )
                 generate_lexer_ml(tf, comp_dir / "lexer.ml")
+            elif mod == "Compression":
+                mli_member = find_member(names, f"{base}.mli")
+                ml_member = find_member(names, f"{base}.ml")
+                (comp_dir / f"{base}.mli").write_bytes(read_member(tf, mli_member))
+                raw = read_member(tf, ml_member).decode("utf-8")
+                raw = raw.replace(
+                    "let compression_supported = zstd_initialize ()",
+                    'external ocamlcc_zstd_compress_bytes : bytes -> bytes -> int = "ocamlcc_zstd_compress_bytes"\n'
+                    'external ocamlcc_zstd_decompress_bytes : bytes -> int -> int -> bytes -> int = "ocamlcc_zstd_decompress_bytes"\n\n'
+                    "let compression_supported =\n"
+                    "  let ok = zstd_initialize () in\n"
+                    "  if ok then\n"
+                    "    CamlinternalMarshal.register_codec\n"
+                    "      ~compress:(fun src _len dst -> ocamlcc_zstd_compress_bytes src dst)\n"
+                    "      ~decompress:ocamlcc_zstd_decompress_bytes;\n"
+                    "  ok",
+                )
+                (comp_dir / f"{base}.ml").write_text(raw, encoding="utf-8")
             else:
                 mli_member = find_member(names, f"{base}.mli")
                 ml_member = find_member(names, f"{base}.ml")

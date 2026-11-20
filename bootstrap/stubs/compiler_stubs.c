@@ -12,30 +12,40 @@
 
 static int64_t tag_int(int64_t n) { return (int64_t)(((uint64_t)n << 1) | 1u); }
 
-static int ocamlcc_zstd_decompress(const uint8_t *src, size_t src_len,
-                                   uint8_t *dst, size_t dst_len)
-{
-    size_t r = ZSTD_decompress(dst, dst_len, src, src_len);
-    if (ZSTD_isError(r) || r != dst_len)
-        return -1;
-    return 0;
-}
-
-static int ocamlcc_zstd_compress(const uint8_t *src, size_t src_len,
-                                 uint8_t *dst, size_t dst_cap, size_t *out_len)
-{
-    size_t r = ZSTD_compress(dst, dst_cap, src, src_len, ZSTD_CLEVEL_DEFAULT);
-    if (ZSTD_isError(r))
-        return -1;
-    *out_len = r;
-    return 0;
-}
-
 int64_t caml_zstd_initialize(int64_t ignored)
 {
     (void)ignored;
-    ocamlcc_marshal_register_codec(ocamlcc_zstd_decompress, ocamlcc_zstd_compress);
     return tag_int(1); /* true */
+}
+
+int64_t ocamlcc_zstd_compress_bytes(int64_t src_val, int64_t dst_val)
+{
+    const ArcHeader *sh = (const ArcHeader *)(uintptr_t)src_val - 1;
+    const ArcHeader *dh = (const ArcHeader *)(uintptr_t)dst_val - 1;
+    size_t r = ZSTD_compress((void *)(uintptr_t)dst_val, (size_t)dh->reserved,
+                             (const void *)(uintptr_t)src_val, (size_t)sh->reserved,
+                             ZSTD_CLEVEL_DEFAULT);
+    if (ZSTD_isError(r))
+        return tag_int(-1);
+    return tag_int((int64_t)r);
+}
+
+int64_t ocamlcc_zstd_decompress_bytes(int64_t src_val, int64_t src_ofs_val,
+                                      int64_t src_len_val, int64_t dst_val)
+{
+    const ArcHeader *sh = (const ArcHeader *)(uintptr_t)src_val - 1;
+    const ArcHeader *dh = (const ArcHeader *)(uintptr_t)dst_val - 1;
+    int64_t ofs = src_ofs_val >> 1;
+    int64_t slen = src_len_val >> 1;
+    if (ofs < 0 || slen < 0 || (uint64_t)ofs > sh->reserved ||
+        (uint64_t)slen > sh->reserved - (uint64_t)ofs)
+        return tag_int(-1);
+    size_t r = ZSTD_decompress((void *)(uintptr_t)dst_val, (size_t)dh->reserved,
+                               (const uint8_t *)(uintptr_t)src_val + ofs,
+                               (size_t)slen);
+    if (ZSTD_isError(r) || r != (size_t)dh->reserved)
+        return tag_int(-1);
+    return tag_int(0);
 }
 
 int64_t caml_sys_get_stdlib_dirs(int64_t default_dir)

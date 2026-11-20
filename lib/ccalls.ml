@@ -136,13 +136,13 @@ let table =
     ("caml_ml_close_channel", abi 1 true false);
     ("caml_ml_set_binary_mode", abi 2 true false);
     ("caml_ml_set_channel_name", abi 2 false false);
-    ("caml_output_value_to_bytes", abi 2 true false);
-    ("caml_output_value_to_string", abi 2 true false);
-    ("caml_output_value_to_buffer", abi 5 true false);
-    ("caml_input_value_from_bytes", abi 2 true false);
-    ("caml_marshal_data_size", abi 2 true false);
-    ("caml_output_value", abi 3 true false);
-    ("caml_input_value", abi 1 true false);
+    ("ocamlcc_ptr_id", abi 1 false false);
+    ("ocamlcc_marshal_kind", abi 1 false false);
+    ("ocamlcc_ba_info", abi 1 false false);
+    ("ocamlcc_ba_read_bytes", abi 1 false false);
+    ("ocamlcc_ba_of_bytes", abi 4 true false);
+    ("ocamlcc_zstd_compress_bytes", abi 2 false false);
+    ("ocamlcc_zstd_decompress_bytes", abi 4 false false);
     (* obj / hex float / atomic contended *)
     ("caml_obj_tag", abi 1 false false);
     ("caml_hexstring_of_float", abi 3 false false);
@@ -351,6 +351,8 @@ let returns_imm = function
   | "caml_ml_input_int" | "caml_ml_flush" | "caml_ml_close_channel"
   | "ocamlcc_arc_live" | "ocamlcc_arc_reuse" | "ocamlcc_arc_collect"
   | "ocamlcc_arc_slab_count"
+  | "ocamlcc_ptr_id" | "ocamlcc_marshal_kind"
+  | "ocamlcc_zstd_compress_bytes" | "ocamlcc_zstd_decompress_bytes"
   | "caml_ba_dim" | "caml_ba_num_dims" | "caml_ba_kind" | "caml_ba_layout"
   | "caml_ba_set_1" | "caml_ba_set_2" | "caml_ba_set_3" | "caml_ba_set_generic"
   | "caml_terminfo_rows" | "caml_zstd_initialize" ->

@@ -170,6 +170,54 @@ _COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
             "let string_blit = CamlinternalBulkOps.blit_string\n"
             "let bytes_blit = CamlinternalBulkOps.blit_bytes",
         ),
+        (
+            'external marshal_to_channel : out_channel -> \'a -> unit list -> unit\n'
+            '     = "caml_output_value"',
+            "let marshal_to_channel = CamlinternalMarshal.to_channel",
+        ),
+        (
+            'external input_value : in_channel -> \'a = "caml_input_value"',
+            "let input_value = CamlinternalMarshal.from_channel",
+        ),
+    ],
+    "marshal.mli": [
+        (
+            'external to_bytes :\n'
+            '  \'a -> extern_flags list -> bytes = "caml_output_value_to_bytes"',
+            "val to_bytes :\n"
+            "  'a -> extern_flags list -> bytes",
+        ),
+        (
+            'external to_string :\n'
+            '  \'a -> extern_flags list -> string = "caml_output_value_to_string"',
+            "val to_string :\n"
+            "  'a -> extern_flags list -> string",
+        ),
+    ],
+    "marshal.ml": [
+        (
+            'external to_channel: out_channel -> \'a -> extern_flags list -> unit\n'
+            '    = "caml_output_value"\n'
+            'external to_bytes: \'a -> extern_flags list -> bytes\n'
+            '    = "caml_output_value_to_bytes"\n'
+            'external to_string: \'a -> extern_flags list -> string\n'
+            '    = "caml_output_value_to_string"\n'
+            'external to_buffer_unsafe:\n'
+            '      bytes -> int -> int -> \'a -> extern_flags list -> int\n'
+            '    = "caml_output_value_to_buffer"',
+            "let to_channel = CamlinternalMarshal.to_channel\n"
+            "let to_bytes = CamlinternalMarshal.to_bytes\n"
+            "let to_string = CamlinternalMarshal.to_string\n"
+            "let to_buffer_unsafe = CamlinternalMarshal.to_buffer_unsafe",
+        ),
+        (
+            'external from_channel: in_channel -> \'a = "caml_input_value"\n'
+            'external from_bytes_unsafe: bytes -> int -> \'a = "caml_input_value_from_bytes"\n'
+            'external data_size_unsafe: bytes -> int -> int = "caml_marshal_data_size"',
+            "let from_channel = CamlinternalMarshal.from_channel\n"
+            "let from_bytes_unsafe = CamlinternalMarshal.from_bytes_unsafe\n"
+            "let data_size_unsafe = CamlinternalMarshal.data_size_unsafe",
+        ),
     ],
     "bytes.mli": [
         (
@@ -424,6 +472,9 @@ def materialize_sources(
     if "camlinternalIntFmt" in modules and "camlinternalBulkOps" not in modules:
         idx = modules.index("camlinternalIntFmt") + 1
         modules.insert(idx, "camlinternalBulkOps")
+    if "camlinternalBulkOps" in modules and "camlinternalMarshal" not in modules:
+        idx = modules.index("camlinternalBulkOps") + 1
+        modules.insert(idx, "camlinternalMarshal")
     if (vendor_src / "std_exit.ml").exists() or (overlay_dir / "std_exit.ml").exists():
         if "std_exit" not in modules:
             modules.append("std_exit")
@@ -491,7 +542,7 @@ def materialize_sources(
 
 def compflags_for(base: str, ext: str) -> list[str]:
     flags: list[str] = []
-    if base in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "stdlib"):
+    if base in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalMarshal", "stdlib"):
         flags.append("--nopervasives")
     if base == "stdlib" or base.endswith("Labels") or base == "float":
         flags.append("--no-alias-deps")
@@ -528,9 +579,9 @@ def parse_cmi_deps(depend_path: Path, bases: list[str]) -> list[str]:
                         if dep_base not in deps[target_base]:
                             deps[target_base].append(dep_base)
 
-    # Every module besides camlinternalFormatBasics, camlinternalIntFmt, camlinternalBulkOps, and stdlib implicitly opens Stdlib
+    # Every module besides camlinternalFormatBasics, camlinternalIntFmt, camlinternalBulkOps, camlinternalMarshal, and stdlib implicitly opens Stdlib
     for b in bases:
-        if b not in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "stdlib") and "stdlib" in deps:
+        if b not in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalMarshal", "stdlib") and "stdlib" in deps:
             if "stdlib" not in deps[b]:
                 deps[b].append("stdlib")
     if "stdlib" in deps and "camlinternalFormatBasics" in deps:
@@ -542,6 +593,9 @@ def parse_cmi_deps(depend_path: Path, bases: list[str]) -> list[str]:
     if "stdlib" in deps and "camlinternalBulkOps" in deps:
         if "camlinternalBulkOps" not in deps["stdlib"]:
             deps["stdlib"].append("camlinternalBulkOps")
+    if "stdlib" in deps and "camlinternalMarshal" in deps:
+        if "camlinternalMarshal" not in deps["stdlib"]:
+            deps["stdlib"].append("camlinternalMarshal")
 
     order: list[str] = []
     state: dict[str, int] = {}  # 0=unseen, 1=visiting, 2=done

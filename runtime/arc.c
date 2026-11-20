@@ -4860,4 +4860,46 @@ int64_t caml_get_continuation_callstack(int64_t cont, int64_t n)
     return caml_get_current_callstack(tag_int(0));
 }
 
-#include "marshal.inc"
+/* Thin object-introspection helpers for pure OCaml Marshal */
+
+int64_t ocamlcc_ptr_id(int64_t v)
+{
+    if (!is_heap_ptr(v))
+        return tag_int(0);
+    return tag_int((int64_t)((uint64_t)(uintptr_t)v >> 3));
+}
+
+int64_t ocamlcc_marshal_kind(int64_t v)
+{
+    if (!is_heap_ptr(v))
+        return tag_int(-1);
+    const ArcHeader *h = (const ArcHeader *)(uintptr_t)v - 1;
+    uint16_t tag = h->tag;
+    if (tag == (uint16_t)ARC_TAG_CLOSURE || tag == (uint16_t)ARC_TAG_PAP)
+        return tag_int(247);
+    if (tag == (uint16_t)ARC_TAG_FORCING || tag == (uint16_t)ARC_TAG_WEAK ||
+        tag == (uint16_t)ARC_TAG_FIBER || tag == (uint16_t)ARC_TAG_CHANNEL)
+        return tag_int(251);
+    if (tag == (uint16_t)ARC_TAG_ARRAY)
+        return tag_int(0);
+    if (tag == (uint16_t)ARC_TAG_LAZY)
+        return tag_int(246);
+    if (tag == (uint16_t)ARC_TAG_FORWARD)
+        return tag_int(250);
+    if (tag == (uint16_t)ARC_TAG_STRING)
+        return tag_int(252);
+    if (tag == (uint16_t)ARC_TAG_FLOAT)
+        return tag_int(253);
+    if (tag == (uint16_t)ARC_TAG_FLOAT_ARRAY)
+        return tag_int(254);
+    if (tag == (uint16_t)ARC_TAG_CUSTOM) {
+        if (h->reserved == ARC_CUSTOM_INT32) return tag_int(300);
+        if (h->reserved == ARC_CUSTOM_INT64) return tag_int(301);
+        if (h->reserved == ARC_CUSTOM_NATIVEINT) return tag_int(302);
+        if (h->reserved == ARC_CUSTOM_BIGARRAY) return tag_int(306);
+        return tag_int(251);
+    }
+    if (tag > 250u)
+        return tag_int(251);
+    return tag_int((int64_t)tag);
+}

@@ -8,94 +8,43 @@
 #include <unistd.h>
 
 extern int64_t caml_zstd_initialize(int64_t);
+extern int64_t ocamlcc_zstd_compress_bytes(int64_t, int64_t);
+extern int64_t ocamlcc_zstd_decompress_bytes(int64_t, int64_t, int64_t, int64_t);
 extern int64_t caml_sys_get_stdlib_dirs(int64_t);
 extern int64_t caml_sys_time_include_children(int64_t);
 extern int64_t caml_terminfo_rows(int64_t);
-extern int64_t caml_output_value_to_bytes(int64_t, int64_t);
-extern int64_t caml_input_value_from_bytes(int64_t, int64_t);
-extern int64_t caml_input_value(int64_t);
-extern int64_t caml_ml_open_descriptor_in(int64_t);
-extern int64_t caml_ml_close_channel(int64_t);
-extern int64_t caml_ml_input_char(int64_t);
 
 static int64_t tagged(int64_t n) { return (int64_t)(((uint64_t)n << 1) | 1); }
 
-static void test_zstd_roundtrip_and_host_cmi(const char *cmi_path)
+static void test_zstd_roundtrip(void)
 {
     int64_t before = arc_live_objects();
 
     assert(caml_zstd_initialize(1) == tagged(1)); /* true */
     assert(!ocamlcc_get_exn());
 
-    /* 1. Compress & decompress via real libzstd. */
-    int64_t *pair = arc_alloc(0u, 2u, 16u);
-    pair[0] = tagged(12345);
-    char *s = arc_alloc_bytes(512);
-    for (int i = 0; i < 512; i++) s[i] = (char)('A' + (i % 4));
-    pair[1] = (int64_t)(uintptr_t)s;
-
-    int64_t *flags = arc_alloc(0u, 2u, 16u);
-    flags[0] = tagged(3); /* Compression */
-    flags[1] = 1;
-
-    int64_t comp = caml_output_value_to_bytes((int64_t)(uintptr_t)pair,
-                                              (int64_t)(uintptr_t)flags);
+    char *src = arc_alloc_bytes(512);
+    for (int i = 0; i < 512; i++) src[i] = (char)('A' + (i % 4));
+    char *dst = arc_alloc_bytes(1024);
+    int64_t comp_len = ocamlcc_zstd_compress_bytes(
+        (int64_t)(uintptr_t)src, (int64_t)(uintptr_t)dst);
     assert(!ocamlcc_get_exn());
-    const uint8_t *cb = (const uint8_t *)(uintptr_t)comp;
-    size_t clen = ((const ArcHeader *)(uintptr_t)comp - 1)->reserved;
-    assert(clen < 200u);
-    assert(cb[0] == 0x84u && cb[1] == 0x95u && cb[2] == 0xa6u && cb[3] == 0xbdu);
-    size_t hlen = (size_t)(cb[4] & 0x3fu);
+    assert((comp_len & 1) == 1);
+    int64_t clen = comp_len >> 1;
+    assert(clen > 4 && clen < 200);
     /* ZSTD frame magic: 0x28 0xB5 0x2F 0xFD */
-    assert(hlen + 4u <= clen);
-    assert(cb[hlen] == 0x28u && cb[hlen + 1u] == 0xb5u &&
-           cb[hlen + 2u] == 0x2fu && cb[hlen + 3u] == 0xfdu);
+    assert((uint8_t)dst[0] == 0x28u && (uint8_t)dst[1] == 0xb5u &&
+           (uint8_t)dst[2] == 0x2fu && (uint8_t)dst[3] == 0xfdu);
 
-    int64_t dec = caml_input_value_from_bytes(comp, tagged(0));
-    assert(!ocamlcc_get_exn());
-    assert(caml_compare(dec, (int64_t)(uintptr_t)pair) == tagged(0));
+    char *rec = arc_alloc_bytes(512);
+    int64_t rc = ocamlcc_zstd_decompress_bytes(
+        (int64_t)(uintptr_t)dst, tagged(0), comp_len, (int64_t)(uintptr_t)rec);
+    assert(rc == tagged(0));
+    assert(memcmp(src, rec, 512) == 0);
 
-    arc_release_val(dec);
-    arc_release_val(comp);
-    arc_release_val((int64_t)(uintptr_t)flags);
-    arc_release_val((int64_t)(uintptr_t)pair);
-
-    /* 2. Decode a real host OCaml 5.5 zstd-compressed .cmi file! */
-    if (cmi_path != NULL && cmi_path[0] != '\0') {
-        int fd = open(cmi_path, O_RDONLY);
-        assert(fd >= 0);
-        int64_t ch = caml_ml_open_descriptor_in(tagged(fd));
-        /* Skip 12-byte CMI magic ("Caml1999I037"). */
-        char magic[13];
-        for (int i = 0; i < 12; i++) {
-            int64_t c = caml_ml_input_char(ch);
-            assert(!ocamlcc_get_exn());
-            magic[i] = (char)(c >> 1);
-        }
-        magic[12] = '\0';
-        assert(strncmp(magic, "Caml1999I", 9) == 0);
-
-        /* First marshaled value in a .cmi is (cmi_name, cmi_sign). */
-        int64_t name_sign = caml_input_value(ch);
-        assert(!ocamlcc_get_exn());
-        assert((name_sign & 1) == 0);
-        int64_t *ns = (int64_t *)(uintptr_t)name_sign;
-        const char *modname = (const char *)(uintptr_t)ns[0];
-        const ArcHeader *mh = (const ArcHeader *)modname - 1;
-        assert(mh->tag == ARC_TAG_STRING && mh->reserved > 0u);
-        /* Second marshaled value is cmi_crcs, third is cmi_flags. */
-        int64_t crcs = caml_input_value(ch);
-        assert(!ocamlcc_get_exn());
-        int64_t cflags = caml_input_value(ch);
-        assert(!ocamlcc_get_exn());
-
-        arc_release_val(cflags);
-        arc_release_val(crcs);
-        arc_release_val(name_sign);
-        caml_ml_close_channel(ch);
-        arc_release_val(ch);
-    }
-
+    arc_release(rec);
+    arc_release(dst);
+    arc_release(src);
     ocamlcc_arc_collect(1);
     assert(arc_live_objects() == before);
 }
@@ -148,10 +97,9 @@ static void test_compiler_os_stubs(void)
     assert(arc_live_objects() == before);
 }
 
-int main(int argc, char **argv)
+int main(void)
 {
-    const char *cmi = (argc > 1) ? argv[1] : NULL;
-    test_zstd_roundtrip_and_host_cmi(cmi);
+    test_zstd_roundtrip();
     test_compiler_os_stubs();
     puts("compiler_stubs_test: PASS");
     return 0;

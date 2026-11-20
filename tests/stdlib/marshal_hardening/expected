@@ -1,0 +1,15 @@
+partial_cyc:FAIL
+complete_cyc:true
+trunc:true mut:true
+tobuf_neg_off:INV
+tobuf_neg_len:INV
+tobuf_oob:INV
+tobuf_over:FAIL
+chan_trunc:FAIL
+comp_bad_topbits:INV
+comp_bad_hlen:INV
+bad_ba:INV
+clos:INV
+noshare_dag:true
+compat32:FAIL
+sizes:true
