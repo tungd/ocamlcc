@@ -21,7 +21,6 @@
 #define ARC_TAG_CLOSURE     247u
 #define ARC_TAG_WEAK        249u
 #define ARC_TAG_FIBER       250u
-#define ARC_TAG_CHANNEL     251u
 #define ARC_TAG_STRING      252u
 #define ARC_TAG_FLOAT       253u
 #define ARC_TAG_FLOAT_ARRAY 254u

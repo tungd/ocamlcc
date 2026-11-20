@@ -179,6 +179,155 @@ _COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
             'external input_value : in_channel -> \'a = "caml_input_value"',
             "let input_value = CamlinternalMarshal.from_channel",
         ),
+        (
+            "type in_channel\ntype out_channel\n\n"
+            'external open_descriptor_out : int -> out_channel\n'
+            '                             = "caml_ml_open_descriptor_out"\n'
+            'external open_descriptor_in : int -> in_channel = "caml_ml_open_descriptor_in"',
+            "type in_channel = CamlinternalChannel.in_channel\n"
+            "type out_channel = CamlinternalChannel.out_channel\n\n"
+            "let open_descriptor_out = CamlinternalChannel.open_descriptor_out\n"
+            "let open_descriptor_in = CamlinternalChannel.open_descriptor_in",
+        ),
+        (
+            'external set_out_channel_name: out_channel -> string -> unit =\n'
+            '  "caml_ml_set_channel_name"',
+            "let set_out_channel_name = CamlinternalChannel.set_channel_name",
+        ),
+        (
+            'external flush : out_channel -> unit = "caml_ml_flush"\n\n'
+            'external out_channels_list : unit -> out_channel list\n'
+            '                           = "caml_ml_out_channels_list"',
+            "let flush = CamlinternalChannel.flush\n\n"
+            "let out_channels_list = CamlinternalChannel.out_channels_list",
+        ),
+        (
+            'external unsafe_output : out_channel -> bytes -> int -> int -> unit\n'
+            '                       = "caml_ml_output_bytes"\n'
+            'external unsafe_output_string : out_channel -> string -> int -> int -> unit\n'
+            '                              = "caml_ml_output"\n\n'
+            'external output_char : out_channel -> char -> unit = "caml_ml_output_char"',
+            "let unsafe_output = CamlinternalChannel.unsafe_output\n"
+            "let unsafe_output_string = CamlinternalChannel.unsafe_output_string\n\n"
+            "let output_char = CamlinternalChannel.output_char",
+        ),
+        (
+            'external output_byte : out_channel -> int -> unit = "caml_ml_output_char"\n'
+            'external output_binary_int : out_channel -> int -> unit = "caml_ml_output_int"',
+            "let output_byte = CamlinternalChannel.output_byte\n"
+            "let output_binary_int = CamlinternalChannel.output_int",
+        ),
+        (
+            'external seek_out : out_channel -> int -> unit = "caml_ml_seek_out"\n'
+            'external pos_out : out_channel -> int = "caml_ml_pos_out"\n'
+            'external out_channel_length : out_channel -> int = "caml_ml_channel_size"\n'
+            'external close_out_channel : out_channel -> unit = "caml_ml_close_channel"\n'
+            'let close_out oc = flush oc; close_out_channel oc\n'
+            'let close_out_noerr oc =\n'
+            '  (try flush oc with _ -> ());\n'
+            '  (try close_out_channel oc with _ -> ())\n'
+            'external set_binary_mode_out : out_channel -> bool -> unit\n'
+            '                             = "caml_ml_set_binary_mode"\n\n'
+            '(* General input functions *)\n\n'
+            'external set_in_channel_name: in_channel -> string -> unit =\n'
+            '  "caml_ml_set_channel_name"',
+            "let seek_out = CamlinternalChannel.seek_out\n"
+            "let pos_out = CamlinternalChannel.pos_out\n"
+            "let out_channel_length = CamlinternalChannel.channel_size\n"
+            "let close_out_channel = CamlinternalChannel.close_channel\n"
+            "let close_out oc = flush oc; close_out_channel oc\n"
+            "let close_out_noerr oc =\n"
+            "  (try flush oc with _ -> ());\n"
+            "  (try close_out_channel oc with _ -> ())\n"
+            "let set_binary_mode_out = CamlinternalChannel.set_binary_mode\n\n"
+            "(* General input functions *)\n\n"
+            "let set_in_channel_name = CamlinternalChannel.set_channel_name",
+        ),
+        (
+            'external input_char : in_channel -> char = "caml_ml_input_char"\n\n'
+            'external unsafe_input : in_channel -> bytes -> int -> int -> int\n'
+            '                      = "caml_ml_input"',
+            "let input_char = CamlinternalChannel.input_char\n\n"
+            "let unsafe_input = CamlinternalChannel.unsafe_input",
+        ),
+        (
+            'external input_scan_line : in_channel -> int = "caml_ml_input_scan_line"',
+            "let input_scan_line = CamlinternalChannel.input_scan_line",
+        ),
+        (
+            'external input_byte : in_channel -> int = "caml_ml_input_char"\n'
+            'external input_binary_int : in_channel -> int = "caml_ml_input_int"\n'
+            'let input_value = CamlinternalMarshal.from_channel\n'
+            'external seek_in : in_channel -> int -> unit = "caml_ml_seek_in"\n'
+            'external pos_in : in_channel -> int = "caml_ml_pos_in"\n'
+            'external in_channel_length : in_channel -> int = "caml_ml_channel_size"\n'
+            'external close_in : in_channel -> unit = "caml_ml_close_channel"\n'
+            'let close_in_noerr ic = (try close_in ic with _ -> ())\n'
+            'external set_binary_mode_in : in_channel -> bool -> unit\n'
+            '                            = "caml_ml_set_binary_mode"',
+            "let input_byte = CamlinternalChannel.input_byte\n"
+            "let input_binary_int = CamlinternalChannel.input_int\n"
+            "let input_value = CamlinternalMarshal.from_channel\n"
+            "let seek_in = CamlinternalChannel.seek_in\n"
+            "let pos_in = CamlinternalChannel.pos_in\n"
+            "let in_channel_length = CamlinternalChannel.channel_size\n"
+            "let close_in = CamlinternalChannel.close_channel\n"
+            "let close_in_noerr ic = (try close_in ic with _ -> ())\n"
+            "let set_binary_mode_in = CamlinternalChannel.set_binary_mode",
+        ),
+        (
+            '    external seek_out : out_channel -> int64 -> unit = "caml_ml_seek_out_64"\n'
+            '    external pos_out : out_channel -> int64 = "caml_ml_pos_out_64"\n'
+            '    external out_channel_length : out_channel -> int64\n'
+            '                                = "caml_ml_channel_size_64"\n'
+            '    external seek_in : in_channel -> int64 -> unit = "caml_ml_seek_in_64"\n'
+            '    external pos_in : in_channel -> int64 = "caml_ml_pos_in_64"\n'
+            '    external in_channel_length : in_channel -> int64 = "caml_ml_channel_size_64"',
+            "    let seek_out = CamlinternalChannel.seek_out_64\n"
+            "    let pos_out = CamlinternalChannel.pos_out_64\n"
+            "    let out_channel_length = CamlinternalChannel.channel_size_64\n"
+            "    let seek_in = CamlinternalChannel.seek_in_64\n"
+            "    let pos_in = CamlinternalChannel.pos_in_64\n"
+            "    let in_channel_length = CamlinternalChannel.channel_size_64",
+        ),
+    ],
+    "in_channel.ml": [
+        (
+            'external unsafe_input_bigarray :\n'
+            '  t -> _ Bigarray.Array1.t -> int -> int -> int\n'
+            '  = "caml_ml_input_bigarray"',
+            'external _ch_cast_in : t -> CamlinternalChannel.in_channel = "%identity"\n'
+            "let unsafe_input_bigarray ic buf ofs len =\n"
+            "  CamlinternalChannel.unsafe_input_bigarray (_ch_cast_in ic) buf ofs len",
+        ),
+        (
+            'external is_binary_mode : in_channel -> bool = "caml_ml_is_binary_mode"\n\n'
+            'external isatty : t -> bool = "caml_sys_isatty"',
+            'external _ch_cast_in2 : in_channel -> CamlinternalChannel.in_channel = "%identity"\n'
+            "let is_binary_mode ic = CamlinternalChannel.is_binary_mode (_ch_cast_in2 ic)\n\n"
+            "let isatty ic = CamlinternalChannel.isatty (_ch_cast_in2 ic)",
+        ),
+    ],
+    "out_channel.ml": [
+        (
+            'external unsafe_output_bigarray :\n'
+            '  t -> _ Bigarray.Array1.t -> int -> int -> unit\n'
+            '  = "caml_ml_output_bigarray"',
+            'external _ch_cast_out : t -> CamlinternalChannel.out_channel = "%identity"\n'
+            "let unsafe_output_bigarray oc buf ofs len =\n"
+            "  CamlinternalChannel.unsafe_output_bigarray (_ch_cast_out oc) buf ofs len",
+        ),
+        (
+            'external is_binary_mode : out_channel -> bool = "caml_ml_is_binary_mode"\n\n'
+            'external set_buffered : t -> bool -> unit = "caml_ml_set_buffered"\n\n'
+            'external is_buffered : t -> bool = "caml_ml_is_buffered"\n\n'
+            'external isatty : t -> bool = "caml_sys_isatty"',
+            'external _ch_cast_out2 : out_channel -> CamlinternalChannel.out_channel = "%identity"\n'
+            "let is_binary_mode oc = CamlinternalChannel.is_binary_mode (_ch_cast_out2 oc)\n\n"
+            "let set_buffered oc b = CamlinternalChannel.set_buffered (_ch_cast_out2 oc) b\n\n"
+            "let is_buffered oc = CamlinternalChannel.is_buffered (_ch_cast_out2 oc)\n\n"
+            "let isatty oc = CamlinternalChannel.isatty (_ch_cast_out2 oc)",
+        ),
     ],
     "marshal.mli": [
         (
@@ -472,8 +621,11 @@ def materialize_sources(
     if "camlinternalIntFmt" in modules and "camlinternalBulkOps" not in modules:
         idx = modules.index("camlinternalIntFmt") + 1
         modules.insert(idx, "camlinternalBulkOps")
-    if "camlinternalBulkOps" in modules and "camlinternalMarshal" not in modules:
+    if "camlinternalBulkOps" in modules and "camlinternalChannel" not in modules:
         idx = modules.index("camlinternalBulkOps") + 1
+        modules.insert(idx, "camlinternalChannel")
+    if "camlinternalChannel" in modules and "camlinternalMarshal" not in modules:
+        idx = modules.index("camlinternalChannel") + 1
         modules.insert(idx, "camlinternalMarshal")
     if (vendor_src / "std_exit.ml").exists() or (overlay_dir / "std_exit.ml").exists():
         if "std_exit" not in modules:
@@ -542,7 +694,7 @@ def materialize_sources(
 
 def compflags_for(base: str, ext: str) -> list[str]:
     flags: list[str] = []
-    if base in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalMarshal", "stdlib"):
+    if base in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalChannel", "camlinternalMarshal", "stdlib"):
         flags.append("--nopervasives")
     if base == "stdlib" or base.endswith("Labels") or base == "float":
         flags.append("--no-alias-deps")
@@ -579,9 +731,9 @@ def parse_cmi_deps(depend_path: Path, bases: list[str]) -> list[str]:
                         if dep_base not in deps[target_base]:
                             deps[target_base].append(dep_base)
 
-    # Every module besides camlinternalFormatBasics, camlinternalIntFmt, camlinternalBulkOps, camlinternalMarshal, and stdlib implicitly opens Stdlib
+    # Every module besides camlinternalFormatBasics, camlinternalIntFmt, camlinternalBulkOps, camlinternalChannel, camlinternalMarshal, and stdlib implicitly opens Stdlib
     for b in bases:
-        if b not in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalMarshal", "stdlib") and "stdlib" in deps:
+        if b not in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalChannel", "camlinternalMarshal", "stdlib") and "stdlib" in deps:
             if "stdlib" not in deps[b]:
                 deps[b].append("stdlib")
     if "stdlib" in deps and "camlinternalFormatBasics" in deps:
@@ -593,9 +745,15 @@ def parse_cmi_deps(depend_path: Path, bases: list[str]) -> list[str]:
     if "stdlib" in deps and "camlinternalBulkOps" in deps:
         if "camlinternalBulkOps" not in deps["stdlib"]:
             deps["stdlib"].append("camlinternalBulkOps")
+    if "stdlib" in deps and "camlinternalChannel" in deps:
+        if "camlinternalChannel" not in deps["stdlib"]:
+            deps["stdlib"].append("camlinternalChannel")
     if "stdlib" in deps and "camlinternalMarshal" in deps:
         if "camlinternalMarshal" not in deps["stdlib"]:
             deps["stdlib"].append("camlinternalMarshal")
+    if "camlinternalMarshal" in deps and "camlinternalChannel" in deps:
+        if "camlinternalChannel" not in deps["camlinternalMarshal"]:
+            deps["camlinternalMarshal"].append("camlinternalChannel")
 
     order: list[str] = []
     state: dict[str, int] = {}  # 0=unseen, 1=visiting, 2=done

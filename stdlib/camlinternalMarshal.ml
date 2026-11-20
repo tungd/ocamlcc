@@ -89,8 +89,11 @@ external ba_info : obj_t -> int * int * int array = "ocamlcc_ba_info"
 external ba_read_bytes : obj_t -> bytes = "ocamlcc_ba_read_bytes"
 external ba_of_bytes : int -> int -> int array -> bytes -> obj_t = "ocamlcc_ba_of_bytes"
 
-external ml_output_bytes : 'oc -> bytes -> int -> int -> unit = "caml_ml_output_bytes"
-external ml_input : 'ic -> bytes -> int -> int -> int = "caml_ml_input"
+external ch_cast : 'a -> 'b = "%identity"
+let ml_output_bytes oc b ofs len =
+  CamlinternalChannel.unsafe_output (ch_cast oc) b ofs len
+let ml_input ic b ofs len =
+  CamlinternalChannel.unsafe_input (ch_cast ic) b ofs len
 
 type 'a mref = { mutable contents : 'a }
 

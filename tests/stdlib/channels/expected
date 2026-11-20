@@ -1,0 +1,15 @@
+init_pos_out=0 is_buf=true bin=true tty=false
+after_line1_pos=14
+end_pos=5031 len=5031 lpos=5031 llen=5031
+in_bin=true in_tty=false in_len=5031 llen=5031
+c0=H rest=ELLO, world! p1=14 ints=12345678,edcba988,0,-1 long_len=5000 first5=ABCDE last5=DEFGH
+eof=true,true,true,true,0
+after_seek6_pos=6 next5= worl after_read5_pos=11
+seek0=HELLO lpos=5031 tail_eof=true
+unbuffered=true
+lines=3:[616c7068610d|62657461|67616d6d61] all=616c7068610d0a626574610a67616d6d61
+oob=true,true,true,true
+closed_err=true,true,false
+ba=8:helloBA!,3:llo,0 oob=true,true
+flushed=preflush:
+marshal=msg:10:42:true

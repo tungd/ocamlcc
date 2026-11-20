@@ -20,6 +20,8 @@ sources:
     resource: runtime/bigarray.inc
   - id: marshal-runtime
     resource: stdlib/camlinternalMarshal.ml
+  - id: channel-runtime
+    resource: stdlib/camlinternalChannel.ml
   - id: api-regressions
     resource: tools/stdlib_regressions.py
   - id: runtime
@@ -72,9 +74,7 @@ and shared sub/slice/reshape/layout views. These helpers
 live in `runtime/bigarray.inc`, included by `arc.c`. C callers can retain a
 subview with its data and dimensions across collection. The public interface
 is documented in [memory views](/concepts/memory-views.md).
-The native stdlib build now compiles all 75/75 modules. `stdlib/camlinternalMarshal.ml`
-(`--nopervasives`, compiled right after `CamlinternalBulkOps`) implements Marshal
-in pure OCaml over tiny object/bigarray metadata helpers (`ocamlcc_ptr_id`,
+The native stdlib build now compiles all 76/76 modules. `stdlib/camlinternalChannel.ml` (`--nopervasives`, compiled right after `CamlinternalBulkOps` and before `CamlinternalMarshal`) implements buffered `in_channel` and `out_channel` (4096-byte `bytes` buffers, weak array registry for `out_channels_list ()` / `flush_all ()`, unbuffered mode, 64-bit `LargeFile` seeks/lengths, `input_scan_line`, binary 32-bit ints, and Bigarray 1D `char` slice transfers) over thin POSIX fd shims (`ocamlcc_raw_fd_{read,write,lseek,size,close,isatty}`, `ocamlcc_stdio_flush`, and `ocamlcc_ba_{to_bytes,of_bytes_slice}`), removing `OcamlccChannel`, `ARC_TAG_CHANNEL`, and all `caml_ml_*` channel functions from `runtime/arc.c` and `runtime/arc.h`. `stdlib/camlinternalMarshal.ml` (`--nopervasives`, compiled right after `CamlinternalChannel`) implements Marshal in pure OCaml over `CamlinternalChannel` and tiny object/bigarray metadata helpers (`ocamlcc_ptr_id`,
 `ocamlcc_marshal_kind`, `ocamlcc_ba_info`/`read_bytes`/`of_bytes`), supporting
 uncompressed standard streams (`0x8495a6be`/`0x8495a6bf`, relative sharing
 distances) and optional OCaml-hook-backed compressed streams (`0x8495a6bd` with

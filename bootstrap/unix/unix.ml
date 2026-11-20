@@ -43,7 +43,9 @@ external c_unlink : string -> (unit, int) result = "ocamlcc_unix_unlink"
 external c_openfile : string -> int -> int -> (int, int) result = "ocamlcc_unix_openfile"
 external c_close : int -> (unit, int) result = "ocamlcc_unix_close"
 external c_pipe : bool -> (int * int, int) result = "ocamlcc_unix_pipe"
-external c_in_channel_of_descr : int -> in_channel = "caml_ml_open_descriptor_in"
+external _unix_ch_cast : 'a -> 'b = "%identity"
+let c_in_channel_of_descr (fd : int) : in_channel =
+  _unix_ch_cast (CamlinternalChannel.open_descriptor_in fd)
 external c_create_process :
   string -> string array -> int -> int -> int -> (int, int) result
   = "ocamlcc_unix_create_process"

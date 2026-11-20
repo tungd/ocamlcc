@@ -563,3 +563,54 @@ int64_t ocamlcc_ba_of_bytes(int64_t kind_val, int64_t layout_val, int64_t dims_v
         pal_memcpy(a->data, (const void *)(uintptr_t)raw_val, need);
     return ba;
 }
+
+static int ba_channel_range(int64_t ba, int64_t offset, int64_t length)
+{
+    ArcBigarray *a = (void *)(uintptr_t)ba;
+    int64_t o = offset >> 1, n = length >> 1;
+    if (a->ndims != 1 || a->layout || ba_sizes[a->kind] != 1 || o < 0 || n < 0
+        || (uint64_t)o > ba_count(a) || (uint64_t)n > ba_count(a) - o) {
+        ba_invalid("Bigarray channel I/O: invalid range"); return 0;
+    }
+    return 1;
+}
+
+int64_t ocamlcc_ba_to_bytes(int64_t ba_val, int64_t bofs_val,
+                            int64_t bytes_val, int64_t ofs_val, int64_t len_val)
+{
+    if (!ba_channel_range(ba_val, bofs_val, len_val))
+        return 1;
+    int64_t o = ofs_val >> 1, n = len_val >> 1;
+    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)bytes_val - 1;
+    if (o < 0 || n < 0 || (uint64_t)o > (uint64_t)bh->reserved ||
+        (uint64_t)n > (uint64_t)bh->reserved - (uint64_t)o) {
+        ba_invalid("Bigarray channel I/O: invalid bytes range");
+        return 1;
+    }
+    if (n > 0) {
+        const ArcBigarray *a = (const ArcBigarray *)(uintptr_t)ba_val;
+        pal_memcpy((uint8_t *)(uintptr_t)bytes_val + o,
+                   (const uint8_t *)(uintptr_t)a->data + (bofs_val >> 1), (size_t)n);
+    }
+    return 1;
+}
+
+int64_t ocamlcc_ba_of_bytes_slice(int64_t ba_val, int64_t bofs_val,
+                                  int64_t bytes_val, int64_t ofs_val, int64_t len_val)
+{
+    if (!ba_channel_range(ba_val, bofs_val, len_val))
+        return 1;
+    int64_t o = ofs_val >> 1, n = len_val >> 1;
+    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)bytes_val - 1;
+    if (o < 0 || n < 0 || (uint64_t)o > (uint64_t)bh->reserved ||
+        (uint64_t)n > (uint64_t)bh->reserved - (uint64_t)o) {
+        ba_invalid("Bigarray channel I/O: invalid bytes range");
+        return 1;
+    }
+    if (n > 0) {
+        const ArcBigarray *a = (const ArcBigarray *)(uintptr_t)ba_val;
+        pal_memcpy((uint8_t *)(uintptr_t)a->data + (bofs_val >> 1),
+                   (const uint8_t *)(uintptr_t)bytes_val + o, (size_t)n);
+    }
+    return 1;
+}

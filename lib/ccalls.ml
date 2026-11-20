@@ -109,33 +109,17 @@ let table =
     ("caml_atomic_fetch_add_field", abi 3 false false);
     ("caml_register_named_value", abi 2 false false);
     ("caml_sys_exit", abi 1 false false);
-    (* channels / I/O *)
+    (* channels / raw fd hooks *)
     ("caml_sys_open", abi 3 true false);
-    ("caml_ml_open_descriptor_in", abi 1 true false);
-    ("caml_ml_open_descriptor_out", abi 1 true false);
-    ("caml_ml_out_channels_list", abi 1 false false);
-    ("caml_ml_flush", abi 1 true false);
-    ("caml_ml_output_char", abi 2 true false);
-    ("caml_ml_output", abi 4 true false);
-    ("caml_ml_output_bytes", abi 4 true false);
-    ("caml_ml_output_int", abi 2 true false);
-    ("caml_ml_input_char", abi 1 true false);
-    ("caml_ml_input", abi 4 true false);
-    ("caml_ml_input_int", abi 1 true false);
-    ("caml_ml_input_scan_line", abi 1 true false);
-    ("caml_ml_seek_out", abi 2 true false);
-    ("caml_ml_pos_out", abi 1 true false);
-    ("caml_ml_seek_in", abi 2 true false);
-    ("caml_ml_pos_in", abi 1 true false);
-    ("caml_ml_seek_out_64", abi 2 true false);
-    ("caml_ml_pos_out_64", abi 1 true false);
-    ("caml_ml_seek_in_64", abi 2 true false);
-    ("caml_ml_pos_in_64", abi 1 true false);
-    ("caml_ml_channel_size", abi 1 true false);
-    ("caml_ml_channel_size_64", abi 1 true false);
-    ("caml_ml_close_channel", abi 1 true false);
-    ("caml_ml_set_binary_mode", abi 2 true false);
-    ("caml_ml_set_channel_name", abi 2 false false);
+    ("ocamlcc_raw_fd_read", abi 4 true false);
+    ("ocamlcc_raw_fd_write", abi 4 true false);
+    ("ocamlcc_raw_fd_lseek", abi 3 true false);
+    ("ocamlcc_raw_fd_size", abi 1 true false);
+    ("ocamlcc_raw_fd_close", abi 1 true false);
+    ("ocamlcc_raw_fd_isatty", abi 1 false false);
+    ("ocamlcc_stdio_flush", abi 1 false false);
+    ("ocamlcc_ba_to_bytes", abi 5 true false);
+    ("ocamlcc_ba_of_bytes_slice", abi 5 true false);
     ("ocamlcc_ptr_id", abi 1 false false);
     ("ocamlcc_marshal_kind", abi 1 false false);
     ("ocamlcc_ba_info", abi 1 false false);
@@ -180,7 +164,6 @@ let table =
     ("caml_sys_io_buffer_size", abi 1 false false);
     ("caml_sys_temp_dir_name", abi 1 false false);
     ("caml_sys_close", abi 1 true false);
-    ("caml_sys_isatty", abi 1 false false);
     ("caml_runtime_variant", abi 1 false false);
     ("caml_runtime_parameters", abi 1 false false);
     ("caml_install_signal_handler", abi 2 true false);
@@ -232,14 +215,9 @@ let table =
     ("caml_frexp_float", abi 1 false false);
     ("caml_ldexp_float", abi 2 false false);
     ("caml_modf_float", abi 1 false false);
-    (* computed fields & channel buffering / bigarray stubs *)
+    (* computed fields & bigarray stubs *)
     ("caml_obj_field", abi 2 false false);
     ("caml_obj_set_field", abi 3 false false);
-    ("caml_ml_is_binary_mode", abi 1 false false);
-    ("caml_ml_set_buffered", abi 2 true false);
-    ("caml_ml_is_buffered", abi 1 false false);
-    ("caml_ml_input_bigarray", abi 4 true false);
-    ("caml_ml_output_bigarray", abi 4 true false);
     ("caml_ba_create", abi 3 true false);
     ("caml_ba_get_generic", abi 2 true false);
     ("caml_ba_set_generic", abi 3 true false);
@@ -346,9 +324,9 @@ let returns_imm = function
   | "caml_lessthan" | "caml_lessequal" | "caml_greaterthan" | "caml_greaterequal"
   | "caml_hash"
   | "caml_obj_tag" | "caml_obj_size" | "caml_obj_is_int" | "caml_obj_set_tag"
-  | "caml_ml_output" | "caml_ml_output_bytes" | "caml_ml_output_char"
-  | "caml_ml_output_int" | "caml_ml_input" | "caml_ml_input_char"
-  | "caml_ml_input_int" | "caml_ml_flush" | "caml_ml_close_channel"
+  | "ocamlcc_raw_fd_read" | "ocamlcc_raw_fd_write" | "ocamlcc_raw_fd_close"
+  | "ocamlcc_raw_fd_isatty" | "ocamlcc_stdio_flush"
+  | "ocamlcc_ba_to_bytes" | "ocamlcc_ba_of_bytes_slice"
   | "ocamlcc_arc_live" | "ocamlcc_arc_reuse" | "ocamlcc_arc_collect"
   | "ocamlcc_arc_slab_count"
   | "ocamlcc_ptr_id" | "ocamlcc_marshal_kind"

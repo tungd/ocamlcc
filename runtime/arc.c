@@ -35,22 +35,6 @@ typedef struct ArcWeakArray {
     int64_t              slots[];
 } ArcWeakArray;
 
-#define OCAMLC_CHAN_BUFSZ 4096u
-
-typedef struct OcamlccChannel {
-    struct OcamlccChannel *out_prev;
-    struct OcamlccChannel *out_next;
-    int                    fd;
-    int                    is_out;
-    int                    is_std;
-    int                    unbuffered;
-    int                    closed;
-    size_t                 cur;
-    size_t                 max;
-    uint8_t                buf[OCAMLC_CHAN_BUFSZ];
-} OcamlccChannel;
-
-static void channel_destroy(OcamlccChannel *ch);
 extern void ocamlcc_c_mutex_free(void *p);
 extern void ocamlcc_c_cond_free(void *c);
 
@@ -284,7 +268,6 @@ static inline int is_unscanned_leaf_tag(uint16_t tag)
 {
     return tag == (uint16_t)ARC_TAG_STRING ||
            tag == (uint16_t)ARC_TAG_WEAK ||
-           tag == (uint16_t)ARC_TAG_CHANNEL ||
            tag == (uint16_t)ARC_TAG_FLOAT ||
            tag == (uint16_t)ARC_TAG_FLOAT_ARRAY ||
            tag == (uint16_t)ARC_TAG_CUSTOM;
@@ -1170,8 +1153,6 @@ static void release_subtree(ArcHeader *root, int free_root)
             weak_unlink((ArcWeakArray *)(cur + 1));
         } else if (tag == ARC_TAG_FIBER) {
             fiber_destroy((Fiber *)(cur + 1));
-        } else if (tag == ARC_TAG_CHANNEL) {
-            channel_destroy((OcamlccChannel *)(cur + 1));
         } else if (tag == ARC_TAG_CUSTOM) {
             void *p = (void *)(uintptr_t)(*(uint64_t *)(cur + 1));
             if (cur->reserved == ARC_CUSTOM_MUTEX)
@@ -2756,6 +2737,7 @@ extern int         ocamlcc_c_fd_lseek(int fd, int64_t off, int whence, int64_t *
 extern int         ocamlcc_c_fd_size(int fd, int64_t *size_out, int *err_out);
 extern int         ocamlcc_c_fd_close_raw(int fd, int *err_out);
 extern void        ocamlcc_c_fflush_stdio(int fd);
+extern int         ocamlcc_c_isatty(int fd);
 extern const char *ocamlcc_c_strerror(int err);
 
 static void raise_sys_error_cstr(const char *msg)
@@ -2776,11 +2758,6 @@ static void raise_sys_error_errno(int err)
 {
     const char *m = ocamlcc_c_strerror(err);
     raise_sys_error_cstr(m != NULL ? m : "system error");
-}
-
-static void raise_end_of_file(void)
-{
-    ocamlcc_set_exn((int64_t)(uintptr_t)ocamlcc_global_End_of_file);
 }
 
 /* ---- Named values / exit ---- */
@@ -2812,8 +2789,6 @@ int64_t caml_register_named_value(int64_t name_val, int64_t val)
     return 1;
 }
 
-static void chan_flush_all_out(void);
-
 void ocamlcc_run_at_exit(void)
 {
     arc_lock(&g_named_lock);
@@ -2828,7 +2803,8 @@ void ocamlcc_run_at_exit(void)
         if (ocamlcc_get_exn() != 0)
             ocamlcc_set_exn(0);
     }
-    chan_flush_all_out();
+    ocamlcc_c_fflush_stdio(1);
+    ocamlcc_c_fflush_stdio(2);
 }
 
 void caml_sys_exit(int64_t code_val)
@@ -2895,108 +2871,20 @@ static inline uint32_t arr_len_of(int64_t arr)
     return hdr->byte_size / 8u;
 }
 
-/* ---- Channels & I/O ---- */
+/* ---- Raw POSIX fd hooks (channel buffering lives in CamlinternalChannel) ---- */
 
-static ArcSpinLock g_chan_lock = { 0u };
-static OcamlccChannel *g_out_channels_head = NULL;
-
-static void chan_unlink_locked(OcamlccChannel *ch)
+static int check_bytes_slice(int64_t buf_val, int64_t ofs_val, int64_t len_val,
+                             int64_t *ofs_out, int64_t *len_out)
 {
-    if (!ch->is_out)
-        return;
-    if (ch->out_prev != NULL)
-        ch->out_prev->out_next = ch->out_next;
-    else if (g_out_channels_head == ch)
-        g_out_channels_head = ch->out_next;
-    if (ch->out_next != NULL)
-        ch->out_next->out_prev = ch->out_prev;
-    ch->out_prev = NULL;
-    ch->out_next = NULL;
-}
-
-static int chan_flush_internal(OcamlccChannel *ch, int *err_out)
-{
-    *err_out = 0;
-    if (!ch->is_out || ch->closed)
+    int64_t o = ofs_val >> 1, n = len_val >> 1;
+    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)buf_val - 1;
+    if (!slice_in_bounds(o, n, bh->reserved)) {
+        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
         return 0;
-    if (ch->cur > 0u) {
-        if (ocamlcc_c_fd_write_all(ch->fd, ch->buf, ch->cur, err_out) != 0)
-            return -1;
-        ch->cur = 0u;
     }
-    if (ch->is_std)
-        ocamlcc_c_fflush_stdio(ch->fd);
-    return 0;
-}
-
-static void chan_flush_all_out(void)
-{
-    OcamlccChannel *stack_buf[64];
-    OcamlccChannel **list = stack_buf;
-    size_t cap = 64u, n = 0u, alloc_bytes = 0u;
-    arc_lock(&g_chan_lock);
-    for (OcamlccChannel *c = g_out_channels_head; c != NULL; c = c->out_next) {
-        ArcHeader *chdr = (ArcHeader *)c - 1;
-        if (!arc_try_retain(chdr))
-            continue;
-        if (n == cap) {
-            size_t new_bytes = (alloc_bytes == 0u) ? 4096u : (alloc_bytes * 2u);
-            OcamlccChannel **nl = (OcamlccChannel **)pal_page_alloc(new_bytes);
-            if (nl == NULL) {
-                arc_release(c);
-                break;
-            }
-            pal_memcpy(nl, list, n * sizeof(OcamlccChannel *));
-            if (alloc_bytes > 0u)
-                pal_page_free(list, alloc_bytes);
-            list = nl;
-            alloc_bytes = new_bytes;
-            cap = new_bytes / sizeof(OcamlccChannel *);
-        }
-        list[n++] = c;
-    }
-    arc_unlock(&g_chan_lock);
-    for (size_t i = 0; i < n; i++) {
-        int err = 0;
-        (void)chan_flush_internal(list[i], &err);
-        arc_release(list[i]);
-    }
-    if (alloc_bytes > 0u)
-        pal_page_free(list, alloc_bytes);
-}
-
-static void channel_destroy(OcamlccChannel *ch)
-{
-    arc_lock(&g_chan_lock);
-    chan_unlink_locked(ch);
-    arc_unlock(&g_chan_lock);
-    if (!ch->closed) {
-        int err = 0;
-        if (ch->is_out && ch->cur > 0u)
-            (void)chan_flush_internal(ch, &err);
-        if (!ch->is_std)
-            (void)ocamlcc_c_fd_close_raw(ch->fd, &err);
-        ch->closed = 1;
-    }
-}
-
-static OcamlccChannel *chan_alloc(int fd, int is_out)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)arc_alloc(
-        (uint16_t)ARC_TAG_CHANNEL, 0u, (uint32_t)sizeof(OcamlccChannel));
-    pal_memset(ch, 0, sizeof(*ch));
-    ch->fd = fd;
-    ch->is_out = is_out ? 1 : 0;
-    ch->is_std = (fd >= 0 && fd <= 2) ? 1 : 0;
-    if (ch->is_out) {
-        arc_lock(&g_chan_lock);
-        ch->out_next = g_out_channels_head;
-        if (g_out_channels_head != NULL)
-            g_out_channels_head->out_prev = ch;
-        g_out_channels_head = ch;
-        arc_unlock(&g_chan_lock);
-    }
-    return ch;
+    *ofs_out = o;
+    *len_out = n;
+    return 1;
 }
 
 int64_t caml_sys_open(int64_t path_val, int64_t flags_val, int64_t perm_val)
@@ -3029,435 +2917,76 @@ int64_t caml_sys_open(int64_t path_val, int64_t flags_val, int64_t perm_val)
     return tag_int((int64_t)fd);
 }
 
-int64_t caml_ml_open_descriptor_in(int64_t fd_val)
+int64_t ocamlcc_raw_fd_read(int64_t fd_val, int64_t buf_val,
+                            int64_t ofs_val, int64_t len_val)
 {
-    return (int64_t)(uintptr_t)chan_alloc((int)(fd_val >> 1), 0);
-}
-
-int64_t caml_ml_open_descriptor_out(int64_t fd_val)
-{
-    return (int64_t)(uintptr_t)chan_alloc((int)(fd_val >> 1), 1);
-}
-
-int64_t caml_ml_out_channels_list(int64_t ignored)
-{
-    (void)ignored;
-    int64_t lst = 1; /* [] */
-    arc_lock(&g_chan_lock);
-    for (OcamlccChannel *c = g_out_channels_head; c != NULL; c = c->out_next) {
-        ArcHeader *hdr = (ArcHeader *)c - 1;
-        uint32_t rc = atomic_load_explicit(&hdr->refcount, memory_order_acquire);
-        int retained = 0;
-        while (rc != 0u && rc != ARC_IMMORTAL) {
-            if (atomic_compare_exchange_weak_explicit(
-                    &hdr->refcount, &rc, rc + 1u,
-                    memory_order_acq_rel, memory_order_acquire)) {
-                retained = 1;
-                break;
-            }
-        }
-        if (rc == ARC_IMMORTAL)
-            retained = 1;
-        if (!retained)
-            continue;
-        int64_t *cons = (int64_t *)arc_alloc(0u, 2u, 16u);
-        cons[0] = (int64_t)(uintptr_t)c;
-        cons[1] = lst;
-        lst = (int64_t)(uintptr_t)cons;
-    }
-    arc_unlock(&g_chan_lock);
-    return lst;
-}
-
-int64_t caml_ml_flush(int64_t chan_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    if (ch->closed)
+    int64_t o = 0, n = 0;
+    if (!check_bytes_slice(buf_val, ofs_val, len_val, &o, &n))
         return 1;
     int err = 0;
-    if (chan_flush_internal(ch, &err) != 0)
+    int64_t r = ocamlcc_c_fd_read_raw((int)(fd_val >> 1),
+                                      (uint8_t *)(uintptr_t)buf_val + o,
+                                      (size_t)n, &err);
+    if (r < 0) {
         raise_sys_error_errno(err);
-    return 1;
+        return 1;
+    }
+    return tag_int(r);
 }
 
-static int chan_write_bytes(OcamlccChannel *ch, const uint8_t *p, size_t len)
-{
-    if (ch->closed) {
-        raise_sys_error_cstr("Bad file descriptor");
-        return -1;
-    }
-    int err = 0;
-    if (len >= OCAMLC_CHAN_BUFSZ || (ch->cur + len > OCAMLC_CHAN_BUFSZ)) {
-        if (chan_flush_internal(ch, &err) != 0) {
-            raise_sys_error_errno(err);
-            return -1;
-        }
-        if (len >= OCAMLC_CHAN_BUFSZ) {
-            if (ocamlcc_c_fd_write_all(ch->fd, p, len, &err) != 0) {
-                raise_sys_error_errno(err);
-                return -1;
-            }
-            return 0;
-        }
-    }
-    if (len > 0u) {
-        pal_memcpy(ch->buf + ch->cur, p, len);
-        ch->cur += len;
-        if (ch->unbuffered && chan_flush_internal(ch, &err) != 0) {
-            raise_sys_error_errno(err);
-            return -1;
-        }
-    }
-    return 0;
-}
-
-int64_t caml_ml_output_char(int64_t chan_val, int64_t ch_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    uint8_t byte = (uint8_t)(ch_val >> 1);
-    (void)chan_write_bytes(ch, &byte, 1u);
-    return 1;
-}
-
-int64_t caml_ml_output_bytes(int64_t chan_val, int64_t buf_val,
+int64_t ocamlcc_raw_fd_write(int64_t fd_val, int64_t buf_val,
                              int64_t ofs_val, int64_t len_val)
 {
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)buf_val - 1;
-    int64_t ofs = ofs_val >> 1;
-    int64_t len = len_val >> 1;
-    if (!slice_in_bounds(ofs, len, bh->reserved)) {
-        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
+    int64_t o = 0, n = 0;
+    if (!check_bytes_slice(buf_val, ofs_val, len_val, &o, &n))
         return 1;
-    }
-    if (len == 0)
-        return 1;
-    const uint8_t *p = (const uint8_t *)(uintptr_t)buf_val + ofs;
-    (void)chan_write_bytes(ch, p, (size_t)len);
-    return 1;
-}
-
-int64_t caml_ml_output(int64_t chan_val, int64_t buf_val,
-                       int64_t ofs_val, int64_t len_val)
-{
-    return caml_ml_output_bytes(chan_val, buf_val, ofs_val, len_val);
-}
-
-int64_t caml_ml_output_int(int64_t chan_val, int64_t n_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    uint32_t w = (uint32_t)(int32_t)(n_val >> 1);
-    uint8_t be[4];
-    be[0] = (uint8_t)(w >> 24);
-    be[1] = (uint8_t)(w >> 16);
-    be[2] = (uint8_t)(w >> 8);
-    be[3] = (uint8_t)w;
-    (void)chan_write_bytes(ch, be, 4u);
-    return 1;
-}
-
-static int chan_refill(OcamlccChannel *ch, int *err_out)
-{
-    *err_out = 0;
-    if (ch->closed) {
-        *err_out = 9; /* EBADF */
-        return -1;
-    }
-    ch->cur = 0u;
-    int64_t r = ocamlcc_c_fd_read_raw(ch->fd, ch->buf, OCAMLC_CHAN_BUFSZ, err_out);
-    if (r < 0) {
-        ch->max = 0u;
-        return -1;
-    }
-    ch->max = (size_t)r;
-    return (int)r;
-}
-
-int64_t caml_ml_input_char(int64_t chan_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    if (ch->cur >= ch->max) {
-        int err = 0;
-        int r = chan_refill(ch, &err);
-        if (r < 0) {
-            raise_sys_error_errno(err);
-            return 1;
-        }
-        if (r == 0) {
-            raise_end_of_file();
-            return 1;
-        }
-    }
-    uint8_t b = ch->buf[ch->cur++];
-    return tag_int((int64_t)b);
-}
-
-/* Raw channel read into a caller-owned buffer: no slice bounds check against
- * an ArcHeader (the caller validates its own buffer shape). Raises on closed
- * channel / read error; returns the number of bytes read (>= 0) or -1 after
- * raising. */
-static int64_t chan_read_raw(OcamlccChannel *ch, uint8_t *dst, int64_t ofs,
-                             int64_t len)
-{
-    if (len == 0)
-        return 0;
-    if (ch->cur < ch->max) {
-        size_t avail = ch->max - ch->cur;
-        size_t take = ((size_t)len < avail) ? (size_t)len : avail;
-        pal_memcpy(dst + ofs, ch->buf + ch->cur, take);
-        ch->cur += take;
-        return (int64_t)take;
-    }
     int err = 0;
-    if (ch->closed) {
-        raise_sys_error_cstr("Bad file descriptor");
-        return -1;
-    }
-    if ((size_t)len >= OCAMLC_CHAN_BUFSZ) {
-        int64_t r = ocamlcc_c_fd_read_raw(ch->fd, dst + ofs, (size_t)len, &err);
-        if (r < 0) {
-            raise_sys_error_errno(err);
-            return -1;
-        }
-        return r;
-    }
-    int r = chan_refill(ch, &err);
-    if (r < 0) {
-        raise_sys_error_errno(err);
-        return -1;
-    }
-    size_t take = ((size_t)len < ch->max) ? (size_t)len : ch->max;
-    if (take > 0u)
-        pal_memcpy(dst + ofs, ch->buf, take);
-    ch->cur = take;
-    return (int64_t)take;
-}
-
-int64_t caml_ml_input(int64_t chan_val, int64_t buf_val,
-                      int64_t ofs_val, int64_t len_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    const ArcHeader *bh = (const ArcHeader *)(uintptr_t)buf_val - 1;
-    int64_t ofs = ofs_val >> 1;
-    int64_t len = len_val >> 1;
-    if (!slice_in_bounds(ofs, len, bh->reserved)) {
-        raise_invalid_arg_imm(g_inv_arg_oob_str.str);
-        return tag_int(0);
-    }
-    int64_t got =
-        chan_read_raw(ch, (uint8_t *)(uintptr_t)buf_val, ofs, len);
-    if (got < 0)
-        return 1; /* exception raised by chan_read_raw */
-    return tag_int(got);
-}
-
-int64_t caml_ml_input_int(int64_t chan_val)
-{
-    uint8_t be[4];
-    for (int i = 0; i < 4; i++) {
-        int64_t b = caml_ml_input_char(chan_val);
-        if (ocamlcc_get_exn() != 0)
-            return 1;
-        be[i] = (uint8_t)(b >> 1);
-    }
-    int32_t w = (int32_t)(((uint32_t)be[0] << 24) |
-                          ((uint32_t)be[1] << 16) |
-                          ((uint32_t)be[2] << 8)  |
-                           (uint32_t)be[3]);
-    return tag_int((int64_t)w);
-}
-
-int64_t caml_ml_input_scan_line(int64_t chan_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    if (ch->cur >= ch->max) {
-        int err = 0;
-        int r = chan_refill(ch, &err);
-        if (r < 0) {
-            raise_sys_error_errno(err);
-            return 1;
-        }
-        if (r == 0)
-            return tag_int(0);
-    }
-    for (size_t p = ch->cur; p < ch->max; p++) {
-        if (ch->buf[p] == (uint8_t)'\n')
-            return tag_int((int64_t)(p - ch->cur + 1u));
-    }
-    return tag_int(-(int64_t)(ch->max - ch->cur));
-}
-
-int64_t caml_ml_seek_out_64(int64_t chan_val, int64_t pos_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    int err = 0;
-    if (chan_flush_internal(ch, &err) != 0) {
-        raise_sys_error_errno(err);
-        return 1;
-    }
-    int64_t off = unbox_custom_i64(pos_val);
-    int64_t ignored = 0;
-    if (ocamlcc_c_fd_lseek(ch->fd, off, 0, &ignored, &err) != 0)
+    if (ocamlcc_c_fd_write_all((int)(fd_val >> 1),
+                               (const uint8_t *)(uintptr_t)buf_val + o,
+                               (size_t)n, &err) != 0)
         raise_sys_error_errno(err);
     return 1;
 }
 
-int64_t caml_ml_seek_out(int64_t chan_val, int64_t pos_val)
+int64_t ocamlcc_raw_fd_lseek(int64_t fd_val, int64_t off_val, int64_t whence_val)
 {
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    int err = 0;
-    if (chan_flush_internal(ch, &err) != 0) {
-        raise_sys_error_errno(err);
-        return 1;
-    }
-    int64_t ignored = 0;
-    if (ocamlcc_c_fd_lseek(ch->fd, pos_val >> 1, 0, &ignored, &err) != 0)
-        raise_sys_error_errno(err);
-    return 1;
-}
-
-int64_t caml_ml_pos_out_64(int64_t chan_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
     int64_t pos = 0;
     int err = 0;
-    if (ocamlcc_c_fd_lseek(ch->fd, 0, 1, &pos, &err) != 0) {
+    if (ocamlcc_c_fd_lseek((int)(fd_val >> 1), unbox_custom_i64(off_val),
+                           (int)(whence_val >> 1), &pos, &err) != 0) {
         raise_sys_error_errno(err);
         return 1;
     }
-    pos += (int64_t)ch->cur;
     return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, (uint64_t)pos);
 }
 
-int64_t caml_ml_pos_out(int64_t chan_val)
+int64_t ocamlcc_raw_fd_size(int64_t fd_val)
 {
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    int64_t pos = 0;
-    int err = 0;
-    if (ocamlcc_c_fd_lseek(ch->fd, 0, 1, &pos, &err) != 0) {
-        raise_sys_error_errno(err);
-        return 1;
-    }
-    return tag_int(pos + (int64_t)ch->cur);
-}
-
-int64_t caml_ml_seek_in_64(int64_t chan_val, int64_t pos_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    ch->cur = 0u;
-    ch->max = 0u;
-    int err = 0;
-    int64_t ignored = 0;
-    if (ocamlcc_c_fd_lseek(ch->fd, unbox_custom_i64(pos_val), 0, &ignored, &err) != 0)
-        raise_sys_error_errno(err);
-    return 1;
-}
-
-int64_t caml_ml_seek_in(int64_t chan_val, int64_t pos_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    ch->cur = 0u;
-    ch->max = 0u;
-    int err = 0;
-    int64_t ignored = 0;
-    if (ocamlcc_c_fd_lseek(ch->fd, pos_val >> 1, 0, &ignored, &err) != 0)
-        raise_sys_error_errno(err);
-    return 1;
-}
-
-int64_t caml_ml_pos_in_64(int64_t chan_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    int64_t pos = 0;
-    int err = 0;
-    if (ocamlcc_c_fd_lseek(ch->fd, 0, 1, &pos, &err) != 0) {
-        raise_sys_error_errno(err);
-        return 1;
-    }
-    pos -= (int64_t)(ch->max - ch->cur);
-    return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, (uint64_t)pos);
-}
-
-int64_t caml_ml_pos_in(int64_t chan_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    int64_t pos = 0;
-    int err = 0;
-    if (ocamlcc_c_fd_lseek(ch->fd, 0, 1, &pos, &err) != 0) {
-        raise_sys_error_errno(err);
-        return 1;
-    }
-    return tag_int(pos - (int64_t)(ch->max - ch->cur));
-}
-
-int64_t caml_ml_channel_size_64(int64_t chan_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
     int64_t sz = 0;
     int err = 0;
-    if (ch->is_out && chan_flush_internal(ch, &err) != 0) {
-        raise_sys_error_errno(err);
-        return 1;
-    }
-    if (ocamlcc_c_fd_size(ch->fd, &sz, &err) != 0) {
+    if (ocamlcc_c_fd_size((int)(fd_val >> 1), &sz, &err) != 0) {
         raise_sys_error_errno(err);
         return 1;
     }
     return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, (uint64_t)sz);
 }
 
-int64_t caml_ml_channel_size(int64_t chan_val)
+int64_t ocamlcc_raw_fd_close(int64_t fd_val)
 {
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    int64_t sz = 0;
     int err = 0;
-    if (ch->is_out && chan_flush_internal(ch, &err) != 0) {
+    if (ocamlcc_c_fd_close_raw((int)(fd_val >> 1), &err) != 0)
         raise_sys_error_errno(err);
-        return 1;
-    }
-    if (ocamlcc_c_fd_size(ch->fd, &sz, &err) != 0) {
-        raise_sys_error_errno(err);
-        return 1;
-    }
-    return tag_int(sz);
-}
-
-int64_t caml_ml_close_channel(int64_t chan_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    if (ch->closed)
-        return 1;
-    int err = 0;
-    int flush_rc = 0;
-    if (ch->is_out) {
-        arc_lock(&g_chan_lock);
-        chan_unlink_locked(ch);
-        arc_unlock(&g_chan_lock);
-        flush_rc = chan_flush_internal(ch, &err);
-    }
-    int close_err = 0;
-    int close_rc = 0;
-    if (!ch->is_std)
-        close_rc = ocamlcc_c_fd_close_raw(ch->fd, &close_err);
-    ch->closed = 1;
-    if (flush_rc != 0)
-        raise_sys_error_errno(err);
-    else if (close_rc != 0)
-        raise_sys_error_errno(close_err);
     return 1;
 }
 
-int64_t caml_ml_set_binary_mode(int64_t chan_val, int64_t mode_val)
+int64_t ocamlcc_raw_fd_isatty(int64_t fd_val)
 {
-    (void)chan_val;
-    (void)mode_val;
-    return 1;
+    return ocamlcc_c_isatty((int)(fd_val >> 1)) ? 3 : 1;
 }
 
-int64_t caml_ml_set_channel_name(int64_t chan_val, int64_t name_val)
+int64_t ocamlcc_stdio_flush(int64_t fd_val)
 {
-    (void)chan_val;
-    (void)name_val;
+    ocamlcc_c_fflush_stdio((int)(fd_val >> 1));
     return 1;
 }
 
@@ -3866,14 +3395,6 @@ int64_t caml_sys_close(int64_t fd_val)
     return 1;
 }
 
-int64_t caml_sys_isatty(int64_t chan_val)
-{
-    const OcamlccChannel *ch = (const OcamlccChannel *)(uintptr_t)chan_val;
-    if (ch->closed)
-        return 1;
-    return ocamlcc_c_isatty(ch->fd) ? 3 : 1;
-}
-
 int64_t caml_runtime_variant(int64_t ignored)
 {
     (void)ignored;
@@ -4093,64 +3614,7 @@ int64_t caml_obj_set_field(int64_t obj_val, int64_t idx_val, int64_t new_val)
     return 1;
 }
 
-int64_t caml_ml_is_binary_mode(int64_t chan_val)
-{
-    (void)chan_val;
-    return 3; /* true */
-}
-
-int64_t caml_ml_set_buffered(int64_t chan_val, int64_t mode_val)
-{
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)chan_val;
-    int buffered = (mode_val != 1);
-    ch->unbuffered = buffered ? 0 : 1;
-    if (!buffered && ch->is_out && !ch->closed) {
-        int err = 0;
-        if (chan_flush_internal(ch, &err) != 0)
-            raise_sys_error_errno(err);
-    }
-    return 1;
-}
-
-int64_t caml_ml_is_buffered(int64_t chan_val)
-{
-    const OcamlccChannel *ch = (const OcamlccChannel *)(uintptr_t)chan_val;
-    return ch->unbuffered ? 1 : 3;
-}
-
 #include "bigarray.inc"
-
-static int ba_channel_range(int64_t ba, int64_t offset, int64_t length)
-{
-    ArcBigarray *a = (void *)(uintptr_t)ba;
-    int64_t o = offset >> 1, n = length >> 1;
-    if (a->ndims != 1 || a->layout || ba_sizes[a->kind] != 1 || o < 0 || n < 0
-        || (uint64_t)o > ba_count(a) || (uint64_t)n > ba_count(a) - o) {
-        ba_invalid("Bigarray channel I/O: invalid range"); return 0;
-    }
-    return 1;
-}
-int64_t caml_ml_input_bigarray(int64_t c, int64_t ba, int64_t o, int64_t l)
-{
-    if (!ba_channel_range(ba, o, l)) return 1;
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)c;
-    const ArcBigarray *a = (const ArcBigarray *)(uintptr_t)ba;
-    /* ba->data is a raw PAL page or foreign pointer with no ArcHeader in
-     * front, so go through the raw helper: the slice was validated against
-     * the array extent by ba_channel_range above. */
-    int64_t got = chan_read_raw(ch, (uint8_t *)(uintptr_t)a->data, o >> 1, l >> 1);
-    if (got < 0) return 1; /* exception raised by chan_read_raw */
-    return tag_int(got);
-}
-int64_t caml_ml_output_bigarray(int64_t c, int64_t ba, int64_t o, int64_t l)
-{
-    if (!ba_channel_range(ba, o, l)) return 1;
-    OcamlccChannel *ch = (OcamlccChannel *)(uintptr_t)c;
-    const ArcBigarray *a = (const ArcBigarray *)(uintptr_t)ba;
-    (void)chan_write_bytes(ch, (const uint8_t *)(uintptr_t)a->data + (o >> 1),
-                           (size_t)(l >> 1));
-    return 1;
-}
 
 
 /* ---- Lazy & Obj primitives ---- */
@@ -4271,8 +3735,7 @@ static int64_t dup_with_tag(int64_t v, int override_tag, uint16_t new_atag)
         return v;
     }
     if (src_tag == (uint16_t)ARC_TAG_WEAK ||
-        src_tag == (uint16_t)ARC_TAG_FIBER ||
-        src_tag == (uint16_t)ARC_TAG_CHANNEL) {
+        src_tag == (uint16_t)ARC_TAG_FIBER) {
         /* Runtime-managed objects hold intrusive list links, OS stacks, or
          * synchronization primitives that cannot be shallow-copied. */
         arc_retain_val(v);
@@ -4878,7 +4341,7 @@ int64_t ocamlcc_marshal_kind(int64_t v)
     if (tag == (uint16_t)ARC_TAG_CLOSURE || tag == (uint16_t)ARC_TAG_PAP)
         return tag_int(247);
     if (tag == (uint16_t)ARC_TAG_FORCING || tag == (uint16_t)ARC_TAG_WEAK ||
-        tag == (uint16_t)ARC_TAG_FIBER || tag == (uint16_t)ARC_TAG_CHANNEL)
+        tag == (uint16_t)ARC_TAG_FIBER)
         return tag_int(251);
     if (tag == (uint16_t)ARC_TAG_ARRAY)
         return tag_int(0);

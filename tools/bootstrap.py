@@ -752,6 +752,7 @@ def validate_stage2(compiler: Path, stage2_dir: Path, qbe: Path, qbe_target: str
         ("camlinternalFormatBasics", "camlinternalFormatBasics.ml", []),
         ("camlinternalIntFmt", "camlinternalIntFmt.ml", []),
         ("camlinternalBulkOps", "camlinternalBulkOps.ml", []),
+        ("camlinternalChannel", "camlinternalChannel.ml", []),
         ("camlinternalMarshal", "camlinternalMarshal.ml", []),
         ("stdlib__option", "stdlib__option.ml", []),
         ("stdlib__result", "stdlib__result.ml", []),
