@@ -6,7 +6,7 @@ tags: [compiler, architecture, lambda, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-19T03:35:08Z
+  at: 2026-11-20
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -171,6 +171,16 @@ to `@dispatch`, so `even`/`odd` and `ocamllex` lexer DFAs run 300k+ transitions
 in constant stack. Calls from outside the group pass the member's tag as the
 dispatch selector (while individual member closure wrappers forward through to
 the trampoline for indirect `ocamlcc_apply_n` calls).
+
+**Captured recursive calls** are lifted before ANF when all uses of the
+recursive functions inside the group are saturated direct calls. Workers take
+the outside captures as additional arguments and use the same direct calls and
+tail-call trampolines as static functions. A first-class use in the enclosing
+body gets a closure of the original arity, with only outside captures as
+owning edges. Dynamic sibling calls inside the group, tupled functions, and
+captures of mutable Lambda slots keep the general closure path. The
+`cycle_collect` executable checks that escaping wrappers and partial
+applications work and release all their blocks without collection.
 
 # Builtin resolution
 

@@ -1,7 +1,6 @@
-(* Regression test: non-pure mutually tail-recursive closure [let rec]
-   functions capturing outer variables must lower to a shared [@dispatch]
-   trampoline SCC (running in O(1) stack space, like pure mutual SCCs) while
-   preserving individual closure wrappers for indirect calls. *)
+(* Regression test: mutually recursive [let rec] functions with outer
+   captures must keep the shared [@dispatch] trampoline for saturated tail
+   calls and preserve an individual closure wrapper for indirect calls. *)
 
 let contains_substring ~sub s =
   let sl = String.length s and nl = String.length sub in

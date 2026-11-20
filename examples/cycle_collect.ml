@@ -12,11 +12,32 @@ type node = {
   mutable next : node option;
 }
 
+let invoke f k = f k
+
 let run_closure_cycle x =
   let captured = (x + 10, x + 20) in
-  let rec even_k k = if k = 0 then fst captured else odd_k (k - 1)
+  let rec even_k k = if k = 0 then fst captured else invoke odd_k (k - 1)
   and odd_k k = if k = 0 then snd captured else even_k (k - 1) in
   even_k 5
+
+(* Both functions escape through the result. Each still works after its
+   sibling has been dropped, and partial application keeps its capture alive. *)
+let make_steps x =
+  let captured = (x + 10, x + 20) in
+  let rec even k =
+    if k = 0 then fst captured else odd (k - 1) 0
+  and odd k acc =
+    if k = 0 then snd captured + acc else even (k - 1)
+  in
+  (even, even, odd)
+
+let run_lifted_steps x =
+  let even, alias, _ = make_steps x in
+  let partial =
+    let _, _, odd = make_steps (x + 1) in
+    odd 0
+  in
+  if even == alias then even 50_000 + partial 7 else -1
 
 let make_record_cycle a b =
   let n1 = { id = a; payload = (a + 1, a + 2); next = None } in
@@ -160,4 +181,13 @@ let () =
   print_int fdelta;
   print_endline "";
   print_int live_final;
+  print_endline ""
+
+let () =
+  let live_before = arc_live () in
+  let result = run_lifted_steps 3 in
+  let live_delta = arc_live () - live_before in
+  print_int result;
+  print_endline "";
+  print_int live_delta;
   print_endline ""

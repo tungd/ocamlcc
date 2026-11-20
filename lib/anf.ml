@@ -1348,6 +1348,154 @@ let drop_unused_alias_lets (lam : Lambda.lambda) : Lambda.lambda =
   in
   fst (go lam)
 
+(* Lift recursive calls that never need a sibling closure value. A worker
+   receives the group's captures as extra parameters. Value uses outside the
+   group still see a closure of the declared arity, with its own ownership of
+   the captures, so siblings can die independently. *)
+let lift_recursive_calls program =
+  let open Lambda in
+  let add_params kinds params =
+    List.fold_left
+      (fun kinds (id, kind) -> Ident.Map.add id (Some kind) kinds)
+      kinds params
+  in
+  let vars params = List.map (fun (id, _) -> Lvar id) params in
+  let free_fun def = free_variables (Lfunction def) in
+  (* These workers are only called directly. Cap the internal arity at the
+     backend closure ABI limit as well, including any capture parameters. *)
+  let max_arity = min 32 (Lambda.max_arity ()) in
+  let rec visit kinds static = function
+    | Llet (mode, kind, id, rhs, body) ->
+        let rhs = visit kinds static rhs in
+        let static =
+          match rhs with
+          | Lfunction def when Ident.Set.subset (free_fun def) static ->
+              Ident.Set.add id static
+          | _ -> static
+        in
+        Llet (mode, kind, id, rhs, visit (add_params kinds [ id, kind ]) static body)
+    | Lmutlet (kind, id, rhs, body) ->
+        Lmutlet (kind, id, visit kinds static rhs,
+          visit (Ident.Map.add id None kinds) static body)
+    | Lfunction def ->
+        Lfunction (map_lfunction (visit (add_params kinds def.params) static) def)
+    | Lletrec (bindings, body) ->
+        let ids = Ident.Set.of_list (List.map (fun rb -> rb.id) bindings) in
+        let free =
+          List.fold_left
+            (fun acc rb -> Ident.Set.union acc (free_fun rb.def))
+            Ident.Set.empty bindings
+        in
+        let free = Ident.Set.diff free (Ident.Set.union static ids) in
+        let static = if Ident.Set.is_empty free then Ident.Set.union ids static else static in
+        let bindings =
+          List.map
+            (fun rb ->
+              let def = rb.def in
+              { rb with def = map_lfunction (visit (add_params kinds def.params) static) def })
+            bindings
+        in
+        let body = visit kinds static body in
+        lift_group kinds bindings free body
+    | Lstaticcatch (body, (label, params), handler) ->
+        Lstaticcatch (visit kinds static body, (label, params),
+          visit (add_params kinds params) static handler)
+    | Lfor (id, first, last, direction, body) ->
+        Lfor (id, visit kinds static first, visit kinds static last, direction,
+          visit (add_params kinds [ id, Pintval ]) static body)
+    | expr -> shallow_map (visit kinds static) expr
+  and lift_group kinds bindings free body =
+    let captures = Ident.Set.elements free in
+    let original = Lletrec (bindings, body) in
+    if List.length bindings < 2 || captures = []
+       || List.exists (fun id -> Ident.Map.find_opt id kinds = Some None) captures
+       || List.exists
+            (fun rb -> rb.def.kind <> Curried
+              || List.length rb.def.params + List.length captures > max_arity)
+            bindings
+    then original
+    else
+      let workers =
+        List.fold_left
+          (fun acc rb ->
+            Ident.Map.add rb.id
+              (Ident.rename rb.id, List.length rb.def.params) acc)
+          Ident.Map.empty bindings
+      in
+      let call_target id args =
+        match Ident.Map.find_opt id workers with
+        | Some (worker, arity) when List.length args = arity -> Some worker
+        | _ -> None
+      in
+      let rec uses_values = function
+        | Lapply { ap_func = Lvar id; ap_args; _ }
+          when Option.is_some (call_target id ap_args) ->
+            List.exists uses_values ap_args
+        | Lvar id -> Ident.Map.mem id workers
+        | expr ->
+            let found = ref false in
+            iter_head_constructor (fun e -> if uses_values e then found := true) expr;
+            !found
+      in
+      if List.exists (fun rb -> uses_values rb.def.body) bindings then original
+      else
+        let captures =
+          List.map
+            (fun id ->
+              let kind = Option.join (Ident.Map.find_opt id kinds) in
+              (id, Option.value ~default:Pgenval kind))
+            captures
+        in
+        let rec rewrite = function
+          | Lapply ({ ap_func = Lvar id; ap_args; _ } as ap) ->
+              let args = List.map rewrite ap_args in
+              (match call_target id args with
+              | Some worker ->
+                  Lapply { ap with ap_func = Lvar worker; ap_args = args @ vars captures }
+              | None -> Lapply { ap with ap_args = args })
+          | expr -> shallow_map rewrite expr
+        in
+        let lifted =
+          List.map
+            (fun rb ->
+              let def = rb.def in
+              let extra = List.map (fun (id, kind) -> Ident.rename id, kind) captures in
+              let rename =
+                List.fold_left2
+                  (fun acc (id, _) (param, _) -> Ident.Map.add id (Lvar param) acc)
+                  Ident.Map.empty captures extra
+              in
+              let body = subst (fun _ _ env -> env) rename (rewrite def.body) in
+              { id = fst (Ident.Map.find rb.id workers);
+                def = lfunction' ~kind:Curried ~params:(def.params @ extra)
+                  ~return:def.return ~body ~attr:def.attr ~loc:def.loc })
+            bindings
+        in
+        let body = rewrite body in
+        let value_uses = free_variables body in
+        let body =
+          List.fold_right
+            (fun rb body ->
+              if not (Ident.Set.mem rb.id value_uses) then body
+              else
+                let def = rb.def in
+                let params = List.map (fun (id, kind) -> Ident.rename id, kind) def.params in
+                let worker = fst (Ident.Map.find rb.id workers) in
+                let call =
+                  Lapply { ap_func = Lvar worker; ap_args = vars params @ vars captures;
+                    ap_loc = def.loc; ap_tailcall = Default_tailcall;
+                    ap_inlined = Default_inline; ap_specialised = Default_specialise }
+                in
+                Llet (Strict, Pgenval, rb.id,
+                  lfunction ~kind:Curried ~params ~return:def.return ~body:call
+                    ~attr:def.attr ~loc:def.loc,
+                  body))
+            bindings body
+        in
+        Lletrec (lifted, body)
+  in
+  visit Ident.Map.empty Ident.Set.empty program
+
 let of_lambda ?(use_builtins = true) ?(include_dirs = [])
     (program : Lambda.program) : (program, string) result =
   let saved = !builtins_table in
@@ -1357,7 +1505,7 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = [])
     ~finally:(fun () -> builtins_table := saved)
     (fun () ->
       try
-        let cleaned = drop_unused_alias_lets program.code in
+        let cleaned = program.code |> drop_unused_alias_lets |> lift_recursive_calls in
         let code = conv_tail cleaned |> specialize_scalar_bindings in
         Ok { module_ident = program.module_ident; code }
       with Unsupported what -> Error what)

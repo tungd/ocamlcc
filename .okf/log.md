@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Lift direct calls in capturing recursive groups and keep independently owned wrappers for escaping functions. The native regression retained six blocks before the change and zero afterward. See [compiler pipeline](/concepts/compiler-pipeline.md).
+
 - 2026-11-20 (codex/1) — Carry Lambda’s immediate field kind through ANF and elide ARC traffic for those reads and integer array reads. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Add an opt-in single-OS-thread runtime with load/store refcount updates and an owner check at managed entries. The atomic runtime remains the default. See [Perceus ARC](/concepts/perceus-arc.md).
