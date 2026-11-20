@@ -4147,10 +4147,13 @@ static uint64_t allocation_progress(void)
            (uint64_t)atomic_load_explicit(&g_reuse_hits, memory_order_relaxed);
 }
 
-static int finalizers_due(void)
+static inline int has_finalizers(void)
 {
-    if (atomic_load_explicit(&finalizer_count, memory_order_relaxed) == 0)
-        return 0;
+    return atomic_load_explicit(&finalizer_count, memory_order_relaxed) != 0;
+}
+
+static int finalizer_budget_due(void)
+{
     uint64_t previous = atomic_load_explicit(&last_finalizer_poll, memory_order_acquire);
     int64_t budget = atomic_load_explicit(&g_gc_ctrl[0], memory_order_relaxed);
     return allocation_progress() - previous >= (uint64_t)(budget > 0 ? budget : 1);
@@ -4158,8 +4161,13 @@ static int finalizers_due(void)
 
 int64_t ocamlcc_finalizers_due(void)
 {
+    /* Pending registrations stay counted through dispatch. An empty
+       registry can skip both the dispatch state and allocation budget. */
+    if (!has_finalizers())
+        return 1;
     enum DispatchState state = atomic_load_explicit(&finalizer_dispatch, memory_order_relaxed);
-    return tag_int(state == DISPATCH_READY || (state == DISPATCH_IDLE && finalizers_due()));
+    return tag_int(state == DISPATCH_READY ||
+                   (state == DISPATCH_IDLE && finalizer_budget_due()));
 }
 
 static int64_t run_finalizers(int automatic)
@@ -4175,7 +4183,8 @@ static int64_t run_finalizers(int automatic)
      * inside the mutator gate. Enter before trying a collection so that a
      * competing mutator causes the trial to skip instead of waiting on it. */
     int entered = prior == DISPATCH_READY ? arc_mutator_enter() : 0;
-    int collected = (!automatic || finalizers_due()) && collect_cycles(1) >= 0;
+    int due = !automatic || (has_finalizers() && finalizer_budget_due());
+    int collected = due && collect_cycles(1) >= 0;
     if (!collected && prior != DISPATCH_READY) {
         atomic_store_explicit(&finalizer_dispatch, DISPATCH_IDLE, memory_order_release);
         return 1;

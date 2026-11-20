@@ -670,6 +670,7 @@ static int64_t fin_suspend_probe_fn(int64_t clos, int64_t unit)
 {
     (void)clos;
     (void)unit;
+    assert(ocamlcc_finalizers_due() == 1);
     ocamlcc_fiber_suspend(1);
     expect_invalid("suspend");
     ocamlcc_fiber_can_yield(1);
@@ -697,6 +698,7 @@ static void test_finalizer_no_suspend(void)
 {
     int64_t before = arc_live_objects();
     g_fin_probe_failures = 0;
+    assert(ocamlcc_finalizers_due() == 1);
 
     int64_t *target = arc_alloc(0, 0, 8);
     ArcClosure *cb = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
@@ -726,6 +728,7 @@ static void test_finalizer_no_suspend(void)
 
     /* Drain leftover dispatch state on the main fiber. */
     ocamlcc_poll_finalizers();
+    assert(ocamlcc_finalizers_due() == 1);
     if (ocamlcc_get_exn())
         clear_exception();
     ocamlcc_arc_collect(1);

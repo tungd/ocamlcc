@@ -88,9 +88,11 @@ the first condition evaluation and every 64 evaluations thereafter. The
 compiler keeps an immediate local counter for that cadence. Other loops
 check each iteration or condition as before. A due poll enters the
 dispatcher with live owners available for exception unwinding. With an empty
-registry, the check returns immediately and cycles await explicit collection.
-Straight-line allocations can cross the budget before execution reaches a
-poll.[^compiler][^abi]
+registry, the check returns after a single relaxed load of the registration
+count. That count includes pending callbacks through dispatch. A nonempty
+registry checks for handed-off work or an exhausted allocation budget.
+Cycles without registrations await explicit collection. Straight-line
+allocations can cross the budget before execution reaches a poll.[^compiler][^abi][^runtime]
 
 ### Releasing dispatch
 

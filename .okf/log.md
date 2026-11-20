@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Return from empty finalizer polls after reading the registration count. Preserve ready-queue handoff and explicit cycle collection. See [ARC finalizers](/concepts/arc-finalizers.md).
+
 - 2026-11-20 (codex/1) — Follow bounded branches and local mutable slots when placing finalizer polls. Check every 64 condition evaluations in bounded while loops. See [ARC finalizers](/concepts/arc-finalizers.md).
 
 - 2026-11-20 (codex/1) — Use native kernels for array fill, blit, and sub. Check the actual tagged slices and keep ownership-aware copies for pointer payloads. See [stdlib compatibility](/concepts/stdlib-compatibility.md).
