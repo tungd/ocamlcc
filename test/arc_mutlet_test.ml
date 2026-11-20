@@ -1,9 +1,8 @@
 (* ARC pass regression tests: a [MutLet] slot must be released exactly once.
 
-   [Lmutlet] never reaches the frontend today (see .okf/perceus-arc.md), so
-   these tests drive hand-written Lambda IR — the same shape the official
-   frontend emits once [@tail_mod_cons] / future [let mutable] lowering kicks
-   in — through [Anf.of_lambda] and [Arc_pass.run].
+   These tests drive hand-written [Lmutlet] terms through [Anf.of_lambda]
+   and [Arc_pass.run] to exercise mutable-slot control flow directly.
+   [local_refs_test.ml] covers promotion from OCaml source.
 
    A mutable slot lives until the enclosing scope exits (the function-exit
    [Halt] or a [Raise]). Control flowing through a [LetJoin] rhs, loop

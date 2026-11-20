@@ -1512,6 +1512,46 @@ let inline_local_calls code =
   in
   visit 0 Ident.Map.empty code
 
+(* The address of a one-field mutable block can be removed when every
+   occurrence reads or writes that field. Immutable aliases have the same
+   address. Closures, unknown calls and other uses can observe the block. *)
+let promote_local_refs code =
+  let open Lambda in
+  let exception Escapes in
+  let rec replace slot aliases = function
+    | Llet (_, _, alias, Lvar id, body) when Ident.Set.mem id aliases ->
+        replace slot (Ident.Set.add alias aliases) body
+    | Lprim (Pfield (0, _, _), [ Lvar id ], _) when Ident.Set.mem id aliases ->
+        Lmutvar slot
+    | Lprim (Psetfield (0, _, _), [ Lvar id; rhs ], _) when Ident.Set.mem id aliases ->
+        Lassign (slot, replace slot aliases rhs)
+    | Lprim (Poffsetref offset, [ Lvar id ], loc) when Ident.Set.mem id aliases ->
+        Lassign (slot, Lprim (Poffsetint offset, [ Lmutvar slot ], loc))
+    | Lvar id | Lmutvar id | Lassign (id, _) | Lifused (id, _)
+      when Ident.Set.mem id aliases -> raise Escapes
+    | Lfunction _ as expr ->
+        if not (Ident.Set.disjoint aliases (free_variables expr)) then raise Escapes;
+        expr
+    | Lletrec (defs, body) ->
+        List.iter (fun def ->
+          if not (Ident.Set.disjoint aliases (free_variables (Lfunction def.def))) then
+            raise Escapes) defs;
+        Lletrec (defs, replace slot aliases body)
+    | expr -> shallow_map (replace slot aliases) expr
+  in
+  let rec visit = function
+    | Llet (mode, kind, id, Lprim ((Pmakeblock (0, Mutable, shape) as p), [init], loc), body) ->
+        let init = visit init in
+        let body = visit body in
+        (match replace id (Ident.Set.singleton id) body with
+        | body ->
+            let slot_kind = match shape with Some [kind] -> kind | _ -> Pgenval in
+            Lmutlet (slot_kind, id, init, body)
+        | exception Escapes -> Llet (mode, kind, id, Lprim (p, [init], loc), body))
+    | expr -> shallow_map visit expr
+  in
+  visit code
+
 (* Groups that use their members only as saturated calls can share a
    dispatcher closure. Its environment stays borrowed across transitions.
    First-class uses outside the group call it through wrappers of the original
@@ -1709,7 +1749,8 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir
           | None -> program.code
         in
         let cleaned =
-          code |> inline_local_calls |> drop_unused_alias_lets |> lift_recursive_calls
+          code |> inline_local_calls |> drop_unused_alias_lets |> promote_local_refs
+          |> lift_recursive_calls
         in
         let code = conv_tail cleaned |> specialize_scalar_bindings in
         Ok { module_ident = program.module_ident; code }

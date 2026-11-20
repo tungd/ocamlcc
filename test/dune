@@ -400,3 +400,8 @@
  (name lambda_inline_test)
  (modules lambda_inline_test)
  (libraries ocamlcc str))
+
+(test
+ (name local_refs_test)
+ (modules local_refs_test)
+ (libraries ocamlcc str))

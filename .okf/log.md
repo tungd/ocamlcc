@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Promote non-escaping refs and equivalent mutable blocks to local slots before ANF. Reuse immediate-slot inference and owning-slot cleanup. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Inline saturated local functions and specialize known callbacks before building closures or inserting ARC. See [compiler pipeline](/concepts/compiler-pipeline.md#local-inlining-and-known-callbacks).
 
 - 2026-11-20 (codex/1) — Test the immediate tag and null inline for explicit ARC operations in QBE. Call the pointer retain or release helper on the heap path. See [Perceus ARC](/concepts/perceus-arc.md).
