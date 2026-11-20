@@ -543,6 +543,55 @@ static int64_t noop_fiber_fn(int64_t clos, int64_t arg)
     return arg;
 }
 
+static int64_t yield_from_effect_stack(int64_t clos, int64_t arg)
+{
+    (void)clos;
+    assert(ocamlcc_fiber_is_main(1) == 1);
+    return ocamlcc_fiber_suspend(arg);
+}
+
+static int64_t wren_with_effect_stack(int64_t closure, int64_t arg)
+{
+    const ArcClosure *c = (const ArcClosure *)(uintptr_t)closure;
+    int64_t handler = (int64_t)c->env[1];
+    int64_t stack = caml_alloc_stack(handler, handler, handler);
+    arc_fiber_push(stack);
+    int64_t result = ocamlcc_effect_runstack(stack, (int64_t)c->env[0], arg);
+    arc_fiber_pop(1);
+    arc_release_val(stack);
+    return result;
+}
+
+static void test_wren_suspend_through_effect_stack(void)
+{
+    int64_t before = arc_live_objects();
+    ArcClosure *yield = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
+    yield->code = (void *)yield_from_effect_stack;
+    yield->arity = 1;
+    ArcClosure *ret = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
+    ret->code = (void *)noop_fiber_fn;
+    ret->arity = 1;
+    ArcClosure *outer = arc_alloc(ARC_TAG_CLOSURE, 2,
+                                  sizeof(ArcClosure) + 2 * sizeof(int64_t));
+    outer->code = (void *)wren_with_effect_stack;
+    outer->arity = 1;
+    outer->env[0] = (uintptr_t)yield;
+    outer->env[1] = (uintptr_t)ret;
+
+    int64_t fiber = ocamlcc_fiber_create((int64_t)(uintptr_t)outer);
+    assert(ocamlcc_fiber_resume(fiber, tagged(10)) == tagged(10));
+    assert(ocamlcc_fiber_is_done(fiber) == 1);
+    assert(ocamlcc_fiber_resume(fiber, tagged(20)) == tagged(20));
+    assert(ocamlcc_fiber_is_done(fiber) == 3);
+    arc_release_val(fiber);
+
+    fiber = ocamlcc_fiber_create((int64_t)(uintptr_t)outer);
+    assert(ocamlcc_fiber_resume(fiber, tagged(30)) == tagged(30));
+    arc_release_val(fiber); /* abandons both the Wren and effect stacks */
+    arc_release(outer);
+    assert(!ocamlcc_get_exn() && arc_live_objects() == before);
+}
+
 static void test_fiber_robustness(void)
 {
     int64_t before = arc_live_objects();
@@ -1121,6 +1170,7 @@ int main(void)
     test_poller_multi_waiters_and_overflow();
     test_bounds_and_marshal_dos();
     test_fiber_robustness();
+    test_wren_suspend_through_effect_stack();
     test_runtime_3_3();
     test_reachable_words();
     test_view_lifetime();

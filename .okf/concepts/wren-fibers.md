@@ -52,6 +52,27 @@ Cross-calls raise `Invalid_argument`: `Fiber.suspend` inside a spawned fiber or 
 
 No OCaml 5 multicore domains and no multi-shot effects: one cooperative scheduler, explicit single-shot coroutines (`Stdlib.Fiber`, design doc §2 non-goals).
 
+## OCaml 5 effect handlers
+
+The stdlib compatibility build uses the existing guarded C stacks for
+`Effect.Deep` and the OCaml effect-pattern syntax. A handler delimiter starts
+one fiber. Its value, exception, and effect callbacks execute in the caller.
+`perform` hands the effect to that caller, which receives a one-shot
+continuation owning the suspended fiber. Resuming atomically takes that
+ownership. Declining an effect forwards it through enclosing delimiters while
+the inner continuation remains rooted on the forwarding stack.
+
+`discontinue` resumes at the perform site with a raised exception so the
+captured code can catch it and run cleanup. Dropping a continuation releases
+the shadow roots and frees its stack. These are separate lifetime operations.
+The cycle collector also visits the fiber's retained handler closures.
+
+An effect fiber can forward a Wren suspension through its delimiters to the
+enclosing Wren resumer. A Wren coroutine remains its own effect scope, and a
+captured effect stack resumes on the OS thread that created it. The native
+runtime regression covers resuming and dropping a Wren coroutine suspended
+inside an effect delimiter.
+
 # Status
 
 Implemented and verified across `fiber_test` and `fiber_io` (`runtime/pal_ctx.S` for Darwin/Linux `arm64` and `x86_64`, `runtime/pal.c` `kqueue`/`epoll`, `runtime/fiber.c`, `stdlib/stdlib__fiber.ml`, and `ShadowPush`/`ShadowPop` lowering in `lib/arc_pass.ml` and `lib/codegen.ml`) with zero ARC leaks.

@@ -6,7 +6,7 @@ tags: [stdlib, compatibility, testing, arc]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-19
+  at: 2026-11-20
 sources:
   - id: runner
     resource: tools/stdlib_compat.py
@@ -64,6 +64,12 @@ cover zero-scan-count
 arrays with pointers, empty slices, and the preservation of floating-point
 bits. Scalar comparisons, hashing, append, and concat use the OCaml
 module.[^bulk-ops]
+
+The Effect overlay uses [stackful fibers](/concepts/wren-fibers.md#ocaml-5-effect-handlers)
+for `Effect.Deep` and the OCaml effect-pattern syntax. The standard library
+regression runs the same fixture on ocamlcc and stock OCaml and covers
+forwarding, one-shot continuations, exception injection, and abandonment.
+Continuation callstack introspection still returns an empty backtrace.
 
 The Lexing overlay implements both DFA engines in OCaml, including signed
 16-bit transitions, unsigned memory-code offsets, captures, backtracking,

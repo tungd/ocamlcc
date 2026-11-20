@@ -1400,6 +1400,8 @@ static void cc_visit_children(ArcHeader *hdr, CcChildFn fn, void *ctx)
             fn(f->exn_slot, ctx);
         if (f->pending_exn != 0)
             fn(f->pending_exn, ctx);
+        for (size_t i = 0; i < FIBER_HANDLER_COUNT; i++)
+            fn(f->handlers[i], ctx);
     } else if (!is_unscanned_leaf_tag(tag)) {
         int64_t *fields = (int64_t *)(hdr + 1);
         uint32_t n = arc_scan_count(hdr);

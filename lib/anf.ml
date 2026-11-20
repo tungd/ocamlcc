@@ -588,6 +588,18 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
           conv_expr i (fun ia ->
               conv_expr v (fun va ->
                   emit_cexpr (ArraySet (true, kind, aa, ia, va)))))
+  | Lprim (((Pperform | Prunstack | Presume | Preperform) as prim), args, _) ->
+      let symbol =
+        match prim with
+        | Pperform -> "ocamlcc_effect_perform"
+        | Prunstack -> "ocamlcc_effect_runstack"
+        | Presume -> "ocamlcc_effect_resume"
+        | Preperform -> "ocamlcc_effect_reperform"
+        | _ -> assert false
+      in
+      let abi = Ccalls.find symbol in
+      if List.length args <> abi.argc then raise (Unsupported (describe lam));
+      conv_atoms args (fun vs -> emit_cexpr (Ccall (symbol, vs)))
   | Lprim (Pccall pd, args, _) -> (
       match (pd.Primitive.prim_name, args) with
       | "caml_create_bytes", [ len ] ->

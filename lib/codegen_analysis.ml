@@ -160,6 +160,11 @@ let collect_globals self_sym (e : Anf.aexpr) : string list =
     match ce with
     | GetGlobal name -> add name
     | DirectApp (target, _) -> add target.unit_name
+    | Ccall (("ocamlcc_effect_perform" | "ocamlcc_effect_runstack"
+             | "ocamlcc_effect_resume" | "ocamlcc_effect_reperform"), _) ->
+        (* Primitive calls can mention no module global. Initialize the
+           public Effect exception constructors before any such call. *)
+        add "Stdlib__Effect"
     | Fun lf -> scan_aexpr lf.body
     | _ -> ()
   in

@@ -21,6 +21,18 @@ typedef enum FiberState {
     FIBER_DONE
 } FiberState;
 
+typedef enum FiberSuspension {
+    FIBER_SUSPEND_WREN,
+    FIBER_SUSPEND_EFFECT
+} FiberSuspension;
+
+typedef enum FiberHandler {
+    FIBER_RETC,
+    FIBER_EXNC,
+    FIBER_EFFC,
+    FIBER_HANDLER_COUNT
+} FiberHandler;
+
 typedef struct Fiber {
     PalContext    ctx;
     uint8_t      *c_stack;       /* NULL for root main-thread fiber */
@@ -38,7 +50,13 @@ typedef struct Fiber {
     int64_t       pending_exn;   /* owned uncaught exception on FIBER_DONE */
     int           owns_finalizer_dispatch; /* set during an unreleased callback */
     FiberState    state;
+    FiberSuspension suspension;
+    int64_t       handlers[FIBER_HANDLER_COUNT]; /* zeroed for Wren coroutines */
+    uint64_t      effect_owner;  /* zero for Wren; effect stacks stay on one thread */
 } Fiber;
+
+int64_t caml_alloc_stack(int64_t retc, int64_t exnc, int64_t effc);
+int64_t ocamlcc_effect_runstack(int64_t stack, int64_t fn, int64_t arg);
 
 Fiber *arc_fiber_current(void);
 

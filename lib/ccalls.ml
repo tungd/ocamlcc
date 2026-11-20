@@ -70,6 +70,14 @@ let table =
     ("ocamlcc_fiber_can_yield", abi 1 true false);
     ("ocamlcc_fiber_sched_get", abi 1 false false);
     ("ocamlcc_fiber_sched_set", abi 1 false false);
+    (* Algebraic effects share the stackful coroutine and shadow-stack ABI. *)
+    ("caml_alloc_stack", abi 3 false false);
+    ("caml_continuation_use_noexc", abi 1 false false);
+    ("ocamlcc_effect_register_exceptions", abi 2 false false);
+    ("ocamlcc_effect_perform", abi 1 true true);
+    ("ocamlcc_effect_runstack", abi 3 true true);
+    ("ocamlcc_effect_resume", abi 4 true true);
+    ("ocamlcc_effect_reperform", abi 3 true true);
     ("ocamlcc_monotonic_ns", abi 1 false false);
     ("ocamlcc_poller_watch", abi 3 true false);
     ("ocamlcc_poller_unwatch_waiter", abi 3 false false);
@@ -317,6 +325,7 @@ let returns_imm = function
   | "ocamlcc_set_at_exit_fn" | "ocamlcc_sys_is_win32"
   | "ocamlcc_fiber_is_done" | "ocamlcc_fiber_is_main"
   | "ocamlcc_fiber_can_yield" | "ocamlcc_fiber_sched_set"
+  | "ocamlcc_effect_register_exceptions"
   | "ocamlcc_monotonic_ns" | "ocamlcc_poller_watch"
   | "ocamlcc_poller_unwatch_waiter" | "ocamlcc_poller_wait"
   | "ocamlcc_arc_live" | "ocamlcc_arc_reuse" | "ocamlcc_arc_collect"

@@ -22,6 +22,8 @@ typedef struct FiberThreadState {
 
 static _Thread_local FiberThreadState *tls_state = NULL;
 static _Thread_local Fiber            *tls_current_fiber = NULL;
+static _Thread_local uint64_t         tls_effect_owner = 0;
+static _Atomic uint64_t                g_next_effect_owner = 1;
 
 /* Once a stackful fiber is published, execution on that fiber must check
  * TLS. A main-stack frame never becomes abandonable, even across the first
@@ -237,6 +239,8 @@ void fiber_destroy(Fiber *f)
         f->pending_exn = 0;
         arc_release_val(ex);
     }
+    for (size_t i = 0; i < FIBER_HANDLER_COUNT; i++)
+        arc_release_val(f->handlers[i]);
     if (f->c_stack != NULL) {
         pal_page_free(f->c_stack, f->c_stack_bytes);
         f->c_stack = NULL;
@@ -319,16 +323,15 @@ int64_t ocamlcc_fiber_create(int64_t closure)
     return (int64_t)(uintptr_t)f;
 }
 
-int64_t ocamlcc_fiber_resume(int64_t fiber_val, int64_t send_val)
+static int64_t fiber_resume_owned(Fiber *f, int64_t send_val)
 {
-    Fiber *f = (Fiber *)(uintptr_t)fiber_val;
     if (f == NULL || f->state != FIBER_SUSPENDED || f->caller != NULL) {
+        arc_release_val(send_val);
         ocamlcc_fiber_raise_invalid();
         return 1;
     }
 
     arc_retain(f);
-    arc_retain_val(send_val);
     if (f->result != 0)
         arc_release_val(f->result);
     f->result = send_val;
@@ -354,6 +357,12 @@ int64_t ocamlcc_fiber_resume(int64_t fiber_val, int64_t send_val)
     return out;
 }
 
+int64_t ocamlcc_fiber_resume(int64_t fiber_val, int64_t send_val)
+{
+    arc_retain_val(send_val);
+    return fiber_resume_owned((Fiber *)(uintptr_t)fiber_val, send_val);
+}
+
 /* poll_finalizers is registered yields = false, so the dispatcher fiber has
  * no shadow-stack window around finalizer callbacks: every suspension entry
  * point checks owns_finalizer_dispatch and refuses instead of stranding. */
@@ -363,19 +372,18 @@ static int finalizer_owns_current_fiber(void)
     return cur != NULL && cur->owns_finalizer_dispatch != 0;
 }
 
-int64_t ocamlcc_fiber_suspend(int64_t send_val)
+static int effect_fiber(const Fiber *f)
 {
-    Fiber *cur = arc_fiber_current();
-    if (finalizer_owns_current_fiber() ||
-        cur == &tls_main_fiber || cur->caller == NULL) {
-        ocamlcc_fiber_raise_invalid();
-        return 1;
-    }
+    return f->effect_owner != 0;
+}
 
-    arc_retain_val(send_val);
+static int64_t fiber_suspend_owned(Fiber *cur, int64_t send_val,
+                                   FiberSuspension suspension)
+{
     if (cur->result != 0)
         arc_release_val(cur->result);
     cur->result = send_val;
+    cur->suspension = suspension;
     cur->state = FIBER_SUSPENDED;
 
     Fiber *target = cur->caller;
@@ -385,6 +393,26 @@ int64_t ocamlcc_fiber_suspend(int64_t send_val)
     int64_t in = cur->result;
     cur->result = 0;
     return in;
+}
+
+int64_t ocamlcc_fiber_suspend(int64_t send_val)
+{
+    Fiber *cur = arc_fiber_current();
+    /* A Wren operation belongs to the enclosing Wren coroutine. Forward
+     * through any intervening effect delimiters on the way to its caller. */
+    for (Fiber *f = cur; f != NULL; f = f->caller) {
+        if (f->owns_finalizer_dispatch)
+            break;
+        if (!effect_fiber(f)) {
+            if (f->caller != NULL) {
+                arc_retain_val(send_val);
+                return fiber_suspend_owned(cur, send_val, FIBER_SUSPEND_WREN);
+            }
+            break;
+        }
+    }
+    ocamlcc_fiber_raise_invalid();
+    return 1;
 }
 
 int64_t ocamlcc_fiber_is_done(int64_t fiber_val)
@@ -398,7 +426,10 @@ int64_t ocamlcc_fiber_is_done(int64_t fiber_val)
 int64_t ocamlcc_fiber_is_main(int64_t unit)
 {
     (void)unit;
-    return arc_fiber_current() == &tls_main_fiber ? 3 : 1;
+    Fiber *cur = arc_fiber_current();
+    while (effect_fiber(cur))
+        cur = cur->caller;
+    return cur == &tls_main_fiber ? 3 : 1;
 }
 
 int64_t ocamlcc_fiber_can_yield(int64_t unit)
@@ -409,6 +440,198 @@ int64_t ocamlcc_fiber_can_yield(int64_t unit)
         return 1;
     }
     return 1;
+}
+
+/* Effect handlers run on the resumer, outside the captured stack. Each
+ * continuation owns one suspended fiber; taking it empties that particular
+ * continuation even if the fiber later suspends and produces another. */
+static int64_t g_effect_unhandled;
+static int64_t g_effect_already_resumed;
+
+int64_t ocamlcc_effect_register_exceptions(int64_t unhandled, int64_t resumed)
+{
+    int64_t ctor = ((int64_t *)(uintptr_t)unhandled)[0];
+    arc_retain_val(ctor);
+    arc_retain_val(resumed);
+    g_effect_unhandled = ctor;
+    g_effect_already_resumed = resumed;
+    return 1;
+}
+
+static Fiber *effect_take_continuation(int64_t continuation)
+{
+    _Atomic int64_t *slot = (_Atomic int64_t *)(uintptr_t)continuation;
+    int64_t value = atomic_exchange_explicit(slot, 1, memory_order_acq_rel);
+    return value == 1 ? NULL : (Fiber *)(uintptr_t)value;
+}
+
+int64_t caml_continuation_use_noexc(int64_t continuation)
+{
+    Fiber *f = effect_take_continuation(continuation);
+    return f == NULL ? 1 : (int64_t)(uintptr_t)f;
+}
+
+static int64_t effect_capture(Fiber *f)
+{
+    int64_t *cont = arc_alloc(0, 1, 2 * sizeof(int64_t));
+    arc_retain(f);
+    atomic_init((_Atomic int64_t *)cont, (int64_t)(uintptr_t)f);
+    cont[1] = 1; /* last_fiber is carried by the forwarding frames */
+    return (int64_t)(uintptr_t)cont;
+}
+
+int64_t caml_alloc_stack(int64_t retc, int64_t exnc, int64_t effc)
+{
+    int64_t stack = ocamlcc_fiber_create(1);
+    Fiber *f = (Fiber *)(uintptr_t)stack;
+    arc_retain_val(retc);
+    arc_retain_val(exnc);
+    arc_retain_val(effc);
+    f->handlers[FIBER_RETC] = retc;
+    f->handlers[FIBER_EXNC] = exnc;
+    f->handlers[FIBER_EFFC] = effc;
+    /* A newly created OS thread may reuse a departed thread's pthread_t. */
+    if (tls_effect_owner == 0) {
+        tls_effect_owner = atomic_fetch_add_explicit(
+            &g_next_effect_owner, 1, memory_order_relaxed);
+        if (tls_effect_owner == 0)
+            pal_abort();
+    }
+    f->effect_owner = tls_effect_owner;
+    return stack;
+}
+
+static int64_t effect_already_resumed(void)
+{
+    arc_retain_val(g_effect_already_resumed);
+    ocamlcc_set_exn(g_effect_already_resumed);
+    return 1;
+}
+
+static int64_t effect_drive(Fiber *f, int64_t payload)
+{
+    if (f->effect_owner != tls_effect_owner) {
+        arc_release_val(payload);
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
+    int64_t result;
+    while (1) {
+        result = fiber_resume_owned(f, payload);
+        if (f->state == FIBER_DONE || f->suspension == FIBER_SUSPEND_EFFECT)
+            break;
+        payload = fiber_suspend_owned(arc_fiber_current(), result, FIBER_SUSPEND_WREN);
+    }
+
+    int64_t exn = ocamlcc_get_exn();
+    FiberHandler handler = exn != 0 ? FIBER_EXNC :
+        f->state == FIBER_DONE ? FIBER_RETC : FIBER_EFFC;
+    if (exn != 0) {
+        ocamlcc_set_exn(0);
+        result = exn;
+    }
+    int64_t callback = f->handlers[handler];
+    arc_retain_val(callback);
+    arc_fiber_push(callback);
+    int64_t answer = handler == FIBER_EFFC
+        ? ocamlcc_apply3_raw(callback, result, effect_capture(f), 1)
+        : ocamlcc_apply1_raw(callback, result);
+    arc_fiber_pop(1);
+    arc_release_val(callback);
+    return answer;
+}
+
+/* Resume messages contain a function and its argument. Unit in the
+ * function slot denotes injecting an already constructed exception. */
+static int64_t effect_reply(int64_t fn, int64_t owned_arg)
+{
+    int64_t *pair = arc_alloc(0, 2, 2 * sizeof(int64_t));
+    arc_retain_val(fn);
+    pair[0] = fn;
+    pair[1] = owned_arg;
+    return (int64_t)(uintptr_t)pair;
+}
+
+static int64_t effect_suspend(int64_t effect)
+{
+    Fiber *cur = arc_fiber_current();
+    if (!effect_fiber(cur)) {
+        int64_t *exn = arc_alloc(0, 2, 2 * sizeof(int64_t));
+        arc_retain_val(g_effect_unhandled);
+        arc_retain_val(effect);
+        exn[0] = g_effect_unhandled;
+        exn[1] = effect;
+        ocamlcc_set_exn((int64_t)(uintptr_t)exn);
+        return 1;
+    }
+    if (cur->owns_finalizer_dispatch) {
+        ocamlcc_fiber_raise_invalid();
+        return 1;
+    }
+    arc_retain_val(effect);
+    return fiber_suspend_owned(cur, effect, FIBER_SUSPEND_EFFECT);
+}
+
+int64_t ocamlcc_effect_perform(int64_t effect)
+{
+    int64_t reply = effect_suspend(effect);
+    if (ocamlcc_get_exn() != 0)
+        return 1;
+    int64_t *pair = (int64_t *)(uintptr_t)reply;
+    int64_t fn = pair[0], arg = pair[1];
+    arc_retain_val(fn);
+    arc_retain_val(arg);
+    arc_release_val(reply);
+    if (fn == 1) {
+        ocamlcc_set_exn(arg);
+        return 1;
+    }
+    arc_fiber_push(fn);
+    int64_t result = ocamlcc_apply1_raw(fn, arg);
+    arc_fiber_pop(1);
+    arc_release_val(fn);
+    return result;
+}
+
+int64_t ocamlcc_effect_runstack(int64_t stack, int64_t fn, int64_t arg)
+{
+    Fiber *f = (Fiber *)(uintptr_t)stack;
+    arc_retain_val(fn);
+    f->entry_closure = fn;
+    arc_retain_val(arg);
+    return effect_drive(f, arg);
+}
+
+int64_t ocamlcc_effect_resume(int64_t stack, int64_t fn, int64_t arg, int64_t last)
+{
+    (void)last;
+    if (stack == 1)
+        return effect_already_resumed();
+    arc_retain_val(arg);
+    return effect_drive((Fiber *)(uintptr_t)stack, effect_reply(fn, arg));
+}
+
+int64_t ocamlcc_effect_reperform(int64_t effect, int64_t cont, int64_t last)
+{
+    (void)last;
+    /* Capture the next enclosing stack with the inner continuation still
+     * rooted here. Forward its reply to the original perform unchanged. */
+    int64_t reply = effect_suspend(effect);
+    int64_t exn = ocamlcc_get_exn();
+    if (exn != 0) {
+        ocamlcc_set_exn(0);
+        reply = effect_reply(1, exn);
+    }
+    Fiber *f = effect_take_continuation(cont);
+    if (f == NULL) {
+        arc_release_val(reply);
+        return effect_already_resumed();
+    }
+    arc_fiber_push((int64_t)(uintptr_t)f);
+    int64_t result = effect_drive(f, reply);
+    arc_fiber_pop(1);
+    arc_release(f);
+    return result;
 }
 
 int64_t ocamlcc_fiber_sched_get(int64_t unit)
