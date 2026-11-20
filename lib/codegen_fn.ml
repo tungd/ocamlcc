@@ -281,7 +281,8 @@ let compile_scc_group compile_aexpr b gname ~export ~with_closure
 let compile_group compile_aexpr b gname (members : (Ident.t * Anf.lfunction) list)
     : unit =
   let members_with_env = List.map (fun (id, lf) -> (id, lf, [])) members in
-  compile_scc_group compile_aexpr b gname ~export:true ~with_closure:false
+  let export = List.exists (fun (_, lf) -> not lf.Anf.private_entry) members in
+  compile_scc_group compile_aexpr b gname ~export ~with_closure:false
     members_with_env
 
 let define_pure_function compile_aexpr b id (lf : Anf.lfunction)

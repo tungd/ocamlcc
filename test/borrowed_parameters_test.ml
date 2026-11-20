@@ -45,3 +45,44 @@ let () =
     let twice x = use x + use x
   |} in
   forbid unsafe "use_borrowed"
+
+let () =
+  let il = compile {|
+    external length : string -> int = "%string_length"
+    external ( + ) : int -> int -> int = "%addint"
+    external ( - ) : int -> int -> int = "%subint"
+    external ( = ) : int -> int -> bool = "%eq"
+    let[@inline never] width text = length text
+    let[@inline never] forward text = width text
+    let[@inline never] use_forward text = forward text + length text
+    let rec scan text n =
+      if n = 0 then width text else scan text (n - 1)
+    let use_scan text n = scan text n + length text
+  |} in
+  let borrowed name = "call $ocamlcc_Borrow_params_" ^ name ^ "_borrowed(" in
+  require (function_body il "use_forward") (borrowed "forward");
+  require (function_body il "forward_borrowed") (borrowed "width");
+  require (function_body il "use_scan") (borrowed "scan");
+  let worker = function_body il "scan_borrowed" in
+  require worker (borrowed "width");
+  forbid worker "call extern $arc_retain(";
+  forbid worker "call extern $arc_release(";
+  forbid il "export function l $ocamlcc_Borrow_params_scan_borrowed"
+
+let () =
+  let il = compile {|
+    external length : string -> int = "%string_length"
+    external ( + ) : int -> int -> int = "%addint"
+    external ( - ) : int -> int -> int = "%subint"
+    external ( = ) : int -> int -> bool = "%eq"
+    let rec left text n = if n = 0 then length text else right text (n - 1)
+    and right text n = if n = 0 then length text + 1 else left text (n - 1)
+    let bridge text n = left text n + length text
+    let rec keep text n = if n = 0 then text else alias text (n - 1)
+    and alias text n = if n = 0 then text else keep text (n - 1)
+    let use_keep text n = keep text n, length text
+  |} in
+  require il "left_borrowed_entry";
+  require il "right_borrowed_entry";
+  forbid il "keep_borrowed";
+  forbid il "alias_borrowed"

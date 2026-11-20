@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Infer borrowed argument positions across static recursive groups and saturated forwarding calls. Preserve owning entries and test long mutual recursion. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Keep typed immediate field stores and inline heap checks for pointer-capable field and array ownership. Cover overwrites and checked-store errors. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Resume shallow continuations with fresh handlers on the same effect fiber. Check handler replacement and cancellation against stock OCaml. See [Wren-style fibers](/concepts/wren-fibers.md#ocaml-5-effect-handlers).

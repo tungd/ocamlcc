@@ -343,13 +343,32 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | Assign (_, rhs) | AssignImm (_, rhs) -> (Ident.Set.empty, [ rhs ])
   | Fun _ -> (Ident.Set.empty, [])
 
-(* A private entry may borrow parameters used only by local readers.
-   Keep owned entries for uses that transfer ownership or may suspend or
-   publish the object. A worker duplicates no nested function identities. *)
-let read_only_parameters (lf : Anf.lfunction) =
+let pointer_parameters (lf : Anf.lfunction) =
+  List.fold_left
+    (fun set (id, kind) ->
+      if kind = Lambda.Pintval then set else Ident.Set.add id set)
+    Ident.Set.empty lf.params
+
+let borrow_flags (lf : Anf.lfunction) read_only =
+  List.map (fun (param, _) -> Ident.Set.mem param read_only) lf.params
+
+let borrowed_flags env id =
+  Option.map (fun entry -> entry.borrow) (Ident.Map.find_opt id env.borrowed_entries)
+
+(* A private entry may borrow parameters read locally or forwarded to other
+   borrowed arguments. A worker duplicates no nested function identities. *)
+let read_only_parameters ~borrowed (lf : Anf.lfunction) =
   let remove_uses params args = Ident.Set.diff params (atoms_vars args) in
   let cexpr params = function
-    | Anf.App _ | DirectApp _ | Fun _ -> Ident.Set.empty
+    | Anf.App (Var fn, args) -> (
+        match borrowed fn with
+        | Some flags when List.length flags = List.length args ->
+            List.fold_left2
+              (fun params borrows arg ->
+                if borrows then params else Ident.Set.diff params (atom_vars arg))
+              params flags args
+        | _ -> Ident.Set.empty)
+    | App _ | DirectApp _ | Fun _ -> Ident.Set.empty
     | Ccall (("ocamlcc_finalizers_due" | "ocamlcc_poll_finalizers"), []) ->
         params
     | Ccall _ -> Ident.Set.empty
@@ -379,13 +398,44 @@ let read_only_parameters (lf : Anf.lfunction) =
       let params = List.fold_left (fun left (_, arm) -> scan left arm) params arms in
       Option.fold ~none:params ~some:(scan params) fallback
   in
-  let candidates =
+  scan (pointer_parameters lf) lf.body
+
+let recursive_borrows env (bindings : Anf.rec_binding list) =
+  let infer f =
     List.fold_left
-      (fun set (id, kind) ->
-        if kind = Lambda.Pintval then set else Ident.Set.add id set)
-      Ident.Set.empty lf.params
+      (fun map (rb : Anf.rec_binding) ->
+        let flags =
+          if Ident.Set.mem rb.id env.yielding_funs then
+            borrow_flags rb.def Ident.Set.empty
+          else f rb.def
+        in
+        Ident.Map.add rb.id flags map)
+      Ident.Map.empty bindings
   in
-  scan candidates lf.body
+  let rec solve assumptions =
+    let borrowed id =
+      match Ident.Map.find_opt id assumptions with
+      | Some _ as flags -> flags
+      | None -> borrowed_flags env id
+    in
+    let next = infer (fun lf -> borrow_flags lf (read_only_parameters ~borrowed lf)) in
+    if Ident.Map.equal ( = ) assumptions next then next else solve next
+  in
+  solve (infer (fun lf -> borrow_flags lf (pointer_parameters lf)))
+
+let add_borrowed_entry env id borrow =
+  let worker = Ident.create_local (Ident.name id ^ "_borrowed") in
+  let imm_funs =
+    match Ident.Map.find_opt id env.imm_funs with
+    | Some arity -> Ident.Map.add worker arity env.imm_funs
+    | None -> env.imm_funs
+  in
+  worker,
+  { env with
+    known_funs = Ident.Map.add worker (List.length borrow) env.known_funs;
+    pure = Ident.Set.add worker env.pure;
+    imm_funs;
+    borrowed_entries = Ident.Map.add id { worker; borrow } env.borrowed_entries }
 
 (* Fuse an immutable field into local operations on its value. The receiver
    stays live through those operations via their borrowed operands. Do not
@@ -892,24 +942,14 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
   | Let (id, Fun lf, body) ->
       if Ident.Set.mem id env.pure then
         let lf' = transform_fun env ~self_id:None ~has_closure:false lf in
-        let read_only = read_only_parameters lf in
+        let read_only =
+          if Ident.Set.mem id env.yielding_funs then Ident.Set.empty
+          else read_only_parameters ~borrowed:(borrowed_flags env) lf
+        in
         let body' =
           if Ident.Set.is_empty read_only then transform_aexpr env body
           else
-            let worker = Ident.create_local (Ident.name id ^ "_borrowed") in
-            let borrow = List.map (fun (p, _) -> Ident.Set.mem p read_only) lf.params in
-            let imm_funs =
-              match Ident.Map.find_opt id env.imm_funs with
-              | Some arity -> Ident.Map.add worker arity env.imm_funs
-              | None -> env.imm_funs
-            in
-            let env_body =
-              { env with
-                known_funs = Ident.Map.add worker (List.length lf.params) env.known_funs;
-                pure = Ident.Set.add worker env.pure;
-                imm_funs;
-                borrowed_entries = Ident.Map.add id { worker; borrow } env.borrowed_entries }
-            in
+            let worker, env_body = add_borrowed_entry env id (borrow_flags lf read_only) in
             let body' = transform_aexpr env_body body in
             if Ident.Set.mem worker (Anf.free_vars body') then
               let worker_def =
@@ -1030,17 +1070,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           bindings
       in
       if all_pure then
-        let bindings' =
-          List.map
-            (fun (rb : Anf.rec_binding) ->
-              { rb with
-                def =
-                  transform_fun env ~self_id:(Some rb.id) ~has_closure:false
-                    rb.def })
-            bindings
-        in
-        let body' = transform_aexpr env body in
-        LetRec (bindings', body')
+        transform_pure_group env bindings body
       else
         let cap_list_per_rb =
           List.map
@@ -1301,6 +1331,50 @@ and transform_branch (env : state) (arm : Anf.aexpr) : Anf.aexpr =
   let dead = Ident.Set.diff env.owned live in
   let arm' = transform_aexpr { env with owned = Ident.Set.diff env.owned dead } arm in
   emit_drops env dead arm'
+
+and transform_pure_group env (bindings : Anf.rec_binding list) body =
+  let plan = recursive_borrows env bindings in
+  let env, workers =
+    List.fold_left
+      (fun (env, workers) (rb : Anf.rec_binding) ->
+        let flags = Ident.Map.find rb.id plan in
+        if not (List.exists Fun.id flags) then env, workers
+        else
+          let worker, env = add_borrowed_entry env rb.id flags in
+          let params =
+            List.fold_left2
+              (fun acc (param, _) borrow ->
+                if borrow then Ident.Set.add param acc else acc)
+              Ident.Set.empty rb.def.params flags
+          in
+          env, (worker, params, rb.def) :: workers)
+      (env, []) bindings
+  in
+  let bindings =
+    List.map (fun (rb : Anf.rec_binding) ->
+      { rb with def = transform_fun env ~self_id:(Some rb.id) ~has_closure:false rb.def })
+      bindings
+  in
+  let body = transform_aexpr env body in
+  let workers =
+    List.rev_map (fun (id, borrowed_params, def) ->
+      let def =
+        transform_fun env ~self_id:(Some id) ~has_closure:false
+          ~borrowed_params { def with private_entry = true }
+      in
+      { Anf.id; def }) workers
+  in
+  let include_body used (rb : Anf.rec_binding) =
+    Ident.Set.union used (Anf.free_vars rb.def.body)
+  in
+  let rec reachable used =
+    let next = List.fold_left (fun used (rb : Anf.rec_binding) ->
+      if Ident.Set.mem rb.id used then include_body used rb else used) used workers
+    in
+    if Ident.Set.equal used next then used else reachable next
+  in
+  let used = reachable (List.fold_left include_body (Anf.free_vars body) bindings) in
+  LetRec (bindings @ List.filter (fun (rb : Anf.rec_binding) -> Ident.Set.mem rb.id used) workers, body)
 
 and transform_fun (env : state) ~self_id ~has_closure
     ?(borrowed_params = Ident.Set.empty) (lf : Anf.lfunction) :
