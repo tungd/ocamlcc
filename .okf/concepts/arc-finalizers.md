@@ -75,7 +75,7 @@ One dispatcher enters the mutator context and removes each pending registration 
 
 When registrations exist, the runtime compares allocation progress since the last completed dispatch with the minor-heap size from `Gc.get ()`. Each newly allocated word and each successful in-place reuse advance the counter. Reuse leaves the public allocation statistics unchanged. Finishing a dispatch also accounts for work done inside callbacks. A skipped collection leaves the allocation budget due.[^runtime]
 
-Generated code checks at function entry, including self-tail-call backedges, at each `for` iteration, before a `while` condition, and at Lambda polls. A due poll enters the dispatcher with live roots available for suspension and exception unwinding. With an empty registry, the check returns immediately and cycles continue to await explicit collection. Straight-line allocations can cross the budget before execution reaches a poll.[^compiler][^abi]
+Generated code polls at function entries that may allocate, call other code, or execute a loop. Self-tail-call backedges, `while` conditions, and explicit Lambda polls still check. Bounded leaf functions made of local operations return directly. A `for` loop with a bounded, allocation-free body polls on its first iteration and every 64 iterations thereafter, in either direction. Other `for` bodies poll on every iteration. A due poll enters the dispatcher with live owners available for exception unwinding. With an empty registry, the check returns immediately and cycles continue to await explicit collection. Straight-line allocations can cross the budget before execution reaches a poll.[^compiler][^abi]
 
 ### Releasing dispatch
 

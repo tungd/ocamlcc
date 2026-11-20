@@ -270,6 +270,39 @@ let with_finalizer_poll body =
           Halt Unit),
       body))
 
+(* Only local, bounded operations can defer polling. A call, an allocation,
+   or a checked operation that constructs an exception needs the usual poll. *)
+let rec is_bounded_local = function
+  | Halt _ | HaltScalar _ -> true
+  | Let (_, (Atom _ | Field _ | IntSelect _
+            | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr
+                     | Cmp _ | Compare_ints | Isout), _, _)
+            | Unop ((Neg | Not | Offset _ | Isint | String_length | Array_length), _)
+            | StringGet (false, _, _)
+            | BytesSet (false, _, _, _) | ArraySet (false, _, _, _, _)
+            | ArrayGet (false, (Lambda.Pintarray | Lambda.Paddrarray), _, _)), body) ->
+      is_bounded_local body
+  | LetJoin (_, lhs, rhs) | If (_, lhs, rhs) | ScalarIf (_, _, lhs, rhs) ->
+      is_bounded_local lhs && is_bounded_local rhs
+  | _ -> false
+
+let with_entry_poll body =
+  if is_bounded_local body then body else with_finalizer_poll body
+
+let with_counted_loop_poll index start body =
+  if is_bounded_local body then
+    (* Poll on the first iteration and every 64 iterations thereafter.
+       Masking the distance works in both directions, including wraparound. *)
+    let distance = Ident.create_local "poll_distance" in
+    let phase = Ident.create_local "poll_phase" in
+    let due = Ident.create_local "loop_poll_due" in
+    let ignored = Ident.create_local "loop_poll" in
+    Let (distance, Binop (Sub, Var index, start),
+      Let (phase, Binop (And, Var distance, Int 63),
+        Let (due, Binop (Cmp Ceq, Var phase, Int 0),
+          LetJoin (ignored, If (Var due, with_finalizer_poll (Halt Unit), Halt Unit), body))))
+  else with_finalizer_poll body
+
 let float_arithmetic = function
   | Lambda.Paddfloat -> Addf
   | Psubfloat -> Subf
@@ -298,7 +331,7 @@ and conv_atoms (lams : Lambda.lambda list) (k : atom list -> aexpr) : aexpr =
 
 and conv_fun (lf : Lambda.lfunction) : lfunction =
   match lf.kind with
-  | Curried -> { params = lf.params; private_entry = false; body = with_finalizer_poll (conv_tail lf.body) }
+  | Curried -> { params = lf.params; private_entry = false; body = with_entry_poll (conv_tail lf.body) }
   | Tupled ->
       let tup = Ident.create_local "tup" in
       let rec bind_fields i = function
@@ -306,7 +339,7 @@ and conv_fun (lf : Lambda.lfunction) : lfunction =
         | (p, _) :: rest ->
             Let (p, Field (i, Immutable_field, Var tup), bind_fields (i + 1) rest)
       in
-      { params = [ (tup, Lambda.Pgenval) ]; private_entry = false; body = with_finalizer_poll (bind_fields 0 lf.params) }
+      { params = [ (tup, Lambda.Pgenval) ]; private_entry = false; body = with_entry_poll (bind_fields 0 lf.params) }
 
 and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   match rhs with
@@ -761,7 +794,7 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
   | Lfor (id, start_e, stop_e, dir, body) ->
       conv_expr start_e (fun sa ->
           conv_expr stop_e (fun ea ->
-              seq_stmt (For (id, sa, ea, dir, with_finalizer_poll (conv_tail body))) (k Unit)))
+              seq_stmt (For (id, sa, ea, dir, with_counted_loop_poll id sa (conv_tail body))) (k Unit)))
   | Lapply _ | Lprim _ ->
       let id = Ident.create_local "anf" in
       conv_simple id lam (fun () -> k (Var id))

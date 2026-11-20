@@ -380,3 +380,8 @@
  (name int_selection_test)
  (modules int_selection_test)
  (libraries ocamlcc compiler-libs.common str))
+
+(test
+ (name finalizer_poll_test)
+ (modules finalizer_poll_test)
+ (libraries ocamlcc str))

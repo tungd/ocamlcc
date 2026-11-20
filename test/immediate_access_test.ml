@@ -1,4 +1,4 @@
-let check ?(owner_releases = 2) ~retains name source =
+let check ?(owner_releases = 1) ~retains name source =
   let il =
     match
       Pipeline.compile_source ~nopervasives:true ~nostdlib:true
@@ -54,7 +54,7 @@ let () =
       type outer = { inner : inner }
       external length : string -> int = "%string_length"
       let f r = let item = r.inner in length item.data|};
-  check ~owner_releases:3 ~retains:0 "field_used_for_dispatch"
+  check ~owner_releases:2 ~retains:0 "field_used_for_dispatch"
     {|type choice = Empty | Filled of string
       type t = { choice : choice }
       let f r = match r.choice with Empty -> 1 | Filled _ -> 2|};

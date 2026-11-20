@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Omit entry polls in bounded leaf functions and poll every 64 iterations in counted loops with allocation-free local bodies. See [ARC finalizers](/concepts/arc-finalizers.md).
+
 - 2026-11-20 (codex/1) — Borrow immutable fields at proven local read sites and keep the receiver live through the operation. Cover mutable fields, escaping values, callback and FFI barriers, and bounds-error cleanup. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Specialize saturated calls through immutable aliases of the selected stdlib’s integer selectors. Partial and first-class uses retain ordinary closure behavior. See [compiler pipeline](/concepts/compiler-pipeline.md).
