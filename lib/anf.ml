@@ -299,36 +299,67 @@ let with_finalizer_poll body =
 
 (* Only local, bounded operations can defer polling. A call, an allocation,
    or a checked operation that constructs an exception needs the usual poll. *)
+let is_local_operation = function
+  | Atom _ | Field _ | IntSelect _ | Assign _ | AssignImm _
+  | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr
+           | Cmp _ | Compare_ints | Isout), _, _)
+  | Unop ((Neg | Not | Offset _ | Isint | String_length | Array_length), _)
+  | StringGet (false, _, _)
+  | BytesSet (false, _, _, _) | ArraySet (false, _, _, _, _)
+  | ArrayGet (false, (Lambda.Pintarray | Lambda.Paddrarray), _, _) -> true
+  | DirectApp (target, _) -> Option.is_some target.inline_leaf
+  (* Generic reads can box a flat-float element. *)
+  | _ -> false
+
 let rec is_bounded_local = function
-  | Halt _ | HaltScalar _ -> true
-  | Let (_, (Atom _ | Field _ | IntSelect _
-            | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr
-                     | Cmp _ | Compare_ints | Isout), _, _)
-            | Unop ((Neg | Not | Offset _ | Isint | String_length | Array_length), _)
-            | StringGet (false, _, _)
-            | BytesSet (false, _, _, _) | ArraySet (false, _, _, _, _)
-            | ArrayGet (false, (Lambda.Pintarray | Lambda.Paddrarray), _, _)), body) ->
-      is_bounded_local body
-  | LetJoin (_, lhs, rhs) | If (_, lhs, rhs) | ScalarIf (_, _, lhs, rhs) ->
+  | Halt _ | HaltScalar _ | StaticRaise _ -> true
+  | Let (_, ce, body) | MutLet (_, ce, body) ->
+      is_local_operation ce && is_bounded_local body
+  | LetJoin (_, lhs, rhs) | If (_, lhs, rhs) | ScalarIf (_, _, lhs, rhs)
+  | StaticCatch (lhs, _, _, rhs, _) ->
       is_bounded_local lhs && is_bounded_local rhs
+  | Switch (_, { consts; blocks; fail; _ }) ->
+      List.for_all (fun (_, arm) -> is_bounded_local arm) consts
+      && List.for_all (fun (_, arm) -> is_bounded_local arm) blocks
+      && Option.fold ~none:true ~some:is_bounded_local fail
+  | StringSwitch (_, cases, fail) ->
+      List.for_all (fun (_, arm) -> is_bounded_local arm) cases
+      && Option.fold ~none:true ~some:is_bounded_local fail
   | _ -> false
 
 let with_entry_poll body =
   if is_bounded_local body then body else with_finalizer_poll body
 
+(* Masking a distance from the first check works through tagged-int wraparound. *)
+let with_periodic_finalizer_poll distance body =
+  let phase = Ident.create_local "poll_phase" in
+  let due = Ident.create_local "loop_poll_due" in
+  let ignored = Ident.create_local "loop_poll" in
+  Let (phase, Binop (And, distance, Int 63),
+    Let (due, Binop (Cmp Ceq, Var phase, Int 0),
+      LetJoin (ignored, If (Var due, with_finalizer_poll (Halt Unit), Halt Unit), body)))
+
 let with_counted_loop_poll index start body =
   if is_bounded_local body then
-    (* Poll on the first iteration and every 64 iterations thereafter.
-       Masking the distance works in both directions, including wraparound. *)
     let distance = Ident.create_local "poll_distance" in
-    let phase = Ident.create_local "poll_phase" in
-    let due = Ident.create_local "loop_poll_due" in
-    let ignored = Ident.create_local "loop_poll" in
     Let (distance, Binop (Sub, Var index, start),
-      Let (phase, Binop (And, Var distance, Int 63),
-        Let (due, Binop (Cmp Ceq, Var phase, Int 0),
-          LetJoin (ignored, If (Var due, with_finalizer_poll (Halt Unit), Halt Unit), body))))
+      with_periodic_finalizer_poll (Var distance) body)
   else with_finalizer_poll body
+
+let while_with_poll cond body =
+  if is_bounded_local cond && is_bounded_local body then
+    let counter = Ident.create_local "poll_counter" in
+    let count = Ident.create_local "poll_count" in
+    let next = Ident.create_local "poll_next" in
+    let ignored = Ident.create_local "poll_tick" in
+    let cond =
+      Let (count, Atom (MutVar counter),
+        Let (next, Binop (Add, Var count, Int 1),
+          Let (ignored, Assign (counter, Var next),
+            with_periodic_finalizer_poll (Var count) cond)))
+    in
+    MutLet (counter, Atom (Int 0), While (cond, body))
+  else While (with_finalizer_poll cond, body)
 
 let float_arithmetic = function
   | Lambda.Paddfloat -> Addf
@@ -825,7 +856,7 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
       let e = TryWith (conv_tail body, exn_id, conv_tail handler) in
       wrap_or_tail e k
   | Lwhile (cond, body) ->
-      seq_stmt (While (with_finalizer_poll (conv_tail cond), conv_tail body)) (k Unit)
+      seq_stmt (while_with_poll (conv_tail cond) (conv_tail body)) (k Unit)
   | Lfor (id, start_e, stop_e, dir, body) ->
       conv_expr start_e (fun sa ->
           conv_expr stop_e (fun ea ->
