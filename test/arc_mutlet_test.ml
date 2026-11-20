@@ -80,6 +80,7 @@ and dump_atom (a : Anf.atom) : string =
   | Anf.Int32 n -> Printf.sprintf "%ldl" n
   | Anf.Int64 n -> Printf.sprintf "%LdL" n
   | Anf.Nativeint n -> Printf.sprintf "%ndn" n
+  | Anf.BorrowedField (i, owner) -> Printf.sprintf "(borrow-field%d %s)" i (dump_atom owner)
   | Anf.ConstFloatArray fs ->
       Printf.sprintf "farr[%d]" (List.length fs)
   | Anf.ConstBlock (t, _) -> Printf.sprintf "blk%d" t
@@ -145,6 +146,7 @@ and dump_ce (ce : Anf.cexpr) : string =
 (* Count [ReleaseMut] instructions targeting [id] in an ANF expression. *)
 let rec count_release_mut id (e : Anf.aexpr) : int =
   let count_atom acc = function
+    | Anf.BorrowedField _ -> acc
     | Anf.Var _ | Anf.MutVar _ | Anf.Int _ | Anf.Char _ | Anf.String _
     | Anf.Float _ | Anf.Int32 _ | Anf.Int64 _ | Anf.Nativeint _
     | Anf.ConstFloatArray _ | Anf.ConstBlock _ | Anf.Unit ->

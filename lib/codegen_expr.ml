@@ -27,8 +27,15 @@ let static_payload_ptr b base_name sym =
   emit b (Binop (Add, Long, dst, Global sym, Int 16L));
   dst
 
-let compile_atom hooks b (a : Anf.atom) : t =
+let load_field b obj index =
+  let addr = ptr_offset b obj (8 * index) "fldp" in
+  let dst = fresh_temp b "fld" in
+  emit b (Load (Loadl, Long, dst, addr));
+  dst
+
+let rec compile_atom hooks b (a : Anf.atom) : t =
   match a with
+  | BorrowedField (index, owner) -> load_field b (compile_atom hooks b owner) index
   | Int n -> Int (tag_int n)
   | Char c -> Int (tag_int (Char.code c))
   | Unit -> unit_const
@@ -745,10 +752,8 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
           arr)
   | Field (i, kind, arg) ->
       let obj = compile_atom hooks b arg in
-      let addr = ptr_offset b obj (8 * i) "fldp" in
-      let dst = fresh_temp b "fld" in
-      emit b (Load (Loadl, Long, dst, addr));
-      if kind = Lambda.Pointer then
+      let dst = load_field b obj i in
+      if kind <> Anf.Immediate_field then
         emit b (Call_void { fn = Global "arc_retain_val"; args = [ (Long, dst) ] });
       dst
   | SetField (i, arg, rhs) ->

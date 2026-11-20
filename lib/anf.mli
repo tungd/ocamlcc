@@ -3,7 +3,8 @@
    Every non-trivial subexpression is bound to a named [Ident.t] so
    downstream passes (Perceus ARC dup/drop/reuse, exception lowering, and
    QBE codegen) see explicit evaluation order, liveness boundaries, and
-   tail-call positions. *)
+   tail-call positions. ARC may fuse an immutable projection into a read
+   operand while keeping its owner live. *)
 
 type const_item =
   | C_int of int
@@ -19,6 +20,9 @@ type const_item =
 type atom =
   | Var of Ident.t
   | MutVar of Ident.t
+  | BorrowedField of int * atom
+      (** Read-only operand introduced by ARC. Its base stays live through
+          the operation that reads it. It carries no reference of its own. *)
   | Int of int
   | Char of char
   | String of string
@@ -98,6 +102,8 @@ type integer_shift = Left_shift | Logical_right | Arithmetic_right
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
+type field_kind = Immediate_field | Immutable_field | Mutable_field
+
 type reuse = { primary : Ident.t; fallback : Ident.t option }
 
 type cexpr =
@@ -108,7 +114,7 @@ type cexpr =
   | MakeBlock of int * atom list
   | AllocReuse of reuse * int * atom list
   | MakeArray of Lambda.array_kind * atom list
-  | Field of int * Lambda.immediate_or_pointer * atom
+  | Field of int * field_kind * atom
   | SetField of int * atom * atom
   | FloatField of int * atom
   | SetFloatField of int * atom * atom

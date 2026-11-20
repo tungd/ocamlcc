@@ -433,3 +433,26 @@ let () =
   let recovered = borrowed_argument_result 2 in
   let delta = arc_live () - before in
   Printf.printf "borrowed=%d,%d,live=%d\n" result recovered delta
+
+type byte_box = { data : bytes }
+type outer_box = { inner : byte_box }
+
+let read_from_box box index = Bytes.get box.inner.data index
+
+let check_borrowed_field index =
+  let data = Bytes.create 2 in
+  Bytes.set data 0 'q';
+  let box = { inner = { data } } in
+  try int_of_char (read_from_box box index) with Invalid_argument _ -> -1
+
+let () =
+  let before = arc_live () in
+  let found = check_borrowed_field 0 in
+  let bounds = check_borrowed_field 2 in
+  let live_delta = arc_live () - before in
+  print_int found;
+  print_endline "";
+  print_int bounds;
+  print_endline "";
+  print_int live_delta;
+  print_endline ""

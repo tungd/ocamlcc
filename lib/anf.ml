@@ -14,6 +14,7 @@ type const_item =
 type atom =
   | Var of Ident.t
   | MutVar of Ident.t
+  | BorrowedField of int * atom
   | Int of int
   | Char of char
   | String of string
@@ -93,6 +94,8 @@ type integer_shift = Left_shift | Logical_right | Arithmetic_right
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
+type field_kind = Immediate_field | Immutable_field | Mutable_field
+
 type reuse = { primary : Ident.t; fallback : Ident.t option }
 
 type cexpr =
@@ -103,7 +106,7 @@ type cexpr =
   | MakeBlock of int * atom list
   | AllocReuse of reuse * int * atom list
   | MakeArray of Lambda.array_kind * atom list
-  | Field of int * Lambda.immediate_or_pointer * atom
+  | Field of int * field_kind * atom
   | SetField of int * atom * atom
   | FloatField of int * atom
   | SetFloatField of int * atom * atom
@@ -301,7 +304,7 @@ and conv_fun (lf : Lambda.lfunction) : lfunction =
       let rec bind_fields i = function
         | [] -> conv_tail lf.body
         | (p, _) :: rest ->
-            Let (p, Field (i, Pointer, Var tup), bind_fields (i + 1) rest)
+            Let (p, Field (i, Immutable_field, Var tup), bind_fields (i + 1) rest)
       in
       { params = [ (tup, Lambda.Pgenval) ]; private_entry = false; body = with_finalizer_poll (bind_fields 0 lf.params) }
 
@@ -399,7 +402,13 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
   | Lprim (Pduparray (kind, _), [ Lambda.Lconst (Const_float_array sl) ], _) ->
       check_array_kind kind;
       emit_cexpr (MakeArray (kind, List.map (fun s -> Float (parse_const_float s)) sl))
-  | Lprim (Pfield (i, kind, _), [ arg ], _) ->
+  | Lprim (Pfield (i, repr, mutability), [ arg ], _) ->
+      let kind =
+        match repr, mutability with
+        | Lambda.Immediate, _ -> Immediate_field
+        | Pointer, Immutable -> Immutable_field
+        | Pointer, Mutable -> Mutable_field
+      in
       conv_expr arg (fun a -> emit_cexpr (Field (i, kind, a)))
   | Lprim (Pfield_computed, [ arg; idx ], _) ->
       conv_atoms [ arg; idx ] (fun vs ->
@@ -773,8 +782,9 @@ and seq_stmt (stmt : aexpr) (next : aexpr) : aexpr =
 (* Free variables                                                      *)
 (* ------------------------------------------------------------------ *)
 
-let atom_vars acc = function
+let rec atom_vars acc = function
   | Var id | MutVar id -> Ident.Set.add id acc
+  | BorrowedField (_, owner) -> atom_vars acc owner
   | Int _ | Char _ | String _ | Float _ | Int32 _ | Int64 _ | Nativeint _
   | ConstFloatArray _ | ConstBlock _ | Unit ->
       acc
