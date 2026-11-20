@@ -147,6 +147,7 @@ type cexpr =
   | GetGlobal of string
   | Fun of lfunction
   | Assign of Ident.t * atom
+  | AssignImm of Ident.t * atom
 
 and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;

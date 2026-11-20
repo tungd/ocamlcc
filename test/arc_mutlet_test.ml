@@ -133,7 +133,7 @@ and dump_ce (ce : Anf.cexpr) : string =
       Printf.sprintf "(app %s [%s])" (dump_atom f)
         (String.concat "," (List.map dump_atom args))
   | Anf.Fun _ -> "(fun)"
-  | Anf.Assign (id, a) -> Printf.sprintf "(assign %s %s)" (dump_ident id) (dump_atom a)
+  | Anf.Assign (id, a) | Anf.AssignImm (id, a) -> Printf.sprintf "(assign %s %s)" (dump_ident id) (dump_atom a)
   | Anf.Field (i, _, a) -> Printf.sprintf "(field%d %s)" i (dump_atom a)
   | Anf.SetField (i, a, b) ->
       Printf.sprintf "(setfield%d %s %s)" i (dump_atom a) (dump_atom b)
@@ -178,7 +178,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.IntegerOfInt _ | Anf.IntOfInteger _ | Anf.IntegerConvert _ -> acc
     | Anf.ScalarLoad _ | Anf.ScalarStore _ | Anf.FloatBinop _ | Anf.IntegerBinop _ | Anf.IntegerCompare _ | Anf.IntegerNeg _ | Anf.IntegerShift _ | Anf.ScalarValue _ | Anf.GetGlobal _ -> acc
     | Anf.Fun lf -> count_release_mut id lf.Anf.body
-    | Anf.Assign (_, a) -> count_atom acc a
+    | Anf.Assign (_, a) | Anf.AssignImm (_, a) -> count_atom acc a
   in
   match e with
   | Anf.Release (_rel, cont) -> count_release_mut id cont
@@ -257,35 +257,39 @@ let run_case name lam expected =
 
 (* --- Lambda term shapes -------------------------------------------------- *)
 
-(* [let mutable m = 1 in
+let heap_init =
+  Lambda.Lprim (Pmakeblock (0, Immutable, None), [const 1; const 2],
+                Debuginfo.Scoped_location.Loc_unknown)
+
+(* [let mutable m = (1, 2) in
      (if 1 then 2 else 3);
      m]
    The [if] is in non-tail position, so the frontend ANF lowering wraps it in
    [LetJoin (join, If (..., Halt .., Halt ..), ... read m ... Halt ..)] and
    the mutable stays live in the join body. *)
 let letjoin_case m =
-  Lambda.Lmutlet (Pgenval, m, const 1,
+  Lambda.Lmutlet (Pgenval, m, heap_init,
     Lambda.Lsequence
       ( Lambda.Lifthenelse (const 1, const 2, const 3),
         Lambda.Lmutvar m ))
 
-(* [let mutable m = 1 in while 1 do () done; m] *)
+(* [let mutable m = (1, 2) in while 1 do () done; m] *)
 let while_case m =
-  Lambda.Lmutlet (Pgenval, m, const 1,
+  Lambda.Lmutlet (Pgenval, m, heap_init,
     Lambda.Lsequence
       (Lambda.Lwhile (const 1, const 0), Lambda.Lmutvar m))
 
-(* [let mutable m = 1 in for _i = 0 to 9 do () done; m] *)
+(* [let mutable m = (1, 2) in for _i = 0 to 9 do () done; m] *)
 let for_case m =
   let i = Ident.create_local "i" in
-  Lambda.Lmutlet (Pgenval, m, const 1,
+  Lambda.Lmutlet (Pgenval, m, heap_init,
     Lambda.Lsequence
       ( Lambda.Lfor (i, const 0, const 9, Asttypes.Upto, const 0),
         Lambda.Lmutvar m ))
 
-(* Control: [let mutable m = 1 in m] — exactly one release at the
+(* Control: [let mutable m = (1, 2) in m] — exactly one release at the
    function-exit Halt, no join or loop in between. *)
-let plain_case m = Lambda.Lmutlet (Pgenval, m, const 1, Lambda.Lmutvar m)
+let plain_case m = Lambda.Lmutlet (Pgenval, m, heap_init, Lambda.Lmutvar m)
 
 let () =
   let failures = ref 0 in

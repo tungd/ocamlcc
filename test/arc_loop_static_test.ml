@@ -1,5 +1,5 @@
 (* Regression tests for ARC ownership in loops & StaticRaise:
-   1. Tail-position While/For with MutLet emits ReleaseMut on normal exit.
+   1. Tail-position While/For with owning MutLet emits ReleaseMut on normal exit.
    2. StaticRaise from While/For/LetJoin rhs drops dead frame_borrowed vars.
    3. has_static_raise recurses into While/For bodies. *)
 
@@ -53,21 +53,21 @@ let count_release_of id (e : Anf.aexpr) : int =
   go e
 
 let () =
-  (* 1. Tail-position While with MutLet must emit ReleaseMut on normal exit. *)
+  (* 1. Tail-position While with owning MutLet must emit ReleaseMut on normal exit. *)
   let m = Ident.create_local "m" in
   let tail_while =
-    Anf.MutLet (m, Atom (Int 0), While (Halt (Int 0), Halt Unit))
+    Anf.MutLet (m, MakeBlock (0, [Int 0]), While (Halt (Int 0), Halt Unit))
   in
   let m_id = Ident.create_persistent "M" in
   let prog1 = Arc_pass.run { Anf.module_ident = m_id; code = tail_while } in
   let rm_while = count_release_mut prog1.code in
 
-  (* 2. Tail-position For with MutLet must emit ReleaseMut on normal exit. *)
+  (* 2. Tail-position For with owning MutLet must emit ReleaseMut on normal exit. *)
   let m2 = Ident.create_local "m2" in
   let idx = Ident.create_local "i" in
   let tail_for =
     Anf.MutLet
-      (m2, Atom (Int 0), For (idx, Int 0, Int 3, Asttypes.Upto, Halt Unit))
+      (m2, MakeBlock (0, [Int 0]), For (idx, Int 0, Int 3, Asttypes.Upto, Halt Unit))
   in
   let prog2 = Arc_pass.run { Anf.module_ident = m_id; code = tail_for } in
   let rm_for = count_release_mut prog2.code in

@@ -1139,16 +1139,18 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       gv
   | App (fn, args) -> apply hooks b tail fn args
   | Fun _ -> failwith "codegen: Fun must be bound by Let"
-  | Assign (id, rhs) -> (
+  | Assign (id, rhs) | AssignImm (id, rhs) -> (
       let v = compile_atom hooks b rhs in
       match Hashtbl.find_opt b.mut_vars id with
       | Some slot ->
-          let old_v = fresh_temp b "oldm" in
-          emit b (Load (Loadl, Long, old_v, slot));
-          emit b (Store (Storel, v, slot));
-          emit b
-            (Call_void
-               { fn = Global "arc_release_val"; args = [ (Long, old_v) ] });
+          (match ce with
+          | AssignImm _ -> emit b (Store (Storel, v, slot))
+          | _ ->
+              let old_v = fresh_temp b "oldm" in
+              emit b (Load (Loadl, Long, old_v, slot));
+              emit b (Store (Storel, v, slot));
+              emit b
+                (Call_void { fn = Global "arc_release_val"; args = [ (Long, old_v) ] }));
           unit_const
       | None ->
           failwith

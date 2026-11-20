@@ -385,3 +385,8 @@
  (name finalizer_poll_test)
  (modules finalizer_poll_test)
  (libraries ocamlcc str))
+
+(test
+ (name arc_immediates_test)
+ (modules arc_immediates_test)
+ (libraries ocamlcc str))

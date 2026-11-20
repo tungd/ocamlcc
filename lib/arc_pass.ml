@@ -64,13 +64,16 @@ let false_edge env = function
   | Anf.Var id -> { env with imm = Ident.Set.add id env.imm }
   | _ -> env
 
-let is_imm_atom (env : state) (a : Anf.atom) : bool =
+let atom_is_imm ~pure imm (a : Anf.atom) =
   match a with
   | Int _ | Char _ | Unit | String _ | Float _ | Int32 _ | Int64 _
   | Nativeint _ | ConstFloatArray _ | ConstBlock _ ->
       true
-  | Var id -> Ident.Set.mem id env.imm || Ident.Set.mem id env.pure
-  | MutVar _ | BorrowedField _ -> false
+  | Var id -> Ident.Set.mem id imm || Ident.Set.mem id pure
+  | MutVar id -> Ident.Set.mem id imm
+  | BorrowedField _ -> false
+
+let is_imm_atom env = atom_is_imm ~pure:env.pure env.imm
 
 let is_imm_binop : Anf.binop -> bool = function
   | Add | Sub | Mul | Div | Mod | And | Or | Xor | Lsl | Lsr | Asr | Cmp _
@@ -89,14 +92,14 @@ let is_imm_unop : Anf.unop -> bool = function
   | Float_of_int | Fneg | Fabs | Bint_of_int _ | Bint_cvt _ | Bint_neg _ ->
       false
 
-let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
+let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   match ce with
-  | Atom a -> is_imm_atom env a
+  | Atom a -> atom_is_imm ~pure imm a
   | Binop (op, _, _) -> is_imm_binop op
   | Unop (op, _) -> is_imm_unop op
   | IntSelect _ | Field (_, Immediate_field, _) | ArrayGet (_, Lambda.Pintarray, _, _)
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
-  | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ ->
+  | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ | AssignImm _ ->
       true
   | BytesGetN (_, 2, _, _) -> true
   | BytesGetN _ | BswapBint _ -> false
@@ -104,7 +107,7 @@ let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
   | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
   | Ccall (name, _) -> Ccalls.returns_imm name
   | App (Var fn, args) -> (
-      match Ident.Map.find_opt fn env.imm_funs with
+      match Ident.Map.find_opt fn imm_funs with
       | Some arity -> List.length args = arity
       | None -> false)
   | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _
@@ -112,77 +115,133 @@ let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
   | GetGlobal _ | Fun _ ->
       false
 
+let is_imm_cexpr env = cexpr_is_imm ~pure:env.pure ~imm_funs:env.imm_funs env.imm
+
 let imm_params_of (lf : Anf.lfunction) : Ident.Set.t =
   List.fold_left
     (fun s (p, vk) ->
       match vk with Lambda.Pintval -> Ident.Set.add p s | _ -> s)
     Ident.Set.empty lf.params
 
-let rec aexpr_returns_imm ~pure ~imm_funs (imm : Ident.Set.t) (e : Anf.aexpr) :
-    bool =
-  let atom_imm = function
-    | Anf.Int _ | Char _ | Unit | String _ | Float _ | Int32 _ | Int64 _
-    | Nativeint _ | ConstFloatArray _ | ConstBlock _ ->
-        true
-    | Var id -> Ident.Set.mem id imm || Ident.Set.mem id pure
-    | MutVar _ | BorrowedField _ -> false
+let set_imm imm id proven =
+  if proven then Ident.Set.add id imm else Ident.Set.remove id imm
+
+(* Static catches consume local exits in their body. Track each argument
+   independently, intersecting the facts supplied by all incoming exits. *)
+let observe_exit imm_args args =
+  let incoming = List.map imm_args args in
+  function
+  | None -> Some incoming
+  | Some previous when List.length previous = List.length incoming ->
+      Some (List.map2 ( && ) previous incoming)
+  | Some _ -> Some []
+
+let binders_imm binders observed =
+  match observed with
+  | Some kinds when List.length kinds = List.length binders ->
+      List.fold_left2 set_imm Ident.Set.empty binders kinds
+  | _ -> Ident.Set.empty
+
+(* A mutable slot can use the immediate convention for its whole scope
+   only if every write is immediate and the slot is local to this frame. *)
+let scan_immediates ~pure ~imm_funs ?(exits = []) ?mutable_slot imm e =
+  let ce_imm = cexpr_is_imm ~pure ~imm_funs in
+  let check_closure (lf : Anf.lfunction) =
+    Option.iter
+      (fun (slot, valid) ->
+        if Ident.Set.mem slot (Anf.free_vars lf.body) then valid := false)
+      mutable_slot
   in
-  let ce_imm = function
-    | Anf.Atom a -> atom_imm a
-    | Binop (op, _, _) -> is_imm_binop op
-    | Unop (op, _) -> is_imm_unop op
-    | IntSelect _ | Field (_, Immediate_field, _) | ArrayGet (_, Lambda.Pintarray, _, _)
-    | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
-    | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _
-    | BytesGetN (_, 2, _, _)
-    | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
-    | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _
-    | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
-    | ScalarStore _ ->
-        true
-    | Ccall (name, _) -> Ccalls.returns_imm name
-    | App (Var fn, args) -> (
-        match Ident.Map.find_opt fn imm_funs with
-        | Some arity -> List.length args = arity
-        | None -> false)
-    | _ -> false
+  let observe_binding imm = function
+    | Anf.Assign (slot, rhs) | AssignImm (slot, rhs) ->
+        Option.iter
+          (fun (watched, valid) ->
+            if Ident.same slot watched && not (atom_is_imm ~pure imm rhs)
+            then valid := false)
+          mutable_slot
+    | Fun lf -> check_closure lf
+    | _ -> ()
   in
-  match e with
-  | Halt a -> atom_imm a
-  | HaltScalar _ | Raise _ | Unwind | StaticRaise _ | While _ | For _ -> true
-  | Let (id, ce, body) | MutLet (id, ce, body) ->
-      let imm' =
-        if ce_imm ce then Ident.Set.add id imm else Ident.Set.remove id imm
+  let rec scan exits imm = function
+    | Anf.Halt a -> atom_is_imm ~pure imm a
+    | HaltScalar _ | Raise _ | Unwind -> true
+    | StaticRaise (hid, args) ->
+        Option.iter
+          (fun observed -> observed := observe_exit (atom_is_imm ~pure imm) args !observed)
+          (List.assoc_opt hid exits);
+        true
+    | Let (id, ce, body) ->
+        observe_binding imm ce;
+        scan exits (set_imm imm id (ce_imm imm ce)) body
+    | MutLet (id, ce, body) ->
+        observe_binding imm ce;
+        scan exits (Ident.Set.remove id imm) body
+    | LetJoin (id, rhs, body) ->
+        let immediate = scan exits imm rhs in
+        scan exits (set_imm imm id immediate) body
+    | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) ->
+        let immediate = scan exits imm a in
+        scan exits imm b && immediate
+    | TryWith (a, exn, b) ->
+        let immediate = scan exits imm a in
+        scan exits (Ident.Set.remove exn imm) b && immediate
+    | StaticCatch (body, hid, binders, handler, _) ->
+        let observed = ref None in
+        let immediate = scan ((hid, observed) :: exits) imm body in
+        let handler_imm =
+          Ident.Set.union
+            (Ident.Set.diff imm (Ident.Set.of_list binders))
+            (binders_imm binders !observed)
+        in
+        scan exits handler_imm handler && immediate
+    | Switch (_, sw) -> scan_arms exits imm (sw.consts @ sw.blocks) sw.fail
+    | StringSwitch (_, cases, fail) -> scan_arms exits imm cases fail
+    | While (cond, body) ->
+        ignore (scan exits imm cond);
+        ignore (scan exits imm body);
+        true
+    | For (idx, _, _, _, body) ->
+        ignore (scan exits (Ident.Set.add idx imm) body);
+        true
+    | LetRec (bindings, body) ->
+        List.iter (fun (rb : Anf.rec_binding) -> check_closure rb.def) bindings;
+        scan exits imm body
+    | Retain (_, body) | Release (_, body) | ReleaseMut (_, body)
+    | DropReuse (_, _, body) | FreeReuse (_, body)
+    | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
+        scan exits imm body
+  and scan_arms : 'a. _ -> _ -> ('a * Anf.aexpr) list -> _ -> bool =
+    fun exits imm arms fail ->
+      let immediate =
+        List.fold_left (fun acc (_, arm) -> scan exits imm arm && acc) true arms
       in
-      aexpr_returns_imm ~pure ~imm_funs imm' body
-  | LetJoin (id, rhs, body) ->
-      let imm' =
-        if Anf.returns_scalar rhs || aexpr_returns_imm ~pure ~imm_funs imm rhs
-        then Ident.Set.add id imm
-        else Ident.Set.remove id imm
-      in
-      aexpr_returns_imm ~pure ~imm_funs imm' body
-  | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) ->
-      aexpr_returns_imm ~pure ~imm_funs imm a
-      && aexpr_returns_imm ~pure ~imm_funs imm b
-  | TryWith (a, _, b) ->
-      aexpr_returns_imm ~pure ~imm_funs imm a
-      && aexpr_returns_imm ~pure ~imm_funs imm b
-  | StaticCatch (a, _, _, b, _) ->
-      aexpr_returns_imm ~pure ~imm_funs imm a
-      && aexpr_returns_imm ~pure ~imm_funs imm b
-  | Switch (_, sw) ->
-      List.for_all (fun (_, arm) -> aexpr_returns_imm ~pure ~imm_funs imm arm) sw.consts
-      && List.for_all (fun (_, arm) -> aexpr_returns_imm ~pure ~imm_funs imm arm) sw.blocks
-      && Option.fold ~none:true ~some:(aexpr_returns_imm ~pure ~imm_funs imm) sw.fail
-  | StringSwitch (_, cases, fail) ->
-      List.for_all (fun (_, arm) -> aexpr_returns_imm ~pure ~imm_funs imm arm) cases
-      && Option.fold ~none:true ~some:(aexpr_returns_imm ~pure ~imm_funs imm) fail
-  | LetRec (_, body)
-  | Retain (_, body) | Release (_, body) | ReleaseMut (_, body)
-  | DropReuse (_, _, body) | FreeReuse (_, body)
-  | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
-      aexpr_returns_imm ~pure ~imm_funs imm body
+      Option.fold ~none:true ~some:(scan exits imm) fail && immediate
+  in
+  scan exits imm e
+
+let aexpr_returns_imm ~pure ~imm_funs imm e =
+  scan_immediates ~pure ~imm_funs imm e
+
+let handler_immediates env hid binders body =
+  match binders with
+  | [] -> Ident.Set.empty
+  | _ ->
+      let observed = ref None in
+      ignore (scan_immediates ~pure:env.pure ~imm_funs:env.imm_funs
+                ~exits:[hid, observed] env.imm body);
+      binders_imm binders !observed
+
+let mutlet_is_imm env slot init body =
+  if not (is_imm_cexpr env init) then false
+  else
+    let valid = ref true in
+    ignore (scan_immediates ~pure:env.pure ~imm_funs:env.imm_funs
+              ~mutable_slot:(slot, valid) (Ident.Set.add slot env.imm) body);
+    !valid
+
+let specialize_assignment env = function
+  | Anf.Assign (slot, rhs) when Ident.Set.mem slot env.imm -> Anf.AssignImm (slot, rhs)
+  | ce -> ce
 
 let compute_imm_funs ~pure (e : Anf.aexpr) : int Ident.Map.t =
   let funs = ref [] in
@@ -278,7 +337,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | FloatBinop (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> (Anf.scalar_operand_vars (Anf.scalar_operand_vars Ident.Set.empty a) b, [])
   | BigarrayAccess (_, args) | Ccall (_, args) -> (atoms_vars args, [])
   | GetGlobal _ -> (Ident.Set.empty, [])
-  | Assign (_, rhs) -> (Ident.Set.empty, [ rhs ])
+  | Assign (_, rhs) | AssignImm (_, rhs) -> (Ident.Set.empty, [ rhs ])
   | Fun _ -> (Ident.Set.empty, [])
 
 (* A private entry may borrow parameters used only by local readers.
@@ -627,7 +686,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _
              | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
              | ScalarLoad _ | ScalarStore _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
-             | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _
+             | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _ | AssignImm _
              | MakeBlock (_, [])) as ce), body) -> (
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (Let (x, ce, body'))
@@ -710,14 +769,14 @@ let prepare_consumed (env : state) ~(borrowed_also : Ident.Set.t)
     ~(live_after : Ident.Set.t) (atoms : Anf.atom list)
     (k : Ident.Set.t -> Anf.atom list -> Anf.aexpr) : Anf.aexpr =
   let counts : (Ident.t, int) Hashtbl.t = Hashtbl.create 8 in
-  let mat_binds : (Ident.t * Ident.t) list ref = ref [] in
+  let mat_binds = ref [] in
   let atoms' =
     List.map
       (fun (a : Anf.atom) ->
         match a with
         | MutVar m ->
             let tmp = Ident.create_local "mval" in
-            mat_binds := (tmp, m) :: !mat_binds;
+            mat_binds := (tmp, m, Ident.Set.mem m env.imm) :: !mat_binds;
             Anf.Var tmp
         | Var id ->
             if not (Ident.Set.mem id env.imm || Ident.Set.mem id env.pure) then
@@ -752,8 +811,9 @@ let prepare_consumed (env : state) ~(borrowed_also : Ident.Set.t)
     List.fold_left (fun acc id -> Anf.Retain (id, acc)) body !retains
   in
   List.fold_left
-    (fun acc (tmp, m) ->
-      Anf.Let (tmp, Atom (MutVar m), Retain (tmp, acc)))
+    (fun acc (tmp, m, immediate) ->
+      let next = if immediate then acc else Anf.Retain (tmp, acc) in
+      Anf.Let (tmp, Atom (MutVar m), next))
     body !mat_binds
 
 let unwind_cleanup (env : state) (live_vars : Ident.Set.t)
@@ -886,6 +946,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       | None -> transform_let env id ce body)
   | Let (id, ce, body) -> transform_let env id ce body
   | MutLet (id, ce, body) ->
+      let immediate = mutlet_is_imm env id ce body in
+      let ce = specialize_assignment env ce in
       let ce_may_raise = ce_may_raise_fn ce in
       let borrowed_in_ce, consumed_in_ce = atom_operands ce in
       let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
@@ -910,7 +972,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           let env_body =
             { env with
               owned = live_for_body;
-              muts = Ident.Set.add id env.muts }
+              imm = set_imm env.imm id immediate;
+              muts = if immediate then env.muts else Ident.Set.add id env.muts }
           in
           let body' = transform_aexpr env_body body in
           let body_with_dead_after = emit_drops env dead_after body' in
@@ -1043,6 +1106,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let fail' = Option.map (transform_branch env) fail in
       StringSwitch (scrut, cases', fail')
   | StaticCatch (body, hid, binders, handler, result_rep) ->
+      let immediate = handler_immediates env hid binders body in
       let base_fh =
         List.fold_left
           (fun s b -> Ident.Set.remove b s)
@@ -1056,7 +1120,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let handler_owned = Ident.Set.inter env.owned fv_handler in
       let handler_owned_list =
         List.fold_left
-          (fun acc b -> Ident.Set.add b acc)
+          (fun acc b -> if Ident.Set.mem b immediate then acc else Ident.Set.add b acc)
           handler_owned binders
       in
       let target_live = Ident.Set.union handler_owned env.frame_borrowed in
@@ -1067,7 +1131,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let handler' =
         transform_aexpr
           { env with
-            owned = Ident.Set.diff handler_owned_list dead_at_handler }
+            owned = Ident.Set.diff handler_owned_list dead_at_handler;
+            imm = Ident.Set.union (Ident.Set.diff env.imm (Ident.Set.of_list binders)) immediate }
           handler
       in
       StaticCatch (body', hid, binders, emit_drops env dead_at_handler handler', result_rep)
@@ -1151,6 +1216,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
         LetJoin (u, For (idx, s, e, dir, body'), cont)
 
 and transform_let env id ce body =
+  let ce = specialize_assignment env ce in
   let ce_may_raise = ce_may_raise_fn ce in
   let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
   let borrowed_in_ce, consumed_in_ce, rebuild =
@@ -1191,7 +1257,7 @@ and transform_let env id ce body =
       in
       let dead_after = Ident.Set.diff rem_after_before live_for_after_ce in
       let live_for_body = Ident.Set.diff rem_after_before dead_after in
-      let is_imm = is_imm_cexpr env ce' in
+      let is_imm = is_imm_cexpr env ce in
       let env_body =
         { env with
           owned = Ident.Set.add id live_for_body;
@@ -1292,6 +1358,7 @@ and rebuild_cexpr (ce : Anf.cexpr) (atoms' : Anf.atom list) : Anf.cexpr =
   | MakeArrayInit (len, _), [ init ] -> MakeArrayInit (len, init)
   | App (fn, _), args -> App (fn, args)
   | Assign (id, _), [ rhs ] -> Assign (id, rhs)
+  | AssignImm (id, _), [ rhs ] -> AssignImm (id, rhs)
   | _ -> ce
 
 let run (prog : Anf.program) : Anf.program =

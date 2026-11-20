@@ -139,6 +139,7 @@ type cexpr =
   | GetGlobal of string
   | Fun of lfunction
   | Assign of Ident.t * atom
+  | AssignImm of Ident.t * atom
 
 and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;
@@ -860,7 +861,7 @@ let cexpr_vars free_aexpr acc = function
   | Builtin (_, _, a) -> atom_vars acc a
   | BigarrayAccess (_, args) | Ccall (_, args) -> List.fold_left atom_vars acc args
   | GetGlobal _ -> acc
-  | Assign (id, a) -> Ident.Set.add id (atom_vars acc a)
+  | Assign (id, a) | AssignImm (id, a) -> Ident.Set.add id (atom_vars acc a)
   | Fun lf ->
       let body_free = free_aexpr lf.body in
       let body_free =
