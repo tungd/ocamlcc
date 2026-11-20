@@ -34,10 +34,10 @@ let () =
   |} in
   require (function_body il "twice") "call $ocamlcc_Borrow_params_width_borrowed(";
   require (function_body il "twice") "call extern $ocamlcc_Borrow_params_width(";
-  forbid (function_body il "twice") "arc_retain_val";
-  forbid (function_body il "width_borrowed") "arc_release_val";
+  forbid (function_body il "twice") "arc_retain";
+  forbid (function_body il "width_borrowed") "arc_release";
   forbid il "export function l $ocamlcc_Borrow_params_width_borrowed";
-  require (function_body il "width") "arc_release_val";
+  require (function_body il "width") "call extern $arc_release(";
   let unsafe = compile {|
     external opaque : string -> int = "opaque_observer"
     external ( + ) : int -> int -> int = "%addint"

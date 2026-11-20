@@ -62,5 +62,7 @@ let () =
   (* Module initialization releases the exception itself before aborting. *)
   if count "call extern $arc_retain_val(" local <> 0
      || count "call extern $arc_release_val(" local <> 1
+     || count "call extern $arc_retain(" local <> 0
+     || count "call extern $arc_release(" local <> 0
   then failwith ("immediate mutable initializer, assignment and read should need no ARC\n" ^ local);
   check "mutable slot with a heap write" 2 (qbe (mutable_slot ~mixed:true))

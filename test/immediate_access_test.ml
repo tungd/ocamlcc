@@ -16,11 +16,11 @@ let check ?(owner_releases = 1) ~retains name source =
     in
     count 0 0
   in
-  let actual = count_calls "arc_retain_val" in
+  let actual = count_calls "arc_retain_val" + count_calls "arc_retain" in
   if actual <> retains then
     failwith (Printf.sprintf "%s: expected %d retains, got %d" name retains actual);
   if retains = 0 then
-    let actual = count_calls "arc_release_val" in
+    let actual = count_calls "arc_release_val" + count_calls "arc_release" in
     if actual <> owner_releases then
       failwith (Printf.sprintf "%s: expected only the owner's releases, got %d" name actual)
 

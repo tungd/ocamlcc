@@ -1157,6 +1157,22 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
             (Printf.sprintf "codegen: assignment to non-mutable %s"
                (sanitize (Ident.name id))))
 
+let emit_arc_if_heap b fn value =
+  let odd = fresh_temp b "rc_tag" in
+  let is_null = fresh_temp b "rc_null" in
+  let check = fresh_label b "rc_check" in
+  let heap = fresh_label b "rc_heap" in
+  let done_ = fresh_label b "rc_done" in
+  emit b (Binop (And, Long, odd, value, Int 1L));
+  close_block b (Br (odd, done_, check));
+  start_block b check;
+  emit b (Cmp (Eq, Long, is_null, value, Int 0L));
+  close_block b (Br (is_null, done_, heap));
+  start_block b heap;
+  emit b (Call_void { fn = Global fn; args = [ (Long, value) ] });
+  close_block b (Jmp done_);
+  start_block b done_
+
 let emit_unwind b : t =
   match b.cur_fn.try_stack with
   | lcatch :: _ ->
@@ -1284,19 +1300,18 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       unit_const
   | Retain (id, body) ->
       let v = compile_atom hooks b (Var id) in
-      emit b (Call_void { fn = Global "arc_retain_val"; args = [ (Long, v) ] });
+      emit_arc_if_heap b "arc_retain" v;
       compile_aexpr hooks b tail body
   | Release (id, body) ->
       let v = compile_atom hooks b (Var id) in
-      emit b (Call_void { fn = Global "arc_release_val"; args = [ (Long, v) ] });
+      emit_arc_if_heap b "arc_release" v;
       compile_aexpr hooks b tail body
   | ReleaseMut (id, body) ->
       (match Hashtbl.find_opt b.mut_vars id with
       | Some slot ->
           let v = fresh_temp b "mrel" in
           emit b (Load (Loadl, Long, v, slot));
-          emit b
-            (Call_void { fn = Global "arc_release_val"; args = [ (Long, v) ] })
+          emit_arc_if_heap b "arc_release" v
       | None -> ());
       compile_aexpr hooks b tail body
   | DropReuse (v_id, tok_id, body) ->

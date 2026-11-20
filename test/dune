@@ -390,3 +390,8 @@
  (name arc_immediates_test)
  (modules arc_immediates_test)
  (libraries ocamlcc str))
+
+(test
+ (name arc_inline_test)
+ (modules arc_inline_test)
+ (libraries ocamlcc str))

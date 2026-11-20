@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Test the immediate tag and null inline for explicit ARC operations in QBE. Call the pointer retain or release helper on the heap path. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Infer unmanaged static handler arguments and join results, and elide ARC and shadow roots for local slots with only unmanaged writes. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Skip duplicate cycle-root lock acquisitions on shared drops. Keep collection through untouched members of cycles after a live trial. See [Perceus ARC](/concepts/perceus-arc.md).
