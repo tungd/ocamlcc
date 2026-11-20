@@ -23,6 +23,11 @@ typedef struct FiberThreadState {
 static _Thread_local FiberThreadState *tls_state = NULL;
 static _Thread_local Fiber            *tls_current_fiber = NULL;
 
+/* Once a stackful fiber is published, execution on that fiber must check
+ * TLS. A main-stack frame never becomes abandonable, even across the first
+ * fiber creation on this or another thread. */
+static _Atomic unsigned g_stackful_fibers_created;
+
 static pthread_once_t g_fiber_tls_once = PTHREAD_ONCE_INIT;
 static pthread_key_t  g_fiber_tls_key;
 static int            g_fiber_tls_key_ok = 0;
@@ -121,9 +126,19 @@ static void shadow_init(Fiber *f)
     f->shadow_end = buf + (SHADOW_INIT_BYTES / sizeof(uint64_t));
 }
 
+static inline Fiber *shadow_fiber(void)
+{
+    if (atomic_load_explicit(&g_stackful_fibers_created, memory_order_relaxed) == 0)
+        return NULL;
+    Fiber *cur = tls_current_fiber;
+    return cur != NULL && cur->c_stack != NULL ? cur : NULL;
+}
+
 void arc_fiber_push(int64_t val)
 {
-    Fiber *cur = arc_fiber_current();
+    Fiber *cur = shadow_fiber();
+    if (cur == NULL)
+        return;
     if (cur->shadow_base == NULL)
         shadow_init(cur);
     if (cur->shadow_sp == cur->shadow_end) {
@@ -146,7 +161,9 @@ void arc_fiber_pop(int64_t n)
 {
     if (n <= 0)
         return;
-    Fiber *cur = arc_fiber_current();
+    Fiber *cur = shadow_fiber();
+    if (cur == NULL)
+        return;
     if (cur->shadow_base == NULL ||
         (size_t)(cur->shadow_sp - cur->shadow_base) < (size_t)n)
         pal_abort();
@@ -155,7 +172,9 @@ void arc_fiber_pop(int64_t n)
 
 void arc_fiber_push_reuse(void *tok)
 {
-    Fiber *cur = arc_fiber_current();
+    Fiber *cur = shadow_fiber();
+    if (cur == NULL)
+        return;
     if (cur->reuse_base == NULL) {
         void **buf = (void **)pal_page_alloc(SHADOW_INIT_BYTES);
         if (buf == NULL)
@@ -184,7 +203,9 @@ void arc_fiber_pop_reuse(int64_t n)
 {
     if (n <= 0)
         return;
-    Fiber *cur = arc_fiber_current();
+    Fiber *cur = shadow_fiber();
+    if (cur == NULL)
+        return;
     if (cur->reuse_base == NULL ||
         (size_t)(cur->reuse_sp - cur->reuse_base) < (size_t)n)
         pal_abort();
@@ -293,6 +314,8 @@ int64_t ocamlcc_fiber_create(int64_t closure)
     f->entry_closure = closure;
     f->state = FIBER_SUSPENDED;
     pal_ctx_make(&f->ctx, cstack + total_bytes, fiber_trampoline);
+    if (atomic_load_explicit(&g_stackful_fibers_created, memory_order_relaxed) == 0)
+        atomic_store_explicit(&g_stackful_fibers_created, 1u, memory_order_relaxed);
     return (int64_t)(uintptr_t)f;
 }
 

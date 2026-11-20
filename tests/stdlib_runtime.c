@@ -1012,8 +1012,32 @@ static void test_string_bytes_rel_compare(void)
     assert(arc_live_objects() == before);
 }
 
+static void test_main_shadow_stack(void)
+{
+    Fiber *main_fiber = arc_fiber_current();
+    arc_fiber_push(1);
+    arc_fiber_push_reuse(NULL);
+    assert(main_fiber->shadow_base == NULL);
+    assert(main_fiber->reuse_base == NULL);
+
+    /* The scope began before the first stackful fiber was created. */
+    ArcClosure *clos = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
+    clos->code = (void *)tls_exit_body_fn;
+    clos->arity = 1;
+    int64_t child = ocamlcc_fiber_create((int64_t)(uintptr_t)clos);
+    arc_fiber_pop_reuse(1);
+    arc_fiber_pop(1);
+    arc_fiber_push(1);
+    arc_fiber_pop(1);
+    assert(main_fiber->shadow_base == NULL);
+    assert(main_fiber->reuse_base == NULL);
+    arc_release_val(child);
+    arc_release(clos);
+}
+
 int main(void)
 {
+    test_main_shadow_stack();
     test_float_format();
     test_buffered_dummy_update();
     test_cycle_loses_external_owner_at_immutable_member();

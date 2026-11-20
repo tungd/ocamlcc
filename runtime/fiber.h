@@ -42,7 +42,8 @@ typedef struct Fiber {
 
 Fiber *arc_fiber_current(void);
 
-/* Compiler shadow-stack ABI (calls inserted around yielding call sites). */
+/* Compiler shadow-stack ABI for abandonable stackful fibers. Root stacks
+ * keep their live owners in their ordinary frames. */
 void arc_fiber_push(int64_t val);
 void arc_fiber_pop(int64_t n);
 void arc_fiber_push_reuse(void *tok);
