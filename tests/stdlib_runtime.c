@@ -1035,9 +1035,44 @@ static void test_main_shadow_stack(void)
     arc_release(clos);
 }
 
+static void test_bulk_array_ownership(void)
+{
+    int64_t before = arc_live_objects();
+    /* Zero scan fields does not make a generic array immediate-only. */
+    int64_t *a = arc_alloc(ARC_TAG_ARRAY, 0, 4 * sizeof(*a));
+    int64_t x = (int64_t)(uintptr_t)arc_alloc_bytes(1);
+    int64_t y = (int64_t)(uintptr_t)arc_alloc_bytes(1);
+    int64_t z = (int64_t)(uintptr_t)arc_alloc_bytes(1);
+    a[0] = x;
+    a[1] = tagged(7);
+    a[2] = y;
+    a[3] = z;
+
+    int64_t av = (int64_t)(uintptr_t)a;
+    int64_t cv = ocamlcc_bulk_array_sub(av, tagged(0), tagged(4));
+    int64_t *copy = (int64_t *)(uintptr_t)cv;
+    ocamlcc_bulk_array_blit(av, tagged(0), av, tagged(1), tagged(3));
+    assert(a[0] == x && a[1] == x && a[2] == tagged(7) && a[3] == y);
+    ocamlcc_bulk_array_blit(av, tagged(1), av, tagged(0), tagged(3));
+    assert(a[0] == x && a[1] == tagged(7) && a[2] == y && a[3] == y);
+    assert(copy[0] == x && copy[1] == tagged(7) && copy[2] == y && copy[3] == z);
+    assert(arc_live_objects() == before + 5);
+
+    ocamlcc_bulk_array_fill(av, tagged(1), tagged(2), z);
+    assert(a[0] == x && a[1] == z && a[2] == z && a[3] == y);
+    ocamlcc_bulk_array_fill(cv, tagged(0), tagged(4), tagged(-42));
+    for (int i = 0; i < 4; i++)
+        assert(copy[i] == tagged(-42));
+    arc_release(a);
+    assert(arc_live_objects() == before + 1);
+    arc_release(copy);
+    assert(arc_live_objects() == before);
+}
+
 int main(void)
 {
     test_main_shadow_stack();
+    test_bulk_array_ownership();
     test_float_format();
     test_buffered_dummy_update();
     test_cycle_loses_external_owner_at_immutable_member();

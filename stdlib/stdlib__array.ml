@@ -111,9 +111,7 @@ let fill a ofs len v =
   if ofs < 0 || len < 0 || ofs > length a - len then
     invalid_arg "Array.fill"
   else
-    for i = ofs to ofs + len - 1 do
-      unsafe_set a i v
-    done
+    CamlinternalBulkOps.unsafe_array_fill a ofs len v
 
 let blit = CamlinternalBulkOps.array_blit
 

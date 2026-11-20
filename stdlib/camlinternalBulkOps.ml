@@ -35,6 +35,12 @@ external array_length : 'a array -> int = "%array_length"
 external array_unsafe_get : 'a array -> int -> 'a = "%array_unsafe_get"
 external array_unsafe_set : 'a array -> int -> 'a -> unit = "%array_unsafe_set"
 external array_make : int -> 'a -> 'a array = "caml_array_make"
+external unsafe_array_sub : 'a array -> int -> int -> 'a array
+  = "ocamlcc_bulk_array_sub"
+external unsafe_array_blit : 'a array -> int -> 'a array -> int -> int -> unit
+  = "ocamlcc_bulk_array_blit"
+external unsafe_array_fill : 'a array -> int -> int -> 'a -> unit
+  = "ocamlcc_bulk_array_fill"
 
 external floatarray_length : floatarray -> int = "%floatarray_length"
 external floatarray_unsafe_get : floatarray -> int -> float = "%floatarray_unsafe_get"
@@ -136,12 +142,7 @@ let array_sub a ofs len =
   if not (slice_ok ofs len (array_length a)) then
     invalid_arg "index out of bounds";
   if len = 0 then [||]
-  else
-    let dst = array_make len (array_unsafe_get a ofs) in
-    for i = 1 to len - 1 do
-      array_unsafe_set dst i (array_unsafe_get a (ofs + i))
-    done;
-    dst
+  else unsafe_array_sub a ofs len
 
 let array_append a1 a2 =
   let n1 = array_length a1 in
@@ -199,22 +200,12 @@ let array_blit src sofs dst dofs len =
   if not (slice_ok sofs len (array_length src))
      || not (slice_ok dofs len (array_length dst))
   then invalid_arg "index out of bounds";
-  if len > 0 then
-    if src == dst && dofs > sofs then
-      for i = len - 1 downto 0 do
-        array_unsafe_set dst (dofs + i) (array_unsafe_get src (sofs + i))
-      done
-    else
-      for i = 0 to len - 1 do
-        array_unsafe_set dst (dofs + i) (array_unsafe_get src (sofs + i))
-      done
+  unsafe_array_blit src sofs dst dofs len
 
 let array_fill dst ofs len v =
   if not (slice_ok ofs len (array_length dst)) then
     invalid_arg "index out of bounds";
-  for i = 0 to len - 1 do
-    array_unsafe_set dst (ofs + i) v
-  done
+  unsafe_array_fill dst ofs len v
 
 let floatarray_create (n : int) : floatarray =
   if n < 0 then invalid_arg "Float.Array.create";

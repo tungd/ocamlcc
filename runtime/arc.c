@@ -2212,6 +2212,109 @@ int64_t ocamlcc_gen_array_set(int64_t safe, int64_t arr, int64_t idx_val, int64_
     return 1;
 }
 
+static int array_is_flat_float(int64_t value)
+{
+    return ((const ArcHeader *)(uintptr_t)value - 1)->tag == ARC_TAG_FLOAT_ARRAY;
+}
+
+/* An array's header scan count is not a type proof. AND the tags across
+   the affected slice so the native compiler can vectorize the check. */
+static int array_words_are_immediate(const int64_t *words, size_t count)
+{
+    uint64_t tags = 1u;
+    for (size_t i = 0; i < count; i++)
+        tags &= (uint64_t)words[i];
+    return (int)(tags & 1u);
+}
+
+static inline void array_replace_borrowed(int64_t *slot, int64_t value)
+{
+    int64_t old = *slot;
+    if (old == value)
+        return;
+    arc_retain_val(value);
+    *slot = value;
+    arc_release_val(old);
+}
+
+int64_t ocamlcc_bulk_array_sub(int64_t src, int64_t off, int64_t len)
+{
+    size_t count = (size_t)(len >> 1);
+    size_t start = (size_t)(off >> 1);
+    int flat_float = array_is_flat_float(src);
+    const void *from = (const char *)(uintptr_t)src + start * sizeof(int64_t);
+    int needs_retain = !flat_float && !array_words_are_immediate(from, count);
+    uint16_t tag = flat_float ? ARC_TAG_FLOAT_ARRAY : ARC_TAG_ARRAY;
+    uint16_t scan = !needs_retain ? 0u :
+        (count > UINT16_MAX ? UINT16_MAX : (uint16_t)count);
+    int64_t *copy = arc_alloc(tag, scan, (uint32_t)(count * sizeof(*copy)));
+    pal_memcpy(copy, from, count * sizeof(*copy));
+    if (needs_retain)
+        for (size_t i = 0; i < count; i++)
+            arc_retain_val(copy[i]);
+    return (int64_t)(uintptr_t)copy;
+}
+
+int64_t ocamlcc_bulk_array_blit(int64_t src, int64_t src_off, int64_t dst,
+                              int64_t dst_off, int64_t len)
+{
+    size_t count = (size_t)(len >> 1);
+    if (count == 0 || (src == dst && src_off == dst_off))
+        return 1;
+
+    int src_float = array_is_flat_float(src);
+    int dst_float = array_is_flat_float(dst);
+    if (src_float != dst_float) {
+        /* Preserve the generic boxed/flat conversion for mixed layouts. */
+        for (size_t i = 0; i < count; i++) {
+            int64_t delta = (int64_t)i * 2;
+            int64_t value = ocamlcc_gen_array_get(0, src, src_off + delta);
+            ocamlcc_gen_array_set(0, dst, dst_off + delta, value);
+        }
+        return 1;
+    }
+
+    const void *src_slice = (const char *)(uintptr_t)src + (src_off >> 1) * 8;
+    void *dst_slice = (char *)(uintptr_t)dst + (dst_off >> 1) * 8;
+    const int64_t *from = src_slice;
+    int64_t *to = dst_slice;
+    if (src_float || (array_words_are_immediate(from, count) &&
+                      array_words_are_immediate(to, count))) {
+        pal_memmove(dst_slice, src_slice, count * sizeof(*to));
+    } else if (src == dst && dst_off > src_off) {
+        for (size_t i = count; i > 0; i--)
+            array_replace_borrowed(&to[i - 1], from[i - 1]);
+    } else {
+        for (size_t i = 0; i < count; i++)
+            array_replace_borrowed(&to[i], from[i]);
+    }
+    return 1;
+}
+
+int64_t ocamlcc_bulk_array_fill(int64_t dst, int64_t off, int64_t len, int64_t value)
+{
+    size_t count = (size_t)(len >> 1);
+    if (count == 0)
+        return 1;
+
+    if (array_is_flat_float(dst)) {
+        double *to = (double *)(uintptr_t)dst + (off >> 1);
+        double unboxed = unbox_float(value);
+        for (size_t i = 0; i < count; i++)
+            to[i] = unboxed;
+    } else {
+        int64_t *to = (int64_t *)(uintptr_t)dst + (off >> 1);
+        if ((value & 1) && array_words_are_immediate(to, count)) {
+            for (size_t i = 0; i < count; i++)
+                to[i] = value;
+        } else {
+            for (size_t i = 0; i < count; i++)
+                array_replace_borrowed(&to[i], value);
+        }
+    }
+    return 1;
+}
+
 extern int ocamlcc_snprintf_double(char *out, size_t cap, const char *fmt,
                                    size_t fmt_len, double d);
 extern int ocamlcc_parse_double(const char *s, size_t len, double *out);

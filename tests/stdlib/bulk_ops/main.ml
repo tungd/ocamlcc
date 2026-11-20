@@ -89,6 +89,24 @@ let () =
     (Array.length (Array.create_float 0)) cf.(0) cf2.(0) cf2.(1);
   check_invalid_arg "arr_sub" (fun () -> Array.sub a 3 3);
   check_invalid_arg "arr_blit" (fun () -> Array.blit a 4 a 0 2);
+  let words = Array.make 120 min_int in
+  Array.fill words 20 100 max_int;
+  Array.blit words 20 words 0 100;
+  Array.fill words 120 0 0;
+  Array.blit words 120 words 120 0;
+  assert (Array.sub words 120 0 = [||]);
+  assert (Array.sub words 0 120 = Array.make 120 max_int);
+  assert
+    (try Array.fill words max_int 1 0; false
+     with Invalid_argument _ -> true);
+
+  let nan_bits = 0x7ff80000000000a5L in
+  let floats = [| -0.0; Int64.float_of_bits nan_bits; 1.0 |] in
+  Array.blit floats 0 floats 1 2;
+  let copied = Array.sub floats 1 2 in
+  Array.fill floats 0 3 copied.(1);
+  assert (Int64.bits_of_float copied.(0) = Int64.min_int);
+  assert (Int64.bits_of_float floats.(2) = nan_bits);
 
   (* Float.Array *)
   let fa = Float.Array.make 4 1.5 in

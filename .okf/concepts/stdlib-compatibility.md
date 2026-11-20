@@ -55,8 +55,15 @@ against that archive and our ARC runtime. It does not use the host OCaml runtime
 `stdlib/camlinternalBulkOps.ml` compiles with `--nopervasives` after
 `CamlinternalIntFmt`. It checks byte and string slices in OCaml, then calls
 the runtime's overlap-safe move or byte fill. An unsafe string view can alias
-its byte destination. The scalar comparisons, hashing, and array operations
-remain in the OCaml module.[^bulk-ops]
+its byte destination. Array fill, blit, and sub also validate slices in
+OCaml before entering a native kernel. The kernels copy flat floats as raw
+payloads. For tagged word arrays they check the affected source and destination
+slices before a bulk move or fill. Pointer-capable slices retain incoming
+owners before releasing replaced ones, in overlap-safe order. The tests
+cover zero-scan-count
+arrays with pointers, empty slices, and the preservation of floating-point
+bits. Scalar comparisons, hashing, append, and concat use the OCaml
+module.[^bulk-ops]
 
 The Lexing overlay implements both DFA engines in OCaml, including signed
 16-bit transitions, unsigned memory-code offsets, captures, backtracking,

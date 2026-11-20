@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Use native kernels for array fill, blit, and sub. Check the actual tagged slices and keep ownership-aware copies for pointer payloads. See [stdlib compatibility](/concepts/stdlib-compatibility.md).
+
 - 2026-11-20 (codex/1) — Use PAL memmove and memset for checked byte and string bulk operations. Cover aliased string views and empty slices. See [stdlib compatibility](/concepts/stdlib-compatibility.md).
 
 - 2026-11-20 (codex/1) — Track cross-unit exports through immutable Lambda blocks and their signature coercions. Exercise reordered slots and a hidden nested member in the native driver test. See [compiler pipeline](/concepts/compiler-pipeline.md#cross-unit-calls).

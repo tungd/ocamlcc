@@ -140,6 +140,12 @@ int64_t ocamlcc_gen_makearray(int64_t n, const int64_t *elems);
 int64_t ocamlcc_gen_array_get(int64_t safe, int64_t arr, int64_t idx_val);
 int64_t ocamlcc_gen_array_set(int64_t safe, int64_t arr, int64_t idx_val, int64_t v);
 
+/* Borrowed inputs and tagged indices. CamlinternalBulkOps validates the slices. */
+int64_t ocamlcc_bulk_array_sub(int64_t src, int64_t off, int64_t len);
+int64_t ocamlcc_bulk_array_blit(int64_t src, int64_t src_off, int64_t dst,
+                               int64_t dst_off, int64_t len);
+int64_t ocamlcc_bulk_array_fill(int64_t dst, int64_t off, int64_t len, int64_t value);
+
 int64_t caml_format_float(int64_t fmt_val, int64_t float_val);
 int64_t caml_float_of_string(int64_t s_val);
 
