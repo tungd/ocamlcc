@@ -1,6 +1,6 @@
 /*
- * fiber.c — Wren-style stackful coroutines, shadow stack, and cooperative
- * kqueue/epoll scheduler (design doc §4.4).
+ * fiber.c — Wren-style stackful coroutine context, shadow stack, and minimal
+ * PAL TLS/poller bridge (scheduler, timers & fd waiters live in Stdlib__fiber).
  */
 #include "fiber.h"
 
@@ -12,20 +12,12 @@
 #define FIBER_GUARD_BYTES (16u * 1024u)
 #define FIBER_STACK_BYTES (256u * 1024u)
 #define SHADOW_INIT_BYTES (16u * 1024u)
-
-typedef struct SchedState {
-    Fiber *ready_head;
-    Fiber *ready_tail;
-    Fiber *timer_head;
-    Fiber *io_head;
-    int    poller_fd;
-    int    main_io_pending;
-    int    main_io_ready;
-} SchedState;
+#define POLLER_BATCH_CAP  64
 
 typedef struct FiberThreadState {
-    Fiber      main_fiber;
-    SchedState sched;
+    Fiber   main_fiber;
+    int64_t sched_val;
+    int     poller_fd;
 } FiberThreadState;
 
 static _Thread_local FiberThreadState *tls_state = NULL;
@@ -66,39 +58,20 @@ static void fiber_tls_cleanup(void *arg)
     FiberThreadState *s = (FiberThreadState *)arg;
     if (s == NULL)
         return;
-    /* Release every fiber still queued on this thread's scheduler lists:
-     * the spawn pin belongs to the scheduler, so fibers left queued at
-     * thread exit would otherwise leak. Wakes triggered by these releases
-     * can push to the ready queue again, so drain until all lists are
-     * empty. */
-    for (;;) {
-        Fiber *f = s->sched.ready_head;
-        if (f != NULL) {
-            s->sched.ready_head = f->sched_next;
-            if (s->sched.ready_head == NULL)
-                s->sched.ready_tail = NULL;
-        } else if ((f = s->sched.io_head) != NULL) {
-            s->sched.io_head = f->sched_next;
-        } else if ((f = s->sched.timer_head) != NULL) {
-            s->sched.timer_head = f->sched_next;
-        } else {
-            break;
-        }
-        f->sched_next = NULL;
-        arc_release(f);
-    }
+    int64_t sv = s->sched_val;
+    s->sched_val = 0;
     fiber_free_buffers(&s->main_fiber);
-    /* Detach the TLS pointers before freeing the state: releasing buffer
-     * values can run custom finalizers, and other pthread_key destructors
-     * may touch fiber/runtime state after this one. arc_fiber_current()
-     * must allocate fresh state instead of dereferencing freed memory. */
+    /* Detach TLS pointers and release OCaml scheduler state afterwards so any
+     * finalizer touching arc_fiber_current() allocates fresh TLS safely. */
     tls_state = NULL;
     tls_current_fiber = NULL;
-    if (s->sched.poller_fd >= 0) {
-        pal_poller_close(s->sched.poller_fd);
-        s->sched.poller_fd = -1;
+    if (s->poller_fd >= 0) {
+        pal_poller_close(s->poller_fd);
+        s->poller_fd = -1;
     }
     free(s);
+    if (sv != 0)
+        arc_release_val(sv);
 }
 
 static void fiber_tls_key_init(void)
@@ -115,9 +88,8 @@ static FiberThreadState *fiber_thread_state(void)
     s = (FiberThreadState *)calloc(1, sizeof(FiberThreadState));
     if (s == NULL)
         pal_abort();
-    s->main_fiber.wait_fd = -1;
     s->main_fiber.state = FIBER_RUNNING;
-    s->sched.poller_fd = -1;
+    s->poller_fd = -1;
     tls_state = s;
     pthread_once(&g_fiber_tls_once, fiber_tls_key_init);
     if (g_fiber_tls_key_ok)
@@ -126,7 +98,6 @@ static FiberThreadState *fiber_thread_state(void)
 }
 
 #define tls_main_fiber (fiber_thread_state()->main_fiber)
-#define tls_sched      (fiber_thread_state()->sched)
 
 Fiber *arc_fiber_current(void)
 {
@@ -220,62 +191,10 @@ void arc_fiber_pop_reuse(int64_t n)
     cur->reuse_sp -= (size_t)n;
 }
 
-static void sched_push_ready(Fiber *f);
-static int sched_remove_io(Fiber *f);
-static void sched_remove_timer(Fiber *f);
-
 void fiber_destroy(Fiber *f)
 {
     if (f == NULL || (tls_state != NULL && f == &tls_state->main_fiber))
         return;
-    /* Unlink from an awaited target's waiter list first: a fiber destroyed
-     * while queued on target->waiter_head would otherwise leave a dangling
-     * pointer that the target's completion (or destroy) wake would
-     * dereference. */
-    if (f->awaiting != NULL) {
-        Fiber **pp = &f->awaiting->waiter_head;
-        while (*pp != NULL) {
-            if (*pp == f) {
-                *pp = f->sched_next;
-                break;
-            }
-            pp = &(*pp)->sched_next;
-        }
-        f->awaiting = NULL;
-        f->sched_next = NULL;
-    }
-    if (f->state == FIBER_WAITING_IO) {
-        /* Capture the watch key before unlinking: sched_remove_io clears
-         * wait_fd/wait_events, which made the old unwatch below it dead
-         * code and left a stale (freed-fiber) waiter entry in the poller. */
-        int wfd = f->wait_fd;
-        uint32_t wev = f->wait_events;
-        int queued = 0;
-        if (tls_state != NULL)
-            queued = sched_remove_io(f);
-        /* Only this thread's poller can hold the watch: a parked fiber is
-         * pinned by its scheduler, so a same-thread destroy is the only
-         * sound teardown. Remove just this fiber's waiter entry —
-         * pal_poller_unwatch would drop other fibers waiting on the same
-         * fd. */
-        if (queued && tls_state != NULL && tls_state->sched.poller_fd >= 0)
-            (void)pal_poller_unwatch_waiter(tls_state->sched.poller_fd, wfd,
-                                            wev, f);
-        f->wait_fd = -1;
-        f->wait_events = 0;
-    } else if (f->state == FIBER_WAITING_TIMER) {
-        if (tls_state != NULL)
-            sched_remove_timer(f);
-    }
-    while (f->waiter_head != NULL) {
-        Fiber *w = f->waiter_head;
-        f->waiter_head = w->sched_next;
-        w->sched_next = NULL;
-        w->awaiting = NULL;
-        if (tls_state != NULL && w->state != FIBER_DONE)
-            sched_push_ready(w);
-    }
-    f->awaiting = NULL;
     fiber_free_buffers(f);
     if (f->entry_closure != 0) {
         int64_t clos = f->entry_closure;
@@ -317,155 +236,13 @@ static void fiber_swap_to(Fiber *next)
 
 static int ensure_poller(void)
 {
-    if (tls_sched.poller_fd < 0) {
-        tls_sched.poller_fd = pal_poller_create();
-        if (tls_sched.poller_fd < 0)
+    FiberThreadState *s = fiber_thread_state();
+    if (s->poller_fd < 0) {
+        s->poller_fd = pal_poller_create();
+        if (s->poller_fd < 0)
             pal_abort();
     }
-    return tls_sched.poller_fd;
-}
-
-static void sched_push_ready(Fiber *f)
-{
-    f->state = FIBER_RUNNABLE;
-    f->sched_next = NULL;
-    if (tls_sched.ready_tail != NULL)
-        tls_sched.ready_tail->sched_next = f;
-    else
-        tls_sched.ready_head = f;
-    tls_sched.ready_tail = f;
-}
-
-static Fiber *sched_pop_ready(void)
-{
-    Fiber *f = tls_sched.ready_head;
-    if (f == NULL)
-        return NULL;
-    tls_sched.ready_head = f->sched_next;
-    if (tls_sched.ready_head == NULL)
-        tls_sched.ready_tail = NULL;
-    f->sched_next = NULL;
-    return f;
-}
-
-static void sched_unlink(Fiber **pp, Fiber *target)
-{
-    while (*pp != NULL) {
-        if (*pp == target) {
-            *pp = target->sched_next;
-            target->sched_next = NULL;
-            return;
-        }
-        pp = &(*pp)->sched_next;
-    }
-}
-
-static int sched_remove_io(Fiber *target)
-{
-    int found = 0;
-    Fiber **pp = &tls_sched.io_head;
-    while (*pp != NULL) {
-        if (*pp == target) {
-            *pp = target->sched_next;
-            target->sched_next = NULL;
-            found = 1;
-            break;
-        }
-        pp = &(*pp)->sched_next;
-    }
-    target->wait_fd = -1;
-    target->wait_events = 0;
-    return found;
-}
-
-static void sched_remove_timer(Fiber *target)
-{
-    sched_unlink(&tls_sched.timer_head, target);
-}
-
-static void sched_drain_timers(void)
-{
-    uint64_t now = pal_monotonic_ns();
-    Fiber **pp = &tls_sched.timer_head;
-    while (*pp != NULL) {
-        Fiber *f = *pp;
-        if (f->wake_ns <= now) {
-            *pp = f->sched_next;
-            f->sched_next = NULL;
-            sched_push_ready(f);
-        } else {
-            pp = &f->sched_next;
-        }
-    }
-}
-
-static int sched_next_timer_timeout_ms(void)
-{
-    if (tls_sched.timer_head == NULL)
-        return -1;
-    uint64_t earliest = tls_sched.timer_head->wake_ns;
-    for (Fiber *f = tls_sched.timer_head->sched_next; f != NULL; f = f->sched_next) {
-        if (f->wake_ns < earliest)
-            earliest = f->wake_ns;
-    }
-    uint64_t now = pal_monotonic_ns();
-    if (earliest <= now)
-        return 0;
-    uint64_t diff_ns = earliest - now;
-    uint64_t ms = (diff_ns + 999999ull) / 1000000ull;
-    if (ms > (uint64_t)INT32_MAX)
-        return INT32_MAX;
-    return (int)ms;
-}
-
-static void sched_poll(int timeout_ms)
-{
-    sched_drain_timers();
-    if (tls_sched.io_head == NULL && !tls_sched.main_io_pending) {
-        if (timeout_ms > 0) {
-            int pfd = ensure_poller();
-            PalPollEvent ev;
-            (void)pal_poller_wait(pfd, &ev, 1, timeout_ms);
-            sched_drain_timers();
-        }
-        return;
-    }
-    if (tls_sched.ready_head != NULL)
-        timeout_ms = 0;
-    int pfd = ensure_poller();
-    PalPollEvent evs[32];
-    int n = pal_poller_wait(pfd, evs, 32, timeout_ms);
-    for (int i = 0; i < n; i++) {
-        Fiber *wf = (Fiber *)evs[i].udata;
-        if (wf == &tls_main_fiber) {
-            tls_sched.main_io_pending = 0;
-            tls_sched.main_io_ready = 1;
-        } else if (wf != NULL && wf->state == FIBER_WAITING_IO) {
-            sched_remove_io(wf);
-            sched_push_ready(wf);
-        }
-    }
-    sched_drain_timers();
-}
-
-static int sched_step(void)
-{
-    sched_poll(0);
-    Fiber *next = sched_pop_ready();
-    if (next != NULL) {
-        next->caller = arc_fiber_current();
-        fiber_swap_to(next);
-        if (next->state == FIBER_DONE)
-            arc_release(next);
-        return 1;
-    }
-    if (tls_sched.io_head != NULL || tls_sched.timer_head != NULL ||
-        tls_sched.main_io_pending) {
-        int tms = sched_next_timer_timeout_ms();
-        sched_poll(tms);
-        return 1;
-    }
-    return 0;
+    return s->poller_fd;
 }
 
 static void __attribute__((noreturn)) fiber_trampoline(void)
@@ -490,21 +267,13 @@ static void __attribute__((noreturn)) fiber_trampoline(void)
     }
     self->state = FIBER_DONE;
 
-    while (self->waiter_head != NULL) {
-        Fiber *w = self->waiter_head;
-        self->waiter_head = w->sched_next;
-        w->sched_next = NULL;
-        w->awaiting = NULL;
-        sched_push_ready(w);
-    }
-
     Fiber *caller = self->caller;
     self->caller = NULL;
     fiber_swap_to(caller);
     pal_abort();
 }
 
-static Fiber *alloc_fiber_obj(int64_t closure, int scheduled)
+int64_t ocamlcc_fiber_create(int64_t closure)
 {
     size_t total_bytes = (size_t)FIBER_GUARD_BYTES + (size_t)FIBER_STACK_BYTES;
     uint8_t *cstack = (uint8_t *)pal_page_alloc(total_bytes);
@@ -522,16 +291,8 @@ static Fiber *alloc_fiber_obj(int64_t closure, int scheduled)
     shadow_init(f);
     arc_retain_val(closure);
     f->entry_closure = closure;
-    f->wait_fd = -1;
-    f->is_scheduled = scheduled;
-    f->state = scheduled ? FIBER_RUNNABLE : FIBER_SUSPENDED;
+    f->state = FIBER_SUSPENDED;
     pal_ctx_make(&f->ctx, cstack + total_bytes, fiber_trampoline);
-    return f;
-}
-
-int64_t ocamlcc_fiber_create(int64_t closure)
-{
-    Fiber *f = alloc_fiber_obj(closure, 0);
     return (int64_t)(uintptr_t)f;
 }
 
@@ -571,11 +332,8 @@ int64_t ocamlcc_fiber_resume(int64_t fiber_val, int64_t send_val)
 }
 
 /* poll_finalizers is registered yields = false, so the dispatcher fiber has
- * no shadow-stack window around finalizer callbacks: if a finalizer
- * suspended the fiber and the fiber was later abandoned, every live local
- * in unshadowed caller frames would leak. Finalizer dispatch owns the fiber
- * (owns_finalizer_dispatch, set by run_finalizers in arc.c), so every
- * suspension entry point must refuse instead of yielding. */
+ * no shadow-stack window around finalizer callbacks: every suspension entry
+ * point checks owns_finalizer_dispatch and refuses instead of stranding. */
 static int finalizer_owns_current_fiber(void)
 {
     Fiber *cur = arc_fiber_current();
@@ -585,19 +343,11 @@ static int finalizer_owns_current_fiber(void)
 int64_t ocamlcc_fiber_suspend(int64_t send_val)
 {
     Fiber *cur = arc_fiber_current();
-    if (finalizer_owns_current_fiber()) {
+    if (finalizer_owns_current_fiber() ||
+        cur == &tls_main_fiber || cur->caller == NULL) {
         ocamlcc_fiber_raise_invalid();
         return 1;
     }
-    if (cur == &tls_main_fiber || cur->is_scheduled) {
-        /* Fiber.suspend is a coroutine operation; inside a spawned fiber it
-           would strand the fiber off every scheduler queue (leaking it and
-           its payload). */
-        ocamlcc_fiber_raise_invalid();
-        return 1;
-    }
-    if (cur->caller == NULL)
-        pal_abort();
 
     arc_retain_val(send_val);
     if (cur->result != 0)
@@ -622,224 +372,86 @@ int64_t ocamlcc_fiber_is_done(int64_t fiber_val)
     return tag_int(f->state == FIBER_DONE ? 1 : 0);
 }
 
-int64_t ocamlcc_fiber_spawn(int64_t closure)
-{
-    Fiber *f = alloc_fiber_obj(closure, 1);
-    f->result = 1; /* tagged unit arg passed to (fun () -> ...) */
-    arc_retain(f); /* scheduler queue owns +1 */
-    sched_push_ready(f);
-    return (int64_t)(uintptr_t)f;
-}
-
-int64_t ocamlcc_fiber_yield(int64_t unit)
+int64_t ocamlcc_fiber_is_main(int64_t unit)
 {
     (void)unit;
-    Fiber *cur = arc_fiber_current();
+    return arc_fiber_current() == &tls_main_fiber ? 3 : 1;
+}
+
+int64_t ocamlcc_fiber_can_yield(int64_t unit)
+{
+    (void)unit;
     if (finalizer_owns_current_fiber()) {
         ocamlcc_fiber_raise_invalid();
         return 1;
     }
-    if (cur == &tls_main_fiber) {
-        sched_poll(0);
-        Fiber *next = sched_pop_ready();
-        if (next != NULL) {
-            next->caller = &tls_main_fiber;
-            fiber_swap_to(next);
-            if (next->state == FIBER_DONE)
-                arc_release(next);
-        }
-        return 1;
-    }
-    if (cur->caller == NULL || !cur->is_scheduled) {
-        /* Fiber.yield is a scheduler operation; inside a coroutine it would
-           queue the coroutine without scheduler ownership and return the
-           resume payload to the resumer. */
-        ocamlcc_fiber_raise_invalid();
-        return 1;
-    }
-    sched_push_ready(cur);
-    Fiber *target = cur->caller;
-    cur->caller = NULL;
-    fiber_swap_to(target);
     return 1;
 }
 
-int64_t ocamlcc_fiber_sleep_ms(int64_t ms_val)
+int64_t ocamlcc_fiber_sched_get(int64_t unit)
 {
-    if (finalizer_owns_current_fiber()) {
-        ocamlcc_fiber_raise_invalid();
-        return 1;
-    }
-    int64_t ms = ms_val >> 1;
-    if (ms <= 0)
-        return ocamlcc_fiber_yield(1);
+    (void)unit;
+    FiberThreadState *s = fiber_thread_state();
+    if (s->sched_val == 0)
+        return 1; /* None */
+    arc_retain_val(s->sched_val);
+    return s->sched_val;
+}
 
-    uint64_t deadline = pal_monotonic_ns() + (uint64_t)ms * 1000000ull;
-    Fiber *cur = arc_fiber_current();
-    if (cur == &tls_main_fiber) {
-        for (;;) {
-            uint64_t now = pal_monotonic_ns();
-            if (now >= deadline)
-                break;
-            if (!sched_step()) {
-                uint64_t rem_ms = (deadline - now + 999999ull) / 1000000ull;
-                if (rem_ms > (uint64_t)INT32_MAX)
-                    rem_ms = (uint64_t)INT32_MAX;
-                int pfd = ensure_poller();
-                PalPollEvent ev;
-                (void)pal_poller_wait(pfd, &ev, 1, (int)rem_ms);
-            } else {
-                sched_drain_timers();
-            }
-        }
-        return 1;
-    }
-
-    if (cur->caller == NULL || !cur->is_scheduled) {
-        ocamlcc_fiber_raise_invalid();
-        return 1;
-    }
-    cur->wake_ns = deadline;
-    cur->state = FIBER_WAITING_TIMER;
-    cur->sched_next = tls_sched.timer_head;
-    tls_sched.timer_head = cur;
-
-    Fiber *target = cur->caller;
-    cur->caller = NULL;
-    fiber_swap_to(target);
+int64_t ocamlcc_fiber_sched_set(int64_t opt_val)
+{
+    FiberThreadState *s = fiber_thread_state();
+    int64_t old = s->sched_val;
+    arc_retain_val(opt_val);
+    s->sched_val = (opt_val == 1) ? 0 : opt_val;
+    if (opt_val == 1)
+        arc_release_val(opt_val);
+    if (old != 0)
+        arc_release_val(old);
     return 1;
 }
 
-static int64_t fiber_fd_wait(int64_t fd_val, uint32_t events)
+int64_t ocamlcc_monotonic_ns(int64_t unit)
 {
-    if (finalizer_owns_current_fiber()) {
-        ocamlcc_fiber_raise_invalid();
-        return 1;
-    }
-    int fd = (int)(fd_val >> 1);
+    (void)unit;
+    return tag_int((int64_t)pal_monotonic_ns());
+}
+
+int64_t ocamlcc_poller_watch(int64_t fd_val, int64_t events_val, int64_t tok_val)
+{
     int pfd = ensure_poller();
-    Fiber *cur = arc_fiber_current();
-
-    if (cur == &tls_main_fiber) {
-        tls_sched.main_io_pending = 1;
-        tls_sched.main_io_ready = 0;
-        if (pal_poller_watch(pfd, fd, events, &tls_main_fiber) < 0) {
-            tls_sched.main_io_pending = 0;
-            tls_sched.main_io_ready = 0;
-            ocamlcc_fiber_raise_invalid();
-            return 1;
-        }
-        while (!tls_sched.main_io_ready)
-            (void)sched_step();
-        tls_sched.main_io_ready = 0;
-        return 1;
-    }
-
-    if (cur->caller == NULL || !cur->is_scheduled) {
+    int fd = (int)(fd_val >> 1);
+    uint32_t ev = (uint32_t)(events_val >> 1);
+    if (pal_poller_watch(pfd, fd, ev, (void *)(intptr_t)(tok_val >> 1)) < 0)
         ocamlcc_fiber_raise_invalid();
-        return 1;
-    }
-    cur->wait_fd = fd;
-    cur->wait_events = events;
-    cur->state = FIBER_WAITING_IO;
-    if (pal_poller_watch(pfd, fd, events, cur) < 0) {
-        cur->wait_fd = -1;
-        cur->wait_events = 0;
-        cur->state = FIBER_RUNNING;
-        ocamlcc_fiber_raise_invalid();
-        return 1;
-    }
-    cur->sched_next = tls_sched.io_head;
-    tls_sched.io_head = cur;
-
-    Fiber *target = cur->caller;
-    cur->caller = NULL;
-    fiber_swap_to(target);
     return 1;
 }
 
-int64_t ocamlcc_fiber_fd_wait_read(int64_t fd_val)
+int64_t ocamlcc_poller_unwatch_waiter(int64_t fd_val, int64_t events_val, int64_t tok_val)
 {
-    return fiber_fd_wait(fd_val, PAL_POLL_READ);
-}
-
-int64_t ocamlcc_fiber_fd_wait_write(int64_t fd_val)
-{
-    return fiber_fd_wait(fd_val, PAL_POLL_WRITE);
-}
-
-int64_t ocamlcc_fiber_await(int64_t fiber_val)
-{
-    if (finalizer_owns_current_fiber()) {
-        ocamlcc_fiber_raise_invalid();
+    FiberThreadState *s = fiber_thread_state();
+    if (s->poller_fd < 0)
         return 1;
-    }
-    Fiber *f = (Fiber *)(uintptr_t)fiber_val;
-    Fiber *cur = arc_fiber_current();
-    if (f == NULL || f == cur) {
-        ocamlcc_fiber_raise_invalid();
-        return 1;
-    }
-    for (Fiber *p = f; p != NULL; p = p->awaiting) {
-        if (p == cur) {
-            ocamlcc_fiber_raise_invalid();
-            return 1;
-        }
-    }
-
-    if (f->state != FIBER_DONE) {
-        if (cur == &tls_main_fiber) {
-            if (!f->is_scheduled) {
-                /* Awaiting a live coroutine from the main fiber can never
-                   complete: only Fiber.resume drives coroutines. */
-                ocamlcc_fiber_raise_invalid();
-                return 1;
-            }
-            while (f->state != FIBER_DONE) {
-                if (!sched_step()) {
-                    ocamlcc_fiber_raise_invalid();
-                    return 1;
-                }
-            }
-        } else {
-            if (!cur->is_scheduled || !f->is_scheduled) {
-                /* Waiter handoff routes through the scheduler ready queue,
-                   which is only sound between scheduler fibers. */
-                ocamlcc_fiber_raise_invalid();
-                return 1;
-            }
-            if (cur->caller == NULL) {
-                ocamlcc_fiber_raise_invalid();
-                return 1;
-            }
-            cur->state = FIBER_WAITING_IO;
-            cur->awaiting = f;
-            cur->sched_next = f->waiter_head;
-            f->waiter_head = cur;
-            Fiber *target = cur->caller;
-            cur->caller = NULL;
-            fiber_swap_to(target);
-            cur->awaiting = NULL;
-        }
-    }
-
-    if (f->pending_exn != 0) {
-        arc_retain_val(f->pending_exn);
-        ocamlcc_set_exn(f->pending_exn);
-        return 1;
-    }
-    arc_retain_val(f->result);
-    return f->result;
-}
-
-int64_t ocamlcc_fiber_run_all(int64_t unit)
-{
-    (void)unit;
-    if (arc_fiber_current() != &tls_main_fiber)
-        pal_abort();
-    while (sched_step())
-        ;
+    (void)pal_poller_unwatch_waiter(
+        s->poller_fd, (int)(fd_val >> 1),
+        (uint32_t)(events_val >> 1), (void *)(intptr_t)(tok_val >> 1));
     return 1;
+}
+
+int64_t ocamlcc_poller_wait(int64_t out_arr_val, int64_t timeout_ms_val)
+{
+    int pfd = ensure_poller();
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)out_arr_val - 1;
+    size_t cap = hdr->byte_size / sizeof(int64_t);
+    int64_t *out = (int64_t *)(uintptr_t)out_arr_val;
+    int max_ev = (cap == 0u) ? 1 : (cap > POLLER_BATCH_CAP ? POLLER_BATCH_CAP : (int)cap);
+    PalPollEvent evs[POLLER_BATCH_CAP];
+    int n = pal_poller_wait(pfd, evs, max_ev, (int)(timeout_ms_val >> 1));
+    if (n <= 0 || cap == 0u)
+        return tag_int(0);
+    for (int i = 0; i < n; i++)
+        out[i] = tag_int((int64_t)(intptr_t)evs[i].udata);
+    return tag_int((int64_t)n);
 }
 
 int64_t ocamlcc_pipe(int64_t unit)
@@ -894,12 +506,10 @@ int64_t ocamlcc_fd_close(int64_t fd_val)
     return 1;
 }
 
-/* Legacy/direct helper preserved for fiber_init API compatibility. */
 void fiber_init(Fiber *fiber, size_t stack_words)
 {
     pal_memset(fiber, 0, sizeof(*fiber));
     (void)stack_words;
-    fiber->wait_fd = -1;
     fiber->state = FIBER_SUSPENDED;
 }
 

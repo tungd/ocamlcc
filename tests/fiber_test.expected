@@ -4,3 +4,4 @@ exns=100,4,3 delta=0
 sched=[A1 B1 A2 C1 C2 B2 A3 ] sum=40 delta=0
 cross=1,1,1,1,1
 oapp=10,10,1,0 delta=0
+edges=[FS] 3,45,1,1,1 delta=0

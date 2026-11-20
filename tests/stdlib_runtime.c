@@ -23,8 +23,11 @@ extern int64_t ocamlcc_ba_to_bytes(int64_t, int64_t, int64_t, int64_t, int64_t);
 extern int64_t ocamlcc_ba_of_bytes_slice(int64_t, int64_t, int64_t, int64_t, int64_t);
 extern int64_t ocamlcc_fiber_create(int64_t);
 extern int64_t ocamlcc_fiber_resume(int64_t, int64_t);
-extern int64_t ocamlcc_fiber_fd_wait_read(int64_t);
-extern int64_t ocamlcc_fiber_await(int64_t);
+extern int64_t ocamlcc_fiber_suspend(int64_t);
+extern int64_t ocamlcc_fiber_is_done(int64_t);
+extern int64_t ocamlcc_fiber_can_yield(int64_t);
+extern int64_t ocamlcc_fiber_sched_set(int64_t);
+extern int64_t ocamlcc_poller_watch(int64_t, int64_t, int64_t);
 extern int64_t caml_lazy_make_forward(int64_t);
 extern int64_t caml_compare(int64_t, int64_t);
 extern int64_t caml_ml_mutex_new(int64_t);
@@ -483,8 +486,8 @@ static void test_fiber_robustness(void)
     clear_exception();
     arc_release_val(fib);
 
-    /* 2. Passing an invalid fd to fiber_fd_wait must raise, not abort. */
-    ocamlcc_fiber_fd_wait_read(tagged(-1));
+    /* 2. Passing an invalid fd to poller_watch must raise, not abort. */
+    ocamlcc_poller_watch(tagged(-1), tagged(1), tagged(1));
     clear_exception();
 
     /* 3. Invoking a closure with > 32 parameters must raise and not leak args. */
@@ -498,8 +501,8 @@ static void test_fiber_robustness(void)
     clear_exception();
     arc_release(big_clos);
 
-    /* 4. Self-await on current fiber must not deadlock. */
-    ocamlcc_fiber_await((int64_t)(uintptr_t)arc_fiber_current());
+    /* 4. Suspending on the main fiber must raise Invalid_argument. */
+    ocamlcc_fiber_suspend(tagged(1));
     clear_exception();
 
     assert(arc_live_objects() == before);
@@ -590,25 +593,10 @@ static int64_t fin_suspend_probe_fn(int64_t clos, int64_t unit)
 {
     (void)clos;
     (void)unit;
-    ocamlcc_fiber_yield(1);
-    expect_invalid("yield");
     ocamlcc_fiber_suspend(1);
     expect_invalid("suspend");
-    ocamlcc_fiber_sleep_ms(tagged(5));
-    expect_invalid("sleep_ms");
-    ocamlcc_fiber_fd_wait_read(tagged(0));
-    expect_invalid("fd_wait_read");
-    ArcClosure *noop = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
-    noop->code = (void *)noop_fiber_fn;
-    noop->arity = 1;
-    int64_t done_fib = ocamlcc_fiber_create((int64_t)(uintptr_t)noop);
-    arc_release(noop);
-    ocamlcc_fiber_resume(done_fib, tagged(0));
-    if (ocamlcc_get_exn())
-        clear_exception();
-    ocamlcc_fiber_await(done_fib);
-    expect_invalid("await");
-    arc_release_val(done_fib);
+    ocamlcc_fiber_can_yield(1);
+    expect_invalid("can_yield");
     return 1;
 }
 
@@ -663,84 +651,6 @@ static void test_finalizer_no_suspend(void)
     ocamlcc_poll_finalizers();
     if (ocamlcc_get_exn())
         clear_exception();
-    ocamlcc_arc_collect(1);
-    assert(arc_live_objects() == before);
-}
-
-static int64_t g_test_rfd = 0;
-
-static int64_t fd_wait_body_fn(int64_t clos, int64_t arg)
-{
-    (void)clos;
-    (void)arg;
-    ocamlcc_fiber_fd_wait_read(tagged(g_test_rfd));
-    return 1;
-}
-
-static int64_t g_await_target = 0;
-
-static int64_t await_body_fn(int64_t clos, int64_t arg)
-{
-    (void)clos;
-    (void)arg;
-    ocamlcc_fiber_await(g_await_target);
-    return 1;
-}
-
-static void run_one_ready_fiber(void)
-{
-    /* Run exactly one queued fiber until it parks or completes. */
-    ocamlcc_fiber_yield(1);
-}
-
-static void test_destroy_waiter_cleanup(void)
-{
-    int64_t before = arc_live_objects();
-    int fds[2];
-    assert(pipe(fds) == 0);
-    g_test_rfd = (int64_t)fds[0];
-
-    /* fB parks on the pipe fd. */
-    ArcClosure *bodB = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
-    bodB->code = (void *)fd_wait_body_fn;
-    bodB->arity = 1;
-    int64_t fB = ocamlcc_fiber_spawn((int64_t)(uintptr_t)bodB);
-    arc_release(bodB);
-    run_one_ready_fiber();
-    const Fiber *fbobj = (const Fiber *)(uintptr_t)fB;
-    assert(fbobj->state == FIBER_WAITING_IO);
-
-    /* fA awaits fB: it sits on fB->waiter_head. */
-    g_await_target = fB;
-    ArcClosure *bodA = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
-    bodA->code = (void *)await_body_fn;
-    bodA->arity = 1;
-    int64_t fA = ocamlcc_fiber_spawn((int64_t)(uintptr_t)bodA);
-    arc_release(bodA);
-    run_one_ready_fiber();
-    const Fiber *faobj = (const Fiber *)(uintptr_t)fA;
-    assert(faobj->state == FIBER_WAITING_IO);
-    assert(fbobj->waiter_head == (Fiber *)(uintptr_t)fA);
-
-    /* Collector-style teardown of the abandoned awaiter: it must be
-       unlinked from fB's waiter list, or fB's later completion wakes a
-       freed fiber. */
-    fiber_destroy((Fiber *)(uintptr_t)fA);
-    assert(fbobj->waiter_head == NULL);
-
-    /* fB still completes and wakes on data; the destroyed awaiter must not
-       be touched. */
-    assert(write(fds[1], "x", 1) == 1);
-    run_one_ready_fiber();
-    assert(((const Fiber *)(uintptr_t)fB)->state == FIBER_DONE);
-
-    /* The scheduler's spawn pin for the manually destroyed fA is settled by
-       hand (fiber_destroy stood in for the completion path). */
-    arc_release((Fiber *)(uintptr_t)fA);
-    arc_release_val(fB);
-    arc_release_val(fA);
-    close(fds[0]);
-    close(fds[1]);
     ocamlcc_arc_collect(1);
     assert(arc_live_objects() == before);
 }
@@ -810,16 +720,17 @@ static void *tls_queued_exit_worker(void *arg)
     ArcClosure *clos = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(ArcClosure));
     clos->code = (void *)tls_exit_body_fn;
     clos->arity = 1;
-    /* Spawn fibers and drop our handles: the scheduler queue owns +1 each,
-     * so they survive queued until the thread's TLS is cleaned up. */
-    for (int i = 0; i < 3; i++) {
-        int64_t fib = ocamlcc_fiber_spawn((int64_t)(uintptr_t)clos);
-        arc_release_val(fib);
-    }
+    int64_t *queued = arc_alloc(ARC_TAG_ARRAY, 3, 24);
+    for (int i = 0; i < 3; i++)
+        queued[i] = ocamlcc_fiber_create((int64_t)(uintptr_t)clos);
     arc_release(clos);
+    int64_t *some_sched = arc_alloc(0, 1, 8);
+    some_sched[0] = (int64_t)(uintptr_t)queued;
+    ocamlcc_fiber_sched_set((int64_t)(uintptr_t)some_sched);
+    arc_release(some_sched);
     if (g_probe_key_ok)
         pthread_setspecific(g_probe_key, (void *)(uintptr_t)1);
-    return NULL; /* thread exits with 3 fibers still queued */
+    return NULL; /* thread exits with 3 fibers still held in TLS sched_val */
 }
 
 static void test_tls_cleanup_queued_fibers(void)
@@ -1040,7 +951,6 @@ int main(void)
     test_import_contract();
     test_bigarray_channel_io();
     test_finalizer_no_suspend();
-    test_destroy_waiter_cleanup();
     test_poller_unwatch_waiter();
     test_tls_cleanup_queued_fibers();
     test_high_arity_closure();

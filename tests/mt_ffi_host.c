@@ -351,7 +351,7 @@ extern void arc_fiber_push(int64_t);
 extern void arc_fiber_pop(int64_t);
 extern void arc_fiber_push_reuse(void *);
 extern void arc_fiber_pop_reuse(int64_t);
-extern int64_t ocamlcc_fiber_sleep_ms(int64_t);
+extern int64_t ocamlcc_poller_wait(int64_t, int64_t);
 
 static void *tls_exit_worker(void *p)
 {
@@ -360,7 +360,10 @@ static void *tls_exit_worker(void *p)
     arc_fiber_pop(1);
     arc_fiber_push_reuse(NULL);
     arc_fiber_pop_reuse(1);
-    ocamlcc_fiber_sleep_ms((1ll << 1) | 1ll);
+    int64_t arr = (int64_t)(uintptr_t)arc_alloc(ARC_TAG_ARRAY, 0u, 8u);
+    ((int64_t *)(uintptr_t)arr)[0] = 1;
+    ocamlcc_poller_wait(arr, (1ll << 1) | 1ll);
+    arc_release_val(arr);
     return NULL;
 }
 

@@ -1,6 +1,6 @@
 /*
- * fiber.h — Wren-style stackful coroutines and cooperative I/O scheduler
- * (design doc §4.4).
+ * fiber.h — Wren-style stackful coroutine context & shadow stack
+ * (scheduler, timers, and I/O waiters live in stdlib/stdlib__fiber.ml).
  *
  * Each Fiber is an ARC-managed heap object (ARC_TAG_FIBER) owning a C
  * execution stack and a shadow value stack for live ARC references across
@@ -17,10 +17,7 @@
 
 typedef enum FiberState {
     FIBER_SUSPENDED,
-    FIBER_RUNNABLE,
     FIBER_RUNNING,
-    FIBER_WAITING_IO,
-    FIBER_WAITING_TIMER,
     FIBER_DONE
 } FiberState;
 
@@ -34,18 +31,11 @@ typedef struct Fiber {
     void        **reuse_base;    /* pal_page_alloc buffer for open reuse tokens */
     void        **reuse_sp;
     void        **reuse_end;
-    struct Fiber *caller;        /* link back to resuming / scheduler fiber */
+    struct Fiber *caller;        /* link back to resuming fiber */
     int64_t       entry_closure; /* owned closure while executing */
     int64_t       result;        /* owned return / yield / resume payload */
     int64_t       exn_slot;      /* saved per-fiber ocamlcc_exn_slot */
     int64_t       pending_exn;   /* owned uncaught exception on FIBER_DONE */
-    uint64_t      wake_ns;       /* monotonic wake time for timer wait */
-    int           wait_fd;       /* fd awaited or -1 */
-    uint32_t      wait_events;   /* PAL_POLL_READ / PAL_POLL_WRITE */
-    int           is_scheduled;  /* 1 = spawn/scheduler fiber, 0 = coroutine */
-    struct Fiber *waiter_head;   /* queued fibers in Fiber.await */
-    struct Fiber *awaiting;      /* fiber this fiber is awaiting (cycle check) */
-    struct Fiber *sched_next;    /* scheduler ready / timer / io queue link */
     int           owns_finalizer_dispatch; /* set during an unreleased callback */
     FiberState    state;
 } Fiber;
@@ -61,19 +51,20 @@ void arc_fiber_pop_reuse(int64_t n);
 /* Called by ARC release_subtree when ARC_TAG_FIBER refcount hits 0. */
 void fiber_destroy(Fiber *fiber);
 
-/* OCaml Wren-style coroutine & cooperative scheduler externals. */
+/* Low-level coroutine & TLS/poller hooks backed by C PAL. */
 int64_t ocamlcc_fiber_create(int64_t closure);
 int64_t ocamlcc_fiber_resume(int64_t fiber_val, int64_t send_val);
 int64_t ocamlcc_fiber_suspend(int64_t send_val);
 int64_t ocamlcc_fiber_is_done(int64_t fiber_val);
 
-int64_t ocamlcc_fiber_spawn(int64_t closure);
-int64_t ocamlcc_fiber_yield(int64_t unit);
-int64_t ocamlcc_fiber_sleep_ms(int64_t ms_val);
-int64_t ocamlcc_fiber_fd_wait_read(int64_t fd_val);
-int64_t ocamlcc_fiber_fd_wait_write(int64_t fd_val);
-int64_t ocamlcc_fiber_await(int64_t fiber_val);
-int64_t ocamlcc_fiber_run_all(int64_t unit);
+int64_t ocamlcc_fiber_is_main(int64_t unit);
+int64_t ocamlcc_fiber_can_yield(int64_t unit);
+int64_t ocamlcc_fiber_sched_get(int64_t unit);
+int64_t ocamlcc_fiber_sched_set(int64_t opt_val);
+int64_t ocamlcc_monotonic_ns(int64_t unit);
+int64_t ocamlcc_poller_watch(int64_t fd_val, int64_t events_val, int64_t tok_val);
+int64_t ocamlcc_poller_unwatch_waiter(int64_t fd_val, int64_t events_val, int64_t tok_val);
+int64_t ocamlcc_poller_wait(int64_t out_arr_val, int64_t timeout_ms_val);
 
 /* Non-blocking pipe / fd test primitives backed by PAL. */
 int64_t ocamlcc_pipe(int64_t unit);

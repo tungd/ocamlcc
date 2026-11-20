@@ -57,16 +57,17 @@ let table =
     ("ocamlcc_weak_check", abi 2 true false);
     (* fibers *)
     ("ocamlcc_fiber_create", abi 1 false false);
-    ("ocamlcc_fiber_spawn", abi 1 false false);
     ("ocamlcc_fiber_is_done", abi 1 false false);
-    ("ocamlcc_fiber_yield", abi 1 true true);
     ("ocamlcc_fiber_suspend", abi 1 true true);
-    ("ocamlcc_fiber_sleep_ms", abi 1 true true);
-    ("ocamlcc_fiber_fd_wait_read", abi 1 true true);
-    ("ocamlcc_fiber_fd_wait_write", abi 1 true true);
     ("ocamlcc_fiber_resume", abi 2 true true);
-    ("ocamlcc_fiber_await", abi 1 true true);
-    ("ocamlcc_fiber_run_all", abi 0 false true);
+    ("ocamlcc_fiber_is_main", abi 1 false false);
+    ("ocamlcc_fiber_can_yield", abi 1 true false);
+    ("ocamlcc_fiber_sched_get", abi 1 false false);
+    ("ocamlcc_fiber_sched_set", abi 1 false false);
+    ("ocamlcc_monotonic_ns", abi 1 false false);
+    ("ocamlcc_poller_watch", abi 3 true false);
+    ("ocamlcc_poller_unwatch_waiter", abi 3 false false);
+    ("ocamlcc_poller_wait", abi 2 false false);
     (* structural comparison / hashing *)
     ("caml_fresh_oo_id", abi 1 false false);
     ("caml_equal", abi 2 true false);
@@ -327,6 +328,10 @@ let returns_imm = function
   | "ocamlcc_raw_fd_read" | "ocamlcc_raw_fd_write" | "ocamlcc_raw_fd_close"
   | "ocamlcc_raw_fd_isatty" | "ocamlcc_stdio_flush"
   | "ocamlcc_ba_to_bytes" | "ocamlcc_ba_of_bytes_slice"
+  | "ocamlcc_fiber_is_done" | "ocamlcc_fiber_is_main"
+  | "ocamlcc_fiber_can_yield" | "ocamlcc_fiber_sched_set"
+  | "ocamlcc_monotonic_ns" | "ocamlcc_poller_watch"
+  | "ocamlcc_poller_unwatch_waiter" | "ocamlcc_poller_wait"
   | "ocamlcc_arc_live" | "ocamlcc_arc_reuse" | "ocamlcc_arc_collect"
   | "ocamlcc_arc_slab_count"
   | "ocamlcc_ptr_id" | "ocamlcc_marshal_kind"
