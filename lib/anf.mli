@@ -103,6 +103,7 @@ type reuse = { primary : Ident.t; fallback : Ident.t option }
 type cexpr =
   | Atom of atom
   | Binop of binop * atom * atom
+  | IntSelect of Builtins.int_selection * atom * atom
   | Unop of unop * atom
   | MakeBlock of int * atom list
   | AllocReuse of reuse * int * atom list
@@ -194,6 +195,7 @@ type program = {
 val of_lambda :
   ?use_builtins:bool ->
   ?include_dirs:string list ->
+  ?stdlib_dir:string ->
   Lambda.program ->
   (program, string) result
 val scalar_rep : Lambda.bigarray_kind -> scalar_rep option

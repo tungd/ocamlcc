@@ -896,6 +896,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
               let inc_dirs =
                 cmi_dir :: (stdlib_cmi_dirs @ cfg.include_dirs)
               in
+              let stdlib_dir = List.nth_opt stdlib_cmi_dirs 0 in
               let is_lib_kind =
                 match kind with
                 | Kind_shared | Kind_static | Kind_obj | Kind_asm
@@ -945,7 +946,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                  | None -> false)
                             in
                             match
-                              Pipeline.compile_file ~include_dirs:inc_dirs
+                              Pipeline.compile_file ~include_dirs:inc_dirs ?stdlib_dir
                                 ~output_prefix:prefix ~emit_cmi
                                 ~nopervasives:cfg.nopervasives
                                 ~nostdlib:eff_nostdlib ~emit_entry:false

@@ -2,6 +2,7 @@ val module_name_of_file : string -> string
 
 val compile_source :
   ?include_dirs:string list ->
+  ?stdlib_dir:string ->
   ?output_prefix:string ->
   ?emit_cmi:bool ->
   ?nopervasives:bool ->
@@ -18,6 +19,7 @@ val compile_source :
 
 val compile_file :
   ?include_dirs:string list ->
+  ?stdlib_dir:string ->
   ?output_prefix:string ->
   ?emit_cmi:bool ->
   ?nopervasives:bool ->

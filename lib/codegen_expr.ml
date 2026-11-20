@@ -656,6 +656,25 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   match ce with
   | Atom a -> compile_atom hooks b a
   | Binop (op, a, c) -> compile_binop hooks b op a c
+  | IntSelect (op, a, c) ->
+      let lhs = compile_atom hooks b a in
+      let rhs = compile_atom hooks b c in
+      let cmp = match op with Builtins.Min -> Cmp.Sle | Max -> Cmp.Sge in
+      (* The signed ordering of tagged ints is the same as their value order. *)
+      let choose_left = fresh_temp b "intcmp" in
+      emit b (Cmp (cmp, Long, choose_left, lhs, rhs));
+      let left = fresh_label b "intleft" in
+      let right = fresh_label b "intright" in
+      let join = fresh_label b "intjoin" in
+      close_block b (Br (choose_left, left, right));
+      start_block b left;
+      close_block b (Jmp join);
+      start_block b right;
+      close_block b (Jmp join);
+      start_block b join;
+      let dst = fresh_temp b "intsel" in
+      emit b (Phi (Long, dst, [ (left, lhs); (right, rhs) ]));
+      dst
   | Unop (op, a) -> compile_unop hooks b op a
   | MakeBlock (tag, args) ->
       emit_block_alloc b tag (List.map (compile_atom hooks b) args)

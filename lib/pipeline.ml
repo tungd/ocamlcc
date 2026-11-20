@@ -8,7 +8,7 @@ let read_file filename =
   Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () ->
       really_input_string ic (in_channel_length ic))
 
-let compile_source ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
+let compile_source ?(include_dirs = []) ?stdlib_dir ?output_prefix ?(emit_cmi = false)
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
     ?(nolabels = false) ?(open_modules = []) ?(emit_entry = true) ~filename
     ~modname source : (string, string) result =
@@ -19,20 +19,20 @@ let compile_source ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
   with
   | Error { msg } -> Error msg
   | Ok program -> (
-      match Anf.of_lambda ~use_builtins:(not nostdlib) ~include_dirs program with
+      match Anf.of_lambda ~use_builtins:(not nostdlib) ~include_dirs ?stdlib_dir program with
       | Error what -> Error (Printf.sprintf "unsupported: %s" what)
       | Ok anf ->
           let anf = Arc_pass.run anf in
           Ok (Qbe_il.to_string (Codegen.compile_program ~emit_entry anf)))
 
-let compile_file ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
+let compile_file ?(include_dirs = []) ?stdlib_dir ?output_prefix ?(emit_cmi = false)
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
     ?(nolabels = false) ?(open_modules = []) ?(emit_entry = true) ~filename
     ~modname () : (string, string) result =
   match read_file filename with
   | exception Sys_error msg -> Error msg
   | source ->
-      compile_source ~include_dirs ?output_prefix ~emit_cmi ~nopervasives
+      compile_source ~include_dirs ?stdlib_dir ?output_prefix ~emit_cmi ~nopervasives
         ~nostdlib ~no_alias_deps ~nolabels ~open_modules ~emit_entry ~filename
         ~modname source
 

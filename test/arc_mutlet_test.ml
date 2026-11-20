@@ -152,7 +152,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
   in
   let count_ce acc = function
     | Anf.Atom a -> count_atom acc a
-    | Anf.Binop (_, a, b) -> count_atom (count_atom acc a) b
+    | Anf.Binop (_, a, b) | Anf.IntSelect (_, a, b) -> count_atom (count_atom acc a) b
     | Anf.Unop (_, a) -> count_atom acc a
     | Anf.MakeBlock (_, args) | Anf.AllocReuse (_, _, args)
     | Anf.MakeArray (_, args) ->

@@ -93,7 +93,7 @@ let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
   | Atom a -> is_imm_atom env a
   | Binop (op, _, _) -> is_imm_binop op
   | Unop (op, _) -> is_imm_unop op
-  | Field (_, Lambda.Immediate, _) | ArrayGet (_, Lambda.Pintarray, _, _)
+  | IntSelect _ | Field (_, Lambda.Immediate, _) | ArrayGet (_, Lambda.Pintarray, _, _)
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
   | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ ->
       true
@@ -130,7 +130,7 @@ let rec aexpr_returns_imm ~pure ~imm_funs (imm : Ident.Set.t) (e : Anf.aexpr) :
     | Anf.Atom a -> atom_imm a
     | Binop (op, _, _) -> is_imm_binop op
     | Unop (op, _) -> is_imm_unop op
-    | Field (_, Lambda.Immediate, _) | ArrayGet (_, Lambda.Pintarray, _, _)
+    | IntSelect _ | Field (_, Lambda.Immediate, _) | ArrayGet (_, Lambda.Pintarray, _, _)
     | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
     | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _
     | BytesGetN (_, 2, _, _)
@@ -244,7 +244,7 @@ let atoms_vars (xs : Anf.atom list) : Ident.Set.t =
 let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   match ce with
   | Atom a -> (Ident.Set.empty, [ a ])
-  | Binop (_, a, b) ->
+  | Binop (_, a, b) | IntSelect (_, a, b) ->
       (Ident.Set.union (atom_vars a) (atom_vars b), [])
   | Unop (_, a) -> (atom_vars a, [])
   | MakeBlock (_, args) | AllocReuse (_, _, args) | MakeArray (_, args) ->
@@ -542,7 +542,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
       | None when not in_shadow && Option.is_none reuse.fallback ->
           Some (Let (res, AllocReuse ({ reuse with fallback = Some tok }, tag, args), next))
       | None -> None)
-  | Let (x, ((Atom _ | Binop _ | Unop _ | Field _ | SetField _
+  | Let (x, ((Atom _ | Binop _ | IntSelect _ | Unop _ | Field _ | SetField _
              | FloatField _ | SetFloatField _ | OffsetRef _
              | StringGet _ | BytesSet _ | BytesGetN _ | BytesSetN _ | Bswap16 _ | BswapBint _ | ArrayGet _ | ArraySet _
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _

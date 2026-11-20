@@ -22,8 +22,7 @@ let known_builtins : (string * builtin) list =
     ("print_endline", { symbol = "ocamlcc_print_endline"; arg_kind = String_arg });
     ("exit", { symbol = "ocamlcc_exit"; arg_kind = Int_arg }) ]
 
-let slots_of_cmi (path : string) : table =
-  let cmi = Cmi_format.read_cmi path in
+let value_slots lookup signature =
   let rec go idx acc = function
     | [] -> List.rev acc
     | item :: rest -> (
@@ -37,7 +36,7 @@ let slots_of_cmi (path : string) : table =
             if is_prim then go idx acc rest
             else
               let acc =
-                match List.assoc_opt (Ident.name id) known_builtins with
+                match lookup (Ident.name id) with
                 | Some b -> (idx, b) :: acc
                 | None -> acc
               in
@@ -53,7 +52,11 @@ let slots_of_cmi (path : string) : table =
         | Types.Sig_type _ | Types.Sig_modtype _ | Types.Sig_class_type _ ->
             go idx acc rest)
   in
-  go 0 [] cmi.Cmi_format.cmi_sign
+  go 0 [] signature
+
+let slots_of_cmi path : table =
+  let cmi = Cmi_format.read_cmi path in
+  value_slots (fun name -> List.assoc_opt name known_builtins) cmi.cmi_sign
 
 let find_stdlib_cmi (include_dirs : string list) : string option =
   let dirs = include_dirs @ [ Config.standard_library ] in
@@ -81,13 +84,48 @@ let load ?(include_dirs = []) () : table =
       | Some path -> slots_of_cmi path
       | None -> [])
 
-let resolve ?table (func : Lambda.lambda) : builtin option =
-  let tbl = match table with Some t -> t | None -> Lazy.force default_table in
-  match func with
+let slot_of_callee module_name = function
   | Lambda.Lprim
       ( Lambda.Pfield (pos, _, _),
         [ Lambda.Lprim (Lambda.Pgetglobal id, [], _) ],
         _ )
-    when Ident.global id && String.equal (Ident.name id) "Stdlib" ->
-      List.assoc_opt pos tbl
+    when Ident.global id && String.equal (Ident.name id) module_name ->
+      Some pos
   | _ -> None
+
+let resolve ?table (func : Lambda.lambda) : builtin option =
+  let tbl = match table with Some t -> t | None -> Lazy.force default_table in
+  Option.bind (slot_of_callee "Stdlib" func) (fun pos -> List.assoc_opt pos tbl)
+
+type int_selection = Min | Max
+type int_selection_table = (int * int_selection) list
+
+let int_cmi dir =
+  List.find_map
+    (fun name ->
+      let path = Filename.concat dir name in
+      if Sys.file_exists path then Some path else None)
+    [ "stdlib__Int.cmi"; "Stdlib__Int.cmi" ]
+
+let load_int_selection ~include_dirs ~stdlib_dir =
+  (* A project may supply its own persistent unit with this name. Leave the
+     ordinary call intact whenever a competing interface is on the load path. *)
+  let dirs = "" :: List.map (Misc.expand_directory Config.standard_library) include_dirs in
+  let competing =
+    List.exists (fun dir -> dir <> stdlib_dir && Option.is_some (int_cmi dir)) dirs
+  in
+  match int_cmi stdlib_dir with
+  | Some path when not competing -> (
+      try
+        let cmi = Cmi_format.read_cmi path in
+        if cmi.cmi_name = "Stdlib__Int" then
+          value_slots
+            (function "min" -> Some Min | "max" -> Some Max | _ -> None)
+            cmi.cmi_sign
+        else []
+      with Cmi_format.Error _ | Sys_error _ | End_of_file -> [])
+  | _ -> []
+
+let resolve_int_selection table func =
+  Option.bind (slot_of_callee "Stdlib__Int" func) (fun pos ->
+      List.assoc_opt pos (Lazy.force table))

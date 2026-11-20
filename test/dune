@@ -375,3 +375,8 @@
  (name immediate_access_test)
  (modules immediate_access_test)
  (libraries ocamlcc str))
+
+(test
+ (name int_selection_test)
+ (modules int_selection_test)
+ (libraries ocamlcc compiler-libs.common str))

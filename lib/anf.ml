@@ -98,6 +98,7 @@ type reuse = { primary : Ident.t; fallback : Ident.t option }
 type cexpr =
   | Atom of atom
   | Binop of binop * atom * atom
+  | IntSelect of Builtins.int_selection * atom * atom
   | Unop of unop * atom
   | MakeBlock of int * atom list
   | AllocReuse of reuse * int * atom list
@@ -250,7 +251,9 @@ let conv_const (c : Lambda.structured_constant) : atom =
 
 let check_array_kind (_k : Lambda.array_kind) = ()
 
-let builtins_table : Builtins.table option ref = ref None
+let builtin_tables :
+    (Builtins.table option * Builtins.int_selection_table Lazy.t option) ref =
+  ref (None, None)
 
 (* Guard the yielding, raising callback path before ARC liveness analysis.
    Idle polls need neither a shadow-stack frame nor an exception check. *)
@@ -355,19 +358,22 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
   let emit_cexpr ce = Let (id, ce, k ()) in
   match lam with
   | Lapply { ap_func; ap_args; _ } -> (
-      match
-        match !builtins_table with
-        | Some table -> Builtins.resolve ~table ap_func
-        | None -> None
-      with
-      | Some { symbol; arg_kind } -> (
-          match ap_args with
-          | [ arg ] ->
-              conv_expr arg (fun a -> emit_cexpr (Builtin (symbol, arg_kind, a)))
-          | _ -> raise (Unsupported (describe lam)))
-      | None ->
-          conv_expr ap_func (fun fn ->
-              conv_atoms ap_args (fun args -> emit_cexpr (App (fn, args)))))
+      let printing, selectors = !builtin_tables in
+      let select = Option.bind selectors (fun table -> Builtins.resolve_int_selection table ap_func) in
+      match select, ap_args with
+      | Some op, [ lhs; rhs ] ->
+          conv_expr lhs (fun a ->
+              conv_expr rhs (fun b -> emit_cexpr (IntSelect (op, a, b))))
+      | _ -> (
+          match Option.bind printing (fun table -> Builtins.resolve ~table ap_func) with
+          | Some { symbol; arg_kind } -> (
+              match ap_args with
+              | [ arg ] ->
+                  conv_expr arg (fun a -> emit_cexpr (Builtin (symbol, arg_kind, a)))
+              | _ -> raise (Unsupported (describe lam)))
+          | None ->
+              conv_expr ap_func (fun fn ->
+                  conv_atoms ap_args (fun args -> emit_cexpr (App (fn, args))))))
   | Lprim (Pignore, [ arg ], _) ->
       conv_expr arg (fun _ -> emit_cexpr (Atom Unit))
   | Lprim (Pbytes_to_string, [ arg ], _)
@@ -787,7 +793,7 @@ let cexpr_vars free_aexpr acc = function
   | ScalarStore (_, a, i, v) -> scalar_operand_vars (atom_vars (atom_vars acc a) i) v
   | FloatBinop (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> scalar_operand_vars (scalar_operand_vars acc a) b
   | Atom a -> atom_vars acc a
-  | Binop (_, a, b) -> atom_vars (atom_vars acc a) b
+  | Binop (_, a, b) | IntSelect (_, a, b) -> atom_vars (atom_vars acc a) b
   | Unop (_, a) -> atom_vars acc a
   | MakeBlock (_, args) | MakeArray (_, args) ->
       List.fold_left atom_vars acc args
@@ -1496,13 +1502,23 @@ let lift_recursive_calls program =
   in
   visit Ident.Map.empty Ident.Set.empty program
 
-let of_lambda ?(use_builtins = true) ?(include_dirs = [])
+let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir
     (program : Lambda.program) : (program, string) result =
-  let saved = !builtins_table in
-  builtins_table :=
-    if use_builtins then Some (Builtins.load ~include_dirs ()) else None;
+  let saved = !builtin_tables in
+  let printing = if use_builtins then Some (Builtins.load ~include_dirs ()) else None in
+  let stdlib_dir =
+    match stdlib_dir with
+    | None when use_builtins -> Some Config.standard_library
+    | dir -> dir
+  in
+  let selectors =
+    Option.map
+      (fun stdlib_dir -> lazy (Builtins.load_int_selection ~include_dirs ~stdlib_dir))
+      stdlib_dir
+  in
+  builtin_tables := (printing, selectors);
   Fun.protect
-    ~finally:(fun () -> builtins_table := saved)
+    ~finally:(fun () -> builtin_tables := saved)
     (fun () ->
       try
         let cleaned = program.code |> drop_unused_alias_lets |> lift_recursive_calls in
