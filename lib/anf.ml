@@ -123,6 +123,13 @@ type cexpr =
   | ScalarLoad of bigarray_access * atom * atom
   | ScalarStore of bigarray_access * atom * atom * scalar_operand
   | ScalarValue of scalar_rep * scalar_operand
+  | BoxScalar of scalar_rep * scalar_operand
+  | FloatArrayGet of bool * atom * atom
+  | FloatArraySet of bool * atom * atom * scalar_operand
+  | FloatOfInt of atom
+  | IntOfFloat of scalar_operand
+  | FloatSign of [ `Neg | `Abs ] * scalar_operand
+  | FloatCompare of Lambda.float_comparison * scalar_operand * scalar_operand
   | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
   | IntegerBinop of Lambda.boxed_integer * integer_arithmetic * scalar_operand * scalar_operand
   | IntegerCompare of Lambda.boxed_integer * integer_relation * scalar_operand * scalar_operand
@@ -909,10 +916,13 @@ let cexpr_vars free_aexpr acc = function
   | IntOfInteger (_, value) | IntegerConvert (_, _, value)
   | IntegerNeg (_, value) -> scalar_operand_vars acc value
   | IntegerShift (_, _, value, count) -> scalar_operand_vars (atom_vars acc count) value
-  | ScalarValue (_, a) -> scalar_operand_vars acc a
-  | ScalarLoad (_, a, i) -> atom_vars (atom_vars acc a) i
-  | ScalarStore (_, a, i, v) -> scalar_operand_vars (atom_vars (atom_vars acc a) i) v
-  | FloatBinop (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> scalar_operand_vars (scalar_operand_vars acc a) b
+  | ScalarValue (_, a) | BoxScalar (_, a) | IntOfFloat a | FloatSign (_, a) ->
+      scalar_operand_vars acc a
+  | FloatOfInt a -> atom_vars acc a
+  | FloatArrayGet (_, a, i) | ScalarLoad (_, a, i) -> atom_vars (atom_vars acc a) i
+  | FloatArraySet (_, a, i, v) | ScalarStore (_, a, i, v) ->
+      scalar_operand_vars (atom_vars (atom_vars acc a) i) v
+  | FloatBinop (_, a, b) | FloatCompare (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> scalar_operand_vars (scalar_operand_vars acc a) b
   | Atom a -> atom_vars acc a
   | Binop (_, a, b) | IntSelect (_, a, b) -> atom_vars (atom_vars acc a) b
   | Unop (_, a) -> atom_vars acc a
@@ -1059,14 +1069,9 @@ let bind_scalar_chain id binding body =
   | Value ce -> Let (id, ce, body)
   | Join rhs -> LetJoin (id, rhs, body)
 
-let specialize_integer_binop kind op lhs rhs =
-  let value = Boxed_scalar lhs in
-  let binary actual op =
-    if actual = kind then Some (IntegerBinop (kind, op, value, Boxed_scalar rhs)) else None
-  in
-  let shift actual op =
-    if actual = kind then Some (IntegerShift (kind, op, value, rhs)) else None
-  in
+let raw_boxed_arithmetic op lhs rhs =
+  let binary kind op = Some (Integer_scalar kind, IntegerBinop (kind, op, lhs, Boxed_scalar rhs)) in
+  let shift kind op = Some (Integer_scalar kind, IntegerShift (kind, op, lhs, rhs)) in
   match op with
   | Bint_add k -> binary k Add_int
   | Bint_sub k -> binary k Sub_int
@@ -1080,6 +1085,45 @@ let specialize_integer_binop kind op lhs rhs =
   | Bint_lsr k -> shift k Logical_right
   | Bint_asr k -> shift k Arithmetic_right
   | _ -> None
+
+let raw_producer = function
+  | ArrayGet (safe, Lambda.Pfloatarray, arr, index) ->
+      Some (Double_scalar, FloatArrayGet (safe, arr, index))
+  | Binop (Float_arithmetic op, lhs, rhs) ->
+      Some (Double_scalar, FloatBinop (op, Boxed_scalar lhs, Boxed_scalar rhs))
+  | Binop (op, lhs, rhs) -> raw_boxed_arithmetic op (Boxed_scalar lhs) rhs
+  | Unop (Float_of_int, value) -> Some (Double_scalar, FloatOfInt value)
+  | Unop ((Fneg | Fabs as op), value) ->
+      let op = match op with Fneg -> `Neg | _ -> `Abs in
+      Some (Double_scalar, FloatSign (op, Boxed_scalar value))
+  | Unop (Bint_of_int kind, value) ->
+      Some (Integer_scalar kind, IntegerOfInt (kind, value))
+  | Unop (Bint_cvt (src, dst), value) ->
+      Some (Integer_scalar dst, IntegerConvert (src, dst, Boxed_scalar value))
+  | Unop (Bint_neg kind, value) ->
+      Some (Integer_scalar kind, IntegerNeg (kind, Boxed_scalar value))
+  | _ -> None
+
+let collect_scalar_binding id ce bindings =
+  match raw_producer ce with
+  | Some (rep, producer) ->
+      let raw = Ident.create_local "scalar" in
+      (id, Value (BoxScalar (rep, Raw_scalar raw))) :: (raw, Value producer) :: bindings
+  | None ->
+      let ce =
+        match ce with
+        | Unop (Int_of_bint kind, value) -> IntOfInteger (kind, Boxed_scalar value)
+        | Unop (Int_of_float, value) -> IntOfFloat (Boxed_scalar value)
+        | Binop (Bint_cmp (kind, cmp), lhs, rhs) ->
+            IntegerCompare (kind, Predicate cmp, Boxed_scalar lhs, Boxed_scalar rhs)
+        | Binop (Compare_bints kind, lhs, rhs) ->
+            IntegerCompare (kind, Three_way, Boxed_scalar lhs, Boxed_scalar rhs)
+        | Binop (Fcmp cmp, lhs, rhs) -> FloatCompare (cmp, Boxed_scalar lhs, Boxed_scalar rhs)
+        | ArraySet (safe, Lambda.Pfloatarray, arr, index, value) ->
+            FloatArraySet (safe, arr, index, Boxed_scalar value)
+        | _ -> ce
+      in
+      (id, Value ce) :: bindings
 
 (* Walk backwards from scalar consumers. Uses that cross a control-flow
    boundary or need an OCaml value keep the binding boxed. Conflicting
@@ -1099,31 +1143,14 @@ let rec specialize_scalar_chain bindings tail =
     in
     let binding, raw =
       match wanted, binding with
-      | _, Value (Unop (Int_of_bint kind, value)) ->
-          Value (IntOfInteger (kind, Boxed_scalar value)), raw
-      | Some (Integer_scalar kind), Value (Unop (Bint_of_int actual, value))
-        when actual = kind ->
-          Value (IntegerOfInt (kind, value)), Ident.Set.add id raw
-      | Some (Integer_scalar kind), Value (Unop (Bint_cvt (src, dst), value))
-        when dst = kind ->
-          Value (IntegerConvert (src, dst, Boxed_scalar value)), Ident.Set.add id raw
-      | _, Value (Binop (Bint_cmp (kind, cmp), lhs, rhs)) ->
-          Value (IntegerCompare (kind, Predicate cmp, Boxed_scalar lhs, Boxed_scalar rhs)), raw
-      | _, Value (Binop (Compare_bints kind, lhs, rhs)) ->
-          Value (IntegerCompare (kind, Three_way, Boxed_scalar lhs, Boxed_scalar rhs)), raw
+      | Some rep, Value (BoxScalar (actual, value)) when rep = actual ->
+          Value (ScalarValue (rep, value)), Ident.Set.add id raw
+      | Some rep, Value (Atom value) ->
+          Value (ScalarValue (rep, Boxed_scalar value)), Ident.Set.add id raw
       | Some rep, Value (BigarrayAccess
           (({ operation = `Get; rank = 1; kind; layout; _ } as access), [arr; index]))
         when scalar_layout layout && scalar_rep kind = Some rep ->
           Value (ScalarLoad (access, arr, index)), Ident.Set.add id raw
-      | Some Double_scalar, Value (Binop (Float_arithmetic op, lhs, rhs)) ->
-          Value (FloatBinop (op, Boxed_scalar lhs, Boxed_scalar rhs)), Ident.Set.add id raw
-      | Some (Integer_scalar kind), Value (Unop (Bint_neg actual, value))
-        when actual = kind ->
-          Value (IntegerNeg (kind, Boxed_scalar value)), Ident.Set.add id raw
-      | Some (Integer_scalar kind), Value (Binop (op, lhs, rhs)) ->
-          (match specialize_integer_binop kind op lhs rhs with
-           | Some ce -> Value ce, Ident.Set.add id raw
-           | None -> binding, raw)
       | Some rep, Join rhs ->
           Join (specialize_branch rep rhs), Ident.Set.add id raw
       | _ -> binding, raw
@@ -1134,8 +1161,12 @@ let rec specialize_scalar_chain bindings tail =
       | Value (ScalarStore (access, arr, index, v)) ->
           let rep = Option.get (scalar_rep access.kind) in
           atom_vars (atom_vars boxed arr) index, demand rep scalar v
-      | Value (FloatBinop (_, lhs, rhs)) ->
+      | Value (FloatArraySet (_, arr, index, v)) ->
+          atom_vars (atom_vars boxed arr) index, demand Double_scalar scalar v
+      | Value (FloatBinop (_, lhs, rhs) | FloatCompare (_, lhs, rhs)) ->
           boxed, demand Double_scalar (demand Double_scalar scalar lhs) rhs
+      | Value (IntOfFloat value | FloatSign (_, value)) ->
+          boxed, demand Double_scalar scalar value
       | Value (IntegerBinop (kind, _, lhs, rhs) | IntegerCompare (kind, _, lhs, rhs)) ->
           let rep = Integer_scalar kind in
           boxed, demand rep (demand rep scalar lhs) rhs
@@ -1144,7 +1175,8 @@ let rec specialize_scalar_chain bindings tail =
           boxed, demand (Integer_scalar kind) scalar value
       | Value (IntegerShift (kind, _, value, count)) ->
           atom_vars boxed count, demand (Integer_scalar kind) scalar value
-      | Value (ScalarValue (rep, value)) -> boxed, demand rep scalar value
+      | Value (ScalarValue (rep, value) | BoxScalar (rep, value)) ->
+          boxed, demand rep scalar value
       | Value ce -> cexpr_vars free_vars boxed ce, scalar
       | Join rhs -> Ident.Set.union boxed (free_vars rhs), scalar
     in
@@ -1163,6 +1195,12 @@ let rec specialize_scalar_chain bindings tail =
       | Value (ScalarStore (access, arr, index, v)) ->
           Value (ScalarStore (access, arr, index, operand v))
       | Value (FloatBinop (op, lhs, rhs)) -> Value (FloatBinop (op, operand lhs, operand rhs))
+      | Value (FloatCompare (op, lhs, rhs)) -> Value (FloatCompare (op, operand lhs, operand rhs))
+      | Value (FloatArraySet (safe, arr, index, value)) ->
+          Value (FloatArraySet (safe, arr, index, operand value))
+      | Value (IntOfFloat value) -> Value (IntOfFloat (operand value))
+      | Value (FloatSign (op, value)) -> Value (FloatSign (op, operand value))
+      | Value (BoxScalar (rep, value)) -> Value (BoxScalar (rep, operand value))
       | Value (IntegerBinop (kind, op, lhs, rhs)) ->
           Value (IntegerBinop (kind, op, operand lhs, operand rhs))
       | Value (IntegerCompare (kind, op, lhs, rhs)) ->
@@ -1195,7 +1233,7 @@ and specialize_branch rep = function
   | _ -> assert false
 
 and specialize_scalar_arm rep bindings = function
-  | Let (id, ce, body) -> specialize_scalar_arm rep ((id, Value ce) :: bindings) body
+  | Let (id, ce, body) -> specialize_scalar_arm rep (collect_scalar_binding id ce bindings) body
   | LetJoin (id, rhs, body) when boxed_branch rhs ->
       specialize_scalar_arm rep ((id, Join rhs) :: bindings) body
   | Halt value ->
@@ -1253,15 +1291,16 @@ let rec specialize_scalar_bindings = function
 and specialize_let_chain bindings = function
   | Let (id, ce, body) ->
       let ce = match ce with Fun lf -> Fun (specialize_scalar_function lf) | _ -> ce in
-      specialize_let_chain ((id, Value ce) :: bindings) body
+      specialize_let_chain (collect_scalar_binding id ce bindings) body
   | LetJoin (id, rhs, body) when boxed_branch rhs ->
       let rhs = specialize_scalar_bindings rhs in
       specialize_let_chain ((id, Join rhs) :: bindings) body
   | tail ->
       let tail = specialize_scalar_bindings tail in
       if List.exists (function
-        | _, Value (ScalarStore _ | FloatBinop _ | IntegerBinop _ | ScalarValue _
-                   | Binop ((Bint_cmp _ | Compare_bints _), _, _) | Unop (Int_of_bint _, _)) -> true
+        | _, Value (BoxScalar _ | ScalarStore _ | FloatBinop _ | IntegerBinop _
+                   | ScalarValue _ | IntegerCompare _ | IntOfInteger _
+                   | FloatCompare _ | IntOfFloat _ | FloatArraySet _) -> true
         | _ -> false) bindings
       then specialize_scalar_chain bindings tail
       else List.fold_left (fun body (id, binding) -> bind_scalar_chain id binding body) tail bindings

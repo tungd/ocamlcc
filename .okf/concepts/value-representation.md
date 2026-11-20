@@ -6,7 +6,7 @@ tags: [value-representation, codegen, arc]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-18
+  at: 2026-11-20
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -105,3 +105,13 @@ Structural predicates raise Invalid_argument when they reach a functional value,
 # NaN in structural comparisons
 
 Polymorphic predicates propagate unordered floating-point comparisons through lists, records and arrays. Stdlib.compare supplies the total ordering that places NaN before numbers.
+
+## Local numeric values
+
+ANF keeps typed flat-float array reads, writes, and arithmetic in double
+temporaries. Float comparisons and conversions can use those temporaries
+directly. Local boxed-integer arithmetic similarly carries the native word
+width through arithmetic, shifts, and conversions. A chain boxes its result
+where an ordinary OCaml value is required. Checked array operations preserve
+bounds exceptions, and boxed-integer division preserves zero-divisor and
+signed overflow behavior.

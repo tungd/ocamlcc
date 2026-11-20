@@ -425,3 +425,8 @@
  (name aggregate_test)
  (modules aggregate_test)
  (libraries ocamlcc str))
+
+(test
+ (name local_scalars_test)
+ (modules local_scalars_test)
+ (libraries ocamlcc str))

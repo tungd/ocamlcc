@@ -437,6 +437,32 @@ let convert_integer b (src : Lambda.boxed_integer) (dst : Lambda.boxed_integer) 
   | (Pint64 | Pnativeint), Pint32 -> narrow_integer b raw
   | _ -> raw
 
+let float_of_int b value =
+  let raw = untag b value in
+  let dst = fresh_temp b "fofint" in
+  emit b (Sltof (Double, dst, raw));
+  dst
+
+let int_of_float b value =
+  let raw = fresh_temp b "ioff" in
+  emit b (Dtosi (Long, raw, value));
+  retag b raw
+
+let float_sign b op value =
+  match op with
+  | `Neg ->
+      let dst = fresh_temp b "fneg" in
+      emit b (Neg (Double, dst, value));
+      dst
+  | `Abs ->
+      let bits = fresh_temp b "fbits" in
+      emit b (Cast (Long, bits, value));
+      let masked = fresh_temp b "fabsm" in
+      emit b (Binop (And, Long, masked, bits, Int 0x7fffffffffffffffL));
+      let dst = fresh_temp b "fabsd" in
+      emit b (Cast (Double, dst, masked));
+      dst
+
 let compile_unop hooks b (op : Anf.unop) (a : Anf.atom) : t =
   let av = compile_atom hooks b a in
   match op with
@@ -462,29 +488,10 @@ let compile_unop hooks b (op : Anf.unop) (a : Anf.atom) : t =
   | Array_length ->
       let len = array_len_raw b av in
       retag b len
-  | Float_of_int ->
-      let ua = untag b av in
-      let d = fresh_temp b "fofint" in
-      emit b (Sltof (Double, d, ua));
-      box_double b d
-  | Int_of_float ->
-      let d = load_double b av in
-      let raw = fresh_temp b "ioff" in
-      emit b (Dtosi (Long, raw, d));
-      retag b raw
-  | Fneg ->
-      let d = load_double b av in
-      let r = fresh_temp b "fneg" in
-      emit b (Neg (Double, r, d));
-      box_double b r
-  | Fabs ->
-      let bits = fresh_temp b "fbits" in
-      emit b (Load (Loadl, Long, bits, av));
-      let masked = fresh_temp b "fabsm" in
-      emit b (Binop (And, Long, masked, bits, Int 0x7fffffffffffffffL));
-      let d = fresh_temp b "fabsd" in
-      emit b (Cast (Double, d, masked));
-      box_double b d
+  | Float_of_int -> box_double b (float_of_int b av)
+  | Int_of_float -> int_of_float b (load_double b av)
+  | Fneg -> box_double b (float_sign b `Neg (load_double b av))
+  | Fabs -> box_double b (float_sign b `Abs (load_double b av))
   | Bint_of_int kind -> box_bint b kind (integer_of_int b kind av)
   | Int_of_bint kind -> int_of_integer b kind (unbox_bint b kind av)
   | Bint_neg bi ->
@@ -671,6 +678,13 @@ let scalar_access_symbol op (access : Anf.bigarray_access) =
 let scalar_type = function
   | Anf.Double_scalar -> Double
   | Integer_scalar kind -> let ty, _, _ = bint_spec kind in ty
+
+let array_address b arr index =
+  let offset = fresh_temp b "aoff" in
+  emit b (Binop (Shl, Long, offset, index, Int 3L));
+  let addr = fresh_temp b "arrp" in
+  emit b (Binop (Add, Long, addr, arr, offset));
+  addr
 
 let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   match ce with
@@ -962,10 +976,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       | Lambda.Pfloatarray ->
           let ui = untag b iv in
           let do_read () =
-            let off = fresh_temp b "aoff" in
-            emit b (Binop (Shl, Long, off, ui, Int 3L));
-            let eaddr = fresh_temp b "arrp" in
-            emit b (Binop (Add, Long, eaddr, av, off));
+            let eaddr = array_address b av ui in
             box_double b (load_double b eaddr)
           in
           if safe then
@@ -975,10 +986,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       | Lambda.Paddrarray | Pintarray ->
           let ui = untag b iv in
           let do_read () =
-            let off = fresh_temp b "aoff" in
-            emit b (Binop (Shl, Long, off, ui, Int 3L));
-            let eaddr = fresh_temp b "arrp" in
-            emit b (Binop (Add, Long, eaddr, av, off));
+            let eaddr = array_address b av ui in
             let dst = fresh_temp b "avel" in
             emit b (Load (Loadl, Long, dst, eaddr));
             if kind = Lambda.Paddrarray then emit_arc_if_heap b "arc_retain" dst;
@@ -1009,10 +1017,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       | Lambda.Pfloatarray ->
           let ui = untag b iv in
           let do_write () =
-            let off = fresh_temp b "aoff" in
-            emit b (Binop (Shl, Long, off, ui, Int 3L));
-            let eaddr = fresh_temp b "arrp" in
-            emit b (Binop (Add, Long, eaddr, av, off));
+            let eaddr = array_address b av ui in
             let d = load_double b vv in
             emit b (Store (Stored, d, eaddr));
             emit_arc_if_heap b "arc_release" vv;
@@ -1025,10 +1030,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       | Lambda.Pintarray | Paddrarray ->
           let ui = untag b iv in
           let do_write () =
-            let off = fresh_temp b "aoff" in
-            emit b (Binop (Shl, Long, off, ui, Int 3L));
-            let eaddr = fresh_temp b "arrp" in
-            emit b (Binop (Add, Long, eaddr, av, off));
+            let eaddr = array_address b av ui in
             (match kind with
             | Lambda.Pintarray | Lambda.Pfloatarray ->
                 emit b (Store (Storel, vv, eaddr))
@@ -1083,6 +1085,35 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       emit b (Call (ty, dst, { fn = Global (scalar_access_symbol "get" access); args }));
       dst
   | ScalarValue (rep, value) -> compile_scalar_operand hooks b rep value
+  | BoxScalar (rep, value) ->
+      let raw = compile_scalar_operand hooks b rep value in
+      (match rep with
+      | Double_scalar -> box_double b raw
+      | Integer_scalar kind -> box_bint b kind raw)
+  | FloatArrayGet (safe, arr, index) ->
+      let av = compile_atom hooks b arr in
+      let idx = untag b (compile_atom hooks b index) in
+      let load () = load_double b (array_address b av idx) in
+      if safe then
+        compile_bounds_guarded b ~result_type:Double idx (array_len_raw b av) load
+      else load ()
+  | FloatArraySet (safe, arr, index, value) ->
+      let av = compile_atom hooks b arr in
+      let idx = untag b (compile_atom hooks b index) in
+      let store () =
+        let v = compile_scalar_operand hooks b Double_scalar value in
+        emit b (Store (Stored, v, array_address b av idx));
+        unit_const
+      in
+      if safe then compile_bounds_guarded b idx (array_len_raw b av) store
+      else store ()
+  | FloatOfInt value -> float_of_int b (compile_atom hooks b value)
+  | IntOfFloat value -> int_of_float b (compile_scalar_operand hooks b Double_scalar value)
+  | FloatSign (op, value) -> float_sign b op (compile_scalar_operand hooks b Double_scalar value)
+  | FloatCompare (op, lhs, rhs) ->
+      let l = compile_scalar_operand hooks b Double_scalar lhs in
+      let r = compile_scalar_operand hooks b Double_scalar rhs in
+      compile_fcmp b op l r
   | FloatBinop (op, lhs, rhs) ->
       let l = compile_scalar_operand hooks b Double_scalar lhs in
       let r = compile_scalar_operand hooks b Double_scalar rhs in

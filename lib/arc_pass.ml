@@ -103,7 +103,9 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
       true
   | BytesGetN (_, 2, _, _) -> true
   | BytesGetN _ | BswapBint _ -> false
-  | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _ -> true
+  | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
+  | FloatArrayGet _ | FloatArraySet _ | FloatOfInt _ | IntOfFloat _
+  | FloatSign _ | FloatCompare _ -> true
   | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
   | Ccall (name, _) -> Ccalls.returns_imm name
   | DirectApp (target, _) -> target.returns_immediate
@@ -111,7 +113,7 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
       match Ident.Map.find_opt fn imm_funs with
       | Some arity -> List.length args = arity
       | None -> false)
-  | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _
+  | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _ | BoxScalar _
   | BigarrayAccess _ | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _
   | GetGlobal _ | Fun _ ->
       false
@@ -329,15 +331,17 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | App (fn, args) -> (atom_vars fn, args)
   | DirectApp (_, args) -> (Ident.Set.empty, args)
   | Builtin (_, _, a) -> (atom_vars a, [])
-  | ScalarValue (_, a) -> (Anf.scalar_operand_vars Ident.Set.empty a, [])
+  | ScalarValue (_, a) | BoxScalar (_, a) | IntOfFloat a | FloatSign (_, a) ->
+      (Anf.scalar_operand_vars Ident.Set.empty a, [])
+  | FloatOfInt a -> (atom_vars a, [])
   | IntegerOfInt (_, value) -> (atom_vars value, [])
   | IntOfInteger (_, value) | IntegerConvert (_, _, value)
   | IntegerNeg (_, value) -> (Anf.scalar_operand_vars Ident.Set.empty value, [])
   | IntegerShift (_, _, value, count) ->
       (Anf.scalar_operand_vars (atom_vars count) value, [])
-  | ScalarLoad (_, a, i) -> (atoms_vars [a; i], [])
-  | ScalarStore (_, a, i, v) -> (Anf.scalar_operand_vars (atoms_vars [a; i]) v, [])
-  | FloatBinop (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> (Anf.scalar_operand_vars (Anf.scalar_operand_vars Ident.Set.empty a) b, [])
+  | FloatArrayGet (_, a, i) | ScalarLoad (_, a, i) -> (atoms_vars [a; i], [])
+  | FloatArraySet (_, a, i, v) | ScalarStore (_, a, i, v) -> (Anf.scalar_operand_vars (atoms_vars [a; i]) v, [])
+  | FloatBinop (_, a, b) | FloatCompare (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> (Anf.scalar_operand_vars (Anf.scalar_operand_vars Ident.Set.empty a) b, [])
   | BigarrayAccess (_, args) | Ccall (_, args) -> (atoms_vars args, [])
   | GetGlobal _ -> (Ident.Set.empty, [])
   | Assign (_, rhs) | AssignImm (_, rhs) -> (Ident.Set.empty, [ rhs ])
@@ -373,7 +377,7 @@ let read_only_parameters ~borrowed (lf : Anf.lfunction) =
         params
     | Ccall _ -> Ident.Set.empty
     | (SetField _ | SetFloatField _ | OffsetRef _ | BytesSet _ | BytesSetN _
-      | ArraySet _ | ScalarStore _ | BigarrayAccess _) as ce ->
+      | ArraySet _ | FloatArraySet _ | ScalarStore _ | BigarrayAccess _) as ce ->
         let uses, consumed = atom_operands ce in
         Ident.Set.diff (remove_uses params consumed) uses
     | ce -> remove_uses params (snd (atom_operands ce))
@@ -540,6 +544,7 @@ let ce_may_raise_fn = function
   | BytesGetN (true, _, _, _)
   | BytesSetN (true, _, _, _, _)
   | ArrayGet (true, _, _, _)
+  | FloatArrayGet (true, _, _) | FloatArraySet (true, _, _, _)
   | ArraySet (true, _, _, _, _)
   | CreateBytes _ | MakeArrayInit _ ->
       true
@@ -739,6 +744,8 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
              | StringGet _ | BytesSet _ | BytesGetN _ | BytesSetN _ | Bswap16 _ | BswapBint _ | ArrayGet _ | ArraySet _
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _ | DirectApp _
              | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
+             | FloatArrayGet _ | FloatArraySet _ | FloatSign _ | FloatCompare _
+             | FloatOfInt _ | IntOfFloat _ | BoxScalar _
              | ScalarLoad _ | ScalarStore _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
              | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _ | AssignImm _
              | MakeBlock (_, [])) as ce), body) -> (

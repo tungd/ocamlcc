@@ -131,6 +131,13 @@ type cexpr =
   | ScalarLoad of bigarray_access * atom * atom
   | ScalarStore of bigarray_access * atom * atom * scalar_operand
   | ScalarValue of scalar_rep * scalar_operand
+  | BoxScalar of scalar_rep * scalar_operand
+  | FloatArrayGet of bool * atom * atom
+  | FloatArraySet of bool * atom * atom * scalar_operand
+  | FloatOfInt of atom
+  | IntOfFloat of scalar_operand
+  | FloatSign of [ `Neg | `Abs ] * scalar_operand
+  | FloatCompare of Lambda.float_comparison * scalar_operand * scalar_operand
   | FloatBinop of float_arithmetic * scalar_operand * scalar_operand
   | IntegerBinop of Lambda.boxed_integer * integer_arithmetic * scalar_operand * scalar_operand
   | IntegerCompare of Lambda.boxed_integer * integer_relation * scalar_operand * scalar_operand

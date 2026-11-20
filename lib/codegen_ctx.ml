@@ -575,7 +575,7 @@ let emit_arc_if_heap b fn value =
   close_block b (Jmp done_);
   start_block b done_
 
-let compile_bounds_guarded b ?drop_on_oob idx_untagged len_val
+let compile_bounds_guarded b ?drop_on_oob ?(result_type = Long) idx_untagged len_val
     (on_ok : unit -> Qbe_il.t) : Qbe_il.t =
   let ok = fresh_temp b "bnd" in
   emit b (Cmp (Ult, Long, ok, idx_untagged, len_val));
@@ -591,11 +591,18 @@ let compile_bounds_guarded b ?drop_on_oob idx_untagged len_val
   Option.iter (emit_arc_if_heap b "arc_release") drop_on_oob;
   emit b
     (Call_void { fn = Global "ocamlcc_raise_invalid_arg_oob"; args = [] });
+  let failure =
+    if result_type = Double then begin
+      let zero = fresh_temp b "bnd_zero" in
+      emit b (Cast (Double, zero, Int 0L));
+      zero
+    end else unit_const
+  in
   let loob_end = b.cur_fn.open_label in
   close_block b (Jmp ldone);
   start_block b ldone;
   let dst = fresh_temp b "bndv" in
-  emit b (Phi (Long, dst, [ (lok_end, ok_res); (loob_end, unit_const) ]));
+  emit b (Phi (result_type, dst, [ (lok_end, ok_res); (loob_end, failure) ]));
   dst
 
 let compile_bytes_slice_bounds_guarded b idx_untagged len_val (width : int)

@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Keep typed float-array and boxed-integer arithmetic in local scalar temporaries. Box at ordinary value uses and preserve numeric exception paths. See [value representation](/concepts/value-representation.md).
+
 - 2026-11-20 (codex/1) — Replace non-escaping tuple and option blocks with their local components. Preserve initializer evaluation and escaping block identity. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Infer borrowed argument positions across static recursive groups and saturated forwarding calls. Preserve owning entries and test long mutual recursion. See [Perceus ARC](/concepts/perceus-arc.md).
