@@ -172,15 +172,17 @@ in constant stack. Calls from outside the group pass the member's tag as the
 dispatch selector (while individual member closure wrappers forward through to
 the trampoline for indirect `ocamlcc_apply_n` calls).
 
-**Captured recursive calls** are lifted before ANF when all uses of the
-recursive functions inside the group are saturated direct calls. Workers take
-the outside captures as additional arguments and use the same direct calls and
-tail-call trampolines as static functions. A first-class use in the enclosing
-body gets a closure of the original arity, with only outside captures as
-owning edges. Dynamic sibling calls inside the group, tupled functions, and
-captures of mutable Lambda slots keep the general closure path. The
-`cycle_collect` executable checks that escaping wrappers and partial
-applications work and release all their blocks without collection.
+**Captured recursive calls** share one dispatcher closure when all uses of
+the recursive functions inside the group are saturated direct calls. The
+dispatcher takes a member selector and argument slots sized to the largest
+member arity. It loads the captured environment at entry and borrows those
+values across tail-call transitions. A first-class use in the enclosing body
+gets a wrapper of its original arity that owns the dispatcher. Dynamic sibling
+uses inside the group, tupled functions, and captures of mutable Lambda slots
+keep the general closure path. The `cycle_collect` executable checks constant
+stack use, escaping wrappers, partial applications and immediate reclamation.
+`mutrec_closure_tail_test.ml` checks that the dispatcher signature is
+independent of the number of captures.
 
 # Builtin resolution
 

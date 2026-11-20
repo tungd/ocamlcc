@@ -1,6 +1,7 @@
 (* Regression test: mutually recursive [let rec] functions with outer
-   captures must keep the shared [@dispatch] trampoline for saturated tail
-   calls and preserve an individual closure wrapper for indirect calls. *)
+   captures use a single environment argument on the recursive path. The
+   dispatch loop handles saturated calls with different arities, and
+   individual closure wrappers preserve indirect application. *)
 
 let contains_substring ~sub s =
   let sl = String.length s and nl = String.length sub in
@@ -38,11 +39,11 @@ let () =
 
       (* Two mutually tail-recursive closures with different arities capturing
          an outer value [offset]. *)
-      let run offset n f =
+      let run offset bonus start n f =
         let rec even_step k =
-          if k = 0 then offset else odd_step (k - 1) 1
+          if k = 0 then offset + bonus else odd_step (k - 1) 1
         and odd_step k acc =
-          if k = 0 then offset + acc else even_step (k - 1)
+          if k = 0 then start + acc else even_step (k - 1)
         in
         let indirect_even = f even_step in
         even_step n + indirect_even 2
@@ -54,8 +55,14 @@ let () =
   with
   | Error msg -> failwith ("Pipeline failed: " ^ msg)
   | Ok ssa ->
-      assert (contains_substring ~sub:"_group" ssa);
-      assert (contains_substring ~sub:"@dispatch" ssa);
-      assert (contains_substring ~sub:"jmp @dispatch" ssa);
+      let prefix = "function l $ocamlcc_Mutrec_clos_mutrec_dispatch(" in
+      let header =
+        match List.find_opt (String.starts_with ~prefix) (String.split_on_char '\n' ssa) with
+        | Some header -> header
+        | None -> failwith "expected one shared recursive dispatcher closure"
+      in
+      let params = List.length (String.split_on_char ',' header) in
+      assert (params = 4);
+      assert (contains_substring ~sub:"jmp @loop" ssa);
       assert (run_qbe qbe_path ssa = 0);
       Printf.printf "mutrec_closure_tail_test: PASS\n"
