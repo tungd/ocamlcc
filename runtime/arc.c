@@ -1250,18 +1250,24 @@ void *arc_drop_reuse(int64_t val)
     return NULL;
 }
 
+static int reuse_fits(const ArcHeader *hdr, uint32_t byte_size)
+{
+    if (hdr == NULL)
+        return 0;
+    if ((uint64_t)sizeof(ArcHeader) + (uint64_t)byte_size > (uint64_t)UINT32_MAX)
+        pal_abort();
+    int old_cls = size_class_for((uint32_t)sizeof(ArcHeader) + hdr->byte_size);
+    int new_cls = size_class_for((uint32_t)sizeof(ArcHeader) + byte_size);
+    return old_cls >= 0 && old_cls == new_cls;
+}
+
 void *arc_alloc_reuse(void *reuse_tok, uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
 {
     if (reuse_tok == NULL)
         return arc_alloc(tag, scan_fields, byte_size);
 
-    if ((uint64_t)sizeof(ArcHeader) + (uint64_t)byte_size > (uint64_t)UINT32_MAX)
-        pal_abort();
-
     ArcHeader *hdr = (ArcHeader *)reuse_tok;
-    int old_cls = size_class_for((uint32_t)sizeof(ArcHeader) + hdr->byte_size);
-    int new_cls = size_class_for((uint32_t)sizeof(ArcHeader) + byte_size);
-    if (old_cls >= 0 && old_cls == new_cls) {
+    if (reuse_fits(hdr, byte_size)) {
         atomic_init(&hdr->refcount, 1u);
         hdr->tag = tag;
         hdr->scan_fields = scan_fields;
@@ -1274,6 +1280,17 @@ void *arc_alloc_reuse(void *reuse_tok, uint16_t tag, uint16_t scan_fields, uint3
 
     slab_free(hdr);
     return arc_alloc(tag, scan_fields, byte_size);
+}
+
+void *arc_alloc_reuse_or(void *primary, void *fallback, uint16_t tag,
+                         uint16_t scan_fields, uint32_t byte_size)
+{
+    if (reuse_fits((const ArcHeader *)primary, byte_size)) {
+        arc_free_reuse(fallback);
+        return arc_alloc_reuse(primary, tag, scan_fields, byte_size);
+    }
+    arc_free_reuse(primary);
+    return arc_alloc_reuse(fallback, tag, scan_fields, byte_size);
 }
 
 void arc_free_reuse(void *reuse_tok)

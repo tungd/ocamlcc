@@ -93,12 +93,14 @@ type integer_shift = Left_shift | Logical_right | Arithmetic_right
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
+type reuse = { primary : Ident.t; fallback : Ident.t option }
+
 type cexpr =
   | Atom of atom
   | Binop of binop * atom * atom
   | Unop of unop * atom
   | MakeBlock of int * atom list
-  | AllocReuse of Ident.t * int * atom list
+  | AllocReuse of reuse * int * atom list
   | MakeArray of Lambda.array_kind * atom list
   | Field of int * atom
   | SetField of int * atom * atom
@@ -789,8 +791,9 @@ let cexpr_vars free_aexpr acc = function
   | Unop (_, a) -> atom_vars acc a
   | MakeBlock (_, args) | MakeArray (_, args) ->
       List.fold_left atom_vars acc args
-  | AllocReuse (tok, _, args) ->
-      Ident.Set.add tok (List.fold_left atom_vars acc args)
+  | AllocReuse (reuse, _, args) ->
+      let acc = Ident.Set.add reuse.primary (List.fold_left atom_vars acc args) in
+      Option.fold ~none:acc ~some:(fun id -> Ident.Set.add id acc) reuse.fallback
   | Field (_, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
   | Bswap16 a | BswapBint (_, a) ->
       atom_vars acc a

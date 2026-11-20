@@ -73,6 +73,8 @@ void  arc_retain_val(int64_t val);
 void  arc_release_val(int64_t val);
 void *arc_drop_reuse(int64_t val);
 void *arc_alloc_reuse(void *reuse_tok, uint16_t tag, uint16_t scan_fields, uint32_t byte_size);
+void *arc_alloc_reuse_or(void *primary, void *fallback, uint16_t tag,
+                         uint16_t scan_fields, uint32_t byte_size);
 void  arc_free_reuse(void *reuse_tok);
 int64_t arc_live_objects(void);
 int64_t arc_reuse_hits(void);

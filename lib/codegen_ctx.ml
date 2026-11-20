@@ -557,27 +557,25 @@ let array_len_raw b av =
   emit b (Binop (Shr, Long, len, bsz, Int 3L));
   len
 
-let emit_block_alloc b ?reuse_tok (tag : int) (vs : Qbe_il.t list) : Qbe_il.t =
+let emit_block_alloc b ?reuse (tag : int) (vs : Qbe_il.t list) : Qbe_il.t =
   match vs with
   | [] -> unit_const
   | _ ->
       let n = List.length vs in
       let obj = fresh_temp b "blk" in
+      let layout =
+        [ (Long, Int (Int64.of_int tag));
+          (Long, Int (Int64.of_int n));
+          (Long, Int (Int64.of_int (8 * n))) ]
+      in
       let call =
-        match reuse_tok with
-        | Some tok ->
-            { fn = Global "arc_alloc_reuse";
-              args =
-                [ (Long, tok);
-                  (Long, Int (Int64.of_int tag));
-                  (Long, Int (Int64.of_int n));
-                  (Long, Int (Int64.of_int (8 * n))) ] }
-        | None ->
-            { fn = Global "arc_alloc";
-              args =
-                [ (Long, Int (Int64.of_int tag));
-                  (Long, Int (Int64.of_int n));
-                  (Long, Int (Int64.of_int (8 * n))) ] }
+        match reuse with
+        | Some (primary, Some fallback) ->
+            { fn = Global "arc_alloc_reuse_or";
+              args = (Long, primary) :: (Long, fallback) :: layout }
+        | Some (primary, None) ->
+            { fn = Global "arc_alloc_reuse"; args = (Long, primary) :: layout }
+        | None -> { fn = Global "arc_alloc"; args = layout }
       in
       emit b (Call (Long, obj, call));
       List.iteri

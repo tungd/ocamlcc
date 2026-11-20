@@ -57,6 +57,12 @@ type state = {
 let is_borrowed (env : state) (id : Ident.t) : bool =
   Ident.Set.mem id env.borrowed || Ident.Set.mem id env.frame_borrowed
 
+(* The false edge of ANF's conditional tests for the tagged zero, even
+   when the scrutinee may be a constructor block on the other edge. *)
+let false_edge env = function
+  | Anf.Var id -> { env with imm = Ident.Set.add id env.imm }
+  | _ -> env
+
 let is_imm_atom (env : state) (a : Anf.atom) : bool =
   match a with
   | Int _ | Char _ | Unit | String _ | Float _ | Int32 _ | Int64 _
@@ -515,53 +521,48 @@ let handler_live_vars (env : state) (e : Anf.aexpr) : Ident.Set.t =
 let live_with_handlers (env : state) (e : Anf.aexpr) : Ident.Set.t =
   Ident.Set.union (Anf.free_vars e) (handler_live_vars env e)
 
-let rec has_static_raise = function
-  | Anf.StaticRaise _ | Unwind | Raise _ -> true
-  | Halt _ | HaltScalar _ -> false
-  | While (cond, body) -> has_static_raise cond || has_static_raise body
-  | For (_, _, _, _, body) -> has_static_raise body
-  | Let (_, _, b) | MutLet (_, _, b) | LetRec (_, b)
-  | Retain (_, b) | Release (_, b) | ReleaseMut (_, b)
-  | DropReuse (_, _, b) | FreeReuse (_, b)
-  | ShadowPush (_, _, _, b) | ShadowPop (_, _, b) ->
-      has_static_raise b
-  | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) | TryWith (a, _, b) ->
-      has_static_raise a || has_static_raise b
-  | Switch (_, sw) ->
-      List.exists (fun (_, a) -> has_static_raise a) sw.consts
-      || List.exists (fun (_, a) -> has_static_raise a) sw.blocks
-      || Option.fold ~none:false ~some:has_static_raise sw.fail
-  | StringSwitch (_, cs, fail) ->
-      List.exists (fun (_, a) -> has_static_raise a) cs
-      || Option.fold ~none:false ~some:has_static_raise fail
-  | StaticCatch (b, _, _, h, _) -> has_static_raise b || has_static_raise h
+(* Each live reuse token is shadowed until the protected call returns.
+   Already-inserted token cleanups may wrap the same error-side pop. *)
+let rec add_reuse_to_pop = function
+  | Anf.ShadowPop (nv, nr, body) -> Some (Anf.ShadowPop (nv, nr + 1, body))
+  | FreeReuse (tok, body) ->
+      Option.map (fun body -> Anf.FreeReuse (tok, body)) (add_reuse_to_pop body)
+  | _ -> None
 
 let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
     Anf.aexpr option =
   match e with
-  | Let (res, MakeBlock (tag, (_ :: _ as args)), next) ->
-      Some (Let (res, AllocReuse (tok, tag, args), next))
+  | Let (res, MakeBlock (tag, (_ :: _ as args)), next) when not in_shadow ->
+      Some (Let (res, AllocReuse ({ primary = tok; fallback = None }, tag, args), next))
+  | Let (res, (AllocReuse (reuse, tag, args) as ce), next) -> (
+      match inject_reuse ~in_shadow tok next with
+      | Some next -> Some (Let (res, ce, next))
+      | None when not in_shadow && Option.is_none reuse.fallback ->
+          Some (Let (res, AllocReuse ({ reuse with fallback = Some tok }, tag, args), next))
+      | None -> None)
   | Let (x, ((Atom _ | Binop _ | Unop _ | Field _ | SetField _
              | FloatField _ | SetFloatField _ | OffsetRef _
              | StringGet _ | BytesSet _ | BytesGetN _ | BytesSetN _ | Bswap16 _ | BswapBint _ | ArrayGet _ | ArraySet _
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _
              | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
              | ScalarLoad _ | ScalarStore _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
-             | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _ | MakeBlock (_, [])) as ce), body) -> (
+             | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _
+             | MakeBlock (_, [])) as ce), body) -> (
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (Let (x, ce, body'))
       | None -> None)
-  | CheckExn (on_err, on_ok) -> (
-      match inject_reuse ~in_shadow tok on_ok with
-      | Some on_ok' ->
-          let on_err' =
-            match on_err with
-            | Anf.ShadowPop (nv, nr, u) when in_shadow ->
-                Anf.ShadowPop (nv, nr + 1, u)
-            | _ -> on_err
-          in
-          Some (CheckExn (FreeReuse (tok, on_err'), on_ok'))
-      | None -> None)
+  | CheckExn (on_err, on_ok) ->
+      let on_err = if in_shadow then add_reuse_to_pop on_err else Some on_err in
+      Option.bind on_err (fun on_err ->
+          Option.map
+            (fun on_ok -> Anf.CheckExn (FreeReuse (tok, on_err), on_ok))
+            (inject_reuse ~in_shadow tok on_ok))
+  | LetJoin (id, rhs, body) when not in_shadow ->
+      Option.map (fun rhs -> Anf.LetJoin (id, rhs, body)) (inject_reuse tok rhs)
+  | DropReuse (v, prior, body) ->
+      Option.map (fun body -> Anf.DropReuse (v, prior, body)) (inject_reuse ~in_shadow tok body)
+  | FreeReuse (prior, body) ->
+      Option.map (fun body -> Anf.FreeReuse (prior, body)) (inject_reuse ~in_shadow tok body)
   | Retain (x, body) -> (
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (Retain (x, body'))
@@ -574,7 +575,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (ReleaseMut (x, body'))
       | None -> None)
-  | ShadowPush (vs, ms, rtoks, body) -> (
+  | ShadowPush (vs, ms, rtoks, body) when not in_shadow -> (
       match inject_reuse ~in_shadow:true tok body with
       | Some body' -> Some (ShadowPush (vs, ms, tok :: rtoks, body'))
       | None -> None)
@@ -584,7 +585,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
           let nr' = if in_shadow then nr + 1 else nr in
           Some (ShadowPop (nv, nr', body'))
       | None -> None)
-  | If (c, th, el) when not (has_static_raise th || has_static_raise el) -> (
+  | If (c, th, el) when not in_shadow -> (
       match
         (inject_reuse ~in_shadow tok th, inject_reuse ~in_shadow tok el)
       with
@@ -1011,11 +1012,11 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
             emit_drops env dead_before (LetRec (bindings', body')))
   | If (cond, th, el) ->
       let th' = transform_branch env th in
-      let el' = transform_branch env el in
+      let el' = transform_branch (false_edge env cond) el in
       If (cond, th', el')
   | ScalarIf (rep, cond, th, el) ->
       let th' = transform_branch env th in
-      let el' = transform_branch env el in
+      let el' = transform_branch (false_edge env cond) el in
       ScalarIf (rep, cond, th', el')
   | Switch (scrut, sw) ->
       let consts' = List.map (fun (k, a) -> (k, transform_branch env a)) sw.consts in

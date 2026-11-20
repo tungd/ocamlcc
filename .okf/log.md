@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Reuse both cells in an unrolled list map and fall back to the input cell when a previously selected token cannot fill the singleton result. Extend token cleanup to branched reads and multiple outstanding tokens. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Infer borrowed arguments for saturated direct calls to eligible read-only OCaml functions and emit a private entry alongside the owning entry. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (antigravity/1): Slice 6g — Migrate `Callback` named values, backtrace stubs, and non-POSIX `Sys` helpers to pure OCaml (`stdlib/camlinternalSys.ml`, `runtime/{arc.c,builtins.c}`, `lib/{anf.ml,ccalls.ml,driver.ml}`, `tools/{stdlib_compat.py,bootstrap.py}`, `test/{ccalls_test.ml,ccalls_test.expected}`, `tests/stdlib/sys_callback/`, `build.ninja`, `dune`):

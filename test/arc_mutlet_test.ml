@@ -123,8 +123,10 @@ and dump_ce (ce : Anf.cexpr) : string =
       Printf.sprintf "(unop %s %s)" name (dump_atom a)
   | Anf.MakeBlock (t, args) ->
       Printf.sprintf "(blk%d %s)" t (String.concat "," (List.map dump_atom args))
-  | Anf.AllocReuse (tok, t, args) ->
-      Printf.sprintf "(reuse %s %d [%s])" (dump_ident tok) t
+  | Anf.AllocReuse (reuse, t, args) ->
+      let tokens = reuse.primary :: Option.to_list reuse.fallback in
+      Printf.sprintf "(reuse %s %d [%s])"
+        (String.concat "/" (List.map dump_ident tokens)) t
         (String.concat "," (List.map dump_atom args))
   | Anf.App (f, args) ->
       Printf.sprintf "(app %s [%s])" (dump_atom f)

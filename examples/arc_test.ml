@@ -123,3 +123,69 @@ let () =
   print_endline "";
   print_int (if arc_slab_count () <= 4 then 1 else 0);
   print_endline ""
+
+(* Match the two-cell unroll in the upstream Stdlib.List.map. *)
+let rec map_pairs f = function
+  | [] -> []
+  | [x] -> [f x]
+  | x :: y :: rest ->
+      let a = f x in
+      let b = f y in
+      a :: b :: map_pairs f rest
+
+let rec make_ints n acc =
+  if n = 0 then acc else make_ints (n - 1) (n :: acc)
+
+let rec sum_ints acc = function
+  | [] -> acc
+  | x :: rest -> sum_ints (acc + x) rest
+
+let increment_int x = x + 1
+
+let map_unique n =
+  let xs = make_ints n [] in
+  let before = arc_reuse () in
+  let ys = map_pairs increment_int xs in
+  let reused = arc_reuse () - before in
+  let sum = sum_ints 0 ys in
+  print_int reused;
+  print_endline "";
+  print_int sum;
+  print_endline ""
+
+let map_shared n =
+  let xs = make_ints n [] in
+  let before = arc_reuse () in
+  let ys = map_pairs increment_int xs in
+  let reused = arc_reuse () - before in
+  let original = sum_ints 0 xs in
+  let updated = sum_ints 0 ys in
+  print_int reused;
+  print_endline "";
+  print_int original;
+  print_endline "";
+  print_int updated;
+  print_endline ""
+
+exception Stop_map
+
+let test_map_unwind () =
+  let before = arc_live () in
+  let result =
+    try
+      sum_ints 0 (map_pairs
+        (fun x -> if x = 4 then raise Stop_map else x + 1)
+        (make_ints 8 []))
+    with Stop_map -> -1
+  in
+  let delta = arc_live () - before in
+  print_int result;
+  print_endline "";
+  print_int delta;
+  print_endline ""
+
+let () =
+  map_unique 8;
+  map_unique 7;
+  map_shared 8;
+  test_map_unwind ()

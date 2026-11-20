@@ -659,9 +659,10 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   | Unop (op, a) -> compile_unop hooks b op a
   | MakeBlock (tag, args) ->
       emit_block_alloc b tag (List.map (compile_atom hooks b) args)
-  | AllocReuse (tok_id, tag, args) ->
-      let tok = Hashtbl.find b.vars tok_id in
-      emit_block_alloc b ~reuse_tok:tok tag (List.map (compile_atom hooks b) args)
+  | AllocReuse (reuse, tag, args) ->
+      let primary = Hashtbl.find b.vars reuse.primary in
+      let fallback = Option.map (Hashtbl.find b.vars) reuse.fallback in
+      emit_block_alloc b ~reuse:(primary, fallback) tag (List.map (compile_atom hooks b) args)
   | MakeArray (kind, args) -> (
       let vs = List.map (compile_atom hooks b) args in
       let n = List.length vs in
