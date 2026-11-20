@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Scalar-replace local aggregates with the same constructor shape across conditional and match branches. Carry components through a shared continuation. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Inline heap retain and eligible shared release updates for the single-thread ARC profile. Require its entry symbol and verify cycle collection through generated code. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Keep typed float-array and boxed-integer arithmetic in local scalar temporaries. Box at ordinary value uses and preserve numeric exception paths. See [value representation](/concepts/value-representation.md).

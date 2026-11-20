@@ -1675,6 +1675,22 @@ let promote_local_refs code =
 let replace_local_aggregates code =
   let open Lambda in
   let exception Escapes in
+  let labels = lazy (
+    let last = ref 0 in
+    let rec scan expr =
+      (match expr with
+      | Lstaticcatch (_, (id, _), _) | Lstaticraise (id, _) -> last := max !last id
+      | _ -> ());
+      iter_head_constructor scan expr
+    in
+    scan code;
+    last)
+  in
+  let fresh_label () =
+    let last = Lazy.force labels in
+    incr last;
+    !last
+  in
   let rec replace tag fields aliases = function
     | Llet (_, _, alias, Lvar id, body) when Ident.Set.mem id aliases ->
         replace tag fields (Ident.Set.add alias aliases) body
@@ -1707,6 +1723,54 @@ let replace_local_aggregates code =
         Lletrec (defs, replace tag fields aliases body)
     | expr -> shallow_map (replace tag fields aliases) expr
   in
+  (* Split matching branch results at a static join so the continuation is
+     emitted once. Only the selected arm evaluates its field expressions. *)
+  let join_fields id init body =
+    let rec shape = function
+      | Lprim (Pmakeblock (tag, Immutable, _), args, _)
+        when args <> [] && List.length args <= 2 -> Some (tag, List.length args)
+      | Lstaticraise _ | Lprim (Praise _, _, _) -> None
+      | Llet (_, _, _, _, tail) | Lmutlet (_, _, _, tail) | Lsequence (_, tail) ->
+          shape tail
+      | Lifthenelse (_, yes, no) -> shared_shape [yes; no]
+      | Lstaticcatch (body, _, handler) -> shared_shape [body; handler]
+      | Lswitch (_, sw, _) ->
+          shared_shape (List.map snd (sw.sw_consts @ sw.sw_blocks) @ Option.to_list sw.sw_failaction)
+      | Lstringswitch (_, cases, fail, _) ->
+          shared_shape (List.map snd cases @ Option.to_list fail)
+      | _ -> raise Escapes
+    and shared_shape arms =
+      match List.filter_map shape arms with
+      | [] -> None
+      | first :: rest ->
+          if List.for_all (( = ) first) rest then Some first else raise Escapes
+    in
+    let tag, arity = match shape init with Some shape -> shape | None -> raise Escapes in
+    let fields = List.init arity (fun _ -> Ident.create_local "component") in
+    let body = replace tag fields (Ident.Set.singleton id) body in
+    let label = fresh_label () in
+    let rec transfer = function
+      | Lprim (Pmakeblock _, args, _) -> Lstaticraise (label, args)
+      | (Lstaticraise _ | Lprim (Praise _, _, _)) as exit -> exit
+      | Llet (mode, rep, id, value, tail) -> Llet (mode, rep, id, value, transfer tail)
+      | Lmutlet (rep, id, value, tail) -> Lmutlet (rep, id, value, transfer tail)
+      | Lsequence (value, tail) -> Lsequence (value, transfer tail)
+      | Lifthenelse (cond, yes, no) -> Lifthenelse (cond, transfer yes, transfer no)
+      | Lstaticcatch (body, binders, handler) ->
+          Lstaticcatch (transfer body, binders, transfer handler)
+      | Lswitch (value, sw, loc) ->
+          let arm (tag, expr) = tag, transfer expr in
+          Lswitch (value,
+            { sw with sw_consts = List.map arm sw.sw_consts;
+                      sw_blocks = List.map arm sw.sw_blocks;
+                      sw_failaction = Option.map transfer sw.sw_failaction }, loc)
+      | Lstringswitch (value, cases, fail, loc) ->
+          Lstringswitch (value, List.map (fun (tag, arm) -> tag, transfer arm) cases,
+                         Option.map transfer fail, loc)
+      | _ -> assert false
+    in
+    Lstaticcatch (transfer init, (label, List.map (fun field -> field, Pgenval) fields), body)
+  in
   let rec visit = function
     | Llet (mode, kind, id, Lprim ((Pmakeblock (tag, Immutable, shape) as prim), args, loc), body)
       when args <> [] && List.length args <= 2 ->
@@ -1721,6 +1785,12 @@ let replace_local_aggregates code =
               (fun (field, arg) kind body -> Llet (Strict, kind, field, arg, body))
               values kinds body
         | exception Escapes -> Llet (mode, kind, id, Lprim (prim, args, loc), body))
+    | Llet (mode, kind, id, ((Lifthenelse _ | Lswitch _ | Lstringswitch _ | Lstaticcatch _) as init), body) ->
+        let init = visit init in
+        let body = visit body in
+        (match join_fields id init body with
+        | result -> result
+        | exception Escapes -> Llet (mode, kind, id, init, body))
     | expr -> shallow_map visit expr
   in
   visit code
