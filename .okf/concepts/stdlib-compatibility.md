@@ -66,9 +66,10 @@ bits. Scalar comparisons, hashing, append, and concat use the OCaml
 module.[^bulk-ops]
 
 The Effect overlay uses [stackful fibers](/concepts/wren-fibers.md#ocaml-5-effect-handlers)
-for `Effect.Deep` and the OCaml effect-pattern syntax. The standard library
+for `Effect.Deep`, `Effect.Shallow`, and the OCaml effect-pattern syntax. The standard library
 regression runs the same fixture on ocamlcc and stock OCaml and covers
-forwarding, one-shot continuations, exception injection, and abandonment.
+forwarding, one-shot continuations, exception injection, abandonment, and
+shallow handler replacement.
 Continuation callstack introspection still returns an empty backtrace.
 
 The Lexing overlay implements both DFA engines in OCaml, including signed

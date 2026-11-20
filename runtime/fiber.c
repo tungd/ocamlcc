@@ -480,16 +480,24 @@ static int64_t effect_capture(Fiber *f)
     return (int64_t)(uintptr_t)cont;
 }
 
+static void effect_set_handlers(Fiber *f, int64_t retc, int64_t exnc, int64_t effc)
+{
+    const int64_t next[FIBER_HANDLER_COUNT] = {retc, exnc, effc};
+    int64_t old[FIBER_HANDLER_COUNT];
+    for (size_t i = 0; i < FIBER_HANDLER_COUNT; i++) {
+        arc_retain_val(next[i]);
+        old[i] = f->handlers[i];
+        f->handlers[i] = next[i];
+    }
+    for (size_t i = 0; i < FIBER_HANDLER_COUNT; i++)
+        arc_release_val(old[i]);
+}
+
 int64_t caml_alloc_stack(int64_t retc, int64_t exnc, int64_t effc)
 {
     int64_t stack = ocamlcc_fiber_create(1);
     Fiber *f = (Fiber *)(uintptr_t)stack;
-    arc_retain_val(retc);
-    arc_retain_val(exnc);
-    arc_retain_val(effc);
-    f->handlers[FIBER_RETC] = retc;
-    f->handlers[FIBER_EXNC] = exnc;
-    f->handlers[FIBER_EFFC] = effc;
+    effect_set_handlers(f, retc, exnc, effc);
     /* A newly created OS thread may reuse a departed thread's pthread_t. */
     if (tls_effect_owner == 0) {
         tls_effect_owner = atomic_fetch_add_explicit(
@@ -499,6 +507,16 @@ int64_t caml_alloc_stack(int64_t retc, int64_t exnc, int64_t effc)
     }
     f->effect_owner = tls_effect_owner;
     return stack;
+}
+
+int64_t caml_continuation_use_and_update_handler_noexc(int64_t cont, int64_t retc,
+                                                       int64_t exnc, int64_t effc)
+{
+    Fiber *f = effect_take_continuation(cont);
+    if (f == NULL)
+        return 1;
+    effect_set_handlers(f, retc, exnc, effc);
+    return (int64_t)(uintptr_t)f;
 }
 
 static int64_t effect_already_resumed(void)

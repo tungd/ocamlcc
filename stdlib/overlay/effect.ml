@@ -92,21 +92,67 @@ module Deep = struct
 end
 
 module Shallow = struct
-  type ('a, 'b) continuation
 
-  let fiber _f = failwith "Effect.Shallow: handlers unsupported"
+  type ('a,'b) continuation
 
-  type ('a, 'b) handler =
+  external alloc_stack :
+    ('a -> 'b) ->
+    (exn -> 'b) ->
+    ('c t -> ('c, 'b) continuation -> last_fiber -> 'b) ->
+    ('a, 'b) stack = "caml_alloc_stack"
+
+  external cont_last_fiber : ('a, 'b) continuation -> last_fiber = "%field1"
+
+  let fiber : type a b. (a -> b) -> (a, b) continuation = fun f ->
+    let module M = struct type _ t += Initial_setup__ : a t end in
+    let exception E of (a,b) continuation in
+    let f' () = f (perform M.Initial_setup__) in
+    let error _ = failwith "impossible" in
+    let effc eff k _last_fiber =
+      match eff with
+      | M.Initial_setup__ -> raise_notrace (E k)
+      | _ -> error ()
+    in
+    let s = alloc_stack error error effc in
+    match runstack s f' () with
+    | exception E k -> k
+    | _ -> error ()
+
+  type ('a,'b) handler =
     { retc: 'a -> 'b;
       exnc: exn -> 'b;
-      effc: 'c.'c t -> (('c, 'a) continuation -> 'b) option }
+      effc: 'c.'c t -> (('c,'a) continuation -> 'b) option }
 
-  let continue_with _k _v _h = failwith "Effect.Shallow: handlers unsupported"
-  let discontinue_with _k _e _h = failwith "Effect.Shallow: handlers unsupported"
-  let discontinue_with_backtrace _k _e _bt _h =
-    failwith "Effect.Shallow: handlers unsupported"
+  external update_handler :
+    ('a,'b) continuation ->
+    ('b -> 'c) ->
+    (exn -> 'c) ->
+    ('d t -> ('d,'b) continuation -> last_fiber -> 'c) ->
+    ('a,'c) stack = "caml_continuation_use_and_update_handler_noexc"
+
+  external reperform :
+    'a t -> ('a, 'b) continuation -> last_fiber -> 'c = "%reperform"
+
+  let continue_gen k resume_fun v handler =
+    let effc eff k last_fiber =
+      match handler.effc eff with
+      | Some f -> f k
+      | None -> reperform eff k last_fiber
+    in
+    let last_fiber = cont_last_fiber k in
+    let stack = update_handler k handler.retc handler.exnc effc in
+    resume stack resume_fun v last_fiber
+
+  let continue_with k v handler =
+    continue_gen k (fun x -> x) v handler
+
+  let discontinue_with k v handler =
+    continue_gen k (fun e -> raise e) v handler
+
+  let discontinue_with_backtrace k v bt handler =
+    continue_gen k (fun e -> Printexc.raise_with_backtrace e bt) v handler
 
   external get_callstack :
-    ('a, 'b) continuation -> int -> Printexc.raw_backtrace =
+    ('a,'b) continuation -> int -> Printexc.raw_backtrace =
     "caml_get_continuation_callstack"
 end

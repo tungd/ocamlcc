@@ -55,11 +55,12 @@ No OCaml 5 multicore domains and no multi-shot effects: one cooperative schedule
 ## OCaml 5 effect handlers
 
 The stdlib compatibility build uses the existing guarded C stacks for
-`Effect.Deep` and the OCaml effect-pattern syntax. A handler delimiter starts
+`Effect.Deep`, `Effect.Shallow`, and the OCaml effect-pattern syntax. A handler delimiter starts
 one fiber. Its value, exception, and effect callbacks execute in the caller.
 `perform` hands the effect to that caller, which receives a one-shot
 continuation owning the suspended fiber. Resuming atomically takes that
-ownership. Declining an effect forwards it through enclosing delimiters while
+ownership. Deep resumption keeps the fiber’s handler. Shallow resumption
+installs the supplied handler and releases the replaced closures. Declining an effect forwards it through enclosing delimiters while
 the inner continuation remains rooted on the forwarding stack.
 
 `discontinue` resumes at the perform site with a raised exception so the

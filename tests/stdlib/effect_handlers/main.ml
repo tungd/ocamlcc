@@ -108,3 +108,50 @@ let () =
   forwarding ();
   abandon ();
   print_endline "deep continuation lifecycle: ok"
+
+let shallow () =
+  let open Effect.Shallow in
+  let started = ref false in
+  let initial =
+    fiber (fun initial ->
+      started := true;
+      let a = Effect.perform Ask in
+      let b = Effect.perform Ask in
+      initial + a + b)
+  in
+  let finish =
+    { retc = string_of_int; exnc = raise; effc = (fun _ -> None) }
+  in
+  let second : (int, string) handler =
+    let effc : type a. a Effect.t -> ((a, int) continuation -> string) option =
+      function
+      | Ask -> Some (fun k -> continue_with k 37 finish)
+      | _ -> None
+    in
+    { retc = (fun _ -> assert false); exnc = raise; effc }
+  in
+  let first : (int, string) handler =
+    let effc : type a. a Effect.t -> ((a, int) continuation -> string) option =
+      function
+      | Ask -> Some (fun k -> continue_with k 3 second)
+      | _ -> None
+    in
+    { retc = (fun _ -> assert false); exnc = raise; effc }
+  in
+  assert (not !started);
+  assert (continue_with initial 2 first = "42" && !started);
+  (match continue_with initial 2 first with
+  | exception Effect.Continuation_already_resumed -> ()
+  | _ -> assert false);
+  let stop = fiber (fun () -> assert false) in
+  let handler =
+    { retc = (fun _ -> assert false);
+      exnc = (function Cancel -> 7 | e -> raise e);
+      effc = (fun _ -> None) }
+  in
+  assert (discontinue_with_backtrace stop Cancel
+    (Printexc.get_callstack 0) handler = 7)
+
+let () =
+  shallow ();
+  print_endline "shallow: ok"

@@ -73,6 +73,7 @@ let table =
     (* Algebraic effects share the stackful coroutine and shadow-stack ABI. *)
     ("caml_alloc_stack", abi 3 false false);
     ("caml_continuation_use_noexc", abi 1 false false);
+    ("caml_continuation_use_and_update_handler_noexc", abi 4 false false);
     ("ocamlcc_effect_register_exceptions", abi 2 false false);
     ("ocamlcc_effect_perform", abi 1 true true);
     ("ocamlcc_effect_runstack", abi 3 true true);
