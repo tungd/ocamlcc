@@ -71,8 +71,12 @@ static void test_buffered_dummy_update(void)
 {
     int64_t before = arc_live_objects();
     int64_t dummy = caml_alloc_dummy(tagged(1));
+    int64_t weak = ocamlcc_weak_create(tagged(1));
+    int64_t *some = arc_alloc(0, 1, sizeof(*some));
     arc_retain_val(dummy);
-    arc_release_val(dummy);
+    *some = dummy;
+    ocamlcc_weak_set(weak, tagged(0), (int64_t)(uintptr_t)some);
+    arc_release(some);
 
     char *bytes = arc_alloc_bytes(4);
     memcpy(bytes, "text", 4);
@@ -83,6 +87,8 @@ static void test_buffered_dummy_update(void)
     assert(memcmp((const void *)(uintptr_t)dummy, "text", 4) == 0);
     arc_release(bytes);
     arc_release_val(dummy);
+    assert(ocamlcc_weak_check(weak, tagged(0)) == tagged(0));
+    arc_release_val(weak);
     assert(arc_live_objects() == before);
 }
 
@@ -271,6 +277,56 @@ static int64_t dummy_closure_code(int64_t clos, int64_t a, int64_t b)
 {
     (void)clos;
     return a + b;
+}
+
+static void test_weak_target_header_and_reuse(void)
+{
+    int64_t live_before = arc_live_objects();
+    int64_t weak = ocamlcc_weak_create(tagged(1));
+    int64_t *child = arc_alloc(0, 0, sizeof(*child));
+    *child = tagged(17);
+    int64_t *target = arc_alloc(0, 1, sizeof(*target));
+    *target = (int64_t)(uintptr_t)child;
+    ArcHeader *hdr = (ArcHeader *)target - 1;
+    int64_t val = (int64_t)(uintptr_t)target;
+    assert(hdr->scan_fields == 1);
+
+    int64_t *some = arc_alloc(0, 1, sizeof(*some));
+    arc_retain(target);
+    *some = val;
+    ocamlcc_weak_set(weak, tagged(0), (int64_t)(uintptr_t)some);
+    arc_release(some);
+    assert((hdr->scan_fields & ARC_FLAG_WEAK_TARGET) != 0);
+    assert(ocamlcc_weak_check(weak, tagged(0)) == tagged(1));
+
+    int64_t snapshot = caml_obj_dup(val);
+    assert((((ArcHeader *)(uintptr_t)snapshot - 1)->scan_fields & ARC_FLAG_WEAK_TARGET) == 0);
+    arc_release_val(snapshot);
+    void *token = arc_drop_reuse(val);
+    assert(token == hdr);
+    assert(ocamlcc_weak_check(weak, tagged(0)) == tagged(0));
+
+    int64_t *replacement = arc_alloc_reuse(token, 0, 1, sizeof(*replacement));
+    assert(replacement == target);
+    assert(hdr->scan_fields == 1);
+    *replacement = tagged(8);
+    arc_release(replacement);
+
+    /* A scan count using the high bit keeps its original meaning. */
+    int64_t *large = arc_alloc_array(ARC_FLAG_WEAK_TARGET, tagged(0));
+    ArcHeader *large_hdr = (ArcHeader *)large - 1;
+    assert(arc_scan_count(large_hdr) == ARC_FLAG_WEAK_TARGET);
+    some = arc_alloc(0, 1, sizeof(*some));
+    arc_retain(large);
+    *some = (int64_t)(uintptr_t)large;
+    ocamlcc_weak_set(weak, tagged(0), (int64_t)(uintptr_t)some);
+    arc_release(some);
+    assert(arc_scan_count(large_hdr) == ARC_FLAG_WEAK_TARGET);
+    arc_release(large);
+    assert(ocamlcc_weak_check(weak, tagged(0)) == tagged(0));
+
+    arc_release_val(weak);
+    assert(arc_live_objects() == live_before);
 }
 
 static void test_weak_get_copy_and_obj_dup(void)
@@ -939,6 +995,7 @@ int main(void)
 {
     test_float_format();
     test_buffered_dummy_update();
+    test_weak_target_header_and_reuse();
     test_weak_get_copy_and_obj_dup();
     test_poller_multi_waiters_and_overflow();
     test_bounds_and_marshal_dos();

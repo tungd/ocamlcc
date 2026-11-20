@@ -37,10 +37,14 @@
 #define ARC_CUSTOM_BIGARRAY  6u
 #define ARC_CUSTOM_BIGARRAY_BUFFER 7u
 
+/* The top scan-count bit is spare when the payload cannot hold 32768
+ * fields. Larger blocks retain the full scan count. */
+#define ARC_FLAG_WEAK_TARGET 0x8000u
+
 typedef struct ArcHeader {
     _Atomic uint32_t refcount;    /* 0xFFFFFFFF = immortal/static */
     uint16_t         tag;         /* constructor tag / object kind */
-    uint16_t         scan_fields; /* pointer fields to dec_ref on drop */
+    _Atomic uint16_t scan_fields; /* pointer-field count and weak-target hint */
     uint32_t         byte_size;   /* total size, for slab reuse */
     /* CC bookkeeping + custom kind. Written under g_cc_lock by the cycle
      * collector, but read lock-free in release_subtree's CC_BUFFERED check
@@ -50,6 +54,19 @@ typedef struct ArcHeader {
 } ArcHeader;
 
 _Static_assert(sizeof(ArcHeader) == 16u, "ArcHeader must remain 16 bytes");
+
+static inline int arc_has_spare_scan_bit(const ArcHeader *header)
+{
+    return header->byte_size < ARC_FLAG_WEAK_TARGET * 8u;
+}
+
+static inline uint16_t arc_scan_count(const ArcHeader *header)
+{
+    uint16_t count = atomic_load_explicit(&header->scan_fields, memory_order_relaxed);
+    if ((count & ARC_FLAG_WEAK_TARGET) != 0 && arc_has_spare_scan_bit(header))
+        return (uint16_t)(count & ~ARC_FLAG_WEAK_TARGET);
+    return count;
+}
 
 typedef struct ArcClosure {
     void    *code;   /* entry point (clos, arg0, ..., arg_{arity-1}) */

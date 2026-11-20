@@ -311,7 +311,7 @@ static inline int is_cycle_candidate_obj(const ArcHeader *hdr)
         return hdr->byte_size >= 8u;
     if (tag == (uint16_t)ARC_TAG_PAP)
         return 1;
-    return hdr->scan_fields > 0u;
+    return arc_scan_count(hdr) > 0u;
 }
 
 static void ccvec_push(CCVec *v, ArcHeader *h)
@@ -468,6 +468,12 @@ static int weak_targets_contains(int64_t v)
 
 static void weak_targets_insert(int64_t v)
 {
+    ArcHeader *hdr = (ArcHeader *)(uintptr_t)v - 1;
+    if (atomic_load_explicit(&hdr->refcount, memory_order_relaxed) == ARC_IMMORTAL)
+        return; /* An immortal target never needs to be cleared. */
+    if (arc_has_spare_scan_bit(hdr))
+        atomic_fetch_or_explicit(&hdr->scan_fields, ARC_FLAG_WEAK_TARGET,
+                                 memory_order_relaxed);
     if (weak_targets_contains(v))
         return;
     /* Keep at least a third of the table empty so linear probing (which
@@ -516,10 +522,20 @@ static void weak_clear_target_locked(int64_t dead_obj)
     weak_targets_remove(dead_obj);
 }
 
-static void weak_clear_target(int64_t dead_obj)
+static inline void maybe_clear_weak_target(ArcHeader *hdr)
 {
+    /* Registration has an owning reference. The final decrement or the
+     * collector's mutator handoff makes its mark visible before retirement.
+     * Oversized payloads keep the original scan-count representation. */
+    if (arc_has_spare_scan_bit(hdr)) {
+        if ((atomic_load_explicit(&hdr->scan_fields, memory_order_relaxed) &
+             ARC_FLAG_WEAK_TARGET) == 0u)
+            return;
+    } else if (atomic_load_explicit(&g_weak_count, memory_order_acquire) == 0u) {
+        return;
+    }
     arc_lock(&g_weak_lock);
-    weak_clear_target_locked(dead_obj);
+    weak_clear_target_locked((int64_t)(uintptr_t)(hdr + 1));
     arc_unlock(&g_weak_lock);
 }
 
@@ -603,7 +619,7 @@ void ocamlcc_format_exn(int64_t ex, char *buf, size_t cap)
     int64_t ctor = 0;
     if (eh->tag == 248u) {
         ctor = ex;
-    } else if (eh->tag == 0u && eh->scan_fields >= 1u) {
+    } else if (eh->tag == 0u && arc_scan_count(eh) >= 1u) {
         ctor = ((const int64_t *)(uintptr_t)ex)[0];
     }
     size_t pos = 0;
@@ -623,7 +639,7 @@ void ocamlcc_format_exn(int64_t ex, char *buf, size_t cap)
     }
     if (pos == 0u)
         pos = exn_append_cstr(buf, cap, pos, "OCaml exception");
-    if (eh->tag == 0u && eh->scan_fields >= 2u) {
+    if (eh->tag == 0u && arc_scan_count(eh) >= 2u) {
         int64_t arg = ((const int64_t *)(uintptr_t)ex)[1];
         if (arg != 0 && (arg & 1) == 0) {
             const ArcHeader *ah = (const ArcHeader *)(uintptr_t)arg - 1;
@@ -697,9 +713,10 @@ int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
         pal_abort();
 
     /* Release any previously held scanned children on [dummy]. */
+    uint16_t old_count = arc_scan_count(dhdr);
     if (dhdr->tag == (uint16_t)ARC_TAG_CLOSURE) {
         ArcClosure *dc = (ArcClosure *)(uintptr_t)dummy_val;
-        for (uint16_t i = 0; i < dhdr->scan_fields; i++)
+        for (uint16_t i = 0; i < old_count; i++)
             arc_release_val((int64_t)dc->env[i]);
     } else if (dhdr->tag == (uint16_t)ARC_TAG_ARRAY) {
         int64_t *da = (int64_t *)(uintptr_t)dummy_val;
@@ -708,7 +725,7 @@ int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
             arc_release_val(da[i]);
     } else if (!is_unscanned_leaf_tag(dhdr->tag)) {
         int64_t *df = (int64_t *)(uintptr_t)dummy_val;
-        for (uint16_t i = 0; i < dhdr->scan_fields; i++)
+        for (uint16_t i = 0; i < old_count; i++)
             arc_release_val(df[i]);
     }
 
@@ -719,7 +736,14 @@ int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
     pal_memcpy((void *)(uintptr_t)dummy_val, (const void *)(uintptr_t)new_val,
                nhdr->byte_size);
     dhdr->tag = nhdr->tag;
-    dhdr->scan_fields = nhdr->scan_fields;
+    uint16_t new_count = arc_scan_count(nhdr);
+    uint16_t count = new_count;
+    arc_lock(&g_weak_lock);
+    if (arc_has_spare_scan_bit(dhdr))
+        count |= atomic_load_explicit(&dhdr->scan_fields, memory_order_relaxed)
+                 & ARC_FLAG_WEAK_TARGET;
+    atomic_store_explicit(&dhdr->scan_fields, count, memory_order_relaxed);
+    arc_unlock(&g_weak_lock);
     if (nhdr->tag == (uint16_t)ARC_TAG_CUSTOM ||
         nhdr->tag == (uint16_t)ARC_TAG_STRING)
         dhdr->reserved = nhdr->reserved;
@@ -728,7 +752,7 @@ int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
     /* Retain newly-copied scanned children because [dummy] now owns a ref. */
     if (dhdr->tag == (uint16_t)ARC_TAG_CLOSURE) {
         ArcClosure *dc = (ArcClosure *)(uintptr_t)dummy_val;
-        for (uint16_t i = 0; i < dhdr->scan_fields; i++)
+        for (uint16_t i = 0; i < new_count; i++)
             arc_retain_val((int64_t)dc->env[i]);
     } else if (dhdr->tag == (uint16_t)ARC_TAG_ARRAY) {
         int64_t *da = (int64_t *)(uintptr_t)dummy_val;
@@ -737,7 +761,7 @@ int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
             arc_retain_val(da[i]);
     } else if (!is_unscanned_leaf_tag(dhdr->tag)) {
         int64_t *df = (int64_t *)(uintptr_t)dummy_val;
-        for (uint16_t i = 0; i < dhdr->scan_fields; i++)
+        for (uint16_t i = 0; i < new_count; i++)
             arc_retain_val(df[i]);
     }
     return 1;
@@ -945,7 +969,7 @@ void *arc_alloc(uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
     ArcHeader *hdr = slab_alloc((uint32_t)sizeof(ArcHeader) + byte_size);
     atomic_init(&hdr->refcount, 1u);
     hdr->tag = tag;
-    hdr->scan_fields = scan_fields;
+    atomic_init(&hdr->scan_fields, scan_fields);
     hdr->byte_size = byte_size;
     hdr->reserved = 0;
     atomic_fetch_add_explicit(&g_live_objects, 1, memory_order_relaxed);
@@ -1191,7 +1215,7 @@ static void release_subtree(ArcHeader *root, int free_root)
         uint16_t tag = cur->tag;
         if (tag == ARC_TAG_CLOSURE) {
             ArcClosure *c = (ArcClosure *)(cur + 1);
-            uint32_t n = cur->scan_fields;
+            uint32_t n = arc_scan_count(cur);
             for (uint32_t i = 0; i < n; i++)
                 drop_child_val(&w, (int64_t)c->env[i], &tail);
         } else if (tag == ARC_TAG_PAP) {
@@ -1229,13 +1253,12 @@ static void release_subtree(ArcHeader *root, int free_root)
             }
         } else if (!is_unscanned_leaf_tag(tag)) {
             int64_t *fields = (int64_t *)(cur + 1);
-            uint32_t n = cur->scan_fields;
+            uint32_t n = arc_scan_count(cur);
             for (uint32_t i = 0; i < n; i++)
                 drop_child_val(&w, fields[i], &tail);
         }
 
-        if (atomic_load_explicit(&g_weak_count, memory_order_acquire) > 0u)
-            weak_clear_target((int64_t)(uintptr_t)(cur + 1));
+        maybe_clear_weak_target(cur);
 
         if ((is_cycle_candidate_obj(cur) &&
              (atomic_load_explicit(&cur->reserved, memory_order_relaxed) &
@@ -1324,7 +1347,7 @@ void *arc_alloc_reuse(void *reuse_tok, uint16_t tag, uint16_t scan_fields, uint3
     if (reuse_fits(hdr, byte_size)) {
         atomic_init(&hdr->refcount, 1u);
         hdr->tag = tag;
-        hdr->scan_fields = scan_fields;
+        atomic_init(&hdr->scan_fields, scan_fields);
         hdr->byte_size = byte_size;
         hdr->reserved = 0;
         atomic_fetch_add_explicit(&g_live_objects, 1, memory_order_relaxed);
@@ -1397,7 +1420,7 @@ static void cc_visit_children(ArcHeader *hdr, CcChildFn fn, void *ctx)
     uint16_t tag = hdr->tag;
     if (tag == (uint16_t)ARC_TAG_CLOSURE) {
         ArcClosure *c = (ArcClosure *)(hdr + 1);
-        uint32_t n = hdr->scan_fields;
+        uint32_t n = arc_scan_count(hdr);
         for (uint32_t i = 0; i < n; i++)
             fn((int64_t)c->env[i], ctx);
     } else if (tag == (uint16_t)ARC_TAG_PAP) {
@@ -1430,7 +1453,7 @@ static void cc_visit_children(ArcHeader *hdr, CcChildFn fn, void *ctx)
             fn(f->pending_exn, ctx);
     } else if (!is_unscanned_leaf_tag(tag)) {
         int64_t *fields = (int64_t *)(hdr + 1);
-        uint32_t n = hdr->scan_fields;
+        uint32_t n = arc_scan_count(hdr);
         for (uint32_t i = 0; i < n; i++)
             fn(fields[i], ctx);
     }
@@ -1828,8 +1851,7 @@ static int64_t collect_cycles(int discover_finalizers)
                 arc_free_reuse(*f->reuse_sp);
             }
         }
-        if (atomic_load_explicit(&g_weak_count, memory_order_acquire) > 0u)
-            weak_clear_target((int64_t)(uintptr_t)(w + 1));
+        maybe_clear_weak_target(w);
         cc_visit_children(w, cc_collect_outgoing_cb, &outgoing);
         if (is_fiber) {
             f->entry_closure = 0;
@@ -3666,17 +3688,18 @@ static int64_t dup_with_tag(int64_t v, int override_tag, uint16_t new_atag)
         return v;
     }
     if (src_tag == (uint16_t)ARC_TAG_CLOSURE) {
+        uint16_t n = arc_scan_count(hdr);
         ArcClosure *dst =
-            (ArcClosure *)arc_alloc(src_tag, hdr->scan_fields, hdr->byte_size);
+            (ArcClosure *)arc_alloc(src_tag, n, hdr->byte_size);
         if (hdr->byte_size > 0u)
             pal_memcpy(dst, (const void *)(uintptr_t)v, hdr->byte_size);
-        for (uint16_t i = 0u; i < hdr->scan_fields; i++)
+        for (uint16_t i = 0u; i < n; i++)
             arc_retain_val((int64_t)dst->env[i]);
         return (int64_t)(uintptr_t)dst;
     }
     if (src_tag == (uint16_t)ARC_TAG_PAP) {
         ArcPap *dst =
-            (ArcPap *)arc_alloc(src_tag, hdr->scan_fields, hdr->byte_size);
+            (ArcPap *)arc_alloc(src_tag, arc_scan_count(hdr), hdr->byte_size);
         if (hdr->byte_size > 0u)
             pal_memcpy(dst, (const void *)(uintptr_t)v, hdr->byte_size);
         arc_retain_val((int64_t)(uintptr_t)dst->orig);
@@ -3695,7 +3718,7 @@ static int64_t dup_with_tag(int64_t v, int override_tag, uint16_t new_atag)
     }
     uint32_t nf = (src_tag == (uint16_t)ARC_TAG_ARRAY)
                       ? (hdr->byte_size / 8u)
-                      : (uint32_t)hdr->scan_fields;
+                      : (uint32_t)arc_scan_count(hdr);
     uint16_t scan = (tag == (uint16_t)ARC_TAG_ARRAY)
                         ? 0u
                         : (nf > UINT16_MAX ? (uint16_t)UINT16_MAX : (uint16_t)nf);
@@ -3803,7 +3826,7 @@ int64_t caml_obj_reachable_words(int64_t v)
         uint16_t tag = cur->tag;
         if (tag == (uint16_t)ARC_TAG_CLOSURE) {
             ArcClosure *c = (ArcClosure *)(cur + 1);
-            for (uint16_t i = 0; i < cur->scan_fields; i++)
+            for (uint16_t i = 0; i < arc_scan_count(cur); i++)
                 rw_push_val(&work, &tab, &cap, &alloc_bytes, &used, (int64_t)c->env[i]);
         } else if (tag == (uint16_t)ARC_TAG_PAP) {
             ArcPap *p = (ArcPap *)(cur + 1);
@@ -3823,7 +3846,7 @@ int64_t caml_obj_reachable_words(int64_t v)
         } else if (!is_unscanned_leaf_tag(tag) &&
                    tag != (uint16_t)ARC_TAG_FIBER) {
             int64_t *fields = (int64_t *)(cur + 1);
-            for (uint16_t i = 0; i < cur->scan_fields; i++)
+            for (uint16_t i = 0; i < arc_scan_count(cur); i++)
                 rw_push_val(&work, &tab, &cap, &alloc_bytes, &used, fields[i]);
         }
     }
