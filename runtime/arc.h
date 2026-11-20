@@ -164,6 +164,9 @@ int64_t ocamlcc_apply_n_raw(int64_t clos, int64_t argc, int64_t *argv);
 /* Mutator-gate hooks used at C->OCaml FFI entrypoints so ocamlcc_arc_collect
    drains active FFI mutators safely. C hosts must not drop/mutate cycle-
    candidate objects directly outside ocamlcc_apply* during collection. */
+/* The optional single-thread RC build binds to the first thread to enter
+   here or initialize an OCaml module. Raw C runtime calls in that build
+   must execute on the same thread. Generated bindings enter automatically. */
 int  arc_mutator_enter(void);
 void arc_mutator_leave(int entered);
 

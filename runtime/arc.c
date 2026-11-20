@@ -163,8 +163,30 @@ static void tls_init_slot_pop(_Atomic int64_t *slot)
     }
 }
 
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+static _Atomic unsigned g_rc_owner_claimed;
+static _Thread_local int tls_rc_owner;
+#endif
+
+static inline void check_rc_thread(void)
+{
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+    if (tls_rc_owner)
+        return;
+
+    if (atomic_exchange_explicit(&g_rc_owner_claimed, 1u, memory_order_relaxed)) {
+        static const char message[] =
+            "ocamlcc: single-thread ARC runtime entered from another thread\n";
+        pal_stderr_write(message, sizeof(message) - 1);
+        pal_abort();
+    }
+    tls_rc_owner = 1;
+#endif
+}
+
 int64_t ocamlcc_init_try_enter(_Atomic int64_t *slot)
 {
+    check_rc_thread();
     if (tls_init_slot_active(slot))
         return 0; /* re-entrant same-thread init; caller proceeds unblocked */
     for (;;) {
@@ -195,6 +217,7 @@ int arc_mutator_enter(void)
 {
     if (tls_os_mutator_active != 0)
         return 0;
+    check_rc_thread();
     for (;;) {
         while (atomic_load_explicit(&g_cc_waiting, memory_order_acquire) != 0)
             cpu_relax();
@@ -996,6 +1019,32 @@ void *arc_alloc_bytes(uint64_t len)
     return s;
 }
 
+/* Keep the header ABI identical in both builds. On the single owner thread
+   relaxed loads and stores suffice, and require no atomic read-modify-write. */
+static inline void refcount_add(ArcHeader *hdr, uint32_t old_rc, uint32_t n)
+{
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+    atomic_store_explicit(&hdr->refcount, old_rc + n, memory_order_relaxed);
+#else
+    (void)old_rc;
+    atomic_fetch_add_explicit(&hdr->refcount, n, memory_order_relaxed);
+#endif
+}
+
+static inline int refcount_drop_last(ArcHeader *hdr, uint32_t old_rc)
+{
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+    atomic_store_explicit(&hdr->refcount, old_rc - 1u, memory_order_relaxed);
+    return old_rc == 1u;
+#else
+    (void)old_rc;
+    if (atomic_fetch_sub_explicit(&hdr->refcount, 1u, memory_order_acq_rel) != 1u)
+        return 0;
+    atomic_thread_fence(memory_order_acquire);
+    return 1;
+#endif
+}
+
 void *arc_alloc_array(uint64_t len, int64_t init)
 {
     if (len > ((uint64_t)UINT32_MAX - (uint64_t)sizeof(ArcHeader)) / 8u) {
@@ -1029,8 +1078,7 @@ void *arc_alloc_array(uint64_t len, int64_t init)
             uint64_t extra = len - 1u;
             if (extra >= (uint64_t)(ARC_IMMORTAL - rc))
                 pal_abort();
-            atomic_fetch_add_explicit(&ihdr->refcount, (uint32_t)extra,
-                                      memory_order_relaxed);
+            refcount_add(ihdr, rc, (uint32_t)extra);
         }
     }
     for (uint64_t i = 0; i < len; i++)
@@ -1043,11 +1091,19 @@ void arc_retain(void *obj)
     ArcHeader *hdr = (ArcHeader *)obj - 1;
     uint32_t rc = atomic_load_explicit(&hdr->refcount, memory_order_relaxed);
     if (rc != ARC_IMMORTAL)
-        atomic_fetch_add_explicit(&hdr->refcount, 1u, memory_order_relaxed);
+        refcount_add(hdr, rc, 1u);
 }
 
 static int arc_try_retain(ArcHeader *hdr)
 {
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+    uint32_t rc = atomic_load_explicit(&hdr->refcount, memory_order_relaxed);
+    if (rc == 0u)
+        return 0;
+    if (rc != ARC_IMMORTAL)
+        refcount_add(hdr, rc, 1u);
+    return 1;
+#else
     uint32_t rc = atomic_load_explicit(&hdr->refcount, memory_order_acquire);
     while (rc != 0u) {
         if (rc == ARC_IMMORTAL)
@@ -1058,6 +1114,7 @@ static int arc_try_retain(ArcHeader *hdr)
             return 1;
     }
     return 0;
+#endif
 }
 
 typedef struct DropWorklist {
@@ -1111,8 +1168,7 @@ static inline void drop_child_val(DropWorklist *w, int64_t val, ArcHeader **tail
         return;
     if (rc > 1u)
         cc_roots_add(chdr);
-    if (atomic_fetch_sub_explicit(&chdr->refcount, 1u, memory_order_acq_rel) == 1u) {
-        atomic_thread_fence(memory_order_acquire);
+    if (refcount_drop_last(chdr, rc)) {
         if (*tail != NULL)
             work_push(w, *tail);
         *tail = chdr;
@@ -1208,8 +1264,7 @@ void arc_release(void *obj)
         return;
     if (rc > 1u)
         cc_roots_add(hdr);
-    if (atomic_fetch_sub_explicit(&hdr->refcount, 1u, memory_order_acq_rel) == 1u) {
-        atomic_thread_fence(memory_order_acquire);
+    if (refcount_drop_last(hdr, rc)) {
         release_subtree(hdr, 1);
     }
 }
@@ -1242,8 +1297,7 @@ void *arc_drop_reuse(int64_t val)
         return NULL;
     if (rc > 1u)
         cc_roots_add(hdr);
-    if (atomic_fetch_sub_explicit(&hdr->refcount, 1u, memory_order_acq_rel) == 1u) {
-        atomic_thread_fence(memory_order_acquire);
+    if (refcount_drop_last(hdr, rc)) {
         release_subtree(hdr, 0);
         return (void *)hdr;
     }

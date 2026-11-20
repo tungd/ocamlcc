@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Add an opt-in single-OS-thread runtime with load/store refcount updates and an owner check at managed entries. The atomic runtime remains the default. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Reuse both cells in an unrolled list map and fall back to the input cell when a previously selected token cannot fill the singleton result. Extend token cleanup to branched reads and multiple outstanding tokens. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Infer borrowed arguments for saturated direct calls to eligible read-only OCaml functions and emit a private entry alongside the owning entry. See [Perceus ARC](/concepts/perceus-arc.md).
