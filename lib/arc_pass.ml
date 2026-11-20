@@ -108,6 +108,8 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | FloatSign _ | FloatCompare _ | KeepAlive _ -> true
   | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
   | Ccall (name, _) -> Ccalls.returns_imm name
+  | NativeCcall (prim, _) ->
+      not (Primitive.equal_native_repr prim.prim_native_repr_res Same_as_ocaml_repr)
   | DirectApp (target, _) -> target.returns_immediate
   | App (Var fn, args) -> (
       match Ident.Map.find_opt fn imm_funs with
@@ -343,7 +345,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | FloatArrayGet (_, a, i) | ScalarLoad (_, a, i) -> (atoms_vars [a; i], [])
   | FloatArraySet (_, a, i, v) | ScalarStore (_, a, i, v) -> (Anf.scalar_operand_vars (atoms_vars [a; i]) v, [])
   | FloatBinop (_, a, b) | FloatCompare (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> (Anf.scalar_operand_vars (Anf.scalar_operand_vars Ident.Set.empty a) b, [])
-  | BigarrayAccess (_, args) | Ccall (_, args) -> (atoms_vars args, [])
+  | BigarrayAccess (_, args) | Ccall (_, args) | NativeCcall (_, args) -> (atoms_vars args, [])
   | GetGlobal _ -> (Ident.Set.empty, [])
   | Assign (_, rhs) | AssignImm (_, rhs) -> (Ident.Set.empty, [ rhs ])
   | Fun _ -> (Ident.Set.empty, [])
@@ -377,7 +379,7 @@ let read_only_parameters ~borrowed (lf : Anf.lfunction) =
     | App _ | DirectApp _ | Fun _ -> Ident.Set.empty
     | Ccall (("ocamlcc_finalizers_due" | "ocamlcc_poll_finalizers"), []) ->
         params
-    | Ccall _ -> Ident.Set.empty
+    | Ccall _ | NativeCcall _ -> Ident.Set.empty
     | (SetField _ | SetFloatField _ | OffsetRef _ | BytesSet _ | BytesSetN _
       | ArraySet _ | FloatArraySet _ | ScalarStore _ | BigarrayAccess _) as ce ->
         let uses, consumed = atom_operands ce in
@@ -553,6 +555,7 @@ let ce_may_raise_fn = function
   (* The current Bigarray helpers check bounds even for unsafe accesses. *)
   | BigarrayAccess _ | ScalarLoad _ | ScalarStore _ -> true
   | Ccall (name, _) -> (Ccalls.find name).Ccalls.raises
+  | NativeCcall (prim, _) -> prim.prim_alloc
   | _ -> false
 
 let call_can_suspend known yielding = function
@@ -749,7 +752,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
              | FloatArrayGet _ | FloatArraySet _ | FloatSign _ | FloatCompare _
              | FloatOfInt _ | IntOfFloat _ | BoxScalar _
              | ScalarLoad _ | ScalarStore _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
-             | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _ | AssignImm _
+             | Builtin _ | BigarrayAccess _ | Ccall _ | NativeCcall _ | GetGlobal _ | Assign _ | AssignImm _
              | MakeBlock (_, [])) as ce), body) -> (
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (Let (x, ce, body'))

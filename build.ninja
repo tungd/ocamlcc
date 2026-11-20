@@ -475,7 +475,14 @@ build $builddir/rt-single/cycle_collect.s: qbe_ssa $builddir/rt-single/cycle_col
 build $builddir/rt-single/cycle_collect: cc_link $builddir/rt-single/cycle_collect.s $builddir/rt-single/libocamlrt.a
 build test_single_thread_rc: run_single_thread_rc_test | $builddir/rt-single/single_thread_rc $builddir/rt-single/cycle_collect tests/check_single_thread_rc.py tests/cycle_collect.expected
 
-build test: phony test_single_thread_rc test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
+rule run_native_ffi
+  command = $builddir/bin/ocamlcc build --work-dir $builddir/native_ffi-work --stdlib-dir $stdlibdir $in -o $builddir/native_ffi && $builddir/native_ffi
+  pool = console
+  description = TEST native FFI
+
+build test_native_ffi: run_native_ffi tests/native_ffi/main.ml tests/native_ffi/stubs.c | $builddir/bin/ocamlcc $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a
+
+build test: phony test_native_ffi test_single_thread_rc test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
 
 rule cc_rt_asan
   command = $cc $rt_cflags -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iruntime -c $in -o $out

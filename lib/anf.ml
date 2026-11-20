@@ -146,6 +146,7 @@ type cexpr =
   | DirectApp of imported_function * atom list
   | Builtin of string * Builtins.arg_kind * atom
   | Ccall of string * atom list
+  | NativeCcall of Primitive.description * atom list
   | GetGlobal of string
   | Fun of lfunction
   | Assign of Ident.t * atom
@@ -214,6 +215,13 @@ type program = {
 }
 
 exception Unsupported of string
+
+let native_scalar : Primitive.native_repr -> scalar_rep option = function
+  | Unboxed_float -> Some Double_scalar
+  | Unboxed_integer Pint32 -> Some (Integer_scalar Pint32)
+  | Unboxed_integer Pint64 -> Some (Integer_scalar Pint64)
+  | Unboxed_integer Pnativeint -> Some (Integer_scalar Pnativeint)
+  | Same_as_ocaml_repr | Untagged_immediate -> None
 
 let primitive_name p =
   let buf = Buffer.create 64 in
@@ -641,8 +649,8 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
           (* C externals: [caml_*] primitives must be registered with their
              C ABI in [Ccalls] (unknown ones are rejected — they are
              compiler/runtime implementation details, not a user ABI);
-             non-[caml_] externals are user C FFI and always lower to
-             [Ccall] with the conservative default ABI. *)
+             registered runtime entries use ocamlcc's boxed ABI.
+             User externals use the native entry and its declared ABI. *)
           if String.starts_with ~prefix:"caml_" sym then
             match Ccalls.find_opt sym with
             | Some abi when abi.Ccalls.argc = List.length args ->
@@ -653,7 +661,15 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
                     (Printf.sprintf "C primitive %s with %d arguments" sym
                        (List.length args)))
             | None -> raise (Unsupported (describe lam))
-          else conv_atoms args (fun vs -> emit_cexpr (Ccall (sym, vs))))
+          else if Ccalls.is_known sym then
+            conv_atoms args (fun vs -> emit_cexpr (Ccall (sym, vs)))
+          else conv_atoms args (fun vs ->
+            let call = NativeCcall (pd, vs) in
+            match native_scalar pd.prim_native_repr_res with
+            | None -> emit_cexpr call
+            | Some rep ->
+                let raw = Ident.create_local "native_result" in
+                Let (raw, call, emit_cexpr (BoxScalar (rep, Raw_scalar raw)))))
       | _ -> raise (Unsupported (describe lam)))
   | Lprim (Pgetglobal id, [], _) -> emit_cexpr (GetGlobal (Ident.name id))
   | Lprim (Praise _, [ arg ], _) ->
@@ -957,7 +973,8 @@ let cexpr_vars ?(include_raw = true) free_aexpr acc ce =
   | App (fn, args) ->
       List.fold_left atom_vars (atom_vars acc fn) args
   | Builtin (_, _, a) -> atom_vars acc a
-  | BigarrayAccess (_, args) | Ccall (_, args) | DirectApp (_, args) | Recur args | KeepAlive args ->
+  | BigarrayAccess (_, args) | Ccall (_, args) | NativeCcall (_, args)
+  | DirectApp (_, args) | Recur args | KeepAlive args ->
       List.fold_left atom_vars acc args
   | GetGlobal _ -> acc
   | Assign (id, a) | AssignImm (id, a) -> Ident.Set.add id (atom_vars acc a)

@@ -154,6 +154,7 @@ type cexpr =
   | DirectApp of imported_function * atom list
   | Builtin of string * Builtins.arg_kind * atom
   | Ccall of string * atom list
+  | NativeCcall of Primitive.description * atom list
   | GetGlobal of string
   | Fun of lfunction
   | Assign of Ident.t * atom
@@ -215,6 +216,8 @@ and switch_cases = {
 }
 
 type exports = (int list * imported_function) list
+
+val native_scalar : Primitive.native_repr -> scalar_rep option
 
 type program = {
   module_ident : Ident.t;

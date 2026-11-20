@@ -430,3 +430,8 @@
  (name local_scalars_test)
  (modules local_scalars_test)
  (libraries ocamlcc str))
+
+(test
+ (name native_ffi_test)
+ (modules native_ffi_test)
+ (libraries ocamlcc str))

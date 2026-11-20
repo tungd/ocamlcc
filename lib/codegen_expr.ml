@@ -679,6 +679,22 @@ let scalar_type = function
   | Anf.Double_scalar -> Double
   | Integer_scalar kind -> let ty, _, _ = bint_spec kind in ty
 
+let compile_native_ccall hooks b (prim : Primitive.description) args =
+  let arg rep value =
+    match Anf.native_scalar rep with
+    | Some scalar ->
+        scalar_type scalar, compile_scalar_operand hooks b scalar (Boxed_scalar value)
+    | None ->
+        let value = compile_atom hooks b value in
+        Long, (if rep = Primitive.Untagged_immediate then untag b value else value)
+  in
+  let args = List.map2 arg prim.prim_native_repr_args args in
+  let rep = prim.prim_native_repr_res in
+  let ty = Option.fold ~none:Long ~some:scalar_type (Anf.native_scalar rep) in
+  let dst = fresh_temp b "native_cc" in
+  emit b (Call (ty, dst, { fn = Global (Primitive.native_name prim); args }));
+  if rep = Primitive.Untagged_immediate then retag b dst else dst
+
 let array_address b arr index =
   let offset = fresh_temp b "aoff" in
   emit b (Binop (Shl, Long, offset, index, Int 3L));
@@ -1173,6 +1189,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let op = match access.operation with `Get -> "get" | `Set -> "set" in
       compile_ccall hooks b (Printf.sprintf "caml_ba_%s_%d" op access.rank) args
   | Ccall (sym, args) -> compile_ccall hooks b sym args
+  | NativeCcall (prim, args) -> compile_native_ccall hooks b prim args
   | DirectApp (target, args) -> compile_ccall hooks b target.symbol args
   | GetGlobal mod_name ->
       let gsym = "ocamlcc_global_" ^ sanitize mod_name in
