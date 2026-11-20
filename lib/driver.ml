@@ -740,6 +740,7 @@ let stdlib_ordered_units =
     "camlinternalBulkOps.ml";
     "camlinternalChannel.ml";
     "camlinternalMarshal.ml";
+    "camlinternalSys.ml";
     "stdlib__option.ml";
     "stdlib__result.ml";
     "stdlib__bytes.ml";

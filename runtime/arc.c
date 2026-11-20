@@ -2765,27 +2765,15 @@ static void raise_sys_error_errno(int err)
 static ArcSpinLock g_named_lock = { 0u };
 static int64_t g_do_at_exit_fn = 0;
 
-int64_t caml_register_named_value(int64_t name_val, int64_t val)
+int64_t ocamlcc_set_at_exit_fn(int64_t val)
 {
-    const char *name = (const char *)(uintptr_t)name_val;
-    const ArcHeader *nh = (const ArcHeader *)(uintptr_t)name_val - 1;
-    const char *target = "Pervasives.do_at_exit";
-    size_t tlen = 21u;
-    if ((size_t)nh->reserved == tlen) {
-        int eq = 1;
-        for (size_t i = 0; i < tlen; i++) {
-            if (name[i] != target[i]) { eq = 0; break; }
-        }
-        if (eq) {
-            arc_lock(&g_named_lock);
-            int64_t old = g_do_at_exit_fn;
-            arc_retain_val(val);
-            g_do_at_exit_fn = val;
-            arc_unlock(&g_named_lock);
-            if (old != 0)
-                arc_release_val(old);
-        }
-    }
+    arc_lock(&g_named_lock);
+    int64_t old = g_do_at_exit_fn;
+    arc_retain_val(val);
+    g_do_at_exit_fn = val;
+    arc_unlock(&g_named_lock);
+    if (old != 0)
+        arc_release_val(old);
     return 1;
 }
 
@@ -3056,6 +3044,7 @@ extern int   ocamlcc_c_cond_signal(void *c);
 extern int   ocamlcc_c_cond_broadcast(void *c);
 
 extern int   ocamlcc_c_random_bytes(uint8_t *buf, size_t len);
+extern int   ocamlcc_c_is_win32(void);
 
 static int64_t alloc_cstr_z(const char *s)
 {
@@ -3114,82 +3103,21 @@ int64_t caml_atomic_make_contended(int64_t v)
     return (int64_t)(uintptr_t)blk;
 }
 
-/* ---- Backtraces (empty stubs) ---- */
-
-static int g_backtrace_enabled = 0;
-
-int64_t caml_restore_raw_backtrace(int64_t exn, int64_t bt)
-{
-    (void)exn; (void)bt;
-    return 1;
-}
-
-int64_t caml_get_exception_raw_backtrace(int64_t ignored)
-{
-    (void)ignored;
-    return (int64_t)(uintptr_t)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 0u);
-}
-
-int64_t caml_record_backtrace(int64_t b)
-{
-    g_backtrace_enabled = ((b >> 1) != 0) ? 1 : 0;
-    return 1;
-}
-
-int64_t caml_backtrace_status(int64_t ignored)
-{
-    (void)ignored;
-    return g_backtrace_enabled ? 3 : 1;
-}
-
-int64_t caml_get_current_callstack(int64_t max_frames)
-{
-    (void)max_frames;
-    return (int64_t)(uintptr_t)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 0u);
-}
-
-int64_t caml_ml_debug_info_status(int64_t ignored)
-{
-    (void)ignored;
-    return tag_int(0);
-}
-
-int64_t caml_raw_backtrace_slot(int64_t bt, int64_t i)
-{
-    (void)bt; (void)i;
-    ocamlcc_raise_invalid_arg_oob();
-    return 1;
-}
-
-int64_t caml_raw_backtrace_next_slot(int64_t slot)
-{
-    (void)slot;
-    return 1; /* None */
-}
-
-int64_t caml_convert_raw_backtrace(int64_t bt)
-{
-    (void)bt;
-    return (int64_t)(uintptr_t)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 0u);
-}
-
-int64_t caml_convert_raw_backtrace_slot(int64_t slot)
-{
-    (void)slot;
-    raise_failure_cstr("convert_raw_backtrace_slot: unsupported", 39u);
-    return 1;
-}
-
-/* ---- Sys / Env / FS / Runtime ---- */
+/* ---- Sys / Env / FS / Runtime (constants/backtraces/Callback in CamlinternalSys) ---- */
 
 static int    g_argc = 0;
 static char **g_argv = NULL;
-static int    g_runtime_warnings = 0;
 
 void ocamlcc_set_argv(int argc, char **argv)
 {
     g_argc = argc;
     g_argv = argv;
+}
+
+int64_t ocamlcc_sys_is_win32(int64_t ignored)
+{
+    (void)ignored;
+    return ocamlcc_c_is_win32() ? 3 : 1;
 }
 
 int64_t caml_sys_argv(int64_t ignored)
@@ -3205,33 +3133,6 @@ int64_t caml_sys_argv(int64_t ignored)
         arr[0] = alloc_cstr_z("");
     }
     return (int64_t)(uintptr_t)arr;
-}
-
-int64_t caml_sys_executable_name(int64_t ignored)
-{
-    (void)ignored;
-    const char *s = (g_argc > 0 && g_argv != NULL && g_argv[0] != NULL) ? g_argv[0] : "";
-    return alloc_cstr_z(s);
-}
-
-int64_t caml_sys_proc_self_exe(int64_t ignored)
-{
-    (void)ignored;
-    return 1; /* None */
-}
-
-int64_t caml_sys_get_config(int64_t ignored)
-{
-    (void)ignored;
-    int64_t *blk = (int64_t *)arc_alloc(0u, 3u, 24u);
-#if defined(_WIN32)
-    blk[0] = alloc_cstr_z("Win32");
-#else
-    blk[0] = alloc_cstr_z("Unix");
-#endif
-    blk[1] = tag_int(64);
-    blk[2] = 1; /* big_endian = false */
-    return (int64_t)(uintptr_t)blk;
 }
 
 int64_t caml_sys_getenv(int64_t name_val)
@@ -3372,60 +3273,12 @@ int64_t caml_sys_time(int64_t ignored)
     return ocamlcc_alloc_float(ocamlcc_c_sys_time());
 }
 
-int64_t caml_sys_io_buffer_size(int64_t ignored)
-{
-    (void)ignored;
-    return tag_int(65536);
-}
-
-int64_t caml_sys_temp_dir_name(int64_t ignored)
-{
-    (void)ignored;
-    const char *t = ocamlcc_c_getenv("TMPDIR");
-    if (t == NULL || t[0] == '\0')
-        t = "/tmp";
-    return alloc_cstr_z(t);
-}
-
 int64_t caml_sys_close(int64_t fd_val)
 {
     int err = 0;
     if (ocamlcc_c_fd_close_raw((int)(fd_val >> 1), &err) != 0)
         raise_sys_error_errno(err);
     return 1;
-}
-
-int64_t caml_runtime_variant(int64_t ignored)
-{
-    (void)ignored;
-    return alloc_cstr_z("");
-}
-
-int64_t caml_runtime_parameters(int64_t ignored)
-{
-    (void)ignored;
-    return alloc_cstr_z("");
-}
-
-int64_t caml_install_signal_handler(int64_t sig, int64_t beh)
-{
-    (void)sig; (void)beh;
-    return tag_int(0); /* Signal_default */
-}
-
-int64_t caml_sys_convert_signal_number(int64_t s) { return s; }
-int64_t caml_sys_rev_convert_signal_number(int64_t s) { return s; }
-
-int64_t caml_ml_enable_runtime_warnings(int64_t b)
-{
-    g_runtime_warnings = ((b >> 1) != 0) ? 1 : 0;
-    return 1;
-}
-
-int64_t caml_ml_runtime_warnings_enabled(int64_t ignored)
-{
-    (void)ignored;
-    return g_runtime_warnings ? 3 : 1;
 }
 
 int64_t caml_sys_random_seed(int64_t ignored)
@@ -4320,7 +4173,7 @@ int64_t caml_get_public_method(int64_t obj, int64_t tag)
 int64_t caml_get_continuation_callstack(int64_t cont, int64_t n)
 {
     (void)cont; (void)n;
-    return caml_get_current_callstack(tag_int(0));
+    return (int64_t)(uintptr_t)arc_alloc((uint16_t)ARC_TAG_ARRAY, 0u, 0u);
 }
 
 /* Thin object-introspection helpers for pure OCaml Marshal */

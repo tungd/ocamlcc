@@ -546,3 +546,12 @@ int ocamlcc_c_random_bytes(uint8_t *buf, size_t len)
     return -1;
 #endif
 }
+
+int ocamlcc_c_is_win32(void)
+{
+#if defined(_WIN32)
+    return 1;
+#else
+    return 0;
+#endif
+}

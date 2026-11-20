@@ -5,6 +5,8 @@ ocamlcc_print_string_val: registered
 ocamlcc_print_endline_val: registered
 ocamlcc_prerr_string_val: registered
 ocamlcc_exit_val: registered
+ocamlcc_sys_is_win32: registered
+ocamlcc_set_at_exit_fn: registered
 ocamlcc_pipe: registered
 ocamlcc_fd_read: registered
 ocamlcc_fd_write: registered

@@ -24,6 +24,7 @@
   (stdlib/camlinternalFormatBasics.ml as stdlib/camlinternalFormatBasics.ml)
   (stdlib/camlinternalIntFmt.ml as stdlib/camlinternalIntFmt.ml)
   (stdlib/camlinternalMarshal.ml as stdlib/camlinternalMarshal.ml)
+  (stdlib/camlinternalSys.ml as stdlib/camlinternalSys.ml)
   (stdlib/stdlib.ml as stdlib/stdlib.ml)
   (stdlib/stdlib__array.ml as stdlib/stdlib__array.ml)
   (stdlib/stdlib__buffer.ml as stdlib/stdlib__buffer.ml)

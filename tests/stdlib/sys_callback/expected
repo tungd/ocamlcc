@@ -1,0 +1,6 @@
+cfg=Unix,64,63,false,iobuf=65536,var=[],par_ok=true,exe_nonempty=true,tmp_nonempty=true
+warn=false,true,false
+sig=true,rt=true
+bt=true,false,cs=true,oob=true,conv=true,ex1=Failure("boom"),ex2=custom(7,ok),slot=Main.MyExn
+lazy=lazy_err,lazy_err
+at_exit=ok

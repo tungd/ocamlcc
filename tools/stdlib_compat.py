@@ -155,6 +155,11 @@ _COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
     ],
     "stdlib.ml": [
         (
+            'external register_named_value : string -> \'a -> unit\n'
+            '                              = "caml_register_named_value"',
+            "let register_named_value = CamlinternalSys.register_named_value",
+        ),
+        (
             'external format_int : string -> int -> string = "caml_format_int"',
             "let format_int = CamlinternalIntFmt.format_int",
         ),
@@ -327,6 +332,131 @@ _COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
             "let set_buffered oc b = CamlinternalChannel.set_buffered (_ch_cast_out2 oc) b\n\n"
             "let is_buffered oc = CamlinternalChannel.is_buffered (_ch_cast_out2 oc)\n\n"
             "let isatty oc = CamlinternalChannel.isatty (_ch_cast_out2 oc)",
+        ),
+    ],
+    "callback.ml": [
+        (
+            'external register_named_value : string -> Obj.t -> unit\n'
+            '                              = "caml_register_named_value"',
+            "let register_named_value = CamlinternalSys.register_named_value",
+        ),
+    ],
+    "lazy.ml": [
+        (
+            '  external get_raw_backtrace:\n'
+            '    unit -> raw_backtrace = "caml_get_exception_raw_backtrace"',
+            "  let get_raw_backtrace = CamlinternalSys.get_exception_raw_backtrace",
+        ),
+    ],
+    "filename.ml": [
+        (
+            '  external temp_dir_name: unit -> string = "caml_sys_temp_dir_name"',
+            "  let temp_dir_name = CamlinternalSys.temp_dir_name",
+        ),
+    ],
+    "printexc.mli": [
+        (
+            'external get_callstack: int -> raw_backtrace = "caml_get_current_callstack"',
+            "val get_callstack: int -> raw_backtrace",
+        ),
+    ],
+    "printexc.ml": [
+        (
+            'external get_raw_backtrace:\n'
+            '  unit -> raw_backtrace = "caml_get_exception_raw_backtrace"',
+            "let get_raw_backtrace = CamlinternalSys.get_exception_raw_backtrace",
+        ),
+        (
+            'external convert_raw_backtrace_slot:\n'
+            '  raw_backtrace_slot -> backtrace_slot = "caml_convert_raw_backtrace_slot"\n\n'
+            'external convert_raw_backtrace:\n'
+            '  raw_backtrace -> backtrace_slot array = "caml_convert_raw_backtrace"',
+            "let convert_raw_backtrace_slot = CamlinternalSys.convert_raw_backtrace_slot\n\n"
+            "let convert_raw_backtrace = CamlinternalSys.convert_raw_backtrace",
+        ),
+        (
+            'external get_raw_backtrace_slot :\n'
+            '  raw_backtrace -> int -> raw_backtrace_slot = "caml_raw_backtrace_slot"\n\n'
+            'external get_raw_backtrace_next_slot :\n'
+            '  raw_backtrace_slot -> raw_backtrace_slot option\n'
+            '  = "caml_raw_backtrace_next_slot"',
+            "let get_raw_backtrace_slot = CamlinternalSys.raw_backtrace_slot\n\n"
+            "let get_raw_backtrace_next_slot = CamlinternalSys.raw_backtrace_next_slot",
+        ),
+        (
+            'external record_backtrace: bool -> unit = "caml_record_backtrace"\n'
+            'external backtrace_status: unit -> bool = "caml_backtrace_status"',
+            "let record_backtrace = CamlinternalSys.record_backtrace\n"
+            "let backtrace_status = CamlinternalSys.backtrace_status",
+        ),
+        (
+            'external get_callstack: int -> raw_backtrace = "caml_get_current_callstack"',
+            "let get_callstack = CamlinternalSys.get_current_callstack",
+        ),
+        (
+            'external get_debug_info_status : unit -> int = "caml_ml_debug_info_status"',
+            "let get_debug_info_status = CamlinternalSys.ml_debug_info_status",
+        ),
+        (
+            'external register_named_value : string -> \'a -> unit\n'
+            '  = "caml_register_named_value"',
+            "let register_named_value = CamlinternalSys.register_named_value",
+        ),
+    ],
+    "sys.mli": [
+        (
+            'external runtime_variant : unit -> string = "caml_runtime_variant"',
+            "val runtime_variant : unit -> string",
+        ),
+        (
+            'external runtime_parameters : unit -> string = "caml_runtime_parameters"',
+            "val runtime_parameters : unit -> string",
+        ),
+        (
+            'external signal :\n'
+            '  signal -> signal_behavior -> signal_behavior = "caml_install_signal_handler"',
+            "val signal : signal -> signal_behavior -> signal_behavior",
+        ),
+    ],
+    "sys.ml": [
+        (
+            'external get_config: unit -> string * int * bool = "caml_sys_get_config"\n'
+            'external get_executable_name : unit -> string = "caml_sys_executable_name"\n'
+            'external get_proc_self_exe : unit -> string option = "caml_sys_proc_self_exe"',
+            "let get_config = CamlinternalSys.get_config\n"
+            "let get_executable_name = CamlinternalSys.get_executable_name\n"
+            "let get_proc_self_exe = CamlinternalSys.get_proc_self_exe",
+        ),
+        (
+            'external runtime_variant : unit -> string = "caml_runtime_variant"\n'
+            'external runtime_parameters : unit -> string = "caml_runtime_parameters"',
+            "let runtime_variant = CamlinternalSys.runtime_variant\n"
+            "let runtime_parameters = CamlinternalSys.runtime_parameters",
+        ),
+        (
+            'external io_buffer_size: unit -> int = "caml_sys_io_buffer_size"',
+            "let io_buffer_size = CamlinternalSys.io_buffer_size",
+        ),
+        (
+            'external signal : signal -> signal_behavior -> signal_behavior\n'
+            '                = "caml_install_signal_handler"',
+            "let signal _sig _beh = Signal_default",
+        ),
+        (
+            'external rev_convert_signal_number: int -> int =\n'
+            '  "caml_sys_rev_convert_signal_number"\n'
+            'external convert_signal_number: int -> int =\n'
+            '  "caml_sys_convert_signal_number"',
+            "let rev_convert_signal_number = CamlinternalSys.rev_convert_signal_number\n"
+            "let convert_signal_number = CamlinternalSys.convert_signal_number",
+        ),
+        (
+            'external enable_runtime_warnings: bool -> unit =\n'
+            '  "caml_ml_enable_runtime_warnings"\n'
+            'external runtime_warnings_enabled: unit -> bool =\n'
+            '  "caml_ml_runtime_warnings_enabled"',
+            "let enable_runtime_warnings = CamlinternalSys.enable_runtime_warnings\n"
+            "let runtime_warnings_enabled = CamlinternalSys.runtime_warnings_enabled",
         ),
     ],
     "marshal.mli": [
@@ -627,6 +757,9 @@ def materialize_sources(
     if "camlinternalChannel" in modules and "camlinternalMarshal" not in modules:
         idx = modules.index("camlinternalChannel") + 1
         modules.insert(idx, "camlinternalMarshal")
+    if "camlinternalMarshal" in modules and "camlinternalSys" not in modules:
+        idx = modules.index("camlinternalMarshal") + 1
+        modules.insert(idx, "camlinternalSys")
     if (vendor_src / "std_exit.ml").exists() or (overlay_dir / "std_exit.ml").exists():
         if "std_exit" not in modules:
             modules.append("std_exit")
@@ -694,7 +827,7 @@ def materialize_sources(
 
 def compflags_for(base: str, ext: str) -> list[str]:
     flags: list[str] = []
-    if base in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalChannel", "camlinternalMarshal", "stdlib"):
+    if base in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalChannel", "camlinternalMarshal", "camlinternalSys", "stdlib"):
         flags.append("--nopervasives")
     if base == "stdlib" or base.endswith("Labels") or base == "float":
         flags.append("--no-alias-deps")
@@ -731,9 +864,9 @@ def parse_cmi_deps(depend_path: Path, bases: list[str]) -> list[str]:
                         if dep_base not in deps[target_base]:
                             deps[target_base].append(dep_base)
 
-    # Every module besides camlinternalFormatBasics, camlinternalIntFmt, camlinternalBulkOps, camlinternalChannel, camlinternalMarshal, and stdlib implicitly opens Stdlib
+    # Every module besides camlinternalFormatBasics, camlinternalIntFmt, camlinternalBulkOps, camlinternalChannel, camlinternalMarshal, camlinternalSys, and stdlib implicitly opens Stdlib
     for b in bases:
-        if b not in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalChannel", "camlinternalMarshal", "stdlib") and "stdlib" in deps:
+        if b not in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalChannel", "camlinternalMarshal", "camlinternalSys", "stdlib") and "stdlib" in deps:
             if "stdlib" not in deps[b]:
                 deps[b].append("stdlib")
     if "stdlib" in deps and "camlinternalFormatBasics" in deps:
@@ -751,6 +884,9 @@ def parse_cmi_deps(depend_path: Path, bases: list[str]) -> list[str]:
     if "stdlib" in deps and "camlinternalMarshal" in deps:
         if "camlinternalMarshal" not in deps["stdlib"]:
             deps["stdlib"].append("camlinternalMarshal")
+    if "stdlib" in deps and "camlinternalSys" in deps:
+        if "camlinternalSys" not in deps["stdlib"]:
+            deps["stdlib"].append("camlinternalSys")
     if "camlinternalMarshal" in deps and "camlinternalChannel" in deps:
         if "camlinternalChannel" not in deps["camlinternalMarshal"]:
             deps["camlinternalMarshal"].append("camlinternalChannel")

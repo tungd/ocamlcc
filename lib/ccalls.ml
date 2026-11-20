@@ -108,7 +108,7 @@ let table =
     ("caml_atomic_cas_field", abi 4 false false);
     ("caml_atomic_exchange_field", abi 3 false false);
     ("caml_atomic_fetch_add_field", abi 3 false false);
-    ("caml_register_named_value", abi 2 false false);
+    ("ocamlcc_set_at_exit_fn", abi 1 false false);
     ("caml_sys_exit", abi 1 false false);
     (* channels / raw fd hooks *)
     ("caml_sys_open", abi 3 true false);
@@ -132,22 +132,9 @@ let table =
     ("caml_obj_tag", abi 1 false false);
     ("caml_hexstring_of_float", abi 3 false false);
     ("caml_atomic_make_contended", abi 1 false false);
-    (* backtraces *)
-    ("caml_restore_raw_backtrace", abi 2 false false);
-    ("caml_get_exception_raw_backtrace", abi 1 false false);
-    ("caml_record_backtrace", abi 1 false false);
-    ("caml_backtrace_status", abi 1 false false);
-    ("caml_get_current_callstack", abi 1 false false);
-    ("caml_ml_debug_info_status", abi 1 false false);
-    ("caml_raw_backtrace_slot", abi 2 true false);
-    ("caml_raw_backtrace_next_slot", abi 1 false false);
-    ("caml_convert_raw_backtrace", abi 1 false false);
-    ("caml_convert_raw_backtrace_slot", abi 1 true false);
     (* sys / env / fs / runtime *)
+    ("ocamlcc_sys_is_win32", abi 1 false false);
     ("caml_sys_argv", abi 1 false false);
-    ("caml_sys_executable_name", abi 1 false false);
-    ("caml_sys_proc_self_exe", abi 1 false false);
-    ("caml_sys_get_config", abi 1 false false);
     ("caml_sys_getenv", abi 1 true false);
     ("caml_sys_getenv_opt", abi 1 false false);
     ("caml_sys_file_exists", abi 1 false false);
@@ -162,16 +149,7 @@ let table =
     ("caml_sys_read_directory", abi 1 true false);
     ("caml_sys_system_command", abi 1 true false);
     ("caml_sys_time", abi 1 false false);
-    ("caml_sys_io_buffer_size", abi 1 false false);
-    ("caml_sys_temp_dir_name", abi 1 false false);
     ("caml_sys_close", abi 1 true false);
-    ("caml_runtime_variant", abi 1 false false);
-    ("caml_runtime_parameters", abi 1 false false);
-    ("caml_install_signal_handler", abi 2 true false);
-    ("caml_sys_convert_signal_number", abi 1 false false);
-    ("caml_sys_rev_convert_signal_number", abi 1 false false);
-    ("caml_ml_enable_runtime_warnings", abi 1 false false);
-    ("caml_ml_runtime_warnings_enabled", abi 1 false false);
     ("caml_sys_random_seed", abi 1 false false);
     (* sync: mutex / condition *)
     ("caml_ml_mutex_new", abi 1 false false);
@@ -328,6 +306,7 @@ let returns_imm = function
   | "ocamlcc_raw_fd_read" | "ocamlcc_raw_fd_write" | "ocamlcc_raw_fd_close"
   | "ocamlcc_raw_fd_isatty" | "ocamlcc_stdio_flush"
   | "ocamlcc_ba_to_bytes" | "ocamlcc_ba_of_bytes_slice"
+  | "ocamlcc_set_at_exit_fn" | "ocamlcc_sys_is_win32"
   | "ocamlcc_fiber_is_done" | "ocamlcc_fiber_is_main"
   | "ocamlcc_fiber_can_yield" | "ocamlcc_fiber_sched_set"
   | "ocamlcc_monotonic_ns" | "ocamlcc_poller_watch"

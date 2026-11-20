@@ -35,6 +35,8 @@ let stdlib_abis =
     ("ocamlcc_print_endline_val", 1, false, false);
     ("ocamlcc_prerr_string_val", 1, false, false);
     ("ocamlcc_exit_val", 1, false, false);
+    ("ocamlcc_sys_is_win32", 1, false, false);
+    ("ocamlcc_set_at_exit_fn", 1, false, false);
     ("ocamlcc_pipe", 0, true, false);
     ("ocamlcc_fd_read", 4, true, false);
     ("ocamlcc_fd_write", 4, true, false);
@@ -114,6 +116,8 @@ let () =
     Ccalls.returns_imm "caml_equal"
     && Ccalls.returns_imm "caml_compare"
     && not (Ccalls.returns_imm "caml_sys_get_stdlib_dirs")
+    && Ccalls.returns_imm "ocamlcc_set_at_exit_fn"
+    && Ccalls.returns_imm "ocamlcc_sys_is_win32"
     && Ccalls.returns_imm "caml_zstd_initialize"
     && Ccalls.returns_imm "caml_terminfo_rows"
     && Ccalls.returns_imm "caml_lessthan"

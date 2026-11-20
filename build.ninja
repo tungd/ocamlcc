@@ -152,6 +152,11 @@ build $stdlibdir/camlinternalMarshal.ssa | $stdlibdir/camlinternalMarshal.cmi: o
 build $stdlibdir/camlinternalMarshal.s: qbe_ssa $stdlibdir/camlinternalMarshal.ssa | $builddir/qbe/qbe
 build $stdlibdir/camlinternalMarshal.o: as_obj $stdlibdir/camlinternalMarshal.s
 
+build $stdlibdir/camlinternalSys.ssa | $stdlibdir/camlinternalSys.cmi: ocamlcc_ssa stdlib/camlinternalSys.ml | $builddir/bin/ocamlcc
+  flags = $stdlib_flags --cmi-prefix $stdlibdir/camlinternalSys
+build $stdlibdir/camlinternalSys.s: qbe_ssa $stdlibdir/camlinternalSys.ssa | $builddir/qbe/qbe
+build $stdlibdir/camlinternalSys.o: as_obj $stdlibdir/camlinternalSys.s
+
 build $stdlibdir/stdlib__option.ssa | $stdlibdir/stdlib__option.cmi: ocamlcc_ssa stdlib/stdlib__option.ml | $builddir/bin/ocamlcc
   flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__option
 build $stdlibdir/stdlib__option.s: qbe_ssa $stdlibdir/stdlib__option.ssa | $builddir/qbe/qbe
@@ -222,12 +227,12 @@ build $stdlibdir/stdlib__nativeint.ssa | $stdlibdir/stdlib__nativeint.cmi: ocaml
 build $stdlibdir/stdlib__nativeint.s: qbe_ssa $stdlibdir/stdlib__nativeint.ssa | $builddir/qbe/qbe
 build $stdlibdir/stdlib__nativeint.o: as_obj $stdlibdir/stdlib__nativeint.s
 
-build $stdlibdir/stdlib.ssa | $stdlibdir/stdlib.cmi: ocamlcc_ssa stdlib/stdlib.ml | $builddir/bin/ocamlcc $stdlibdir/camlinternalFormatBasics.cmi $stdlibdir/camlinternalIntFmt.cmi $stdlibdir/camlinternalBulkOps.cmi $stdlibdir/camlinternalChannel.cmi $stdlibdir/camlinternalMarshal.cmi $stdlibdir/stdlib__option.cmi $stdlibdir/stdlib__result.cmi $stdlibdir/stdlib__int32.cmi $stdlibdir/stdlib__int64.cmi $stdlibdir/stdlib__nativeint.cmi $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi $stdlibdir/stdlib__list.cmi $stdlibdir/stdlib__array.cmi $stdlibdir/stdlib__buffer.cmi $stdlibdir/stdlib__hashtbl.cmi $stdlibdir/stdlib__printf.cmi $stdlibdir/stdlib__weak.cmi $stdlibdir/stdlib__fiber.cmi
+build $stdlibdir/stdlib.ssa | $stdlibdir/stdlib.cmi: ocamlcc_ssa stdlib/stdlib.ml | $builddir/bin/ocamlcc $stdlibdir/camlinternalFormatBasics.cmi $stdlibdir/camlinternalIntFmt.cmi $stdlibdir/camlinternalBulkOps.cmi $stdlibdir/camlinternalChannel.cmi $stdlibdir/camlinternalMarshal.cmi $stdlibdir/camlinternalSys.cmi $stdlibdir/stdlib__option.cmi $stdlibdir/stdlib__result.cmi $stdlibdir/stdlib__int32.cmi $stdlibdir/stdlib__int64.cmi $stdlibdir/stdlib__nativeint.cmi $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi $stdlibdir/stdlib__list.cmi $stdlibdir/stdlib__array.cmi $stdlibdir/stdlib__buffer.cmi $stdlibdir/stdlib__hashtbl.cmi $stdlibdir/stdlib__printf.cmi $stdlibdir/stdlib__weak.cmi $stdlibdir/stdlib__fiber.cmi
   flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib
 build $stdlibdir/stdlib.s: qbe_ssa $stdlibdir/stdlib.ssa | $builddir/qbe/qbe
 build $stdlibdir/stdlib.o: as_obj $stdlibdir/stdlib.s
 
-build $stdlibdir/libocamlstdlib.a: ar $stdlibdir/camlinternalFormatBasics.o $stdlibdir/camlinternalIntFmt.o $stdlibdir/camlinternalBulkOps.o $stdlibdir/camlinternalChannel.o $stdlibdir/camlinternalMarshal.o $stdlibdir/stdlib__option.o $stdlibdir/stdlib__result.o $stdlibdir/stdlib__int32.o $stdlibdir/stdlib__int64.o $stdlibdir/stdlib__nativeint.o $stdlibdir/stdlib__bytes.o $stdlibdir/stdlib__string.o $stdlibdir/stdlib__list.o $stdlibdir/stdlib__array.o $stdlibdir/stdlib__buffer.o $stdlibdir/stdlib__hashtbl.o $stdlibdir/stdlib__printf.o $stdlibdir/stdlib__weak.o $stdlibdir/stdlib__fiber.o $stdlibdir/stdlib.o
+build $stdlibdir/libocamlstdlib.a: ar $stdlibdir/camlinternalFormatBasics.o $stdlibdir/camlinternalIntFmt.o $stdlibdir/camlinternalBulkOps.o $stdlibdir/camlinternalChannel.o $stdlibdir/camlinternalMarshal.o $stdlibdir/camlinternalSys.o $stdlibdir/stdlib__option.o $stdlibdir/stdlib__result.o $stdlibdir/stdlib__int32.o $stdlibdir/stdlib__int64.o $stdlibdir/stdlib__nativeint.o $stdlibdir/stdlib__bytes.o $stdlibdir/stdlib__string.o $stdlibdir/stdlib__list.o $stdlibdir/stdlib__array.o $stdlibdir/stdlib__buffer.o $stdlibdir/stdlib__hashtbl.o $stdlibdir/stdlib__printf.o $stdlibdir/stdlib__weak.o $stdlibdir/stdlib__fiber.o $stdlibdir/stdlib.o
 
 # ------------------------------------------------------------ examples ----
 

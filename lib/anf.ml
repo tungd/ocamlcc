@@ -494,6 +494,8 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
           conv_atoms args (fun vs -> emit_cexpr (Ccall ("caml_greaterthan", vs)))
       | ( "caml_string_greaterequal" | "caml_bytes_greaterequal" ), args ->
           conv_atoms args (fun vs -> emit_cexpr (Ccall ("caml_greaterequal", vs)))
+      | "caml_restore_raw_backtrace", [ ex; bt ] ->
+          conv_expr ex (fun _ -> conv_expr bt (fun _ -> emit_cexpr (Atom (Int 0))))
       | sym, args
         when pd.Primitive.prim_arity = List.length args
              && List.length args <= 6 -> (
