@@ -102,7 +102,7 @@ type cexpr =
   | MakeBlock of int * atom list
   | AllocReuse of reuse * int * atom list
   | MakeArray of Lambda.array_kind * atom list
-  | Field of int * atom
+  | Field of int * Lambda.immediate_or_pointer * atom
   | SetField of int * atom * atom
   | FloatField of int * atom
   | SetFloatField of int * atom * atom
@@ -298,7 +298,7 @@ and conv_fun (lf : Lambda.lfunction) : lfunction =
       let rec bind_fields i = function
         | [] -> conv_tail lf.body
         | (p, _) :: rest ->
-            Let (p, Field (i, Var tup), bind_fields (i + 1) rest)
+            Let (p, Field (i, Pointer, Var tup), bind_fields (i + 1) rest)
       in
       { params = [ (tup, Lambda.Pgenval) ]; private_entry = false; body = with_finalizer_poll (bind_fields 0 lf.params) }
 
@@ -393,8 +393,8 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
   | Lprim (Pduparray (kind, _), [ Lambda.Lconst (Const_float_array sl) ], _) ->
       check_array_kind kind;
       emit_cexpr (MakeArray (kind, List.map (fun s -> Float (parse_const_float s)) sl))
-  | Lprim (Pfield (i, _, _), [ arg ], _) ->
-      conv_expr arg (fun a -> emit_cexpr (Field (i, a)))
+  | Lprim (Pfield (i, kind, _), [ arg ], _) ->
+      conv_expr arg (fun a -> emit_cexpr (Field (i, kind, a)))
   | Lprim (Pfield_computed, [ arg; idx ], _) ->
       conv_atoms [ arg; idx ] (fun vs ->
           emit_cexpr (Ccall ("caml_obj_field", vs)))
@@ -794,7 +794,7 @@ let cexpr_vars free_aexpr acc = function
   | AllocReuse (reuse, _, args) ->
       let acc = Ident.Set.add reuse.primary (List.fold_left atom_vars acc args) in
       Option.fold ~none:acc ~some:(fun id -> Ident.Set.add id acc) reuse.fallback
-  | Field (_, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
+  | Field (_, _, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
   | Bswap16 a | BswapBint (_, a) ->
       atom_vars acc a
   | SetField (_, a, b)

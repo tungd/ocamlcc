@@ -133,7 +133,7 @@ and dump_ce (ce : Anf.cexpr) : string =
         (String.concat "," (List.map dump_atom args))
   | Anf.Fun _ -> "(fun)"
   | Anf.Assign (id, a) -> Printf.sprintf "(assign %s %s)" (dump_ident id) (dump_atom a)
-  | Anf.Field (i, a) -> Printf.sprintf "(field%d %s)" i (dump_atom a)
+  | Anf.Field (i, _, a) -> Printf.sprintf "(field%d %s)" i (dump_atom a)
   | Anf.SetField (i, a, b) ->
       Printf.sprintf "(setfield%d %s %s)" i (dump_atom a) (dump_atom b)
   | Anf.Ccall (name, args) ->
@@ -157,7 +157,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.MakeBlock (_, args) | Anf.AllocReuse (_, _, args)
     | Anf.MakeArray (_, args) ->
         List.fold_left count_atom acc args
-    | Anf.Field (_, a) | Anf.FloatField (_, a) | Anf.OffsetRef (_, a)
+    | Anf.Field (_, _, a) | Anf.FloatField (_, a) | Anf.OffsetRef (_, a)
     | Anf.CreateBytes a | Anf.Bswap16 a | Anf.BswapBint (_, a) ->
         count_atom acc a
     | Anf.SetField (_, a, b) | Anf.SetFloatField (_, a, b) ->

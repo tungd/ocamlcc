@@ -63,7 +63,7 @@ let rec aexpr_has_field idx = function
   | Anf.StaticRaise _ -> false
 
 and cexpr_has_field idx = function
-  | Anf.Field (i, _) -> i = idx
+  | Anf.Field (i, _, _) -> i = idx
   | Anf.Fun lf -> aexpr_has_field idx lf.body
   | _ -> false
 

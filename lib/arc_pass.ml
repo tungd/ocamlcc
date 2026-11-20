@@ -12,7 +12,7 @@
      with 0 refcount overhead, retaining only on escape/transfer.
      [frame_borrowed] distinguishes same-frame borrows ([LetJoin]/[While]/[For])
      so exceptional unwinding drops them while never dropping caller captures.
-   - Field/array loads retain in codegen; overwrites release old slots.
+   - Pointer-capable field/array loads retain in codegen; overwrites release old slots.
    - [TryWith] / [Raise] / [CheckExn] / [Unwind] ensure every local owned
      value, [MutLet] slot, and open reuse token unwinds with zero leaks.
    - A [MutLet] slot is released exactly once, where it leaves scope: the
@@ -93,6 +93,7 @@ let is_imm_cexpr (env : state) (ce : Anf.cexpr) : bool =
   | Atom a -> is_imm_atom env a
   | Binop (op, _, _) -> is_imm_binop op
   | Unop (op, _) -> is_imm_unop op
+  | Field (_, Lambda.Immediate, _) | ArrayGet (_, Lambda.Pintarray, _, _)
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
   | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ ->
       true
@@ -129,6 +130,7 @@ let rec aexpr_returns_imm ~pure ~imm_funs (imm : Ident.Set.t) (e : Anf.aexpr) :
     | Anf.Atom a -> atom_imm a
     | Binop (op, _, _) -> is_imm_binop op
     | Unop (op, _) -> is_imm_unop op
+    | Field (_, Lambda.Immediate, _) | ArrayGet (_, Lambda.Pintarray, _, _)
     | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
     | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _
     | BytesGetN (_, 2, _, _)
@@ -247,7 +249,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | Unop (_, a) -> (atom_vars a, [])
   | MakeBlock (_, args) | AllocReuse (_, _, args) | MakeArray (_, args) ->
       (Ident.Set.empty, args)
-  | Field (_, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
+  | Field (_, _, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
   | Bswap16 a | BswapBint (_, a) ->
       (atom_vars a, [])
   | SetField (_, a, rhs) -> (atom_vars a, [ rhs ])

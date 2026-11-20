@@ -724,12 +724,13 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
               emit b (Store (Storel, v, addr)))
             vs;
           arr)
-  | Field (i, arg) ->
+  | Field (i, kind, arg) ->
       let obj = compile_atom hooks b arg in
       let addr = ptr_offset b obj (8 * i) "fldp" in
       let dst = fresh_temp b "fld" in
       emit b (Load (Loadl, Long, dst, addr));
-      emit b (Call_void { fn = Global "arc_retain_val"; args = [ (Long, dst) ] });
+      if kind = Lambda.Pointer then
+        emit b (Call_void { fn = Global "arc_retain_val"; args = [ (Long, dst) ] });
       dst
   | SetField (i, arg, rhs) ->
       let obj = compile_atom hooks b arg in
@@ -942,8 +943,9 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
             emit b (Binop (Add, Long, eaddr, av, off));
             let dst = fresh_temp b "avel" in
             emit b (Load (Loadl, Long, dst, eaddr));
-            emit b
-              (Call_void { fn = Global "arc_retain_val"; args = [ (Long, dst) ] });
+            if kind = Lambda.Paddrarray then
+              emit b
+                (Call_void { fn = Global "arc_retain_val"; args = [ (Long, dst) ] });
             dst
           in
           if safe then

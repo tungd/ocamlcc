@@ -370,3 +370,8 @@
  (name borrowed_parameters_test)
  (modules borrowed_parameters_test)
  (libraries ocamlcc str))
+
+(test
+ (name immediate_access_test)
+ (modules immediate_access_test)
+ (libraries ocamlcc str))
