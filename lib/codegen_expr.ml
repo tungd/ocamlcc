@@ -269,19 +269,21 @@ let compile_float_arithmetic b op left right =
 let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
   let av = compile_atom hooks b a in
   let cv = compile_atom hooks b c in
+  let arith opcode lhs rhs =
+    let dst = fresh_temp b "arith" in
+    emit b (Binop (opcode, Long, dst, lhs, rhs));
+    dst
+  in
   match op with
-  | Add ->
-      let sum = fresh_temp b "sum" in
-      let dst = fresh_temp b "arith" in
-      emit b (Binop (Add, Long, sum, av, cv));
-      emit b (Binop (Sub, Long, dst, sum, Int 1L));
-      dst
-  | Sub ->
-      let diff = fresh_temp b "sub" in
-      let dst = fresh_temp b "arith" in
-      emit b (Binop (Sub, Long, diff, av, cv));
-      emit b (Binop (Add, Long, dst, diff, Int 1L));
-      dst
+  | Add -> (
+      match av, cv with
+      | Int k, x | x, Int k -> arith Add x (Int (Int64.sub k 1L))
+      | _ -> arith Sub (arith Add av cv) (Int 1L))
+  | Sub -> (
+      match av, cv with
+      | x, Int k -> arith Sub x (Int (Int64.sub k 1L))
+      | Int k, x -> arith Sub (Int (Int64.add k 1L)) x
+      | _ -> arith Add (arith Sub av cv) (Int 1L))
   | Mul ->
       let ua = untag b av in
       let uc = untag b cv in

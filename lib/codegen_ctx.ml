@@ -291,6 +291,81 @@ let rec split_wide_phis b (blocks : Qbe_il.block list) : Qbe_il.block list =
       in
       split_wide_phis b blocks'
 
+(* Lower a comparison followed by retagging and an immediate branch directly
+   to a branch on its 0/1 result. A phi, return, or any other use in a
+   successor can still require the tagged value. *)
+let fuse_tagged_branches blocks =
+  let booleans = Hashtbl.create 32 in
+  let rec record = function
+    | Cmp (_, _, result, _, _)
+      :: Binop (Shl, Long, shifted, raw, Int 1L)
+      :: Binop (Add, Long, Temp tag, shift, Int 1L) :: rest
+      when raw = result && shift = shifted ->
+        Hashtbl.replace booleans tag (raw, shifted);
+        record rest
+    | _ :: rest -> record rest
+    | [] -> ()
+  in
+  List.iter (fun (block : Qbe_il.block) -> record block.insts) blocks;
+  let uses = lazy (
+    let counts = Hashtbl.create 32 in
+    let use = function
+      | Temp id ->
+          let n = Option.value ~default:0 (Hashtbl.find_opt counts id) in
+          Hashtbl.replace counts id (n + 1)
+      | Int _ | Global _ | Extern _ -> ()
+    in
+    let use_inst = function
+      | Binop (_, _, _, a, b) | Cmp (_, _, _, a, b)
+      | Fcmp (_, _, _, a, b) | Store (_, a, b) -> use a; use b
+      | Neg (_, _, a) | Cast (_, _, a) | Extsw (_, a) | Sltof (_, _, a)
+      | Dtosi (_, _, a) | Copy (_, _, a) | Load (_, _, _, a)
+      | Alloc8 (_, a) -> use a
+      | Phi (_, _, edges) -> List.iter (fun (_, arg) -> use arg) edges
+      | Call (_, _, call) | Call_void call ->
+          use call.fn;
+          List.iter (fun (_, arg) -> use arg) call.args
+    in
+    List.iter (fun (block : Qbe_il.block) ->
+      List.iter use_inst block.insts;
+      match block.term with
+      | Br (cond, _, _) -> use cond
+      | Ret value -> Option.iter use value
+      | Hlt | Jmp _ -> ()) blocks;
+    counts)
+  in
+  let used_once = function
+    | Temp id -> Hashtbl.find_opt (Lazy.force uses) id = Some 1
+    | _ -> false
+  in
+  let dead = Hashtbl.create 16 in
+  let rewrite (block : Qbe_il.block) =
+    match block.term with
+    | Br (cond, yes, no) ->
+        (match List.rev block.insts with
+        | Cmp (Ne, Long, test, (Temp tag as tagged), Int 1L) :: earlier
+          when test = cond ->
+            (match Hashtbl.find_opt booleans tag with
+            | Some (raw, (Temp shift as shifted)) when used_once test ->
+                if used_once tagged && used_once shifted then begin
+                  Hashtbl.replace dead tag ();
+                  Hashtbl.replace dead shift ()
+                end;
+                { block with insts = List.rev earlier; term = Br (raw, yes, no) }
+            | _ -> block)
+        | _ -> block)
+    | _ -> block
+  in
+  if Hashtbl.length booleans = 0 then blocks
+  else
+    let blocks = List.map rewrite blocks in
+    let live_inst = function
+      | Binop (_, _, Temp dst, _, _) -> not (Hashtbl.mem dead dst)
+      | _ -> true
+    in
+    List.map (fun (block : Qbe_il.block) ->
+      { block with insts = List.filter live_inst block.insts }) blocks
+
 let finish_blocks b =
   let allocs = List.rev b.cur_fn.start_allocs in
   let blocks = List.rev b.cur_fn.blocks in
@@ -304,7 +379,7 @@ let finish_blocks b =
           else blk)
         blocks
   in
-  split_wide_phis b blocks
+  split_wide_phis b (fuse_tagged_branches blocks)
 
 let close_block b term =
   match b.cur_fn.term with

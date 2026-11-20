@@ -410,3 +410,8 @@
  (name internal_apply_test)
  (modules internal_apply_test)
  (libraries ocamlcc str))
+
+(test
+ (name integer_codegen_test)
+ (modules integer_codegen_test)
+ (libraries ocamlcc str))

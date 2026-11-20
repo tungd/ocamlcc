@@ -37,23 +37,28 @@ header generation clean.
 
 # Codegen arithmetic
 
-`lib/codegen.ml` exploits the tagging invariant to minimize instructions:
+The QBE code generator uses the tagging invariant to minimize instructions:
 
 | Operation | Lowering |
 |-----------|----------|
 | `x + y` | `a + b - 1` (two ops: tagged sums satisfy `tag(x)+tag(y)-1 = tag(x+y)`) |
 | `x - y` | `a - b + 1` |
+| `x + k`, `x - k` for constant `k` | One add or subtract of `2k` |
+| `k - x` for constant `k` | One subtract from `2k + 2` |
 | `x * y` | untag both (`sar 1`), multiply, retag (`shl 1`, `+ 1`) |
 | `x / y` | untag both, signed `div` (QBE truncates toward zero like OCaml), retag |
 | `x = y` … comparisons | compare tagged values directly — `2x+1` is monotone, so signed order is preserved |
 | `not x` (boolean negation) | `4 - a` (`false = 1`, `true = 3`) |
 | `-x` (`Pnegint`) | `2 - a` |
 
-**Booleans as values**: a comparison produces the raw QBE `0/1`. In
-condition position (`jnz`) that raw result is used directly; in value
-position it is retagged (`2r + 1`), so tagged `false = 1`, `true = 3`. A
-`let`-bound boolean used later as a condition is untagged with `sar 1`
-before the branch.
+Constant adjustments use 64-bit wrapping arithmetic, which preserves OCaml's
+63-bit wraparound after tagging.
+
+A comparison produces a raw QBE `0/1`. Conditional branches can use it
+directly, including across intervening calls. A tagged boolean uses
+`2r + 1` and stays available for returns, stores, and other value uses.
+QBE codegen removes the retagging instructions when the branch was their
+only consumer.
 
 Untag is an arithmetic shift right (`sar`), correct for negatives: for
 tagged `-1` (bit pattern `-1`), `sar 1` still yields `-1`.
