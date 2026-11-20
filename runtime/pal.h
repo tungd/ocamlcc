@@ -100,6 +100,7 @@ void    pal_stderr_write(const void *buf, size_t len);
 
 /* 6. Memory primitives (freestanding fallback or platform libc). */
 void *pal_memcpy(void *dst, const void *src, size_t n);
+void *pal_memmove(void *dst, const void *src, size_t n);
 void *pal_memset(void *dst, int c, size_t n);
 
 /* 7. Minimal libm subset is resolved at link time; no PAL wrapper yet. */

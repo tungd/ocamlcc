@@ -1,6 +1,6 @@
 (**************************************************************************)
 (*                                                                        *)
-(*   Pure OCaml Array / Floatarray / Bytes / String bulk operations       *)
+(*   Array / Floatarray / Bytes / String bulk operations       *)
 (*   Compiled with --nopervasives right after CamlinternalIntFmt.         *)
 (*                                                                        *)
 (**************************************************************************)
@@ -22,10 +22,14 @@ external int_of_char : char -> int = "%identity"
 
 external bytes_length : bytes -> int = "%bytes_length"
 external bytes_unsafe_get : bytes -> int -> char = "%bytes_unsafe_get"
-external bytes_unsafe_set : bytes -> int -> char -> unit = "%bytes_unsafe_set"
 external string_length : string -> int = "%string_length"
 external string_unsafe_get : string -> int -> char = "%string_unsafe_get"
-external bytes_unsafe_of_string : string -> bytes = "%bytes_of_string"
+external unsafe_blit_bytes : bytes -> int -> bytes -> int -> int -> unit
+  = "ocamlcc_bulk_blit_bytes"
+external unsafe_blit_string : string -> int -> bytes -> int -> int -> unit
+  = "ocamlcc_bulk_blit_bytes"
+external unsafe_fill_bytes : bytes -> int -> int -> char -> unit
+  = "ocamlcc_bulk_fill_bytes"
 
 external array_length : 'a array -> int = "%array_length"
 external array_unsafe_get : 'a array -> int -> 'a = "%array_unsafe_get"
@@ -48,37 +52,18 @@ let blit_bytes src soff dst doff len =
   if not (slice_ok soff len (bytes_length src))
      || not (slice_ok doff len (bytes_length dst))
   then invalid_arg "index out of bounds";
-  if len > 0 then
-    if src == dst && doff > soff then
-      for i = len - 1 downto 0 do
-        bytes_unsafe_set dst (doff + i) (bytes_unsafe_get src (soff + i))
-      done
-    else
-      for i = 0 to len - 1 do
-        bytes_unsafe_set dst (doff + i) (bytes_unsafe_get src (soff + i))
-      done
+  unsafe_blit_bytes src soff dst doff len
 
 let blit_string src soff dst doff len =
   if not (slice_ok soff len (string_length src))
      || not (slice_ok doff len (bytes_length dst))
   then invalid_arg "index out of bounds";
-  if len > 0 then
-    let bsrc = bytes_unsafe_of_string src in
-    if bsrc == dst && doff > soff then
-      for i = len - 1 downto 0 do
-        bytes_unsafe_set dst (doff + i) (string_unsafe_get src (soff + i))
-      done
-    else
-      for i = 0 to len - 1 do
-        bytes_unsafe_set dst (doff + i) (string_unsafe_get src (soff + i))
-      done
+  unsafe_blit_string src soff dst doff len
 
 let fill_bytes dst off len ch =
   if not (slice_ok off len (bytes_length dst)) then
     invalid_arg "index out of bounds";
-  for i = 0 to len - 1 do
-    bytes_unsafe_set dst (off + i) ch
-  done
+  unsafe_fill_bytes dst off len ch
 
 let string_equal a b =
   if a == b then true

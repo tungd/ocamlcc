@@ -18,6 +18,16 @@ let () =
   check_invalid_arg "b_oob1" (fun () -> Bytes.blit b (-1) b 0 1);
   check_invalid_arg "b_oob2" (fun () -> Bytes.blit b 6 b 0 3);
   check_invalid_arg "b_oob3" (fun () -> Bytes.fill b 5 4 'z');
+  let shared = Bytes.of_string "abcdefgh" in
+  let alias = Bytes.unsafe_to_string shared in
+  Bytes.blit_string alias 0 shared 2 4;
+  assert (Bytes.to_string shared = "ababcdgh");
+  Bytes.blit_string alias 2 shared 0 4;
+  assert (Bytes.to_string shared = "abcdcdgh");
+  Bytes.blit_string alias 8 shared 8 0;
+  Bytes.fill shared 8 0 '\255';
+  Bytes.fill shared 1 2 '\255';
+  assert (Bytes.to_string shared = "a\255\255dcdgh");
 
   (* String equal / compare with embedded NUL *)
   let s1 = "ab\000c" in

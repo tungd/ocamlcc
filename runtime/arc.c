@@ -1044,6 +1044,24 @@ void *arc_alloc_bytes(uint64_t len)
     return s;
 }
 
+/* CamlinternalBulkOps checks the slices before entering these helpers.
+   Bytes and strings have the same payload layout and may alias. */
+int64_t ocamlcc_bulk_blit_bytes(int64_t src, int64_t src_off, int64_t dst,
+                               int64_t dst_off, int64_t len)
+{
+    pal_memmove((char *)(uintptr_t)dst + (dst_off >> 1),
+                (const char *)(uintptr_t)src + (src_off >> 1),
+                (size_t)(len >> 1));
+    return 1;
+}
+
+int64_t ocamlcc_bulk_fill_bytes(int64_t dst, int64_t off, int64_t len, int64_t ch)
+{
+    pal_memset((char *)(uintptr_t)dst + (off >> 1),
+               (uint8_t)(ch >> 1), (size_t)(len >> 1));
+    return 1;
+}
+
 /* Keep the header ABI identical in both builds. On the single owner thread
    relaxed loads and stores suffice, and require no atomic read-modify-write. */
 static inline void refcount_add(ArcHeader *hdr, uint32_t old_rc, uint32_t n)

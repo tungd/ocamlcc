@@ -43,6 +43,9 @@ let table =
     ("ocamlcc_print_endline_val", abi 1 false false);
     ("ocamlcc_prerr_string_val", abi 1 false false);
     ("ocamlcc_exit_val", abi 1 false false);
+    (* Bounds are checked in CamlinternalBulkOps. *)
+    ("ocamlcc_bulk_blit_bytes", abi 5 false false);
+    ("ocamlcc_bulk_fill_bytes", abi 4 false false);
     (* fd / pipe *)
     ("ocamlcc_pipe", abi 0 true false);
     ("ocamlcc_fd_read", abi 4 true false);
@@ -294,6 +297,7 @@ let is_known name = List.mem_assoc name table
 
 let returns_imm = function
   | "ocamlcc_finalizers_due" | "ocamlcc_poll_finalizers"
+  | "ocamlcc_bulk_blit_bytes" | "ocamlcc_bulk_fill_bytes"
   | "caml_gc_minor" | "caml_gc_major_slice" | "caml_gc_major"
   | "caml_gc_full_major" | "caml_gc_compaction" | "caml_get_minor_free"
   | "caml_final_register" | "caml_final_register_called_without_value"

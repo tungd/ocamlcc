@@ -692,4 +692,9 @@ void *pal_memcpy(void *dst, const void *src, size_t n)
     return memcpy(dst, src, n);
 }
 
+void *pal_memmove(void *dst, const void *src, size_t n)
+{
+    return memmove(dst, src, n);
+}
+
 void *pal_memset(void *dst, int c, size_t n) { return memset(dst, c, n); }
