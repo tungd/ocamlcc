@@ -51,6 +51,26 @@ Phase 2 replaces libc `malloc`/`free` with a freestanding slab allocator and sta
 - **Channel I/O buffers & Bigarray raw path**: `CamlinternalChannel` (`stdlib/camlinternalChannel.ml`) implements 4096-byte buffered `in_channel` and `out_channel` over raw POSIX fd wrappers (`ocamlcc_raw_fd_{read,write,lseek,size,close,isatty}` validating `Bytes` slices against `ArcHeader.reserved`, plus `ocamlcc_stdio_flush`). `CamlinternalChannel.unsafe_input_bigarray` / `unsafe_output_bigarray` transfer chunks through `ocamlcc_ba_of_bytes_slice` / `ocamlcc_ba_to_bytes` in `runtime/bigarray.inc`, which validate the Bigarray extent with `ba_channel_range` and slice the `Bytes` buffer against its `ArcHeader.reserved` rather than probing `(ArcHeader *)a->data - 1` (since `ArcBigarray.data` is a raw PAL page or foreign C pointer with no `ArcHeader`). Regression-tested in `tests/stdlib_runtime.c` (`test_bigarray_channel_io`) and `tests/stdlib/channels/`.
 - **Weak arrays (`ARC_TAG_WEAK = 249`).** Weak registrations mark small heap targets before the weak slot can be observed. Both ARC retirement and cycle collection skip the weak lock and target hash for an unmarked small object. The hint uses the spare high bit of the atomic scan-count field, preserving the 16-byte header. The runtime reads the logical count with `arc_scan_count`. Large objects retain their full count and the existing weak-table check. Reuse clears the hint, shallow copying keeps each object's own hint, and dummy updates preserve an existing registration. Last finalizers and ordinary weak slots share registration; weak blits copy already-registered targets. Locked clearing still removes every matching slot before freeing the storage. Concurrent weak upgrades take an owned reference only while the target is alive.
 
+### Cycle-root registration on drops
+
+The first shared drop of a cycle candidate registers it under the root
+lock. Further drops see the atomic buffered bit and bypass the lock.
+A trial excludes competing mutators before it clears the bit, and insertion
+still checks again under the lock. Retirement checks the buffered bit before
+classifying the object and uses the locked removal path when required.
+
+An immutable block can be part of a cycle created by a write to another block.
+If a trial first sees that cycle as reachable, the next shared drop through
+the immutable member must still register it. The native runtime test exercises
+this sequence, and the concurrent root-table stress test exercises duplicate
+drops and swap-moved root indices.
+
+**Weak copies.** A shallow duplicate starts with its own weak-target state.
+`Weak.get_copy` uses the same copy path as `Obj.dup` and preserves the logical
+layout while taking ownership of copied pointer fields. Runtime-managed
+objects such as fibers and unsplittable custom handles retain their existing
+alias behavior.
+
 # Ownership of atomic field values
 
 A load acquires its owned reference while replacement of that slot is excluded. Exchanges transfer slot ownership to their caller, and successful compare-and-set releases the displaced reference after unlocking.

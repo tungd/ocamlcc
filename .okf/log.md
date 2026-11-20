@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Skip duplicate cycle-root lock acquisitions on shared drops. Keep collection through untouched members of cycles after a live trial. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Skip weak-target lookup on unmarked ordinary object drops and cycle reclamation. Preserve weak clearing across storage reuse, copying, and dummy updates. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Borrow immutable backing storage through local reads and a final array or byte write. Cover transferred values, mutable projections, and checked-store unwinding. See [Perceus ARC](/concepts/perceus-arc.md).

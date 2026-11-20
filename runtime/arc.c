@@ -346,7 +346,10 @@ static void ccvec_free(CCVec *v)
 
 static inline void cc_roots_add(ArcHeader *hdr)
 {
-    if (!is_cycle_candidate_obj(hdr))
+    /* A mutator holds an owner here. An already buffered candidate stays
+     * registered until a trial excludes the mutators or the object dies. */
+    if ((atomic_load_explicit(&hdr->reserved, memory_order_relaxed) & CC_BUFFERED) != 0u ||
+        !is_cycle_candidate_obj(hdr))
         return;
     arc_lock(&g_cc_lock);
     if ((atomic_load_explicit(&hdr->reserved, memory_order_relaxed) & CC_BUFFERED) != 0u) {
@@ -369,12 +372,10 @@ static inline void cc_roots_add(ArcHeader *hdr)
 
 static inline void cc_roots_remove_locked(ArcHeader *hdr)
 {
-    if (!is_cycle_candidate_obj(hdr))
+    uint32_t state = atomic_load_explicit(&hdr->reserved, memory_order_relaxed);
+    if ((state & CC_BUFFERED) == 0u || !is_cycle_candidate_obj(hdr))
         return;
-    if ((atomic_load_explicit(&hdr->reserved, memory_order_relaxed) & CC_BUFFERED) == 0u)
-        return;
-    uint32_t idx =
-        atomic_load_explicit(&hdr->reserved, memory_order_relaxed) >> CC_INDEX_SHIFT;
+    uint32_t idx = state >> CC_INDEX_SHIFT;
     uint32_t last = (uint32_t)--g_cc_roots.len;
     if (idx != last) {
         ArcHeader *moved = g_cc_roots.data[last];
@@ -1260,9 +1261,8 @@ static void release_subtree(ArcHeader *root, int free_root)
 
         maybe_clear_weak_target(cur);
 
-        if ((is_cycle_candidate_obj(cur) &&
-             (atomic_load_explicit(&cur->reserved, memory_order_relaxed) &
-              CC_BUFFERED) != 0u) ||
+        if (((atomic_load_explicit(&cur->reserved, memory_order_relaxed) &
+              CC_BUFFERED) != 0u && is_cycle_candidate_obj(cur)) ||
             atomic_load_explicit(&g_cc_active, memory_order_acquire) != 0) {
             arc_lock(&g_cc_lock);
             cc_roots_remove_locked(cur);

@@ -15,6 +15,7 @@ extern int64_t caml_ba_sub(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_set_1(int64_t, int64_t, int64_t);
 extern int64_t caml_ba_get_1(int64_t, int64_t);
 extern int64_t caml_obj_dup(int64_t);
+extern int64_t caml_obj_set_field(int64_t, int64_t, int64_t);
 extern int64_t caml_obj_with_tag(int64_t, int64_t);
 extern int64_t ocamlcc_raw_fd_read(int64_t, int64_t, int64_t, int64_t);
 extern int64_t ocamlcc_raw_fd_write(int64_t, int64_t, int64_t, int64_t);
@@ -96,6 +97,26 @@ static void clear_exception(void)
 {
     int64_t ex = ocamlcc_get_exn(); assert(ex);
     ocamlcc_set_exn(0); arc_release_val(ex);
+}
+
+static void test_cycle_loses_external_owner_at_immutable_member(void)
+{
+    int64_t before = arc_live_objects();
+    int64_t *mutable = arc_alloc(0, 1, sizeof(*mutable));
+    *mutable = tagged(0);
+    int64_t *immutable = arc_alloc(17, 1, sizeof(*immutable));
+    *immutable = (int64_t)(uintptr_t)mutable; /* transfer the initial owner */
+    caml_obj_set_field((int64_t)(uintptr_t)mutable, tagged(0),
+                       (int64_t)(uintptr_t)immutable);
+
+    /* Let the first trial clear the buffered root at the mutable member.
+     * The external owner of the immutable member keeps the cycle reachable. */
+    arc_retain(mutable);
+    arc_release(mutable);
+    assert(ocamlcc_arc_collect(1) == tagged(0));
+    arc_release(immutable);
+    assert(ocamlcc_arc_collect(1) == tagged(2));
+    assert(arc_live_objects() == before);
 }
 static void test_view_lifetime(void)
 {
@@ -995,6 +1016,7 @@ int main(void)
 {
     test_float_format();
     test_buffered_dummy_update();
+    test_cycle_loses_external_owner_at_immutable_member();
     test_weak_target_header_and_reuse();
     test_weak_get_copy_and_obj_dup();
     test_poller_multi_waiters_and_overflow();

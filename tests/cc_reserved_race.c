@@ -2,7 +2,8 @@
  * in release_subtree racing cc_roots_remove_locked's swap-move writes.
  *
  * Workers repeatedly buffer cycle candidates in g_cc_roots (rc 2 -> 1 calls
- * cc_roots_add under g_cc_lock) and then drop them, so release_subtree reads
+ * cc_roots_add under g_cc_lock), exercise another shared drop and then
+ * retire them, so the root fast path and release_subtree read
  * (cur->reserved & CC_BUFFERED) without the lock while other workers'
  * cc_roots_remove_locked swap-moves g_cc_roots.data[last] into their own
  * slot and rewrites moved->reserved. A collector thread keeps the trial
@@ -26,6 +27,8 @@ static void *race_worker(void *p)
         int64_t *arr = arc_alloc_array(1, 1);
         arc_retain(arr); /* rc 2 */
         arc_release(arr); /* rc 1: buffered as a cycle candidate */
+        arc_retain(arr);
+        arc_release(arr); /* already buffered: skip the root lock */
         arc_release(arr); /* rc 0: release_subtree reads reserved lock-free */
     }
     arc_mutator_leave(entered);
