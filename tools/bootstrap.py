@@ -44,6 +44,7 @@ OCAMLCC_MODULES: list[tuple[str, bool, bool]] = [
     ("codegen", True, True),
     ("pipeline", True, True),
     ("c_bindgen", True, True),
+    ("export_summary", True, True),
     ("driver", True, True),
     ("main", False, False),
 ]
@@ -491,7 +492,7 @@ def build_stage(
         write_stage_report(stage_dir, stage_name, statuses, None)
         return False, statuses, None
 
-    # 4. ocamlcc itself (16 modules)
+    # 4. ocamlcc itself
     occ_out = stage_dir / "ocamlcc_objs"
     occ_out.mkdir(parents=True, exist_ok=True)
     gen_ba = occ_out / "bigarray_header.ml"

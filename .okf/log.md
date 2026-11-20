@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Persist direct-call facts with bundled and compatibility stdlib archives. Use matching archive and interface digests when compiling separately linked clients. See [build pipeline](/concepts/build-pipeline.md).
+
 - 2026-11-20 (codex/1) — Honor native representations and noalloc for user C externals. Check for exceptions before boxing raw numeric results. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Carry float and boxed-integer inputs in raw QBE self-tail loop phis. Preserve boxed seeds and published values at the ordinary OCaml boundary. See [value representation](/concepts/value-representation.md).

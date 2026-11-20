@@ -975,6 +975,7 @@ def compile_stdlib(
                 "-I",
                 str(out_dir),
                 "--mod",
+                "--emit-opt",
                 *([] if mli_path is not None else ["--emit-cmi"]),
                 "--cmi-prefix",
                 str(cmi_prefix),
@@ -1024,7 +1025,13 @@ def compile_stdlib(
     if built_objs:
         if archive.exists():
             archive.unlink()
-        run_cmd(["ar", "rcs", str(archive), *[str(o) for o in built_objs]])
+        archived = run_cmd(["ar", "rcs", str(archive), *[str(o) for o in built_objs]])
+        if archived.returncode != 0:
+            raise RuntimeError(extract_first_error(archived.stderr, archived.stdout))
+        summary = run_cmd([str(ocamlcc), "archive-opt", str(archive),
+                           *[str(obj.with_suffix(".opt")) for obj in built_objs]])
+        if summary.returncode != 0:
+            raise RuntimeError(extract_first_error(summary.stderr, summary.stdout))
 
     return results, built_objs
 
@@ -1138,7 +1145,7 @@ def run_lib_tests(
                     str(ocamlcc),
                     "compile",
                     "--nostdlib",
-                    "-I",
+                    "--stdlib-dir",
                     str(stdlib_out),
                     *flags,
                     str(ml_file),

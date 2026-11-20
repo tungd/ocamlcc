@@ -46,7 +46,7 @@ def run_case(case: Path, stock: bool = False) -> None:
                 command([cc, 'compile-mli', *common, p.name])
             objects = []
             for p in sources:
-                command([cc, 'compile', *common, *([] if p.stem == 'main' else ['--mod', '--emit-cmi']),
+                command([cc, 'compile', *common, '--stdlib-dir', stdlib, *([] if p.stem == 'main' else ['--mod', '--emit-cmi']),
                          p.name, '-o', p.with_suffix('.ssa').name])
                 asm = command([ROOT / 'build/qbe/qbe', '-t', detect_host_qbe_target(), p.with_suffix('.ssa').name])
                 p.with_suffix('.s').write_bytes(asm)

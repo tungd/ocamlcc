@@ -38,6 +38,11 @@ sources:
     resource: tests/stdlib_runtime.c
 ---
 
+
+The compatibility archive publishes direct-call metadata in
+`libocamlstdlib_compat.a.opt` for separately compiled clients.
+See [prebuilt stdlib export summaries](/concepts/build-pipeline.md#prebuilt-stdlib-export-summaries).
+
 # Build and test
 
 `tools/import-ocaml-stdlib.sh` vendors OCaml 5.5.0 standard library sources,

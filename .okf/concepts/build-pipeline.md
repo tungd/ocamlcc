@@ -5,8 +5,8 @@ description: How the top-level build.ninja orchestrates vendored QBE, the C runt
 tags: [build, ninja, dune, qbe]
 status: stable
 generated:
-  by: autoagent/1
-  at: 2026-11-19T07:37:37+00:00
+  by: codex/1
+  at: 2026-11-20
 sources:
   - id: build-ninja
     resource: ../build.ninja
@@ -76,6 +76,23 @@ hiding internal runtime/stdlib symbols on `--shared` via Darwin
 / `--exclude-libs,ALL`), and executable, shared, static, or `.xcframework`
 packaging (only emitting/attaching `-headers` for `ios-xcframework` when a `.mli`
 is present or `--emit-header` is explicitly passed).
+
+# Prebuilt stdlib export summaries
+
+The bundled and compatibility archives ship a versioned `.a.opt` companion.
+`compile --emit-opt` emits per-unit records beside the CMI. `archive-opt`
+combines the records for the archived objects and records the archive
+digest. The consumer also checks the digest of each interface it resolves.
+
+`ocamlcc build` loads the companion when it links a prebuilt stdlib archive
+into an executable. A separate `compile --stdlib-dir DIR` invocation can
+use the same archive and companion for the later link. Saturated calls
+to exports such as `Option.map`, `Result.bind`, and `List.fold_left`
+can then use their direct entries. Suspending callbacks still receive
+shadow-stack protection. Partial applications and clients of archives
+without matching metadata use closure dispatch. The companion records
+entry points, arity, suspension, and immediate-result facts. Inline bodies
+are available through the existing in-process summary.
 
 # Executable startup
 

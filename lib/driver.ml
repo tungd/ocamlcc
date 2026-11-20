@@ -885,10 +885,14 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                   in
                   if is_host_default_toolchain cfg target then
                     match resolve_prebuilt_stdlib_dir cfg with
-                    | Some d
-                      when list_o_files d <> []
-                           && Sys.file_exists (Filename.concat d "stdlib.cmi") ->
-                        Ok (Stdlib_prebuilt (d, list_o_files d), [ d ], true)
+                    | Some d when Sys.file_exists (Filename.concat d "stdlib.cmi") ->
+                        let inputs =
+                          match kind, Export_summary.find_archive d with
+                          | Kind_exe, Some archive -> [archive]
+                          | _ -> list_o_files d
+                        in
+                        if inputs = [] then try_src ()
+                        else Ok (Stdlib_prebuilt (d, inputs), [d], true)
                     | _ -> try_src ()
                   else try_src ()
               in
@@ -913,7 +917,14 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                 | [] -> None
               in
               let asm_files = ref [] in
-              let imports = ref [] in
+              let imports = ref (
+                match stdlib_plan with
+                | Stdlib_prebuilt (_, [archive]) when Filename.check_suffix archive ".a" ->
+                    Export_summary.read_archive ~include_dirs:inc_dirs archive
+                    |> List.filter (fun (unit_name, _) ->
+                         not (List.exists (fun (step : build_step) -> step.modname = unit_name)
+                                ml_steps))
+                | _ -> []) in
               let shim_c_files = ref [] in
               let shim_exported_syms = ref [] in
               let has_mli modname =

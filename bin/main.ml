@@ -13,11 +13,12 @@ let usage =
    [--qbe path] [--cc path] [--sysroot path] [--runtime-objects-dir dir] [--inline-single-thread-rc] \
    [-v] <files...> -o <out>\n\
    \       ocamlcc compile [-I dir] [--nostdlib] [--nopervasives] [--emit-cmi] \
-   [--cmi-prefix p] [--mod] [--inline-single-thread-rc] <file.ml> [-o <out.ssa>]\n\
+   [--cmi-prefix p] [--mod] [--emit-opt] [--stdlib-dir dir] [--inline-single-thread-rc] <file.ml> [-o <out.ssa>]\n\
    \       ocamlcc compile-mli [-I dir] [--nostdlib] [--nopervasives] \
    <file.mli> [-o <out.cmi>]\n\
    \       ocamlcc bindgen [-I dir] [--nostdlib] [--nopervasives] \
    [--shim <out.c>] <file.mli> [-o <out.h>]\n\
+   \       ocamlcc archive-opt <archive.a> <unit.opt>...\n\
    \       ocamlcc dump-lambda [-I dir] [--nostdlib] [--nopervasives] <file.ml>"
 
 type cli_opts = {
@@ -28,6 +29,7 @@ type cli_opts = {
   no_alias_deps : bool;
   nolabels : bool;
   emit_cmi : bool;
+  emit_opt : bool;
   cmi_prefix : string option;
   is_mod : bool;
   shim_out : string option;
@@ -59,6 +61,7 @@ let default_opts =
     no_alias_deps = false;
     nolabels = false;
     emit_cmi = false;
+    emit_opt = false;
     cmi_prefix = None;
     is_mod = false;
     shim_out = None;
@@ -99,6 +102,7 @@ let parse_opts args =
     | "--nopervasives" :: rest -> go { opts with nopervasives = true } rest
     | "--no-alias-deps" :: rest -> go { opts with no_alias_deps = true } rest
     | "--nolabels" :: rest -> go { opts with nolabels = true } rest
+    | "--emit-opt" :: rest -> go { opts with emit_opt = true } rest
     | "--emit-cmi" :: rest -> go { opts with emit_cmi = true } rest
     | "--cmi-prefix" :: p :: rest ->
         go { opts with cmi_prefix = Some p; emit_cmi = true } rest
@@ -176,8 +180,27 @@ let compile opts =
         | Some p -> Pipeline.module_name_of_file (p ^ ".ml")
         | None -> Pipeline.module_name_of_file file
       in
+      let include_dirs, imports =
+        match opts.stdlib_dir with
+        | None -> opts.include_dirs, []
+        | Some dir ->
+            let include_dirs =
+              if List.mem dir opts.include_dirs then opts.include_dirs
+              else opts.include_dirs @ [dir]
+            in
+            let imports =
+              Option.fold ~none:[] ~some:(Export_summary.read_archive ~include_dirs)
+                (Export_summary.find_archive dir)
+            in
+            include_dirs, imports
+      in
+      let exports = ref [] in
+      let on_exports =
+        if opts.emit_opt then Some (fun entries -> exports := entries) else None
+      in
       match
-        Pipeline.compile_file ~include_dirs:opts.include_dirs ?output_prefix
+        Pipeline.compile_file ~include_dirs ?output_prefix
+          ?stdlib_dir:opts.stdlib_dir ~imports ?on_exports
           ~emit_cmi:opts.emit_cmi ~nopervasives:opts.nopervasives
           ~nostdlib:opts.nostdlib ~no_alias_deps:opts.no_alias_deps
           ~nolabels:opts.nolabels ~open_modules:opts.open_modules
@@ -185,11 +208,28 @@ let compile opts =
           ~emit_entry:(not opts.is_mod) ~filename:file ~modname ()
       with
       | Ok ssa ->
-          write_out opts.out ssa;
-          0
+          (try
+             if opts.emit_opt then begin
+               let prefix = Option.value ~default:(Filename.remove_extension file) output_prefix in
+               Export_summary.write_unit ~prefix !exports
+             end;
+             write_out opts.out ssa;
+             0
+           with Sys_error msg ->
+             prerr_endline ("ocamlcc: error: " ^ msg);
+             2)
       | Error msg ->
           prerr_endline ("ocamlcc: error: " ^ msg);
           2)
+
+let archive_opt opts =
+  match opts.inputs with
+  | archive :: (_ :: _ as units) ->
+      (try Export_summary.write_archive ~archive ~units; 0
+       with Sys_error msg ->
+         prerr_endline ("ocamlcc: error: " ^ msg);
+         2)
+  | _ -> prerr_endline usage; 2
 
 let compile_mli opts =
   match single_input opts with
@@ -335,6 +375,7 @@ let () =
           match Sys.argv.(1) with
           | "build" -> build opts
           | "compile" -> compile opts
+          | "archive-opt" -> archive_opt opts
           | "compile-mli" -> compile_mli opts
           | "bindgen" -> bindgen opts
           | "dump-lambda" -> dump_lambda opts
