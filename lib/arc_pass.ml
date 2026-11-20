@@ -325,9 +325,9 @@ let read_only_parameters (lf : Anf.lfunction) =
   in
   scan candidates lf.body
 
-(* Fuse a field load into one local reader. Making the receiver an operand
-   of that reader lets the ordinary liveness and unwind logic keep it alive.
-   Only cross prefixes that cannot call user code or modify the source field. *)
+(* Fuse an immutable field into local operations on its value. The receiver
+   stays live through those operations via their borrowed operands. Do not
+   substitute a projected value that is transferred into an owning slot. *)
 let fuse_field_read id index owner body =
   let open Anf in
   let uses atom = Ident.Set.mem id (atom_vars atom) in
@@ -346,10 +346,24 @@ let fuse_field_read id index owner body =
         Some (Binop (op, substitute a, substitute b))
     | ArrayGet (safe, kind, arr, i) ->
         Some (ArrayGet (safe, kind, substitute arr, i))
+    | ArraySet (safe, kind, arr, i, v) ->
+        Some (ArraySet (safe, kind, substitute arr, substitute i, v))
     | StringGet (safe, str, i) -> Some (StringGet (safe, substitute str, i))
     | BytesGetN (safe, width, str, i) ->
         Some (BytesGetN (safe, width, substitute str, i))
+    | BytesSet (safe, str, i, v) ->
+        Some (BytesSet (safe, substitute str, substitute i, v))
+    | BytesSetN (safe, width, str, i, v) ->
+        Some (BytesSetN (safe, width, substitute str, substitute i, v))
     | _ -> None
+  in
+  let can_cross = function
+    | Atom _ | Field _
+    | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr | Cmp _), _, _)
+    | Unop ((String_length | Array_length | Isint), _)
+    | ArrayGet (false, (Lambda.Pintarray | Lambda.Paddrarray), _, _)
+    | StringGet (false, _, _) -> true
+    | _ -> false
   in
   let use_in ce =
     let borrowed, consumed = atom_operands ce in
@@ -363,10 +377,15 @@ let fuse_field_read id index owner body =
   let rec fuse = function
     | Let (result, ce, next) when use_in ce -> (
         match reader ce with
-        | Some ce' when not (use_in ce' || live next) -> Some (Let (result, ce', next))
+        | Some ce' when not (use_in ce') ->
+            let next =
+              if not (live next) then Some next
+              else if can_cross ce then fuse next
+              else None
+            in
+            Option.map (fun next -> Let (result, ce', next)) next
         | _ -> None)
-    | Let (result, ((Atom _ | Field _ | Binop (Cmp _, _, _)
-                   | Unop ((String_length | Array_length | Isint), _)) as ce), next) ->
+    | Let (result, ce, next) when can_cross ce ->
         Option.map (fun next -> Let (result, ce, next)) (fuse next)
     | LetJoin (result, rhs, next) when not (live next) ->
         Option.map (fun rhs -> LetJoin (result, rhs, next)) (fuse rhs)

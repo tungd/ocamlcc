@@ -58,6 +58,28 @@ let () =
     {|type choice = Empty | Filled of string
       type t = { choice : choice }
       let f r = match r.choice with Empty -> 1 | Filled _ -> 2|};
+  check ~retains:0 "array_store_via_field"
+    {|type t = { data : int array }
+      external set : 'a array -> int -> 'a -> unit = "%array_unsafe_set"
+      let f r i v = set r.data i v|};
+  check ~retains:0 "array_read_and_store_via_field"
+    {|type t = { data : int array }
+      external get : 'a array -> int -> 'a = "%array_unsafe_get"
+      external set : 'a array -> int -> 'a -> unit = "%array_unsafe_set"
+      external ( + ) : int -> int -> int = "%addint"
+      let f r i =
+        let data = r.data in
+        let previous = get data i in
+        set data i (previous + 1);
+        previous|};
+  check ~retains:1 "array_store_transfers_field"
+    {|type t = { data : int array }
+      external set : 'a array -> int -> 'a -> unit = "%array_unsafe_set"
+      let f r destination = set destination 0 r.data|};
+  check ~retains:1 "array_store_via_mutable_field"
+    {|type t = { mutable data : int array }
+      external set : 'a array -> int -> 'a -> unit = "%array_unsafe_set"
+      let f r i v = set r.data i v|};
   check ~retains:1 "pointer_field"
     {|type t = { v : string }
       let f r = r.v|};

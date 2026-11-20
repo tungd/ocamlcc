@@ -456,3 +456,20 @@ let () =
   print_endline "";
   print_int live_delta;
   print_endline ""
+
+type store_box = { items : string array }
+
+let store_item box index value = box.items.(index) <- value
+
+let read_after_store index =
+  let box = { items = [| String.make 1 'a' |] } in
+  let value = String.make 1 'z' in
+  (try store_item box index value with Invalid_argument _ -> ());
+  int_of_char box.items.(0).[0]
+
+let () =
+  let before = arc_live () in
+  let stored = read_after_store 0 in
+  let rejected = read_after_store 1 in
+  let live_delta = arc_live () - before in
+  Printf.printf "borrowed_store=%d,%d,live=%d\n" stored rejected live_delta

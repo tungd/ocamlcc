@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Borrow immutable backing storage through local reads and a final array or byte write. Cover transferred values, mutable projections, and checked-store unwinding. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Omit entry polls in bounded leaf functions and poll every 64 iterations in counted loops with allocation-free local bodies. See [ARC finalizers](/concepts/arc-finalizers.md).
 
 - 2026-11-20 (codex/1) — Borrow immutable fields at proven local read sites and keep the receiver live through the operation. Cover mutable fields, escaping values, callback and FFI barriers, and bounds-error cleanup. See [Perceus ARC](/concepts/perceus-arc.md).
