@@ -365,3 +365,8 @@
  (deps pal_ctx_abi_test.actual pal_ctx_abi_test.expected)
  (action
   (diff pal_ctx_abi_test.expected pal_ctx_abi_test.actual)))
+
+(test
+ (name borrowed_parameters_test)
+ (modules borrowed_parameters_test)
+ (libraries ocamlcc str))

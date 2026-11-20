@@ -141,6 +141,7 @@ type cexpr =
 
 and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;
+  private_entry : bool;
   body : aexpr;
 }
 

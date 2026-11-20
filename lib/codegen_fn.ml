@@ -168,7 +168,7 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
             (List.map (fun (_, formal) -> Temp formal) param_binders);
           let func =
             { name = g;
-              export = not has_closure;
+              export = not has_closure && not lf.private_entry;
               retty = Some Long;
               params = b.cur_fn.fn_params;
               blocks = finish_blocks b }

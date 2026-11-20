@@ -413,3 +413,23 @@ let () =
   run ();
   let after = arc_live () in
   Printf.printf "arc_delta=%d\n" (after - before)
+
+let read_byte data index = Bytes.get data index
+
+let read_twice data index =
+  try
+    let first = int_of_char (read_byte data index) in
+    first + int_of_char (read_byte data 0)
+  with Invalid_argument _ -> int_of_char (read_byte data 0)
+
+let borrowed_argument_result index =
+  let data = Bytes.create 2 in
+  Bytes.set data 0 'q';
+  read_twice data index
+
+let () =
+  let before = arc_live () in
+  let result = borrowed_argument_result 0 in
+  let recovered = borrowed_argument_result 2 in
+  let delta = arc_live () - before in
+  Printf.printf "borrowed=%d,%d,live=%d\n" result recovered delta

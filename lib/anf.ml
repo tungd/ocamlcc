@@ -136,6 +136,7 @@ type cexpr =
 
 and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;
+  private_entry : bool;
   body : aexpr;
 }
 
@@ -289,7 +290,7 @@ and conv_atoms (lams : Lambda.lambda list) (k : atom list -> aexpr) : aexpr =
 
 and conv_fun (lf : Lambda.lfunction) : lfunction =
   match lf.kind with
-  | Curried -> { params = lf.params; body = with_finalizer_poll (conv_tail lf.body) }
+  | Curried -> { params = lf.params; private_entry = false; body = with_finalizer_poll (conv_tail lf.body) }
   | Tupled ->
       let tup = Ident.create_local "tup" in
       let rec bind_fields i = function
@@ -297,7 +298,7 @@ and conv_fun (lf : Lambda.lfunction) : lfunction =
         | (p, _) :: rest ->
             Let (p, Field (i, Var tup), bind_fields (i + 1) rest)
       in
-      { params = [ (tup, Lambda.Pgenval) ]; body = with_finalizer_poll (bind_fields 0 lf.params) }
+      { params = [ (tup, Lambda.Pgenval) ]; private_entry = false; body = with_finalizer_poll (bind_fields 0 lf.params) }
 
 and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   match rhs with

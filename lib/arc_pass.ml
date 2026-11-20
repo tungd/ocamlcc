@@ -1,7 +1,9 @@
 (* Perceus ARC dup / drop / reuse + zero-leak exception middle-end pass.
 
    Ownership contract:
-   - Every [Let]-bound variable and function parameter starts as OWNED (+1 rc).
+   - Every [Let]-bound variable and ordinary function parameter starts owned.
+     A private borrowed entry leaves ownership of its read-only arguments
+     with the caller.
    - Pure global functions ([has_closure = false]), tagged immediates
      ([int], [char], [unit]), and static string/const blocks never require
      retain or release.
@@ -21,6 +23,11 @@
 
 module IntSet = Set.Make (Int)
 
+type borrowed_entry = {
+  worker : Ident.t;
+  borrow : bool list;
+}
+
 type state = {
   owned : Ident.Set.t;
   borrowed : Ident.Set.t;
@@ -30,6 +37,7 @@ type state = {
   known_funs : Ident.Set.t;
   yielding_funs : Ident.Set.t;
   imm_funs : int Ident.Map.t;
+  borrowed_entries : borrowed_entry Ident.Map.t;
   muts : Ident.Set.t;
   (* Mutable slots that stay in scope after the current join point or loop
      exit ([LetJoin] rhs, [While]/[For] condition and body). Their single
@@ -262,6 +270,64 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | GetGlobal _ -> (Ident.Set.empty, [])
   | Assign (_, rhs) -> (Ident.Set.empty, [ rhs ])
   | Fun _ -> (Ident.Set.empty, [])
+
+(* A private entry may borrow parameters used only by local readers.
+   Keep owned entries for uses that transfer ownership or may suspend or
+   publish the object. A worker duplicates no nested function identities. *)
+let read_only_parameters (lf : Anf.lfunction) =
+  let remove_uses params args = Ident.Set.diff params (atoms_vars args) in
+  let cexpr params = function
+    | Anf.App _ | Fun _ -> Ident.Set.empty
+    | Ccall (("ocamlcc_finalizers_due" | "ocamlcc_poll_finalizers"), []) ->
+        params
+    | Ccall _ -> Ident.Set.empty
+    | (SetField _ | SetFloatField _ | OffsetRef _ | BytesSet _ | BytesSetN _
+      | ArraySet _ | ScalarStore _ | BigarrayAccess _) as ce ->
+        let uses, consumed = atom_operands ce in
+        Ident.Set.diff (remove_uses params consumed) uses
+    | ce -> remove_uses params (snd (atom_operands ce))
+  in
+  let rec scan params expr =
+    if Ident.Set.is_empty params then params
+    else
+      match expr with
+      | Anf.Let (_, ce, body) | MutLet (_, ce, body) -> scan (cexpr params ce) body
+      | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b)
+      | While (a, b) | TryWith (a, _, b) | StaticCatch (a, _, _, b, _) ->
+          scan (scan params a) b
+      | For (_, _, _, _, body) -> scan params body
+      | Switch (_, sw) -> cases params (sw.consts @ sw.blocks) sw.fail
+      | StringSwitch (_, arms, fallback) -> cases params arms fallback
+      | Halt a | Raise a -> remove_uses params [ a ]
+      | StaticRaise (_, args) -> remove_uses params args
+      | HaltScalar _ | Unwind -> params
+      | _ -> Ident.Set.empty
+  and cases : 'a. Ident.Set.t -> ('a * Anf.aexpr) list -> Anf.aexpr option -> Ident.Set.t =
+    fun params arms fallback ->
+      let params = List.fold_left (fun left (_, arm) -> scan left arm) params arms in
+      Option.fold ~none:params ~some:(scan params) fallback
+  in
+  let candidates =
+    List.fold_left
+      (fun set (id, kind) ->
+        if kind = Lambda.Pintval then set else Ident.Set.add id set)
+      Ident.Set.empty lf.params
+  in
+  scan candidates lf.body
+
+let borrowed_call env live = function
+  | Anf.App (Var fn, args) -> (
+      match Ident.Map.find_opt fn env.borrowed_entries with
+      | Some entry when List.length args = List.length entry.borrow ->
+          let pairs = List.combine entry.borrow args in
+          let valid = function
+            | false, _ -> true
+            | true, Anf.Var id -> is_borrowed env id || Ident.Set.mem id live
+            | true, a -> is_imm_atom env a
+          in
+          if List.for_all valid pairs then Some (entry.worker, pairs) else None
+      | _ -> None)
+  | _ -> None
 
 let is_yielding_ccall name = (Ccalls.find name).Ccalls.yields
 
@@ -680,7 +746,33 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
   | Let (id, Fun lf, body) ->
       if Ident.Set.mem id env.pure then
         let lf' = transform_fun env ~self_id:None ~has_closure:false lf in
-        let body' = transform_aexpr env body in
+        let read_only = read_only_parameters lf in
+        let body' =
+          if Ident.Set.is_empty read_only then transform_aexpr env body
+          else
+            let worker = Ident.create_local (Ident.name id ^ "_borrowed") in
+            let borrow = List.map (fun (p, _) -> Ident.Set.mem p read_only) lf.params in
+            let imm_funs =
+              match Ident.Map.find_opt id env.imm_funs with
+              | Some arity -> Ident.Map.add worker arity env.imm_funs
+              | None -> env.imm_funs
+            in
+            let env_body =
+              { env with
+                known_funs = Ident.Set.add worker env.known_funs;
+                pure = Ident.Set.add worker env.pure;
+                imm_funs;
+                borrowed_entries = Ident.Map.add id { worker; borrow } env.borrowed_entries }
+            in
+            let body' = transform_aexpr env_body body in
+            if Ident.Set.mem worker (Anf.free_vars body') then
+              let worker_def =
+                transform_fun env ~self_id:None ~has_closure:false
+                  ~borrowed_params:read_only { lf with private_entry = true }
+              in
+              Let (worker, Fun worker_def, body')
+            else body'
+        in
         Let (id, Fun lf', body')
       else
         let cap =
@@ -708,8 +800,25 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
             emit_drops env dead_before (Let (id, Fun lf', body')))
   | Let (id, ce, body) ->
       let ce_may_raise = ce_may_raise_fn ce in
-      let borrowed_in_ce, consumed_in_ce = atom_operands ce in
       let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
+      let borrowed_in_ce, consumed_in_ce, rebuild =
+        match borrowed_call env base_live_body ce with
+        | None ->
+            let borrowed, consumed = atom_operands ce in
+            borrowed, consumed, rebuild_cexpr ce
+        | Some (worker, pairs) ->
+            let borrowed, consumed = List.partition_map
+                (function true, a -> Either.Left a | false, a -> Either.Right a) pairs in
+            let rec restore pairs consumed =
+              match pairs, consumed with
+              | [], [] -> []
+              | (true, a) :: rest, _ -> a :: restore rest consumed
+              | (false, _) :: rest, a :: remaining -> a :: restore rest remaining
+              | _ -> assert false
+            in
+            let rebuild consumed = Anf.App (Var worker, restore pairs consumed) in
+            atoms_vars borrowed, consumed, rebuild
+      in
       let live_before_ce =
         Ident.Set.union base_live_body
           (if ce_may_raise || can_raise body then env.try_owned
@@ -718,7 +827,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let live_after = Ident.Set.union live_before_ce borrowed_in_ce in
       prepare_consumed env ~borrowed_also:borrowed_in_ce ~live_after
         consumed_in_ce (fun remaining_owned atoms' ->
-          let ce' = rebuild_cexpr ce atoms' in
+          let ce' = rebuild atoms' in
           let used_before =
             Ident.Set.union borrowed_in_ce live_before_ce
           in
@@ -1035,7 +1144,8 @@ and transform_branch (env : state) (arm : Anf.aexpr) : Anf.aexpr =
   let arm' = transform_aexpr { env with owned = Ident.Set.diff env.owned dead } arm in
   emit_drops env dead arm'
 
-and transform_fun (env : state) ~self_id ~has_closure (lf : Anf.lfunction) :
+and transform_fun (env : state) ~self_id ~has_closure
+    ?(borrowed_params = Ident.Set.empty) (lf : Anf.lfunction) :
     Anf.lfunction =
   let params_set =
     List.fold_left
@@ -1059,10 +1169,11 @@ and transform_fun (env : state) ~self_id ~has_closure (lf : Anf.lfunction) :
       in
       Ident.Set.union env.borrowed captured
   in
+  let owned_params = Ident.Set.diff params_set borrowed_params in
   let fn_env =
     { env with
-      owned = params_set;
-      borrowed;
+      owned = owned_params;
+      borrowed = Ident.Set.union borrowed borrowed_params;
       frame_borrowed = Ident.Set.empty;
       muts = Ident.Set.empty;
       no_release_muts = Ident.Set.empty;
@@ -1074,10 +1185,10 @@ and transform_fun (env : state) ~self_id ~has_closure (lf : Anf.lfunction) :
       in_tail = true }
   in
   let live_body = Anf.free_vars lf.body in
-  let dead_params = Ident.Set.diff params_set live_body in
+  let dead_params = Ident.Set.diff owned_params live_body in
   let body' =
     transform_aexpr
-      { fn_env with owned = Ident.Set.diff params_set dead_params }
+      { fn_env with owned = Ident.Set.diff owned_params dead_params }
       lf.body
   in
   { lf with body = emit_drops fn_env dead_params body' }
@@ -1110,6 +1221,7 @@ let run (prog : Anf.program) : Anf.program =
       known_funs;
       yielding_funs;
       imm_funs;
+      borrowed_entries = Ident.Map.empty;
       muts = Ident.Set.empty;
       no_release_muts = Ident.Set.empty;
       handlers = Hashtbl.create 8;

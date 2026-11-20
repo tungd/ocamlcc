@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Infer borrowed arguments for saturated direct calls to eligible read-only OCaml functions and emit a private entry alongside the owning entry. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (antigravity/1): Slice 6g — Migrate `Callback` named values, backtrace stubs, and non-POSIX `Sys` helpers to pure OCaml (`stdlib/camlinternalSys.ml`, `runtime/{arc.c,builtins.c}`, `lib/{anf.ml,ccalls.ml,driver.ml}`, `tools/{stdlib_compat.py,bootstrap.py}`, `test/{ccalls_test.ml,ccalls_test.expected}`, `tests/stdlib/sys_callback/`, `build.ninja`, `dune`):
   - Deleted 22 C stubs (`caml_register_named_value`, all 10 `caml_*backtrace*`/`caml_ml_debug_info_status` stubs, `caml_sys_{executable_name,proc_self_exe,get_config,io_buffer_size,temp_dir_name,*convert_signal_number}`, `caml_runtime_{variant,parameters}`, `caml_install_signal_handler`, `caml_ml_*runtime_warnings*`), shrinking runtime C/inc LOC `7,018 -> 6,880` (`7,066` including `pal_ctx.S`, down from `9,833` at Part II start) and keeping only `ocamlcc_set_at_exit_fn`, `ocamlcc_sys_is_win32`, and raw POSIX hooks.
   - Implemented pure OCaml `--nopervasives` `stdlib/camlinternalSys.ml`, lowered `caml_restore_raw_backtrace` cleanly in `lib/anf.ml`, and wired `Stdlib`, `Callback`, `Sys`, `Printexc`, `Lazy`, and `Filename` in `tools/stdlib_compat.py`.
