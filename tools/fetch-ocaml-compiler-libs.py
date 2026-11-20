@@ -352,7 +352,7 @@ def extract_sources(tarball: Path, out_dir: Path) -> dict:
                 ml_member = find_member(names, f"{base}.ml")
                 (comp_dir / f"{base}.mli").write_bytes(read_member(tf, mli_member))
                 raw = read_member(tf, ml_member).decode("utf-8")
-                raw = raw.replace(
+                updated = raw.replace(
                     "let compression_supported = zstd_initialize ()",
                     'external ocamlcc_zstd_compress_bytes : bytes -> bytes -> int = "ocamlcc_zstd_compress_bytes"\n'
                     'external ocamlcc_zstd_decompress_bytes : bytes -> int -> int -> bytes -> int = "ocamlcc_zstd_decompress_bytes"\n\n'
@@ -364,7 +364,31 @@ def extract_sources(tarball: Path, out_dir: Path) -> dict:
                     "      ~decompress:ocamlcc_zstd_decompress_bytes;\n"
                     "  ok",
                 )
-                (comp_dir / f"{base}.ml").write_text(raw, encoding="utf-8")
+                if updated == raw:
+                    raise RuntimeError("Compression codec hook patch did not match")
+                old_out = (
+                    'external to_channel: out_channel -> \'a -> extern_flags list -> unit\n'
+                    '                   = "caml_output_value"'
+                )
+                updated2 = updated.replace(
+                    old_out,
+                    "let to_channel = CamlinternalMarshal.to_channel",
+                )
+                if updated2 == updated:
+                    raise RuntimeError("Compression output_value patch did not match")
+                (comp_dir / f"{base}.ml").write_text(updated2, encoding="utf-8")
+            elif mod in ("Misc", "Terminfo"):
+                mli_member = find_member(names, f"{base}.mli")
+                ml_member = find_member(names, f"{base}.ml")
+                (comp_dir / f"{base}.mli").write_bytes(read_member(tf, mli_member))
+                raw = read_member(tf, ml_member).decode("utf-8")
+                old = 'external isatty : out_channel -> bool = "caml_sys_isatty"'
+                if old not in raw:
+                    raise RuntimeError(f"{mod} isatty patch did not match")
+                (comp_dir / f"{base}.ml").write_text(
+                    raw.replace(old, "let isatty = Out_channel.isatty"),
+                    encoding="utf-8",
+                )
             else:
                 mli_member = find_member(names, f"{base}.mli")
                 ml_member = find_member(names, f"{base}.ml")
