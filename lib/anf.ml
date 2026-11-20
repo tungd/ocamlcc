@@ -1398,6 +1398,120 @@ let drop_unused_alias_lets (lam : Lambda.lambda) : Lambda.lambda =
   in
   fst (go lam)
 
+type call_uses = Calls of { arity : int; count : int } | Other_use
+
+(* Inline before lowering creates closures and inserts polls. Lambda identifiers
+   are globally unique. The compiler-libs copier freshens them, but leaves
+   static exit labels alone. Freshen labels in the scope of their catch. *)
+let inline_local_calls code =
+  let open Lambda in
+  let module Labels = Map.Make (Int) in
+  let next_label = ref 0 in
+  let uses = ref Ident.Map.empty in
+  let callbacks = ref Ident.Set.empty in
+  let callback_limit = 768 in
+  let mark_other id = uses := Ident.Map.add id Other_use !uses in
+  let rec size expr =
+    (match expr with
+    | Lstaticcatch (_, (id, _), _) | Lstaticraise (id, _) ->
+        next_label := max !next_label id
+    | _ -> ());
+    let n = ref 1 in
+    iter_head_constructor (fun child -> n := !n + size child) expr;
+    !n
+  in
+  let rec record_uses skip = function
+    | Lapply { ap_func = Lvar id; ap_args; _ } when not (Ident.Set.mem id skip) ->
+        let arity = List.length ap_args in
+        let use = match Ident.Map.find_opt id !uses with
+          | None -> Calls { arity; count = 1 }
+          | Some (Calls previous) when previous.arity = arity ->
+              Calls { previous with count = previous.count + 1 }
+          | Some _ -> Other_use
+        in
+        uses := Ident.Map.add id use !uses;
+        List.iter (record_uses skip) ap_args
+    | (Lvar id | Lmutvar id) when not (Ident.Set.mem id skip) -> mark_other id
+    | expr -> iter_head_constructor (record_uses skip) expr
+  in
+  record_uses Ident.Set.empty code;
+  let budget = ref (2 * size code) in
+  let rec fresh_exits labels = function
+    | Lstaticcatch (body, (id, binders), handler) ->
+        incr next_label;
+        let fresh = !next_label in
+        Lstaticcatch (fresh_exits (Labels.add id fresh labels) body,
+          (fresh, binders), fresh_exits labels handler)
+    | Lstaticraise (id, args) ->
+        let id = Option.value ~default:id (Labels.find_opt id labels) in
+        Lstaticraise (id, List.map (fresh_exits labels) args)
+    | expr -> shallow_map (fresh_exits labels) expr
+  in
+  let known defs = function
+    | Lfunction def -> Some (def, size def.body)
+    | Lvar id -> Ident.Map.find_opt id defs
+    | _ -> None
+  in
+  let known_callback defs (param, _) arg =
+    match Ident.Map.find_opt param !uses, known defs arg with
+    | Some (Calls { arity; count }), Some (def, cost) ->
+        def.kind = Curried && List.length def.params = arity
+        && def.attr.inline <> Never_inline
+        && cost <= (if count = 1 then callback_limit else 24)
+    | _ -> false
+  in
+  let should_inline defs def cost call =
+    match def.attr.inline, call.ap_inlined with
+    | Never_inline, _ | _, Never_inline -> false
+    | (Always_inline | Hint_inline), _ | _, (Always_inline | Hint_inline) -> true
+    | _ ->
+        let small =
+          match call.ap_func with
+          | Lfunction _ -> cost <= 64
+          | Lvar id ->
+              Ident.Set.mem id !callbacks
+              || (match Ident.Map.find_opt id !uses with
+              | Some (Calls { count = 1; _ }) -> cost <= 64
+              | Some (Calls _) -> cost <= 24
+              | _ -> false)
+          | _ -> false
+        in
+        small || (cost <= callback_limit
+          && List.exists2 (known_callback defs) def.params call.ap_args)
+  in
+  let rec visit depth defs = function
+    | Llet (mode, kind, id, rhs, body) ->
+        let def = known defs rhs in
+        let defs' = match def with
+          | Some def -> Ident.Map.add id def defs
+          | None -> defs
+        in
+        let body = visit depth defs' body in
+        let mode = if Option.is_some def then Alias else mode in
+        Llet (mode, kind, id, visit depth defs rhs, body)
+    | Lapply call ->
+        (match known defs call.ap_func with
+        | Some (def, cost) when def.kind = Curried
+            && List.compare_lengths def.params call.ap_args = 0
+            && should_inline defs def cost call && depth < 12 && cost <= !budget ->
+            budget := !budget - cost;
+            let def = duplicate_function def in
+            let body = fresh_exits Labels.empty def.body in
+            record_uses (free_variables (Lfunction def)) body;
+            List.iter2 (fun ((id, _) as param) arg ->
+              if known_callback defs param arg then
+                callbacks := Ident.Set.add id !callbacks)
+              def.params call.ap_args;
+            (* [conv_atoms] evaluates arguments from left to right. Use
+               strict bindings so effects are preserved even for unused formals. *)
+            let body = List.fold_right2 (fun (id, kind) arg body ->
+              Llet (Strict, kind, id, arg, body)) def.params call.ap_args body in
+            visit (depth + 1) defs body
+        | _ -> shallow_map (visit depth defs) (Lapply call))
+    | expr -> shallow_map (visit depth defs) expr
+  in
+  visit 0 Ident.Map.empty code
+
 (* Groups that use their members only as saturated calls can share a
    dispatcher closure. Its environment stays borrowed across transitions.
    First-class uses outside the group call it through wrappers of the original
@@ -1594,7 +1708,9 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir
           | Some table -> specialize_int_selector_aliases table program.code
           | None -> program.code
         in
-        let cleaned = code |> drop_unused_alias_lets |> lift_recursive_calls in
+        let cleaned =
+          code |> inline_local_calls |> drop_unused_alias_lets |> lift_recursive_calls
+        in
         let code = conv_tail cleaned |> specialize_scalar_bindings in
         Ok { module_ident = program.module_ident; code }
       with Unsupported what -> Error what)

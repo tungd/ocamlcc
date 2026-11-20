@@ -172,7 +172,7 @@ let nested_branch_helper =
   {|
 let f x =
   if x > 0 then
-    let helper y = y + 1 in
+    let[@inline never] helper y = y + 1 in
     helper x
   else x - 1
 
@@ -203,8 +203,8 @@ let r = f 3
 let seq_unexported_helper =
   {|
 let outer n =
-  let h x = x + 1 in
-  let f y = h y + h (y * 2) in
+  let[@inline never] h x = x + 1 in
+  let[@inline never] f y = h y + h (y * 2) in
   f n
 
 let r = outer 3

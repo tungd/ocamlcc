@@ -116,6 +116,22 @@ narrowing, and tagged-int instructions used by the boxed path. The
 demand scan selects a binding only when its scalar uses agree on the
 representation and the binding has no boxed use.
 
+# Local inlining and known callbacks
+
+Before ANF lowering and ARC insertion, the compiler can inline saturated
+calls to lexically known non-recursive curried functions. It uses definition
+and call-site inline hints, a size heuristic for small direct-only helpers,
+and specialization when a known closure can replace a call-only parameter.
+The inliner bounds expansion by depth and total copied Lambda nodes. A copy
+gets fresh variable and static exit identifiers, and strict argument bindings
+preserve evaluation order and side effects. Partial applications, unknown
+callees, and functions marked `[@inline never]` keep ordinary calls.
+
+The tterm codepoint replay uses this path to inline the iterator, its
+callback, and the local dirty-span helpers in `State.handle_codepoints`.
+`test/lambda_inline_test.ml` checks the direct loop and the absence of
+closure allocations in a fixture with the same callback shape.
+
 # Match lowering
 
 Pattern compilation in translmod produces two shapes:

@@ -395,3 +395,8 @@
  (name arc_inline_test)
  (modules arc_inline_test)
  (libraries ocamlcc str))
+
+(test
+ (name lambda_inline_test)
+ (modules lambda_inline_test)
+ (libraries ocamlcc str))
