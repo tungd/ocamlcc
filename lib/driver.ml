@@ -47,6 +47,7 @@ type config = {
   sysroot : string option;
   runtime_dir : string option;
   prebuilt_rt_dir : string option;
+  inline_single_thread_rc : bool;
   stdlib_src_dir : string option;
   prebuilt_stdlib_dir : string option;
   work_dir : string option;
@@ -71,6 +72,7 @@ let default_config () =
     sysroot = None;
     runtime_dir = None;
     prebuilt_rt_dir = None;
+    inline_single_thread_rc = false;
     stdlib_src_dir = None;
     prebuilt_stdlib_dir = None;
     work_dir = None;
@@ -954,6 +956,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                   imports := (s.modname, exports) :: !imports)
                                 ~nopervasives:cfg.nopervasives
                                 ~nostdlib:eff_nostdlib ~emit_entry:false
+                                ~inline_single_thread_rc:cfg.inline_single_thread_rc
                                 ~filename:s.path ~modname:s.modname ()
                             with
                             | Error msg -> Error msg

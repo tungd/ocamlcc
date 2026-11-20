@@ -43,6 +43,7 @@ type config = {
   sysroot : string option;
   runtime_dir : string option;
   prebuilt_rt_dir : string option;
+  inline_single_thread_rc : bool;
   stdlib_src_dir : string option;
   prebuilt_stdlib_dir : string option;
   work_dir : string option;

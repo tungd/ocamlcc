@@ -54,6 +54,10 @@ typedef struct ArcHeader {
 } ArcHeader;
 
 _Static_assert(sizeof(ArcHeader) == 16u, "ArcHeader must remain 16 bytes");
+_Static_assert(offsetof(ArcHeader, refcount) == 0 &&
+               offsetof(ArcHeader, tag) == 4 && offsetof(ArcHeader, reserved) == 12,
+               "ArcHeader offsets used by inline reference counting");
+
 
 static inline int arc_has_spare_scan_bit(const ArcHeader *header)
 {

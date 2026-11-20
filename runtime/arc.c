@@ -230,6 +230,14 @@ int arc_mutator_enter(void)
     return 1;
 }
 
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+/* Generated modules with inline refcounts require this profile at link time. */
+int ocamlcc_arc_enter_single_thread(void)
+{
+    return arc_mutator_enter();
+}
+#endif
+
 void arc_mutator_leave(int entered)
 {
     if (entered) {

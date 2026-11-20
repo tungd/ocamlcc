@@ -4,10 +4,11 @@ import resource
 import signal
 import subprocess
 import sys
+from pathlib import Path
 
 
 def main() -> None:
-    binary = sys.argv[1]
+    binary, cycle_fixture, expected = sys.argv[1:]
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     subprocess.run([binary], check=True, timeout=15)
     result = subprocess.run([binary, "foreign"], capture_output=True, timeout=15)
@@ -17,6 +18,9 @@ def main() -> None:
             f"expected the single-thread ARC diagnostic and SIGABRT, "
             f"got {result.returncode}: {result.stderr!r}"
         )
+    stdout = subprocess.check_output([cycle_fixture], timeout=15)
+    if stdout != Path(expected).read_bytes():
+        raise SystemExit("inline reference counting changed cycle collection output")
     print("PASS single_thread_rc")
 
 

@@ -26,6 +26,17 @@ Phase 2 replaces libc `malloc`/`free` with a freestanding slab allocator and sta
 ## Freestanding Slab Allocator & Thread Safety (`runtime/arc.c`)
 - **Size classes and slab reclamation.** The 12 classes span 16 to 2048 bytes. Slabs have size and alignment of 64 KiB. PAL maps whole pages and trims the address range to keep one aligned slab. The `SlabPage` header starts at its base, so `slab_free` recovers the owner by masking the slot address. The shared allocator lock protects the full and partial lists and per-slab freelists. Empty slabs return to PAL when their class has another slab, preserving one warm slab. Slots preserve 16-byte alignment.
 - **Optional single-thread ARC.** `ninja -j1 single_thread_runtime` produces `build/rt-single/libocamlrt.a` and the objects for `ocamlcc build --runtime-objects-dir build/rt-single`. The first OS thread to enter through a generated binding, the mutator gate, or module initialization owns this runtime for its lifetime. Those entry points reject a different thread. Callers of the raw C runtime APIs must run them on the owner thread too. The build uses load/store updates for reference counts with the existing header and C signatures. The default build keeps atomic updates and supports native thread handoff. `ninja -j1 test_single_thread_rc` checks array ownership, weak upgrades, reuse, and rejection of a second entrant.
+- **Inline single-thread ARC.** Pass `--inline-single-thread-rc` to
+  `ocamlcc build --runtime-objects-dir build/rt-single` after building the
+  single-thread runtime. The option also works with `ocamlcc compile` when
+  the resulting object is linked against that runtime. Generated module
+  initializers use a single-thread entry symbol, which makes runtime-profile
+  mismatches visible during executable linking. Mortal heap retains
+  update the header directly. Shared releases inline the decrement when
+  the object is already buffered for cycle collection or its string,
+  float, float-array, or custom tag needs no registration. First-time
+  cycle registration and final releases use the runtime. The native test
+  also runs the cycle-collection fixture with inlining enabled.
 - **Atomic refcounts & counters**: `ArcHeader.refcount` is `_Atomic uint32_t`, updated via C11 `<stdatomic.h>` (`arc_retain`, `arc_release`, `arc_drop_reuse`, `drop_child_val`, `arc_alloc_array`, plus CAS-based `arc_try_retain` for weak-ref upgrades); `g_live_objects`, `g_reuse_hits`, and `g_next_oo_id` are `_Atomic int64_t`.
 - **Large blocks**: allocations `> 2048` bytes round up to `16 KB` page alignment and release directly via `pal_page_free`.
 - **O(1)-stack tail drop**: `release_subtree` tail-iterates on the last dying child (`tail`) and uses a `256`-entry stack buffer plus lazy `pal_page_alloc` overflow pages (`DropPage`) for deep non-tail trees. `cc_roots_add` is invoked before `atomic_fetch_sub` when `rc > 1`, preventing any race with a concurrent final drop.

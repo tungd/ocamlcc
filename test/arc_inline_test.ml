@@ -22,6 +22,27 @@ let () =
 let () =
   let il =
     match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
+      ~inline_single_thread_rc:true ~filename:"arc_inline.ml"
+      ~modname:"Arc_inline" source with
+    | Ok il -> il
+    | Error error -> failwith error
+  in
+  let contains text =
+    match Str.search_forward (Str.regexp_string text) il 0 with
+    | _ -> true
+    | exception Not_found -> false
+  in
+  List.iter (fun text -> if not (contains text) then
+    failwith ("missing in single-thread QBE: " ^ text))
+    ["call extern $ocamlcc_arc_enter_single_thread("; " =w loadw ";
+     " =w add %rc_count."; " =w sub %rc_count."; "storew %rc_next.";
+     "@rc_release_slow."; "call extern $arc_release("];
+  if contains "call extern $arc_retain(" then
+    failwith "single-thread retains must update the refcount directly"
+
+let () =
+  let il =
+    match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
       ~filename:"arc_fields.ml" ~modname:"Arc_fields" {|
       external get : 'a array -> int -> 'a = "%array_safe_get"
       external set : 'a array -> int -> 'a -> unit = "%array_safe_set"

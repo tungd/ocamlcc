@@ -10,10 +10,10 @@
 let usage =
   "usage: ocamlcc build [--target t] [--shared|--static|--exe|-c|-S] \
    [--emit-header h] [-I dir] [--nostdlib] [--nopervasives] [--no-main] \
-   [--qbe path] [--cc path] [--sysroot path] [--runtime-objects-dir dir] \
+   [--qbe path] [--cc path] [--sysroot path] [--runtime-objects-dir dir] [--inline-single-thread-rc] \
    [-v] <files...> -o <out>\n\
    \       ocamlcc compile [-I dir] [--nostdlib] [--nopervasives] [--emit-cmi] \
-   [--cmi-prefix p] [--mod] <file.ml> [-o <out.ssa>]\n\
+   [--cmi-prefix p] [--mod] [--inline-single-thread-rc] <file.ml> [-o <out.ssa>]\n\
    \       ocamlcc compile-mli [-I dir] [--nostdlib] [--nopervasives] \
    <file.mli> [-o <out.cmi>]\n\
    \       ocamlcc bindgen [-I dir] [--nostdlib] [--nopervasives] \
@@ -43,6 +43,7 @@ type cli_opts = {
   sysroot : string option;
   runtime_dir : string option;
   runtime_objects_dir : string option;
+  inline_single_thread_rc : bool;
   stdlib_dir : string option;
   work_dir : string option;
   extra_cflags : string list;
@@ -73,6 +74,7 @@ let default_opts =
     sysroot = None;
     runtime_dir = None;
     runtime_objects_dir = None;
+    inline_single_thread_rc = false;
     stdlib_dir = None;
     work_dir = None;
     extra_cflags = [];
@@ -120,6 +122,8 @@ let parse_opts args =
     | "--sysroot" :: p :: rest -> go { opts with sysroot = Some p } rest
     | "--runtime-dir" :: p :: rest ->
         go { opts with runtime_dir = Some p } rest
+    | "--inline-single-thread-rc" :: rest ->
+        go { opts with inline_single_thread_rc = true } rest
     | "--runtime-objects-dir" :: p :: rest ->
         go { opts with runtime_objects_dir = Some p } rest
     | "--stdlib-dir" :: p :: rest ->
@@ -177,6 +181,7 @@ let compile opts =
           ~emit_cmi:opts.emit_cmi ~nopervasives:opts.nopervasives
           ~nostdlib:opts.nostdlib ~no_alias_deps:opts.no_alias_deps
           ~nolabels:opts.nolabels ~open_modules:opts.open_modules
+          ~inline_single_thread_rc:opts.inline_single_thread_rc
           ~emit_entry:(not opts.is_mod) ~filename:file ~modname ()
       with
       | Ok ssa ->
@@ -297,6 +302,7 @@ let build opts =
         sysroot = opts.sysroot;
         runtime_dir = opts.runtime_dir;
         prebuilt_rt_dir = opts.runtime_objects_dir;
+        inline_single_thread_rc = opts.inline_single_thread_rc;
         prebuilt_stdlib_dir = opts.stdlib_dir;
         work_dir = opts.work_dir;
         extra_cflags = opts.extra_cflags;

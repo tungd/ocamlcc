@@ -465,11 +465,15 @@ build test_stdlib_runtime: run_test | $builddir/stdlib_runtime tests/stdlib_runt
   name = stdlib_runtime
 
 rule run_single_thread_rc_test
-  command = python3 tests/check_single_thread_rc.py $builddir/rt-single/single_thread_rc
+  command = python3 tests/check_single_thread_rc.py $builddir/rt-single/single_thread_rc $builddir/rt-single/cycle_collect tests/cycle_collect.expected
   description = TEST single_thread_rc
 
 build $builddir/rt-single/single_thread_rc: cc_link tests/single_thread_rc.c $builddir/rt-single/libocamlrt.a
-build test_single_thread_rc: run_single_thread_rc_test | $builddir/rt-single/single_thread_rc tests/check_single_thread_rc.py
+build $builddir/rt-single/cycle_collect.ssa: ocamlcc_ssa examples/cycle_collect.ml | $builddir/bin/ocamlcc
+  flags = --inline-single-thread-rc
+build $builddir/rt-single/cycle_collect.s: qbe_ssa $builddir/rt-single/cycle_collect.ssa | $builddir/qbe/qbe
+build $builddir/rt-single/cycle_collect: cc_link $builddir/rt-single/cycle_collect.s $builddir/rt-single/libocamlrt.a
+build test_single_thread_rc: run_single_thread_rc_test | $builddir/rt-single/single_thread_rc $builddir/rt-single/cycle_collect tests/check_single_thread_rc.py tests/cycle_collect.expected
 
 build test: phony test_single_thread_rc test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
 

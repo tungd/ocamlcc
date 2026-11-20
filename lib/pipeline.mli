@@ -11,6 +11,7 @@ val compile_source :
   ?nolabels:bool ->
   ?open_modules:string list ->
   ?emit_entry:bool ->
+  ?inline_single_thread_rc:bool ->
   filename:string ->
   modname:string ->
   ?imports:(string * Anf.exports) list ->
@@ -30,6 +31,7 @@ val compile_file :
   ?nolabels:bool ->
   ?open_modules:string list ->
   ?emit_entry:bool ->
+  ?inline_single_thread_rc:bool ->
   filename:string ->
   modname:string ->
   ?imports:(string * Anf.exports) list ->

@@ -10,7 +10,7 @@ let read_file filename =
 
 let compile_source ?(include_dirs = []) ?stdlib_dir ?output_prefix ?(emit_cmi = false)
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
-    ?(nolabels = false) ?(open_modules = []) ?(emit_entry = true) ~filename
+    ?(nolabels = false) ?(open_modules = []) ?(emit_entry = true) ?(inline_single_thread_rc = false) ~filename
     ~modname ?imports ?on_exports source : (string, string) result =
   match
     Frontend.compile_implementation ~include_dirs ?output_prefix ~emit_cmi
@@ -31,19 +31,20 @@ let compile_source ?(include_dirs = []) ?stdlib_dir ?output_prefix ?(emit_cmi = 
             | _ -> Anf.inline_export_leaves program.code anf.code
           in
           let anf, effects = Arc_pass.run_with_effects anf in
-          let il, exports = Codegen.compile_with_exports ~emit_entry ~exported:!exported ~effects ~inline_leaf anf in
+          let il, exports = Codegen.compile_with_exports ~emit_entry ~inline_single_thread_rc
+              ~exported:!exported ~effects ~inline_leaf anf in
           Option.iter (fun save -> save exports) on_exports;
           Ok (Qbe_il.to_string il))
 
 let compile_file ?(include_dirs = []) ?stdlib_dir ?output_prefix ?(emit_cmi = false)
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
-    ?(nolabels = false) ?(open_modules = []) ?(emit_entry = true) ~filename
+    ?(nolabels = false) ?(open_modules = []) ?(emit_entry = true) ?(inline_single_thread_rc = false) ~filename
     ~modname ?imports ?on_exports () : (string, string) result =
   match read_file filename with
   | exception Sys_error msg -> Error msg
   | source ->
       compile_source ~include_dirs ?stdlib_dir ?output_prefix ~emit_cmi ~nopervasives
-        ~nostdlib ~no_alias_deps ~nolabels ~open_modules ~emit_entry ~filename
+        ~nostdlib ~no_alias_deps ~nolabels ~open_modules ~emit_entry ~inline_single_thread_rc ~filename
         ~modname ?imports ?on_exports source
 
 let compile_interface_file ?(include_dirs = []) ?output_prefix

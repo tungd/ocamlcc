@@ -49,6 +49,7 @@ type fn_state = {
 
 type t = {
   prefix : string;
+  inline_single_thread_rc : bool;
   mutable temp_counter : int;
   mutable label_counter : int;
   mutable data_counter : int;
@@ -82,8 +83,9 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
     try_stack = [];
     in_init }
 
-let create prefix =
+let create ?(inline_single_thread_rc = false) prefix =
   { prefix;
+    inline_single_thread_rc;
     temp_counter = 0;
     label_counter = 0;
     data_counter = 0;
@@ -559,7 +561,57 @@ let cmp_of_ocaml : Lambda.integer_comparison -> Cmp.t = function
   | Cgt -> Sgt
   | Cge -> Sge
 
-let emit_arc_if_heap b fn value =
+(* Header offsets are relative to the [ArcHeader] base: its 32-bit count,
+   16-bit tag, and collector flags at byte 12. Keep the collector's first
+   candidate registration and all destruction in the runtime. *)
+let emit_single_thread_rc b operation value done_ =
+  let header = ptr_offset b value (-16) "rc_header" in
+  let count = fresh_temp b "rc_count" in
+  let immortal = fresh_temp b "rc_immortal" in
+  let mortal = fresh_label b "rc_mortal" in
+  emit b (Load (Loadw, Word, count, header));
+  emit b (Cmp (Eq, Word, immortal, count, Int (-1L)));
+  close_block b (Br (immortal, done_, mortal));
+  start_block b mortal;
+  let update op =
+    let next = fresh_temp b "rc_next" in
+    emit b (Binop (op, Word, next, count, Int 1L));
+    emit b (Store (Storew, next, header));
+    close_block b (Jmp done_)
+  in
+  match operation with
+  | `Retain -> update Add
+  | `Release ->
+      let shared = fresh_label b "rc_shared" in
+      let decrement = fresh_label b "rc_decrement" in
+      let slow = fresh_label b "rc_release_slow" in
+      let has_other_owner = fresh_temp b "rc_shared" in
+      emit b (Cmp (Ult, Word, has_other_owner, Int 1L, count));
+      close_block b (Br (has_other_owner, shared, slow));
+      start_block b shared;
+      let flags_addr = ptr_offset b header 12 "rc_flags_ptr" in
+      let flags = fresh_temp b "rc_flags" in
+      let buffered = fresh_temp b "rc_buffered" in
+      emit b (Load (Loadw, Word, flags, flags_addr));
+      emit b (Binop (And, Word, buffered, flags, Int 4L));
+      let tag = fresh_temp b "rc_object_tag" in
+      let tag_addr = ptr_offset b header 4 "rc_tag_ptr" in
+      emit b (Load (Loaduh, Word, tag, tag_addr));
+      let leaf_index = fresh_temp b "rc_leaf_index" in
+      let leaf = fresh_temp b "rc_leaf" in
+      emit b (Binop (Sub, Word, leaf_index, tag, Int (Int64.of_int arc_tag_string)));
+      emit b (Cmp (Ult, Word, leaf, leaf_index,
+                  Int (Int64.of_int (arc_tag_custom - arc_tag_string + 1))));
+      let can_decrement = fresh_temp b "rc_can_decrement" in
+      emit b (Binop (Or, Word, can_decrement, buffered, leaf));
+      close_block b (Br (can_decrement, decrement, slow));
+      start_block b decrement;
+      update Sub;
+      start_block b slow;
+      emit b (Call_void { fn = Global "arc_release"; args = [ (Long, value) ] });
+      close_block b (Jmp done_)
+
+let emit_arc_if_heap b operation value =
   let odd = fresh_temp b "rc_tag" in
   let is_null = fresh_temp b "rc_null" in
   let check = fresh_label b "rc_check" in
@@ -571,8 +623,13 @@ let emit_arc_if_heap b fn value =
   emit b (Cmp (Eq, Long, is_null, value, Int 0L));
   close_block b (Br (is_null, done_, heap));
   start_block b heap;
-  emit b (Call_void { fn = Global fn; args = [ (Long, value) ] });
-  close_block b (Jmp done_);
+  if b.inline_single_thread_rc then
+    emit_single_thread_rc b operation value done_
+  else begin
+    let fn = match operation with `Retain -> "arc_retain" | `Release -> "arc_release" in
+    emit b (Call_void { fn = Global fn; args = [ (Long, value) ] });
+    close_block b (Jmp done_)
+  end;
   start_block b done_
 
 let compile_bounds_guarded b ?drop_on_oob ?(result_type = Long) idx_untagged len_val
@@ -588,7 +645,7 @@ let compile_bounds_guarded b ?drop_on_oob ?(result_type = Long) idx_untagged len
   let lok_end = b.cur_fn.open_label in
   close_block b (Jmp ldone);
   start_block b loob;
-  Option.iter (emit_arc_if_heap b "arc_release") drop_on_oob;
+  Option.iter (emit_arc_if_heap b `Release) drop_on_oob;
   emit b
     (Call_void { fn = Global "ocamlcc_raise_invalid_arg_oob"; args = [] });
   let failure =

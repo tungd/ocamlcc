@@ -44,10 +44,10 @@ let export_captured b mod_value path target arity =
                    blocks = finish_blocks b } :: b.funcs);
   name
 
-let compile_with_exports ?(emit_entry = true) ~exported ~effects ~inline_leaf
+let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false) ~exported ~effects ~inline_leaf
     (program : Anf.program) =
   let mod_sym = sanitize (Ident.name program.Anf.module_ident) in
-  let b = create mod_sym in
+  let b = create ~inline_single_thread_rc mod_sym in
   let defs = Codegen_analysis.collect_pure_defs program.code in
   List.iter
     (fun ((id, lf) : Ident.t * Anf.lfunction) ->
@@ -178,11 +178,15 @@ let compile_with_exports ?(emit_entry = true) ~exported ~effects ~inline_leaf
   in
   (* A host can call an exported unit initializer directly. All OCaml
      application inside the initializer has an active mutator boundary. *)
+  let mutator_enter =
+    if inline_single_thread_rc then "ocamlcc_arc_enter_single_thread"
+    else "arc_mutator_enter"
+  in
   let init_func =
     { name = init_sym; export = true; retty = None; params = [];
       blocks = [{ label = "start";
         insts = [
-          Call (Word, Temp "entered", { fn = Global "arc_mutator_enter"; args = [] });
+          Call (Word, Temp "entered", { fn = Global mutator_enter; args = [] });
           Call_void { fn = Global init_body.name; args = [] };
           Call_void { fn = Global "arc_mutator_leave"; args = [ (Word, Temp "entered") ] } ];
         term = Ret None }] }

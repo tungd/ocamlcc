@@ -780,7 +780,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   | Field (i, kind, arg) ->
       let obj = compile_atom hooks b arg in
       let dst = load_field b obj i in
-      if kind <> Anf.Immediate_field then emit_arc_if_heap b "arc_retain" dst;
+      if kind <> Anf.Immediate_field then emit_arc_if_heap b `Retain dst;
       dst
   | SetField (i, repr, arg, rhs) ->
       let obj = compile_atom hooks b arg in
@@ -792,7 +792,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
           let old_v = fresh_temp b "oldf" in
           emit b (Load (Loadl, Long, old_v, addr));
           emit b (Store (Storel, v, addr));
-          emit_arc_if_heap b "arc_release" old_v);
+          emit_arc_if_heap b `Release old_v);
       unit_const
   | FloatField (i, arg) ->
       let obj = compile_atom hooks b arg in
@@ -989,7 +989,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
             let eaddr = array_address b av ui in
             let dst = fresh_temp b "avel" in
             emit b (Load (Loadl, Long, dst, eaddr));
-            if kind = Lambda.Paddrarray then emit_arc_if_heap b "arc_retain" dst;
+            if kind = Lambda.Paddrarray then emit_arc_if_heap b `Retain dst;
             dst
           in
           if safe then
@@ -1020,7 +1020,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
             let eaddr = array_address b av ui in
             let d = load_double b vv in
             emit b (Store (Stored, d, eaddr));
-            emit_arc_if_heap b "arc_release" vv;
+            emit_arc_if_heap b `Release vv;
             unit_const
           in
           if safe then
@@ -1038,7 +1038,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
                 let old_v = fresh_temp b "olda" in
                 emit b (Load (Loadl, Long, old_v, eaddr));
                 emit b (Store (Storel, vv, eaddr));
-                emit_arc_if_heap b "arc_release" old_v);
+                emit_arc_if_heap b `Release old_v);
             unit_const
           in
           if safe then
@@ -1331,18 +1331,18 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       unit_const
   | Retain (id, body) ->
       let v = compile_atom hooks b (Var id) in
-      emit_arc_if_heap b "arc_retain" v;
+      emit_arc_if_heap b `Retain v;
       compile_aexpr hooks b tail body
   | Release (id, body) ->
       let v = compile_atom hooks b (Var id) in
-      emit_arc_if_heap b "arc_release" v;
+      emit_arc_if_heap b `Release v;
       compile_aexpr hooks b tail body
   | ReleaseMut (id, body) ->
       (match Hashtbl.find_opt b.mut_vars id with
       | Some slot ->
           let v = fresh_temp b "mrel" in
           emit b (Load (Loadl, Long, v, slot));
-          emit_arc_if_heap b "arc_release" v
+          emit_arc_if_heap b `Release v
       | None -> ());
       compile_aexpr hooks b tail body
   | DropReuse (v_id, tok_id, body) ->

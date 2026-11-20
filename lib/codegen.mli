@@ -8,6 +8,7 @@ val compile_program : ?emit_entry:bool -> Anf.program -> Qbe_il.module_
 
 val compile_with_exports :
   ?emit_entry:bool ->
+  ?inline_single_thread_rc:bool ->
   exported:(int list * Ident.t) list ->
   effects:(Ident.t -> bool * bool) ->
   inline_leaf:(Ident.t -> Anf.lfunction option) ->
