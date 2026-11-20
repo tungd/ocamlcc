@@ -216,6 +216,7 @@ val of_lambda :
   ?include_dirs:string list ->
   ?stdlib_dir:string ->
   ?imports:(string * exports) list ->
+  ?on_export_ids:((int list * Ident.t) list -> unit) ->
   Lambda.program ->
   (program, string) result
 val scalar_rep : Lambda.bigarray_kind -> scalar_rep option
@@ -224,5 +225,4 @@ val returns_scalar : aexpr -> bool
 val free_vars : aexpr -> Ident.Set.t
 val pure_defs : aexpr -> (Ident.t * lfunction) list
 
-val exported_functions : aexpr -> (int list * Ident.t) list
 val inline_export_leaves : Lambda.lambda -> aexpr -> Ident.t -> lfunction option

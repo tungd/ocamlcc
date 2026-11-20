@@ -135,8 +135,9 @@ closure allocations in a fixture with the same callback shape.
 # Cross-unit calls
 
 The multi-unit build carries export summaries from compiled units to their
-consumers. A summary follows a function through the unit's immutable module
-slots, including nested structures and signature coercions. Saturated calls
+consumers. A summary follows a function through immutable Lambda block
+allocations. It resolves the conservative field reads produced by signature
+coercions when their owner is a known immutable block. Saturated calls
 use the known entry and its ARC argument convention. Capturing entries borrow
 a closure environment cached at module initialization. Small closed functions
 over tagged scalar parameters can be expanded directly in the caller.

@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Track cross-unit exports through immutable Lambda blocks and their signature coercions. Exercise reordered slots and a hidden nested member in the native driver test. See [compiler pipeline](/concepts/compiler-pipeline.md#cross-unit-calls).
+
 - 2026-11-20 (codex/1) — Bypass shadow-stack TLS before the first stackful fiber and skip shadow entries on root stacks. Preserve stackful abandonment cleanup. See [Wren-style fibers](/concepts/wren-fibers.md).
 
 - 2026-11-20 (codex/1) — Resolve saturated cross-unit calls from build-local export summaries, inline scalar leaves, and carry suspension facts into ARC. See [compiler pipeline](/concepts/compiler-pipeline.md#cross-unit-calls).

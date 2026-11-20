@@ -185,10 +185,17 @@ let () =
 let[@inline] printable x = x >= 32 && x < 127
 let offset = int_of_string "17"
 module Nested = struct
+  let hidden = 7
   let classify x = x + offset
 end
 let[@inline never] add x y = x + y
 let[@inline never] pause x = Fiber.suspend x
+|} in
+      let provider_interface = write_tmp "provider.mli" {|
+val add : int -> int -> int
+val printable : int -> bool
+module Nested : sig val classify : int -> int end
+val pause : int -> int
 |} in
       let consumer = write_tmp "consumer.ml" {|
 let[@inline never] printable n = Provider.printable n
@@ -215,7 +222,7 @@ let () =
 |} in
       let direct_work = Filename.concat tmp "work_cross" in
       (match Driver.build
-               { base_cfg with inputs = [consumer; provider];
+               { base_cfg with inputs = [consumer; provider; provider_interface];
                  output = Some (Filename.concat tmp "cross");
                  work_dir = Some direct_work }
        with

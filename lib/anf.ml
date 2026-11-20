@@ -1759,8 +1759,48 @@ let specialize_int_selector_aliases table code =
   in
   visit Ident.Map.empty code
 
+(* Recover function identities from immutable Lambda blocks, including the
+   conservative field reads emitted when a signature projects a submodule.
+   Mutable records can change through aliases and never establish a shape. *)
+type module_value = Unknown | Known_function of Ident.t | Structure of module_value array
+
+let exported_functions code =
+  let open Lambda in
+  let rec scan env = function
+    | Lvar id -> Option.value ~default:Unknown (Ident.Map.find_opt id env)
+    | Llet (_, _, id, rhs, body) ->
+        let value = match rhs with
+          | Lfunction _ -> Known_function id
+          | _ -> scan env rhs
+        in
+        scan (Ident.Map.add id value env) body
+    | Lletrec (defs, body) ->
+        let env = List.fold_left (fun env rb ->
+          Ident.Map.add rb.id (Known_function rb.id) env) env defs in
+        scan env body
+    | Lmutlet (_, _, _, body) | Lsequence (_, body) | Levent (body, _) ->
+        scan env body
+    | Lprim (Psetglobal _, [body], _) -> scan env body
+    | Lprim (Pmakeblock (0, Immutable, _), fields, _) ->
+        Structure (Array.of_list (List.map (scan env) fields))
+    | Lprim (Pfield (slot, _, _), [owner], _) ->
+        (match scan env owner with
+        | Structure fields when slot >= 0 && slot < Array.length fields -> fields.(slot)
+        | _ -> Unknown)
+    | _ -> Unknown
+  in
+  let rec gather path acc = function
+    | Known_function id -> (List.rev path, id) :: acc
+    | Structure fields ->
+        let acc = ref acc in
+        Array.iteri (fun i field -> acc := gather (i :: path) !acc field) fields;
+        !acc
+    | Unknown -> acc
+  in
+  gather [] [] (scan Ident.Map.empty code)
+
 let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = [])
-    (program : Lambda.program) : (program, string) result =
+    ?on_export_ids (program : Lambda.program) : (program, string) result =
   let saved = !builtin_tables in
   let saved_imports = !unit_imports in
   let printing = if use_builtins then Some (Builtins.load ~include_dirs ()) else None in
@@ -1789,51 +1829,10 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
           code |> inline_local_calls |> drop_unused_alias_lets |> promote_local_refs
           |> lift_recursive_calls
         in
+        Option.iter (fun save -> save (exported_functions cleaned)) on_export_ids;
         let code = conv_tail cleaned |> specialize_scalar_bindings in
         Ok { module_ident = program.module_ident; code }
       with Unsupported what -> Error what)
-
-(* Track the functions exported by the final module block through aliases,
-   nested structures and immutable field projections (module coercions). *)
-type module_value = Unknown | Known_function of Ident.t | Structure of module_value array
-
-let exported_functions code =
-  let atom env = function
-    | Var id -> Option.value ~default:Unknown (Ident.Map.find_opt id env)
-    | _ -> Unknown
-  in
-  let rec scan env = function
-    | Let (id, ce, body) ->
-        let value =
-          match ce with
-          | Fun _ -> Known_function id
-          | MakeBlock (0, args) -> Structure (Array.of_list (List.map (atom env) args))
-          | Atom arg -> atom env arg
-          | Field (slot, Immutable_field, owner) ->
-              (match atom env owner with
-              | Structure fields when slot >= 0 && slot < Array.length fields -> fields.(slot)
-              | _ -> Unknown)
-          | _ -> Unknown
-        in
-        scan (Ident.Map.add id value env) body
-    | LetRec (defs, body) ->
-        let env = List.fold_left (fun env rb ->
-          Ident.Map.add rb.id (Known_function rb.id) env) env defs in
-        scan env body
-    | LetJoin (id, rhs, body) -> scan (Ident.Map.add id (scan env rhs) env) body
-    | MutLet (_, _, body) -> scan env body
-    | Halt value -> atom env value
-    | _ -> Unknown
-  in
-  let rec gather path acc = function
-    | Known_function id -> (List.rev path, id) :: acc
-    | Structure fields ->
-        let acc = ref acc in
-        Array.iteri (fun i field -> acc := gather (i :: path) !acc field) fields;
-        !acc
-    | Unknown -> acc
-  in
-  gather [] [] (scan Ident.Map.empty code)
 
 (* A small closed expression over tagged scalar parameters can be copied into
    the caller. Its body uses neither ownership operations nor exception state. *)

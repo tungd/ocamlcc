@@ -19,17 +19,19 @@ let compile_source ?(include_dirs = []) ?stdlib_dir ?output_prefix ?(emit_cmi = 
   with
   | Error { msg } -> Error msg
   | Ok program -> (
-      match Anf.of_lambda ~use_builtins:(not nostdlib) ~include_dirs ?stdlib_dir ?imports program with
+      let exported = ref [] in
+      let on_export_ids = Option.map (fun _ ids -> exported := ids) on_exports in
+      match Anf.of_lambda ~use_builtins:(not nostdlib) ~include_dirs ?stdlib_dir
+              ?imports ?on_export_ids program with
       | Error what -> Error (Printf.sprintf "unsupported: %s" what)
       | Ok anf ->
-          let exported, inline_leaf =
-            match on_exports with
-            | Some _ -> Anf.exported_functions anf.code,
-                        Anf.inline_export_leaves program.code anf.code
-            | None -> [], (fun _ -> None)
+          let inline_leaf =
+            match !exported with
+            | [] -> (fun _ -> None)
+            | _ -> Anf.inline_export_leaves program.code anf.code
           in
           let anf, effects = Arc_pass.run_with_effects anf in
-          let il, exports = Codegen.compile_with_exports ~emit_entry ~exported ~effects ~inline_leaf anf in
+          let il, exports = Codegen.compile_with_exports ~emit_entry ~exported:!exported ~effects ~inline_leaf anf in
           Option.iter (fun save -> save exports) on_exports;
           Ok (Qbe_il.to_string il))
 
