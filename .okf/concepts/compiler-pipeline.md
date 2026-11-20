@@ -132,6 +132,25 @@ callback, and the local dirty-span helpers in `State.handle_codepoints`.
 `test/lambda_inline_test.ml` checks the direct loop and the absence of
 closure allocations in a fixture with the same callback shape.
 
+# Cross-unit calls
+
+The multi-unit build carries export summaries from compiled units to their
+consumers. A summary follows a function through the unit's immutable module
+slots, including nested structures and signature coercions. Saturated calls
+use the known entry and its ARC argument convention. Capturing entries borrow
+a closure environment cached at module initialization. Small closed functions
+over tagged scalar parameters can be expanded directly in the caller.
+Pure direct calls and inlined leaf expressions preserve initialization
+dependencies. Partial applications, dynamic targets, and prebuilt units
+without summaries use ordinary closure application.
+
+The summary carries suspension and immediate-result facts into ARC.
+Non-suspending imports skip caller shadow roots. A suspending import keeps
+the roots, and an over-application stays conservative because the returned
+closure can suspend independently of the first call. The driver regression
+exercises scalar inlining, signature slots, captured environments, partial
+application, and suspension.
+
 # Match lowering
 
 Pattern compilation in translmod produces two shapes:

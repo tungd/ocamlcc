@@ -55,6 +55,7 @@ type t = {
   vars : (Ident.t, Qbe_il.t) Hashtbl.t;
   mut_vars : (Ident.t, Qbe_il.t) Hashtbl.t;
   funs : (Ident.t, fn_info) Hashtbl.t;
+  emitted_funs : (Ident.t, string * bool * int) Hashtbl.t;
   clos_wrappers : (Ident.t, string) Hashtbl.t;
   groups : (string, (Ident.t * Anf.lfunction) list) Hashtbl.t;
   compiled_groups : (string, unit) Hashtbl.t;
@@ -89,6 +90,7 @@ let create prefix =
     vars = Hashtbl.create 16;
     mut_vars = Hashtbl.create 8;
     funs = Hashtbl.create 16;
+    emitted_funs = Hashtbl.create 16;
     clos_wrappers = Hashtbl.create 16;
     groups = Hashtbl.create 8;
     compiled_groups = Hashtbl.create 8;

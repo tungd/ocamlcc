@@ -13,6 +13,8 @@ val compile_source :
   ?emit_entry:bool ->
   filename:string ->
   modname:string ->
+  ?imports:(string * Anf.exports) list ->
+  ?on_exports:(Anf.exports -> unit) ->
   string ->
   (string, string) result
 (** Compile an in-memory OCaml source string to QBE IL text. *)
@@ -30,6 +32,8 @@ val compile_file :
   ?emit_entry:bool ->
   filename:string ->
   modname:string ->
+  ?imports:(string * Anf.exports) list ->
+  ?on_exports:(Anf.exports -> unit) ->
   unit ->
   (string, string) result
 (** Compile an OCaml source file to QBE IL text. [modname] defaults to

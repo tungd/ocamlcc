@@ -142,12 +142,22 @@ type cexpr =
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
+  | DirectApp of imported_function * atom list
   | Builtin of string * Builtins.arg_kind * atom
   | Ccall of string * atom list
   | GetGlobal of string
   | Fun of lfunction
   | Assign of Ident.t * atom
   | AssignImm of Ident.t * atom
+
+and imported_function = {
+  unit_name : string;
+  symbol : string;
+  arity : int;
+  yields : bool;
+  returns_immediate : bool;
+  inline_leaf : lfunction option;
+}
 
 and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;
@@ -194,6 +204,8 @@ and switch_cases = {
   fail : aexpr option;
 }
 
+type exports = (int list * imported_function) list
+
 type program = {
   module_ident : Ident.t;
   code : aexpr;
@@ -203,6 +215,7 @@ val of_lambda :
   ?use_builtins:bool ->
   ?include_dirs:string list ->
   ?stdlib_dir:string ->
+  ?imports:(string * exports) list ->
   Lambda.program ->
   (program, string) result
 val scalar_rep : Lambda.bigarray_kind -> scalar_rep option
@@ -210,3 +223,6 @@ val scalar_operand_vars : Ident.Set.t -> scalar_operand -> Ident.Set.t
 val returns_scalar : aexpr -> bool
 val free_vars : aexpr -> Ident.Set.t
 val pure_defs : aexpr -> (Ident.t * lfunction) list
+
+val exported_functions : aexpr -> (int list * Ident.t) list
+val inline_export_leaves : Lambda.lambda -> aexpr -> Ident.t -> lfunction option

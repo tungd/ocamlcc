@@ -10,8 +10,42 @@ let entry_point modules =
   { name = "ocamlcc_module_init"; export = true; retty = None; params = [];
     blocks = [{ label = "start"; insts = List.map call_init modules; term = Ret None }] }
 
-let compile_program ?(emit_entry = true) (program : Anf.program) :
-    Qbe_il.module_ =
+let load_pointer b addr =
+  let dst = fresh_temp b "capture" in
+  emit b (Load (Loadl, Long, dst, addr));
+  dst
+
+(* Cache a borrowed closure pointer during initialization. The published
+   module remains its owner. The entry invokes the known body with the
+   cached environment and the ordinary owned arguments. *)
+let export_captured b mod_value path target arity =
+  let name =
+    "ocamlcc_direct_" ^ b.prefix ^ "_"
+    ^ String.concat "_" (List.map string_of_int path)
+  in
+  let slot = name ^ "_env" in
+  b.datas <- { name = slot; export = false; align = Some 8;
+               items = [D_long 0L] } :: b.datas;
+  let clos =
+    List.fold_left (fun owner index ->
+      load_pointer b (ptr_offset b owner (8 * index) "slot")) mod_value path
+  in
+  emit b (Store (Storel, clos, Global slot));
+  with_fn_state b ~self:None ~cur_group:None ~entry_label:"start" ~in_init:false
+    (fun () ->
+      start_block b "start";
+      let clos = load_pointer b (Global slot) in
+      let params = List.init arity (fun _ -> Long, fresh_name b "arg") in
+      let args = (Long, clos) :: List.map (fun (ty, name) -> ty, Temp name) params in
+      let res = fresh_temp b "res" in
+      emit b (Call (Long, res, { fn = Global target; args }));
+      close_ret b (Some res);
+      b.funcs <- { name; export = true; retty = Some Long; params;
+                   blocks = finish_blocks b } :: b.funcs);
+  name
+
+let compile_with_exports ?(emit_entry = true) ~exported ~effects ~inline_leaf
+    (program : Anf.program) =
   let mod_sym = sanitize (Ident.name program.Anf.module_ident) in
   let b = create mod_sym in
   let defs = Codegen_analysis.collect_pure_defs program.code in
@@ -114,6 +148,20 @@ let compile_program ?(emit_entry = true) (program : Anf.program) :
       start_block b ldep_ok)
     deps;
   let mod_val = Codegen_expr.compile_aexpr Codegen_fn.hooks b false program.code in
+  let unit_name = Ident.name program.module_ident in
+  let exports = List.filter_map (fun (path, id) ->
+    match Hashtbl.find_opt b.emitted_funs id with
+    | None -> None
+    | Some (_, true, _) when b.cur_fn.term <> None -> None
+    | Some (target, has_closure, arity) ->
+        let symbol =
+          if has_closure then export_captured b mod_val path target arity else target
+        in
+        let yields, returns_immediate = effects id in
+        let inline_leaf = inline_leaf id in
+        Some (path, { Anf.unit_name; symbol; arity; yields; returns_immediate; inline_leaf }))
+    exported
+  in
   if b.cur_fn.term = None then begin
     emit b
       (Call_void
@@ -144,4 +192,8 @@ let compile_program ?(emit_entry = true) (program : Anf.program) :
       List.rev (entry_point [mod_sym] :: init_func :: init_body :: b.funcs)
     else List.rev (init_func :: init_body :: b.funcs)
   in
-  { funcs; datas = List.rev b.datas }
+  { funcs; datas = List.rev b.datas }, exports
+
+let compile_program ?emit_entry program =
+  fst (compile_with_exports ?emit_entry ~exported:[] ~effects:(fun _ -> true, false)
+         ~inline_leaf:(fun _ -> None) program)

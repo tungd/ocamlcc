@@ -35,7 +35,7 @@ type state = {
   frame_borrowed : Ident.Set.t;
   imm : Ident.Set.t;
   pure : Ident.Set.t;
-  known_funs : Ident.Set.t;
+  known_funs : int Ident.Map.t;
   yielding_funs : Ident.Set.t;
   imm_funs : int Ident.Map.t;
   borrowed_entries : borrowed_entry Ident.Map.t;
@@ -106,6 +106,7 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _ -> true
   | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
   | Ccall (name, _) -> Ccalls.returns_imm name
+  | DirectApp (target, _) -> target.returns_immediate
   | App (Var fn, args) -> (
       match Ident.Map.find_opt fn imm_funs with
       | Some arity -> List.length args = arity
@@ -325,6 +326,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
       (Ident.Set.union (atom_vars arr) (atom_vars idx), [ v ])
   | MakeArrayInit (len, init) -> (atom_vars len, [ init ])
   | App (fn, args) -> (atom_vars fn, args)
+  | DirectApp (_, args) -> (Ident.Set.empty, args)
   | Builtin (_, _, a) -> (atom_vars a, [])
   | ScalarValue (_, a) -> (Anf.scalar_operand_vars Ident.Set.empty a, [])
   | IntegerOfInt (_, value) -> (atom_vars value, [])
@@ -346,7 +348,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
 let read_only_parameters (lf : Anf.lfunction) =
   let remove_uses params args = Ident.Set.diff params (atoms_vars args) in
   let cexpr params = function
-    | Anf.App _ | Fun _ -> Ident.Set.empty
+    | Anf.App _ | DirectApp _ | Fun _ -> Ident.Set.empty
     | Ccall (("ocamlcc_finalizers_due" | "ocamlcc_poll_finalizers"), []) ->
         params
     | Ccall _ -> Ident.Set.empty
@@ -479,6 +481,7 @@ let is_yielding_ccall name = (Ccalls.find name).Ccalls.yields
 
 let ce_may_raise_fn = function
   | Anf.App _ -> true
+  | DirectApp (target, _) -> Option.is_none target.inline_leaf
   | Binop ((Div | Mod | Bint_div _ | Bint_mod _), _, _)
   | IntegerBinop (_, (Div_int | Rem_int), _, _) -> true
   | StringGet (true, _, _)
@@ -494,15 +497,20 @@ let ce_may_raise_fn = function
   | Ccall (name, _) -> (Ccalls.find name).Ccalls.raises
   | _ -> false
 
-let is_yielding_ce (env : state) = function
+let call_can_suspend known yielding = function
   | Anf.Ccall (name, _) -> is_yielding_ccall name
-  | App (Var fn, _) ->
-      (not (Ident.Set.mem fn env.known_funs))
-      || Ident.Set.mem fn env.yielding_funs
+  | DirectApp (target, _) -> target.yields
+  | App (Var fn, args) ->
+      (match Ident.Map.find_opt fn known with
+      | Some arity ->
+          List.length args > arity || Ident.Set.mem fn yielding
+      | None -> true)
   | App _ -> true
   | _ -> false
 
-let compute_yield_info (e : Anf.aexpr) : Ident.Set.t * Ident.Set.t =
+let is_yielding_ce env = call_can_suspend env.known_funs env.yielding_funs
+
+let compute_yield_info (e : Anf.aexpr) =
   let funs : (Ident.t * Anf.lfunction) list ref = ref [] in
   let rec collect = function
     | Anf.Let (id, Fun lf, body) ->
@@ -536,15 +544,10 @@ let compute_yield_info (e : Anf.aexpr) : Ident.Set.t * Ident.Set.t =
   in
   collect e;
   let known =
-    List.fold_left (fun s (id, _) -> Ident.Set.add id s) Ident.Set.empty !funs
+    List.fold_left (fun acc (id, (lf : Anf.lfunction)) ->
+      Ident.Map.add id (List.length lf.params) acc) Ident.Map.empty !funs
   in
-  let ce_yields yielding = function
-    | Anf.Ccall (name, _) -> is_yielding_ccall name
-    | App (Var fn, _) ->
-        (not (Ident.Set.mem fn known)) || Ident.Set.mem fn yielding
-    | App _ -> true
-    | _ -> false
-  in
+  let ce_yields = call_can_suspend known in
   let rec body_yields yielding = function
     | Anf.Let (_, ce, body) | MutLet (_, ce, body) ->
         ce_yields yielding ce || body_yields yielding body
@@ -683,7 +686,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
   | Let (x, ((Atom _ | Binop _ | IntSelect _ | Unop _ | Field _ | SetField _
              | FloatField _ | SetFloatField _ | OffsetRef _
              | StringGet _ | BytesSet _ | BytesGetN _ | BytesSetN _ | Bswap16 _ | BswapBint _ | ArrayGet _ | ArraySet _
-             | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _
+             | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _ | DirectApp _
              | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
              | ScalarLoad _ | ScalarStore _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
              | Builtin _ | BigarrayAccess _ | Ccall _ | GetGlobal _ | Assign _ | AssignImm _
@@ -901,7 +904,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
             in
             let env_body =
               { env with
-                known_funs = Ident.Set.add worker env.known_funs;
+                known_funs = Ident.Map.add worker (List.length lf.params) env.known_funs;
                 pure = Ident.Set.add worker env.pure;
                 imm_funs;
                 borrowed_entries = Ident.Map.add id { worker; borrow } env.borrowed_entries }
@@ -1357,11 +1360,12 @@ and rebuild_cexpr (ce : Anf.cexpr) (atoms' : Anf.atom list) : Anf.cexpr =
   | ArraySet (s, k, arr, idx, _), [ v ] -> ArraySet (s, k, arr, idx, v)
   | MakeArrayInit (len, _), [ init ] -> MakeArrayInit (len, init)
   | App (fn, _), args -> App (fn, args)
+  | DirectApp (target, _), args -> DirectApp (target, args)
   | Assign (id, _), [ rhs ] -> Assign (id, rhs)
   | AssignImm (id, _), [ rhs ] -> AssignImm (id, rhs)
   | _ -> ce
 
-let run (prog : Anf.program) : Anf.program =
+let run_with_effects (prog : Anf.program) =
   let pure =
     Anf.pure_defs prog.code |> List.map fst |> Ident.Set.of_list
   in
@@ -1385,4 +1389,7 @@ let run (prog : Anf.program) : Anf.program =
       try_depth = 0;
       in_tail = true }
   in
-  { prog with code = transform_aexpr init_env prog.code }
+  let effects id = Ident.Set.mem id yielding_funs, Ident.Map.mem id imm_funs in
+  { prog with code = transform_aexpr init_env prog.code }, effects
+
+let run prog = fst (run_with_effects prog)

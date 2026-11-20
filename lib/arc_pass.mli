@@ -5,3 +5,6 @@
    instructions over [Anf.program]. *)
 
 val run : Anf.program -> Anf.program
+
+val run_with_effects : Anf.program -> Anf.program * (Ident.t -> bool * bool)
+(** The returned lookup reports suspension and immediate result, respectively. *)

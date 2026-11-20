@@ -159,6 +159,7 @@ let collect_globals self_sym (e : Anf.aexpr) : string list =
   and scan_cexpr (ce : Anf.cexpr) =
     match ce with
     | GetGlobal name -> add name
+    | DirectApp (target, _) -> add target.unit_name
     | Fun lf -> scan_aexpr lf.body
     | _ -> ()
   in

@@ -181,6 +181,76 @@ let () =
           in
           check "exe build" (code = 0 && out = expected));
 
+      let provider = write_tmp "provider.ml" {|
+let[@inline] printable x = x >= 32 && x < 127
+let offset = int_of_string "17"
+module Nested = struct
+  let classify x = x + offset
+end
+let[@inline never] add x y = x + y
+let[@inline never] pause x = Fiber.suspend x
+|} in
+      let consumer = write_tmp "consumer.ml" {|
+let[@inline never] printable n = Provider.printable n
+let[@inline never] classify n =
+  let cell = Some n in
+  let value = Provider.Nested.classify n in
+  value, cell
+let[@inline never] paused n =
+  let cell = Some n in
+  let value = Provider.pause n in
+  value, cell
+let[@inline never] partial n =
+  let fn = Provider.add n in
+  fn 5
+let () =
+  assert (printable 32 && not (printable 127));
+  assert (classify 3 = (20, Some 3));
+  assert (partial 7 = 12);
+  let fiber = Fiber.create (fun n ->
+    let value, cell = paused n in value + Option.get cell) in
+  assert (Fiber.resume fiber 5 = 5);
+  assert (Fiber.resume fiber 20 = 25);
+  print_endline "cross-unit=ok"
+|} in
+      let direct_work = Filename.concat tmp "work_cross" in
+      (match Driver.build
+               { base_cfg with inputs = [consumer; provider];
+                 output = Some (Filename.concat tmp "cross");
+                 work_dir = Some direct_work }
+       with
+       | Error msg -> failwith msg
+       | Ok exe ->
+           let il = read_file (Filename.concat direct_work "consumer.ssa") in
+           let body name =
+             let start = "function l $ocamlcc_Consumer_" ^ name ^ "(" in
+             let rec find = function
+               | [] -> failwith ("missing caller " ^ name)
+               | line :: rest -> if has_substr ~sub:start line then rest else find rest
+             in
+             let rec collect acc = function
+               | "}" :: _ -> String.concat "\n" (List.rev acc)
+               | line :: rest -> collect (line :: acc) rest
+               | [] -> failwith ("unterminated function " ^ name)
+             in
+             collect [] (find (String.split_on_char '\n' il))
+           in
+           let has name sub = has_substr ~sub (body name) in
+           let checks =
+             [ "scalar inlining", not (has "printable" "ocamlcc_Provider_printable")
+                                    && has "printable" "csgel";
+               "captured call", has "classify" "call extern $ocamlcc_direct_Provider_"
+                                && not (has "classify" "arc_fiber_push");
+               "suspending call", has "paused" "call extern $ocamlcc_Provider_pause("
+                                  && has "paused" "arc_fiber_push";
+               "partial call", has "partial" "ocamlcc_apply1_raw";
+               "native result", run_capture exe [] = (0, "cross-unit=ok\n") ]
+           in
+           List.iter (fun (name, ok) ->
+             if not ok then Printf.printf "cross-unit %s failed\n" name) checks;
+           check "cross-unit scalar inlining and captured direct call"
+             (List.for_all snd checks));
+
       let registry = write_tmp "registry.ml" "let count = ref 0" in
       let plugin = write_tmp "plugin.ml" "let () = incr Registry.count" in
       let entry = write_tmp "entry.ml" "let () = print_int !Registry.count" in

@@ -131,6 +131,9 @@ and dump_ce (ce : Anf.cexpr) : string =
   | Anf.App (f, args) ->
       Printf.sprintf "(app %s [%s])" (dump_atom f)
         (String.concat "," (List.map dump_atom args))
+  | Anf.DirectApp (target, args) ->
+      Printf.sprintf "(direct %s [%s])" target.symbol
+        (String.concat "," (List.map dump_atom args))
   | Anf.Fun _ -> "(fun)"
   | Anf.Assign (id, a) | Anf.AssignImm (id, a) -> Printf.sprintf "(assign %s %s)" (dump_ident id) (dump_atom a)
   | Anf.Field (i, _, a) -> Printf.sprintf "(field%d %s)" i (dump_atom a)
@@ -173,7 +176,8 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.MakeArrayInit (a, b) -> count_atom (count_atom acc a) b
     | Anf.App (f, args) -> List.fold_left count_atom (count_atom acc f) args
     | Anf.Builtin (_, _, a) -> count_atom acc a
-    | Anf.BigarrayAccess (_, args) | Anf.Ccall (_, args) -> List.fold_left count_atom acc args
+    | Anf.BigarrayAccess (_, args) | Anf.Ccall (_, args) | Anf.DirectApp (_, args) ->
+        List.fold_left count_atom acc args
     | Anf.IntegerOfInt _ | Anf.IntOfInteger _ | Anf.IntegerConvert _ -> acc
     | Anf.ScalarLoad _ | Anf.ScalarStore _ | Anf.FloatBinop _ | Anf.IntegerBinop _ | Anf.IntegerCompare _ | Anf.IntegerNeg _ | Anf.IntegerShift _ | Anf.ScalarValue _ | Anf.GetGlobal _ -> acc
     | Anf.Fun lf -> count_release_mut id lf.Anf.body

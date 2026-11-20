@@ -911,6 +911,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                 | [] -> None
               in
               let asm_files = ref [] in
+              let imports = ref [] in
               let shim_c_files = ref [] in
               let shim_exported_syms = ref [] in
               let has_mli modname =
@@ -948,6 +949,9 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                             match
                               Pipeline.compile_file ~include_dirs:inc_dirs ?stdlib_dir
                                 ~output_prefix:prefix ~emit_cmi
+                                ~imports:!imports
+                                ~on_exports:(fun exports ->
+                                  imports := (s.modname, exports) :: !imports)
                                 ~nopervasives:cfg.nopervasives
                                 ~nostdlib:eff_nostdlib ~emit_entry:false
                                 ~filename:s.path ~modname:s.modname ()

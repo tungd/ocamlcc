@@ -1131,6 +1131,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let op = match access.operation with `Get -> "get" | `Set -> "set" in
       compile_ccall hooks b (Printf.sprintf "caml_ba_%s_%d" op access.rank) args
   | Ccall (sym, args) -> compile_ccall hooks b sym args
+  | DirectApp (target, args) -> compile_ccall hooks b target.symbol args
   | GetGlobal mod_name ->
       let gsym = "ocamlcc_global_" ^ sanitize mod_name in
       let gv = fresh_temp b "glob" in
@@ -1204,7 +1205,11 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   | Let (id, (App _ as ce), Halt (Var v)) when tail && Ident.same id v ->
       compile_cexpr hooks b ~tail:true ce
   | Let (id, ce, body) ->
-      let v = compile_cexpr hooks b ~tail:false ce in
+      let v =
+        match ce with
+        | DirectApp ({ inline_leaf = Some lf; _ }, args) -> inline_leaf hooks b lf args
+        | _ -> compile_cexpr hooks b ~tail:false ce
+      in
       if b.cur_fn.term <> None then unit_const
       else begin
         Hashtbl.replace b.vars id v;
@@ -1414,6 +1419,20 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
           start_block b ljoin;
           emit b (Phi (Long, res, List.rev !preds));
           res)
+
+and inline_leaf hooks b (lf : Anf.lfunction) args =
+  let args = List.map (compile_atom hooks b) args in
+  let rec bindings ids = function
+    | Anf.Let (id, _, body) -> bindings (id :: ids) body
+    | LetJoin (id, lhs, rhs) -> bindings (bindings (id :: ids) lhs) rhs
+    | If (_, yes, no) -> bindings (bindings ids yes) no
+    | Halt _ -> ids
+    | _ -> assert false
+  in
+  let params = List.map fst lf.params in
+  with_shadowed_vars b (bindings params lf.body) (fun () ->
+    List.iter2 (Hashtbl.replace b.vars) params args;
+    compile_aexpr hooks b false lf.body)
 
 and compile_if hooks b tail result_ty (cond : Anf.atom) th el =
   let v = compile_atom hooks b cond in

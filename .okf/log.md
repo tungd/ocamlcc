@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Resolve saturated cross-unit calls from build-local export summaries, inline scalar leaves, and carry suspension facts into ARC. See [compiler pipeline](/concepts/compiler-pipeline.md#cross-unit-calls).
+
 - 2026-11-20 (codex/1) — Use raw closure application for generated OCaml calls, with direct fixed-arity dispatch and mutator boundaries at host entry. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Promote non-escaping refs and equivalent mutable blocks to local slots before ANF. Reuse immediate-slot inference and owning-slot cleanup. See [Perceus ARC](/concepts/perceus-arc.md).

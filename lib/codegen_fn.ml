@@ -126,6 +126,7 @@ and alloc_closure b code_sym arity (env : Ident.t list) : t =
 let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
     ~(env : Ident.t list) : string =
   let g = (Hashtbl.find b.funs id).global in
+  Hashtbl.replace b.emitted_funs id (g, has_closure, List.length lf.params);
   let param_binders =
     List.map
       (fun (pid, _) -> (pid, fresh_name b (sanitize (Ident.name pid))))

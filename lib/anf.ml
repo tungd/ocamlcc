@@ -134,12 +134,22 @@ type cexpr =
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
+  | DirectApp of imported_function * atom list
   | Builtin of string * Builtins.arg_kind * atom
   | Ccall of string * atom list
   | GetGlobal of string
   | Fun of lfunction
   | Assign of Ident.t * atom
   | AssignImm of Ident.t * atom
+
+and imported_function = {
+  unit_name : string;
+  symbol : string;
+  arity : int;
+  yields : bool;
+  returns_immediate : bool;
+  inline_leaf : lfunction option;
+}
 
 and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;
@@ -185,6 +195,8 @@ and switch_cases = {
   blocks : (int * aexpr) list;
   fail : aexpr option;
 }
+
+type exports = (int list * imported_function) list
 
 type program = {
   module_ident : Ident.t;
@@ -252,6 +264,20 @@ let conv_const (c : Lambda.structured_constant) : atom =
   | Const_nativeint n -> Nativeint n
   | Const_float_array sl -> ConstFloatArray (List.map parse_const_float sl)
   | Const_block (tag, items) -> ConstBlock (tag, List.map conv_const_item items)
+
+let unit_imports : (string * exports) list ref = ref []
+
+let imported_callee callee =
+  let open Lambda in
+  let rec resolve path = function
+    | Lprim (Pfield (slot, Pointer, Immutable), [owner], _) ->
+        resolve (slot :: path) owner
+    | Lprim (Pgetglobal id, [], _) ->
+        Option.bind (List.assoc_opt (Ident.name id) !unit_imports)
+          (List.assoc_opt path)
+    | _ -> None
+  in
+  resolve [] callee
 
 let check_array_kind (_k : Lambda.array_kind) = ()
 
@@ -394,7 +420,7 @@ and conv_mut_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) :
 and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   let emit_cexpr ce = Let (id, ce, k ()) in
   match lam with
-  | Lapply { ap_func; ap_args; _ } -> (
+  | Lapply { ap_func; ap_args; ap_inlined; _ } -> (
       let printing, selectors = !builtin_tables in
       let select = Option.bind selectors (fun table -> Builtins.resolve_int_selection table ap_func) in
       match select, ap_args with
@@ -408,9 +434,17 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
               | [ arg ] ->
                   conv_expr arg (fun a -> emit_cexpr (Builtin (symbol, arg_kind, a)))
               | _ -> raise (Unsupported (describe lam)))
-          | None ->
+          | None -> (
+              match imported_callee ap_func with
+              | Some target when target.arity = List.length ap_args ->
+                  let target =
+                    if ap_inlined = Never_inline then { target with inline_leaf = None }
+                    else target
+                  in
+                  conv_atoms ap_args (fun args -> emit_cexpr (DirectApp (target, args)))
+              | _ ->
               conv_expr ap_func (fun fn ->
-                  conv_atoms ap_args (fun args -> emit_cexpr (App (fn, args))))))
+                  conv_atoms ap_args (fun args -> emit_cexpr (App (fn, args)))))))
   | Lprim (Pignore, [ arg ], _) ->
       conv_expr arg (fun _ -> emit_cexpr (Atom Unit))
   | Lprim (Pbytes_to_string, [ arg ], _)
@@ -859,7 +893,8 @@ let cexpr_vars free_aexpr acc = function
   | App (fn, args) ->
       List.fold_left atom_vars (atom_vars acc fn) args
   | Builtin (_, _, a) -> atom_vars acc a
-  | BigarrayAccess (_, args) | Ccall (_, args) -> List.fold_left atom_vars acc args
+  | BigarrayAccess (_, args) | Ccall (_, args) | DirectApp (_, args) ->
+      List.fold_left atom_vars acc args
   | GetGlobal _ -> acc
   | Assign (id, a) | AssignImm (id, a) -> Ident.Set.add id (atom_vars acc a)
   | Fun lf ->
@@ -1724,9 +1759,10 @@ let specialize_int_selector_aliases table code =
   in
   visit Ident.Map.empty code
 
-let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir
+let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = [])
     (program : Lambda.program) : (program, string) result =
   let saved = !builtin_tables in
+  let saved_imports = !unit_imports in
   let printing = if use_builtins then Some (Builtins.load ~include_dirs ()) else None in
   let stdlib_dir =
     match stdlib_dir with
@@ -1739,8 +1775,9 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir
       stdlib_dir
   in
   builtin_tables := (printing, selectors);
+  unit_imports := imports;
   Fun.protect
-    ~finally:(fun () -> builtin_tables := saved)
+    ~finally:(fun () -> builtin_tables := saved; unit_imports := saved_imports)
     (fun () ->
       try
         let code =
@@ -1755,3 +1792,93 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir
         let code = conv_tail cleaned |> specialize_scalar_bindings in
         Ok { module_ident = program.module_ident; code }
       with Unsupported what -> Error what)
+
+(* Track the functions exported by the final module block through aliases,
+   nested structures and immutable field projections (module coercions). *)
+type module_value = Unknown | Known_function of Ident.t | Structure of module_value array
+
+let exported_functions code =
+  let atom env = function
+    | Var id -> Option.value ~default:Unknown (Ident.Map.find_opt id env)
+    | _ -> Unknown
+  in
+  let rec scan env = function
+    | Let (id, ce, body) ->
+        let value =
+          match ce with
+          | Fun _ -> Known_function id
+          | MakeBlock (0, args) -> Structure (Array.of_list (List.map (atom env) args))
+          | Atom arg -> atom env arg
+          | Field (slot, Immutable_field, owner) ->
+              (match atom env owner with
+              | Structure fields when slot >= 0 && slot < Array.length fields -> fields.(slot)
+              | _ -> Unknown)
+          | _ -> Unknown
+        in
+        scan (Ident.Map.add id value env) body
+    | LetRec (defs, body) ->
+        let env = List.fold_left (fun env rb ->
+          Ident.Map.add rb.id (Known_function rb.id) env) env defs in
+        scan env body
+    | LetJoin (id, rhs, body) -> scan (Ident.Map.add id (scan env rhs) env) body
+    | MutLet (_, _, body) -> scan env body
+    | Halt value -> atom env value
+    | _ -> Unknown
+  in
+  let rec gather path acc = function
+    | Known_function id -> (List.rev path, id) :: acc
+    | Structure fields ->
+        let acc = ref acc in
+        Array.iteri (fun i field -> acc := gather (i :: path) !acc field) fields;
+        !acc
+    | Unknown -> acc
+  in
+  gather [] [] (scan Ident.Map.empty code)
+
+(* A small closed expression over tagged scalar parameters can be copied into
+   the caller. Its body uses neither ownership operations nor exception state. *)
+let inline_export_leaves lambda code =
+  let allowed = ref Ident.Set.empty in
+  let add id (lf : Lambda.lfunction) =
+    match lf.attr.inline with
+    | Never_inline | Unroll _ -> ()
+    | _ -> allowed := Ident.Set.add id !allowed
+  in
+  let rec visit expr =
+    (match expr with
+    | Lambda.Llet (_, _, id, Lfunction lf, _) -> add id lf
+    | Lambda.Lletrec (defs, _) ->
+        List.iter (fun (rb : Lambda.rec_binding) -> add rb.id rb.def) defs
+    | _ -> ());
+    Lambda.iter_head_constructor visit expr
+  in
+  visit lambda;
+  let scalar = function Var _ | Int _ | Char _ | Unit -> true | _ -> false in
+  let rec leaf remaining = function
+    | Halt a when scalar a -> remaining - 1
+    | Let (_, Atom a, body) when scalar a && remaining > 0 ->
+        leaf (remaining - 1) body
+    | Let (_, Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr
+                     | Cmp _ | Compare_ints | Isout), lhs, rhs), body)
+      when scalar lhs && scalar rhs && remaining > 0 ->
+        leaf (remaining - 1) body
+    | Let (_, Unop ((Neg | Not | Offset _ | Isint), a), body)
+      when scalar a && remaining > 0 ->
+        leaf (remaining - 1) body
+    | If (cond, yes, no) when scalar cond && remaining > 0 ->
+        let after_yes = leaf (remaining - 1) yes in
+        if after_yes >= 0 then leaf after_yes no else -1
+    | LetJoin (_, rhs, body) when remaining > 0 ->
+        let after_rhs = leaf (remaining - 1) rhs in
+        if after_rhs >= 0 then leaf after_rhs body else -1
+    | _ -> -1
+  in
+  let leaves = List.fold_left (fun acc (id, lf) ->
+    let params = Ident.Set.of_list (List.map fst lf.params) in
+    if Ident.Set.mem id !allowed
+       && List.for_all (fun (_, rep) -> rep = Lambda.Pintval) lf.params
+       && leaf 12 lf.body >= 0
+       && Ident.Set.subset (free_vars lf.body) params
+    then Ident.Map.add id lf acc else acc) Ident.Map.empty (pure_defs code)
+  in
+  fun id -> Ident.Map.find_opt id leaves
