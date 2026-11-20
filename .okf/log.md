@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Inline known local functor applications and resolve calls through their immutable module fields. See [compiler pipeline](/concepts/compiler-pipeline.md#local-functor-applications).
+
 - 2026-11-20 (codex/1) — Persist direct-call facts with bundled and compatibility stdlib archives. Use matching archive and interface digests when compiling separately linked clients. See [build pipeline](/concepts/build-pipeline.md).
 
 - 2026-11-20 (codex/1) — Honor native representations and noalloc for user C externals. Check for exceptions before boxing raw numeric results. See [Perceus ARC](/concepts/perceus-arc.md).

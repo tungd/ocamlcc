@@ -1796,7 +1796,8 @@ let inline_local_calls code =
           | _ -> false
         in
         small || (cost <= callback_limit
-          && List.exists2 (known_callback defs) def.params call.ap_args)
+          && (def.attr.is_a_functor
+              || List.exists2 (known_callback defs) def.params call.ap_args))
   in
   let rec visit depth defs = function
     | Llet (mode, kind, id, rhs, body) ->
@@ -1830,6 +1831,61 @@ let inline_local_calls code =
     | expr -> shallow_map (visit depth defs) expr
   in
   visit 0 Ident.Map.empty code
+
+(* A known module block contains already-evaluated fields. Expose bindings
+   introduced by a functor's inlined initializer so a later module
+   projection can still name the original function. *)
+let resolve_module_projections code =
+  let open Lambda in
+  let fields_of = function
+    | Lprim (Pmakeblock (0, Immutable, None), fields, _)
+      when List.for_all
+        (function Lvar _ | Lconst (Const_int _ | Const_char _) -> true | _ -> false)
+        fields ->
+        Some (Array.of_list fields)
+    | _ -> None
+  in
+  let extend modules id rhs =
+    let fields =
+      match rhs with Lvar alias -> Ident.Map.find_opt alias modules | _ -> fields_of rhs
+    in
+    match fields with
+    | Some fields -> Ident.Map.add id fields modules
+    | None -> modules
+  in
+  let rec returns_module = function
+    | Llet (_, _, _, _, body) | Lletrec (_, body) | Lsequence (_, body) ->
+        returns_module body
+    | rhs -> Option.is_some (fields_of rhs)
+  in
+  let rec visit modules = function
+    | Llet (mode, kind, id, rhs, body) ->
+        let bind modules rhs =
+          Llet (mode, kind, id, rhs, visit (extend modules id rhs) body)
+        in
+        let rhs = visit modules rhs in
+        if mode = Strict && returns_module rhs then expose bind modules rhs
+        else bind modules rhs
+    | Lprim ((Pfield (index, _, Immutable) as field_prim), [owner], loc) ->
+        let owner = visit modules owner in
+        let field =
+          match owner with
+          | Lvar id ->
+              Option.bind (Ident.Map.find_opt id modules) (fun fields ->
+                if index >= 0 && index < Array.length fields then Some fields.(index)
+                else None)
+          | _ -> None
+        in
+        Option.value ~default:(Lprim (field_prim, [owner], loc)) field
+    | expr -> shallow_map (visit modules) expr
+  and expose bind modules = function
+    | Llet (mode, kind, id, rhs, body) ->
+        Llet (mode, kind, id, rhs, expose bind (extend modules id rhs) body)
+    | Lletrec (defs, body) -> Lletrec (defs, expose bind modules body)
+    | Lsequence (action, body) -> Lsequence (action, expose bind modules body)
+    | rhs -> bind modules rhs
+  in
+  visit Ident.Map.empty code
 
 (* The address of a one-field mutable block can be removed when every
    occurrence reads or writes that field. Immutable aliases have the same
@@ -2236,7 +2292,8 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
           | None -> program.code
         in
         let cleaned =
-          code |> inline_local_calls |> drop_unused_alias_lets |> promote_local_refs
+          code |> inline_local_calls |> resolve_module_projections
+          |> drop_unused_alias_lets |> promote_local_refs
           |> replace_local_aggregates |> lift_recursive_calls
         in
         Option.iter (fun save -> save (exported_functions cleaned)) on_export_ids;

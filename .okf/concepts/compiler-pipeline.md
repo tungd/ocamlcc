@@ -132,6 +132,17 @@ callback, and the local dirty-span helpers in `State.handle_codepoints`.
 `test/lambda_inline_test.ml` checks the direct loop and the absence of
 closure allocations in a fixture with the same callback shape.
 
+# Local functor applications
+
+The Lambda inliner can expand a known, saturated functor application within
+its existing size and expansion budget. Bindings for a functor's initialized
+module fields stay visible to the compiler, so calls through a known
+immutable module projection can name the specialized function directly.
+Initializer effects still run in order for each application. The module
+value and its fields remain available to first-class consumers, and functors
+whose bodies are available only in a prebuilt archive use ordinary module
+application.
+
 # Cross-unit calls
 
 The multi-unit build carries export summaries from compiled units to their

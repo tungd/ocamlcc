@@ -45,3 +45,22 @@ let () =
   forbid run "call extern $ocamlcc_Lambda_inline_apply(";
   forbid run "call extern $ocamlcc_apply";
   forbid run "call extern $arc_alloc("
+
+let () =
+  let il = compile {|
+    let count = ref 0
+    module Make (Order : sig val key : int -> int end) = struct
+      let () = incr count
+      let[@inline never] project x = Order.key x + !count
+    end
+    module Asc_order = struct let key x = x end
+    module Desc_order = struct let key x = -x end
+    module Asc = Make (Asc_order)
+    module Desc = Make (Desc_order)
+    let asc x = Asc.project x
+    let desc x = Desc.project x
+  |} in
+  List.iter (fun name ->
+    let body = function_body il name in
+    require body "call $ocamlcc_Lambda_inline_project";
+    forbid body "call extern $ocamlcc_apply") ["asc"; "desc"]
