@@ -415,3 +415,8 @@
  (name integer_codegen_test)
  (modules integer_codegen_test)
  (libraries ocamlcc str))
+
+(test
+ (name shadow_codegen_test)
+ (modules shadow_codegen_test)
+ (libraries ocamlcc str))

@@ -33,6 +33,26 @@ let load_field b obj index =
   emit b (Load (Loadl, Long, dst, addr));
   dst
 
+let with_shadow_stack b emit_calls =
+  let created = fresh_temp b "stackful" in
+  let active = fresh_label b "shadow_active" in
+  let done_ = fresh_label b "shadow_done" in
+  (* An aligned word load is a relaxed atomic read on the supported
+     targets. Root stacks ignore shadow calls even if a fiber is
+     created between the push and the pop. *)
+  emit b (Load (Loadw, Word, created, Global "ocamlcc_stackful_fibers_created"));
+  close_block b (Br (created, active, done_));
+  start_block b active;
+  emit_calls ();
+  close_block b (Jmp done_);
+  start_block b done_
+
+let shadow_call b fn value =
+  emit b (Call_void { fn = Global fn; args = [ (Long, value) ] })
+
+let shadow_pop b fn count =
+  if count > 0 then shadow_call b fn (Int (Int64.of_int count))
+
 let rec compile_atom hooks b (a : Anf.atom) : t =
   match a with
   | BorrowedField (index, owner) -> load_field b (compile_atom hooks b owner) index
@@ -572,19 +592,11 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
              Pop once the first call returns - apply_closure's runtime
              (closure.c) shadows the tail args it consumes itself. *)
           let rest_vals = List.map (compile_atom hooks b) rest_args in
-          List.iter
-            (fun v ->
-              emit b
-                (Call_void
-                   { fn = Global "arc_fiber_push"; args = [ (Long, v) ] }))
-            rest_vals;
+          with_shadow_stack b (fun () ->
+              List.iter (shadow_call b "arc_fiber_push") rest_vals);
           let clos_res = apply hooks b false fn_atom first_args in
-          List.iter
-            (fun _ ->
-              emit b
-                (Call_void
-                   { fn = Global "arc_fiber_pop"; args = [ (Long, Int 1L) ] }))
-            rest_vals;
+          with_shadow_stack b (fun () ->
+              shadow_pop b "arc_fiber_pop" (List.length rest_vals));
           let ex = fresh_temp b "oex" in
           emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
           let lerr = fresh_label b "oapp_err" in
@@ -602,11 +614,10 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
           let lerr_end = b.cur_fn.open_label in
           close_block b (Jmp ljoin);
           start_block b lok;
-          emit b
-            (Call_void { fn = Global "arc_fiber_push"; args = [ (Long, clos_res) ] });
+          with_shadow_stack b (fun () ->
+              shadow_call b "arc_fiber_push" clos_res);
           let final_v = apply_closure b clos_res rest_vals in
-          emit b
-            (Call_void { fn = Global "arc_fiber_pop"; args = [ (Long, Int 1L) ] });
+          with_shadow_stack b (fun () -> shadow_pop b "arc_fiber_pop" 1);
           emit b
             (Call_void
                { fn = Global "arc_release_val"; args = [ (Long, clos_res) ] });
@@ -1336,42 +1347,31 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
         (Call_void { fn = Global "arc_free_reuse"; args = [ (Long, tok) ] });
       compile_aexpr hooks b tail body
   | ShadowPush (vars, muts, rtoks, body) ->
-      List.iter
-        (fun id ->
-          let v = compile_atom hooks b (Var id) in
-          emit b
-            (Call_void { fn = Global "arc_fiber_push"; args = [ (Long, v) ] }))
-        vars;
-      List.iter
-        (fun mid ->
-          match Hashtbl.find_opt b.mut_vars mid with
-          | Some slot ->
-              let v = fresh_temp b "shmut" in
-              emit b (Load (Loadl, Long, v, slot));
-              emit b
-                (Call_void
-                   { fn = Global "arc_fiber_push"; args = [ (Long, v) ] })
-          | None -> ())
-        muts;
-      List.iter
-        (fun tid ->
-          let tok = Hashtbl.find b.vars tid in
-          emit b
-            (Call_void
-               { fn = Global "arc_fiber_push_reuse"; args = [ (Long, tok) ] }))
-        rtoks;
+      if vars <> [] || muts <> [] || rtoks <> [] then
+        with_shadow_stack b (fun () ->
+            List.iter
+              (fun id ->
+                shadow_call b "arc_fiber_push" (compile_atom hooks b (Var id)))
+              vars;
+            List.iter
+              (fun mid ->
+                match Hashtbl.find_opt b.mut_vars mid with
+                | Some slot ->
+                    let v = fresh_temp b "shmut" in
+                    emit b (Load (Loadl, Long, v, slot));
+                    shadow_call b "arc_fiber_push" v
+                | None -> ())
+              muts;
+            List.iter
+              (fun tid ->
+                shadow_call b "arc_fiber_push_reuse" (Hashtbl.find b.vars tid))
+              rtoks);
       compile_aexpr hooks b tail body
   | ShadowPop (n_vals, n_reuse, body) ->
-      if n_vals > 0 then
-        emit b
-          (Call_void
-             { fn = Global "arc_fiber_pop";
-               args = [ (Long, Int (Int64.of_int n_vals)) ] });
-      if n_reuse > 0 then
-        emit b
-          (Call_void
-             { fn = Global "arc_fiber_pop_reuse";
-               args = [ (Long, Int (Int64.of_int n_reuse)) ] });
+      if n_vals > 0 || n_reuse > 0 then
+        with_shadow_stack b (fun () ->
+            shadow_pop b "arc_fiber_pop" n_vals;
+            shadow_pop b "arc_fiber_pop_reuse" n_reuse);
       compile_aexpr hooks b tail body
   | Unwind -> emit_unwind b
   | Raise a ->

@@ -26,7 +26,7 @@ static _Thread_local Fiber            *tls_current_fiber = NULL;
 /* Once a stackful fiber is published, execution on that fiber must check
  * TLS. A main-stack frame never becomes abandonable, even across the first
  * fiber creation on this or another thread. */
-static _Atomic unsigned g_stackful_fibers_created;
+_Atomic uint32_t ocamlcc_stackful_fibers_created;
 
 static pthread_once_t g_fiber_tls_once = PTHREAD_ONCE_INIT;
 static pthread_key_t  g_fiber_tls_key;
@@ -128,7 +128,7 @@ static void shadow_init(Fiber *f)
 
 static inline Fiber *shadow_fiber(void)
 {
-    if (atomic_load_explicit(&g_stackful_fibers_created, memory_order_relaxed) == 0)
+    if (atomic_load_explicit(&ocamlcc_stackful_fibers_created, memory_order_relaxed) == 0)
         return NULL;
     Fiber *cur = tls_current_fiber;
     return cur != NULL && cur->c_stack != NULL ? cur : NULL;
@@ -314,8 +314,8 @@ int64_t ocamlcc_fiber_create(int64_t closure)
     f->entry_closure = closure;
     f->state = FIBER_SUSPENDED;
     pal_ctx_make(&f->ctx, cstack + total_bytes, fiber_trampoline);
-    if (atomic_load_explicit(&g_stackful_fibers_created, memory_order_relaxed) == 0)
-        atomic_store_explicit(&g_stackful_fibers_created, 1u, memory_order_relaxed);
+    if (atomic_load_explicit(&ocamlcc_stackful_fibers_created, memory_order_relaxed) == 0)
+        atomic_store_explicit(&ocamlcc_stackful_fibers_created, 1u, memory_order_relaxed);
     return (int64_t)(uintptr_t)f;
 }
 
