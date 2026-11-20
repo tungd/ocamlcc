@@ -766,18 +766,19 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   | Field (i, kind, arg) ->
       let obj = compile_atom hooks b arg in
       let dst = load_field b obj i in
-      if kind <> Anf.Immediate_field then
-        emit b (Call_void { fn = Global "arc_retain_val"; args = [ (Long, dst) ] });
+      if kind <> Anf.Immediate_field then emit_arc_if_heap b "arc_retain" dst;
       dst
-  | SetField (i, arg, rhs) ->
+  | SetField (i, repr, arg, rhs) ->
       let obj = compile_atom hooks b arg in
       let v = compile_atom hooks b rhs in
       let addr = ptr_offset b obj (8 * i) "fldp" in
-      let old_v = fresh_temp b "oldf" in
-      emit b (Load (Loadl, Long, old_v, addr));
-      emit b (Store (Storel, v, addr));
-      emit b
-        (Call_void { fn = Global "arc_release_val"; args = [ (Long, old_v) ] });
+      (match repr with
+      | Lambda.Immediate -> emit b (Store (Storel, v, addr))
+      | Pointer ->
+          let old_v = fresh_temp b "oldf" in
+          emit b (Load (Loadl, Long, old_v, addr));
+          emit b (Store (Storel, v, addr));
+          emit_arc_if_heap b "arc_release" old_v);
       unit_const
   | FloatField (i, arg) ->
       let obj = compile_atom hooks b arg in
@@ -980,9 +981,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
             emit b (Binop (Add, Long, eaddr, av, off));
             let dst = fresh_temp b "avel" in
             emit b (Load (Loadl, Long, dst, eaddr));
-            if kind = Lambda.Paddrarray then
-              emit b
-                (Call_void { fn = Global "arc_retain_val"; args = [ (Long, dst) ] });
+            if kind = Lambda.Paddrarray then emit_arc_if_heap b "arc_retain" dst;
             dst
           in
           if safe then
@@ -1016,7 +1015,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
             emit b (Binop (Add, Long, eaddr, av, off));
             let d = load_double b vv in
             emit b (Store (Stored, d, eaddr));
-            emit b (Call_void { fn = Global "arc_release_val"; args = [ (Long, vv) ] });
+            emit_arc_if_heap b "arc_release" vv;
             unit_const
           in
           if safe then
@@ -1037,14 +1036,13 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
                 let old_v = fresh_temp b "olda" in
                 emit b (Load (Loadl, Long, old_v, eaddr));
                 emit b (Store (Storel, vv, eaddr));
-                emit b
-                  (Call_void
-                     { fn = Global "arc_release_val"; args = [ (Long, old_v) ] }));
+                emit_arc_if_heap b "arc_release" old_v);
             unit_const
           in
           if safe then
             let len = array_len_raw b av in
-            compile_bounds_guarded b ~drop_on_oob:vv ui len do_write
+            let drop_on_oob = if kind = Lambda.Pintarray then None else Some vv in
+            compile_bounds_guarded b ?drop_on_oob ui len do_write
           else do_write ())
   | CreateBytes len ->
       let lv = compile_atom hooks b len in
@@ -1170,22 +1168,6 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
           failwith
             (Printf.sprintf "codegen: assignment to non-mutable %s"
                (sanitize (Ident.name id))))
-
-let emit_arc_if_heap b fn value =
-  let odd = fresh_temp b "rc_tag" in
-  let is_null = fresh_temp b "rc_null" in
-  let check = fresh_label b "rc_check" in
-  let heap = fresh_label b "rc_heap" in
-  let done_ = fresh_label b "rc_done" in
-  emit b (Binop (And, Long, odd, value, Int 1L));
-  close_block b (Br (odd, done_, check));
-  start_block b check;
-  emit b (Cmp (Eq, Long, is_null, value, Int 0L));
-  close_block b (Br (is_null, done_, heap));
-  start_block b heap;
-  emit b (Call_void { fn = Global fn; args = [ (Long, value) ] });
-  close_block b (Jmp done_);
-  start_block b done_
 
 let emit_unwind b : t =
   match b.cur_fn.try_stack with

@@ -29,6 +29,8 @@ let il =
         let v = { index = 0 } in
         while v.index < n do v.index <- v.index + 1 done;
         v.index
+      let while_field r n =
+        while r.index < n do r.index <- r.index + 1 done
       let while_call n =
         let v = { index = 0 } in
         while v.index < n do side_effect v.index; v.index <- v.index + 1 done;
@@ -57,10 +59,10 @@ let () =
     ["width"; "select"; "classify"; "join"; "mutate"];
   List.iter (fun name -> check name poll true)
     ["allocate"; "foreign"; "recurse"; "loop"; "reverse"; "loop_with_call";
-     "while_local"; "while_call"; "match_with_call"; "generic_get"];
+     "while_local"; "while_field"; "while_call"; "match_with_call"; "generic_get"];
   check "generic_get" "call extern $ocamlcc_gen_array_get(" true;
   let phase_mask = " =l and [^,\n]+, 127\n" in
   List.iter (fun name -> check ~literal:false name phase_mask true)
-    ["loop"; "reverse"; "while_local"];
+    ["loop"; "reverse"; "while_local"; "while_field"];
   List.iter (fun name -> check ~literal:false name phase_mask false)
     ["loop_with_call"; "while_call"]

@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Keep typed immediate field stores and inline heap checks for pointer-capable field and array ownership. Cover overwrites and checked-store errors. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Resume shallow continuations with fresh handlers on the same effect fiber. Check handler replacement and cancellation against stock OCaml. See [Wren-style fibers](/concepts/wren-fibers.md#ocaml-5-effect-handlers).
 
 - 2026-11-20 (codex/1) — Run OCaml Deep handlers and effect-pattern syntax on stackful fibers. Cover one-shot continuation ownership, forwarding, exception injection, and Wren suspension. See [Wren-style fibers](/concepts/wren-fibers.md#ocaml-5-effect-handlers).

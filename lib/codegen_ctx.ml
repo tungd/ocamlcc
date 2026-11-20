@@ -559,6 +559,22 @@ let cmp_of_ocaml : Lambda.integer_comparison -> Cmp.t = function
   | Cgt -> Sgt
   | Cge -> Sge
 
+let emit_arc_if_heap b fn value =
+  let odd = fresh_temp b "rc_tag" in
+  let is_null = fresh_temp b "rc_null" in
+  let check = fresh_label b "rc_check" in
+  let heap = fresh_label b "rc_heap" in
+  let done_ = fresh_label b "rc_done" in
+  emit b (Binop (And, Long, odd, value, Int 1L));
+  close_block b (Br (odd, done_, check));
+  start_block b check;
+  emit b (Cmp (Eq, Long, is_null, value, Int 0L));
+  close_block b (Br (is_null, done_, heap));
+  start_block b heap;
+  emit b (Call_void { fn = Global fn; args = [ (Long, value) ] });
+  close_block b (Jmp done_);
+  start_block b done_
+
 let compile_bounds_guarded b ?drop_on_oob idx_untagged len_val
     (on_ok : unit -> Qbe_il.t) : Qbe_il.t =
   let ok = fresh_temp b "bnd" in
@@ -572,11 +588,7 @@ let compile_bounds_guarded b ?drop_on_oob idx_untagged len_val
   let lok_end = b.cur_fn.open_label in
   close_block b (Jmp ldone);
   start_block b loob;
-  Option.iter
-    (fun v ->
-      emit b
-        (Call_void { fn = Global "arc_release_val"; args = [ (Long, v) ] }))
-    drop_on_oob;
+  Option.iter (emit_arc_if_heap b "arc_release") drop_on_oob;
   emit b
     (Call_void { fn = Global "ocamlcc_raise_invalid_arg_oob"; args = [] });
   let loob_end = b.cur_fn.open_label in

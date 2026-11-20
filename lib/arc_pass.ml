@@ -314,7 +314,8 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | Field (_, _, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
   | Bswap16 a | BswapBint (_, a) ->
       (atom_vars a, [])
-  | SetField (_, a, rhs) -> (atom_vars a, [ rhs ])
+  | SetField (_, Lambda.Pointer, a, rhs) -> (atom_vars a, [ rhs ])
+  | SetField (_, Immediate, a, rhs)
   | SetFloatField (_, a, rhs) ->
       (Ident.Set.union (atom_vars a) (atom_vars rhs), [])
   | StringGet (_, a, b) | BytesGetN (_, _, a, b) | ArrayGet (_, _, a, b) ->
@@ -1356,7 +1357,7 @@ and rebuild_cexpr (ce : Anf.cexpr) (atoms' : Anf.atom list) : Anf.cexpr =
   | MakeBlock (tag, _), args -> MakeBlock (tag, args)
   | AllocReuse (tok, tag, _), args -> AllocReuse (tok, tag, args)
   | MakeArray (kind, _), args -> MakeArray (kind, args)
-  | SetField (i, arg, _), [ rhs ] -> SetField (i, arg, rhs)
+  | SetField (i, repr, arg, _), [ rhs ] -> SetField (i, repr, arg, rhs)
   | ArraySet (s, k, arr, idx, _), [ v ] -> ArraySet (s, k, arr, idx, v)
   | MakeArrayInit (len, _), [ init ] -> MakeArrayInit (len, init)
   | App (fn, _), args -> App (fn, args)

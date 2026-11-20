@@ -115,7 +115,7 @@ type cexpr =
   | AllocReuse of reuse * int * atom list
   | MakeArray of Lambda.array_kind * atom list
   | Field of int * field_kind * atom
-  | SetField of int * atom * atom
+  | SetField of int * Lambda.immediate_or_pointer * atom * atom
   | FloatField of int * atom
   | SetFloatField of int * atom * atom
   | OffsetRef of int * atom

@@ -107,7 +107,7 @@ type cexpr =
   | AllocReuse of reuse * int * atom list
   | MakeArray of Lambda.array_kind * atom list
   | Field of int * field_kind * atom
-  | SetField of int * atom * atom
+  | SetField of int * Lambda.immediate_or_pointer * atom * atom
   | FloatField of int * atom
   | SetFloatField of int * atom * atom
   | OffsetRef of int * atom
@@ -300,7 +300,7 @@ let with_finalizer_poll body =
 (* Only local, bounded operations can defer polling. A call, an allocation,
    or a checked operation that constructs an exception needs the usual poll. *)
 let is_local_operation = function
-  | Atom _ | Field _ | IntSelect _ | Assign _ | AssignImm _
+  | Atom _ | Field _ | SetField (_, Immediate, _, _) | IntSelect _ | Assign _ | AssignImm _
   | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr
            | Cmp _ | Compare_ints | Isout), _, _)
   | Unop ((Neg | Not | Offset _ | Isint | String_length | Array_length), _)
@@ -512,9 +512,9 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
   | Lprim (Pfield_computed, [ arg; idx ], _) ->
       conv_atoms [ arg; idx ] (fun vs ->
           emit_cexpr (Ccall ("caml_obj_field", vs)))
-  | Lprim (Psetfield (i, _, _), [ arg; rhs ], _) ->
+  | Lprim (Psetfield (i, repr, _), [ arg; rhs ], _) ->
       conv_expr arg (fun a ->
-          conv_expr rhs (fun v -> emit_cexpr (SetField (i, a, v))))
+          conv_expr rhs (fun v -> emit_cexpr (SetField (i, repr, a, v))))
   | Lprim (Psetfield_computed _, [ arg; idx; rhs ], _) ->
       conv_atoms [ arg; idx; rhs ] (fun vs ->
           emit_cexpr (Ccall ("caml_obj_set_field", vs)))
@@ -924,7 +924,7 @@ let cexpr_vars free_aexpr acc = function
   | Field (_, _, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
   | Bswap16 a | BswapBint (_, a) ->
       atom_vars acc a
-  | SetField (_, a, b)
+  | SetField (_, _, a, b)
   | SetFloatField (_, a, b)
   | StringGet (_, a, b)
   | BytesGetN (_, _, a, b)
