@@ -72,7 +72,7 @@ let () =
        let v = try raise (Boom 1) with Boom n -> f n"
       [ "call extern $arc_alloc(";
         "call extern $arc_release_val(";
-        "call extern $ocamlcc_apply1(" ]
+        "call extern $ocamlcc_apply1_raw(" ]
   in
   let ok4 =
     match

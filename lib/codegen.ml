@@ -121,16 +121,27 @@ let compile_program ?(emit_entry = true) (program : Anf.program) :
            args = [ (Long, Global global_sym); (Long, mod_val) ] });
     close_ret b None
   end;
-  let init_func =
-    { name = init_sym;
-      export = true;
+  let init_body =
+    { name = "ocamlcc_init_body_" ^ mod_sym;
+      export = false;
       retty = None;
       params = [];
       blocks = finish_blocks b }
   in
+  (* A host can call an exported unit initializer directly. All OCaml
+     application inside the initializer has an active mutator boundary. *)
+  let init_func =
+    { name = init_sym; export = true; retty = None; params = [];
+      blocks = [{ label = "start";
+        insts = [
+          Call (Word, Temp "entered", { fn = Global "arc_mutator_enter"; args = [] });
+          Call_void { fn = Global init_body.name; args = [] };
+          Call_void { fn = Global "arc_mutator_leave"; args = [ (Word, Temp "entered") ] } ];
+        term = Ret None }] }
+  in
   let funcs =
     if emit_entry then
-      List.rev (entry_point [mod_sym] :: init_func :: b.funcs)
-    else List.rev (init_func :: b.funcs)
+      List.rev (entry_point [mod_sym] :: init_func :: init_body :: b.funcs)
+    else List.rev (init_func :: init_body :: b.funcs)
   in
   { funcs; datas = List.rev b.datas }

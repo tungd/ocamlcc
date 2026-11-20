@@ -489,10 +489,10 @@ let apply_closure b clos_val (arg_vals : t list) : t =
   in
   match n with
   | 0 -> clos_val
-  | 1 -> call_helper "ocamlcc_apply1" arg_vals
-  | 2 -> call_helper "ocamlcc_apply2" arg_vals
-  | 3 -> call_helper "ocamlcc_apply3" arg_vals
-  | 4 -> call_helper "ocamlcc_apply4" arg_vals
+  | 1 -> call_helper "ocamlcc_apply1_raw" arg_vals
+  | 2 -> call_helper "ocamlcc_apply2_raw" arg_vals
+  | 3 -> call_helper "ocamlcc_apply3_raw" arg_vals
+  | 4 -> call_helper "ocamlcc_apply4_raw" arg_vals
   | _ ->
       let arr = fresh_temp b "argv" in
       emit_start_alloc b arr (8 * n);
@@ -505,7 +505,7 @@ let apply_closure b clos_val (arg_vals : t list) : t =
         (Call
            ( Long,
              dst,
-             { fn = Global "ocamlcc_apply_n";
+             { fn = Global "ocamlcc_apply_n_raw";
                args =
                  [ (Long, clos_val); (Long, Int (Int64.of_int n)); (Long, arr) ] } ));
       dst

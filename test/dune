@@ -405,3 +405,8 @@
  (name local_refs_test)
  (modules local_refs_test)
  (libraries ocamlcc str))
+
+(test
+ (name internal_apply_test)
+ (modules internal_apply_test)
+ (libraries ocamlcc str))

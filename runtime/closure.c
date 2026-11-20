@@ -235,20 +235,62 @@ int64_t ocamlcc_apply_n(int64_t clos_val, int64_t argc, int64_t *argv)
     return res;
 }
 
+static ArcClosure *exact_closure(int64_t clos, uint64_t arity)
+{
+    if (clos & 1)
+        return NULL;
+    ArcClosure *c = (ArcClosure *)(uintptr_t)clos;
+    return (((ArcHeader *)c - 1)->tag == ARC_TAG_CLOSURE && c->arity == arity)
+        ? c : NULL;
+}
+
+int64_t ocamlcc_apply2_raw(int64_t clos, int64_t a0, int64_t a1)
+{
+    ArcClosure *c = exact_closure(clos, 2);
+    if (c != NULL)
+        return ((fn2_t)c->code)(clos, a0, a1);
+    int64_t argv[2] = { a0, a1 };
+    return ocamlcc_apply_n_raw(clos, 2, argv);
+}
+
+int64_t ocamlcc_apply3_raw(int64_t clos, int64_t a0, int64_t a1, int64_t a2)
+{
+    ArcClosure *c = exact_closure(clos, 3);
+    if (c != NULL)
+        return ((fn3_t)c->code)(clos, a0, a1, a2);
+    int64_t argv[3] = { a0, a1, a2 };
+    return ocamlcc_apply_n_raw(clos, 3, argv);
+}
+
+int64_t ocamlcc_apply4_raw(int64_t clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3)
+{
+    ArcClosure *c = exact_closure(clos, 4);
+    if (c != NULL)
+        return ((fn4_t)c->code)(clos, a0, a1, a2, a3);
+    int64_t argv[4] = { a0, a1, a2, a3 };
+    return ocamlcc_apply_n_raw(clos, 4, argv);
+}
+
 int64_t ocamlcc_apply2(int64_t clos, int64_t a0, int64_t a1)
 {
-    int64_t argv[2] = { a0, a1 };
-    return ocamlcc_apply_n(clos, 2, argv);
+    int entered = arc_mutator_enter();
+    int64_t res = ocamlcc_apply2_raw(clos, a0, a1);
+    arc_mutator_leave(entered);
+    return res;
 }
 
 int64_t ocamlcc_apply3(int64_t clos, int64_t a0, int64_t a1, int64_t a2)
 {
-    int64_t argv[3] = { a0, a1, a2 };
-    return ocamlcc_apply_n(clos, 3, argv);
+    int entered = arc_mutator_enter();
+    int64_t res = ocamlcc_apply3_raw(clos, a0, a1, a2);
+    arc_mutator_leave(entered);
+    return res;
 }
 
 int64_t ocamlcc_apply4(int64_t clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3)
 {
-    int64_t argv[4] = { a0, a1, a2, a3 };
-    return ocamlcc_apply_n(clos, 4, argv);
+    int entered = arc_mutator_enter();
+    int64_t res = ocamlcc_apply4_raw(clos, a0, a1, a2, a3);
+    arc_mutator_leave(entered);
+    return res;
 }
