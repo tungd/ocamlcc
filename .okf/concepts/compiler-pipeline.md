@@ -201,8 +201,10 @@ Saturated calls to `Stdlib.Int.min` and `Stdlib.Int.max` use slots from the
 selected standard library's `Stdlib__Int.cmi`. The driver passes the chosen
 stdlib directory through even when it disables the host include path.
 These calls become a signed comparison and selection of the original tagged
-integer. Partial applications, project modules named `Int`, and units with a
-competing `Stdlib__Int.cmi` keep ordinary application. See
+integer. The compiler follows immutable local aliases, including alias
+chains, for saturated calls. Partial applications and first-class aliases
+keep ordinary closure behavior. Project modules named `Int` and units
+with a competing `Stdlib__Int.cmi` also keep ordinary application. See
 `test/int_selection_test.ml` for the emitted IL checks.
 
 [^design-doc]: Stage structure, goals, and the exception/fiber lowering

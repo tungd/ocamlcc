@@ -44,8 +44,20 @@ let () =
   require saturated "cslel";
   require saturated "csgel";
   forbid saturated "ocamlcc_global_Stdlib__Int";
+  let aliases = compile {|
+    let min = Int.min
+    let first = min
+    let max = Stdlib.Int.max
+    let clip lo hi x = max lo (first hi x)
+  |} in
+  require aliases "cslel";
+  require aliases "csgel";
+  forbid aliases "ocamlcc_apply2";
   let partial = compile "let f x = Int.min x" in
   require partial "ocamlcc_global_Stdlib__Int";
+  let partial_alias = compile "let min = Int.min\nlet f x = min x" in
+  require partial_alias "ocamlcc_apply1";
+  forbid partial_alias "cslel";
   let shadowed = compile "module Int = struct let min a b = a + b end\nlet f a b = Int.min a b" in
   forbid shadowed "cslel";
   let stdlib_dir = Config.standard_library in

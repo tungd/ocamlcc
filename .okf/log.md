@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Specialize saturated calls through immutable aliases of the selected stdlib’s integer selectors. Partial and first-class uses retain ordinary closure behavior. See [compiler pipeline](/concepts/compiler-pipeline.md).
+
 - 2026-11-20 (codex/1) — Share a dispatcher closure for capturing recursive groups. In the matched tterm parser probe, the streaming dispatch signature shrank from 16 parameters to 3, and all 4,000 calls kept the live-block count flat. See [compiler pipeline](/concepts/compiler-pipeline.md).
 
 - 2026-11-20 (codex/1) — Lower saturated calls to the selected stdlib’s integer min and max to a signed comparison on tagged values. See [compiler pipeline](/concepts/compiler-pipeline.md).

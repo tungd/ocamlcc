@@ -1499,6 +1499,33 @@ let lift_recursive_calls program =
   in
   visit Ident.Set.empty Ident.Set.empty program
 
+(* An immutable alias of a known stdlib selector still names that selector.
+   Rewrite saturated applications only; the original binding remains available
+   for exports, partial application, and other first-class uses. *)
+let specialize_int_selector_aliases table code =
+  let open Lambda in
+  let rec visit aliases = function
+    | Llet (mode, kind, id, rhs, body) ->
+        let rhs = visit aliases rhs in
+        let selector =
+          match rhs with
+          | Lvar source -> Ident.Map.find_opt source aliases
+          | _ when Option.is_some (Builtins.resolve_int_selection table rhs) -> Some rhs
+          | _ -> None
+        in
+        let aliases =
+          match selector with
+          | Some selector -> Ident.Map.add id selector aliases
+          | None -> aliases
+        in
+        Llet (mode, kind, id, rhs, visit aliases body)
+    | Lapply ({ ap_func = Lvar fn; ap_args = [ lhs; rhs ]; _ } as call) ->
+        let ap_func = Option.value ~default:call.ap_func (Ident.Map.find_opt fn aliases) in
+        Lapply { call with ap_func; ap_args = [ visit aliases lhs; visit aliases rhs ] }
+    | expr -> shallow_map (visit aliases) expr
+  in
+  visit Ident.Map.empty code
+
 let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir
     (program : Lambda.program) : (program, string) result =
   let saved = !builtin_tables in
@@ -1518,7 +1545,12 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir
     ~finally:(fun () -> builtin_tables := saved)
     (fun () ->
       try
-        let cleaned = program.code |> drop_unused_alias_lets |> lift_recursive_calls in
+        let code =
+          match selectors with
+          | Some table -> specialize_int_selector_aliases table program.code
+          | None -> program.code
+        in
+        let cleaned = code |> drop_unused_alias_lets |> lift_recursive_calls in
         let code = conv_tail cleaned |> specialize_scalar_bindings in
         Ok { module_ident = program.module_ident; code }
       with Unsupported what -> Error what)
