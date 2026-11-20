@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Replace non-escaping tuple and option blocks with their local components. Preserve initializer evaluation and escaping block identity. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Infer borrowed argument positions across static recursive groups and saturated forwarding calls. Preserve owning entries and test long mutual recursion. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Keep typed immediate field stores and inline heap checks for pointer-capable field and array ownership. Cover overwrites and checked-store errors. See [Perceus ARC](/concepts/perceus-arc.md).

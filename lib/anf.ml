@@ -1630,6 +1630,62 @@ let promote_local_refs code =
   in
   visit code
 
+(* An immutable block can disappear when all its uses project a field or
+   inspect its known constructor. The fields still evaluate once, in the
+   order used by allocation, even when the continuation ignores them. *)
+let replace_local_aggregates code =
+  let open Lambda in
+  let exception Escapes in
+  let rec replace tag fields aliases = function
+    | Llet (_, _, alias, Lvar id, body) when Ident.Set.mem id aliases ->
+        replace tag fields (Ident.Set.add alias aliases) body
+    | Lprim (Pfield (i, _, _), [Lvar id], _) when Ident.Set.mem id aliases ->
+        (match List.nth_opt fields i with
+        | Some field -> Lvar field
+        | None -> raise Escapes)
+    | Lprim (Pisint, [Lvar id], _) when Ident.Set.mem id aliases ->
+        Lconst (Const_int 0)
+    | Lifthenelse (Lvar id, yes, _) when Ident.Set.mem id aliases ->
+        replace tag fields aliases yes
+    | Lswitch (Lvar id, sw, _) when Ident.Set.mem id aliases ->
+        let arm =
+          match List.assoc_opt tag sw.sw_blocks with
+          | Some _ as arm -> arm
+          | None -> sw.sw_failaction
+        in
+        (match arm with
+        | Some arm -> replace tag fields aliases arm
+        | None -> raise Escapes)
+    | Lvar id | Lmutvar id | Lassign (id, _) | Lifused (id, _)
+      when Ident.Set.mem id aliases -> raise Escapes
+    | Lfunction _ as expr ->
+        if not (Ident.Set.disjoint aliases (free_variables expr)) then raise Escapes;
+        expr
+    | Lletrec (defs, body) ->
+        List.iter (fun def ->
+          if not (Ident.Set.disjoint aliases (free_variables (Lfunction def.def))) then
+            raise Escapes) defs;
+        Lletrec (defs, replace tag fields aliases body)
+    | expr -> shallow_map (replace tag fields aliases) expr
+  in
+  let rec visit = function
+    | Llet (mode, kind, id, Lprim ((Pmakeblock (tag, Immutable, shape) as prim), args, loc), body)
+      when args <> [] && List.length args <= 2 ->
+        let args = List.map visit args in
+        let body = visit body in
+        let fields = List.map (fun _ -> Ident.create_local "component") args in
+        (match replace tag fields (Ident.Set.singleton id) body with
+        | body ->
+            let values = List.combine fields args in
+            let kinds = Option.value ~default:(List.map (fun _ -> Pgenval) args) shape in
+            List.fold_right2
+              (fun (field, arg) kind body -> Llet (Strict, kind, field, arg, body))
+              values kinds body
+        | exception Escapes -> Llet (mode, kind, id, Lprim (prim, args, loc), body))
+    | expr -> shallow_map visit expr
+  in
+  visit code
+
 (* Groups that use their members only as saturated calls can share a
    dispatcher closure. Its environment stays borrowed across transitions.
    First-class uses outside the group call it through wrappers of the original
@@ -1870,7 +1926,7 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
         in
         let cleaned =
           code |> inline_local_calls |> drop_unused_alias_lets |> promote_local_refs
-          |> lift_recursive_calls
+          |> replace_local_aggregates |> lift_recursive_calls
         in
         Option.iter (fun save -> save (exported_functions cleaned)) on_export_ids;
         let code = conv_tail cleaned |> specialize_scalar_bindings in

@@ -420,3 +420,8 @@
  (name shadow_codegen_test)
  (modules shadow_codegen_test)
  (libraries ocamlcc str))
+
+(test
+ (name aggregate_test)
+ (modules aggregate_test)
+ (libraries ocamlcc str))
