@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-20 (codex/1) — Align 64 KiB slabs through PAL and recover the owner from the slot address. Cover full slabs, large mappings, and warm-slab reclamation. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Fuse QBE comparison branches and fold tag corrections into constant integer arithmetic. Cover mixed boolean uses and wraparound. See [value representation](/concepts/value-representation.md).
 
 - 2026-11-20 (codex/1) — Return from empty finalizer polls after reading the registration count. Preserve ready-queue handoff and explicit cycle collection. See [ARC finalizers](/concepts/arc-finalizers.md).

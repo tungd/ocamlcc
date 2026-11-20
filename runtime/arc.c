@@ -250,16 +250,14 @@ typedef struct SlabPage {
     uint64_t         _pad;
 } SlabPage;
 
+_Static_assert((SLAB_SIZE & (SLAB_SIZE - 1u)) == 0u,
+               "Slab lookup requires power-of-two alignment");
 _Static_assert((sizeof(SlabPage) % 16u) == 0u,
                "SlabPage header must preserve 16-byte slot alignment");
 
 static SlabPage  *g_partial_slabs[NUM_SIZE_CLASSES];
 static SlabPage  *g_full_slabs[NUM_SIZE_CLASSES];
 static uint32_t   g_class_slab_count[NUM_SIZE_CLASSES];
-static SlabPage **g_slab_dir = NULL;
-static size_t     g_slab_dir_len = 0;
-static size_t     g_slab_dir_cap = 0;
-static size_t     g_slab_dir_bytes = 0;
 
 static ArcWeakArray     *g_weak_head = NULL;
 static _Atomic uint64_t  g_weak_count = 0;
@@ -809,71 +807,6 @@ static void slab_list_remove(SlabPage **head, SlabPage *s)
     s->next = NULL;
 }
 
-static void slab_dir_insert(SlabPage *s)
-{
-    if (g_slab_dir_len == g_slab_dir_cap) {
-        size_t new_bytes = (g_slab_dir_bytes == 0u) ? (size_t)LARGE_PAGE_ALIGN
-                                                  : (g_slab_dir_bytes * 2u);
-        SlabPage **nd = (SlabPage **)pal_page_alloc(new_bytes);
-        if (nd == NULL)
-            pal_abort();
-        if (g_slab_dir != NULL) {
-            pal_memcpy(nd, g_slab_dir, g_slab_dir_len * sizeof(SlabPage *));
-            pal_page_free(g_slab_dir, g_slab_dir_bytes);
-        }
-        g_slab_dir = nd;
-        g_slab_dir_bytes = new_bytes;
-        g_slab_dir_cap = new_bytes / sizeof(SlabPage *);
-    }
-    size_t lo = 0, hi = g_slab_dir_len;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2u;
-        if ((uintptr_t)g_slab_dir[mid] < (uintptr_t)s)
-            lo = mid + 1u;
-        else
-            hi = mid;
-    }
-    for (size_t i = g_slab_dir_len; i > lo; i--)
-        g_slab_dir[i] = g_slab_dir[i - 1u];
-    g_slab_dir[lo] = s;
-    g_slab_dir_len++;
-}
-
-static SlabPage *slab_dir_find(const void *ptr)
-{
-    size_t lo = 0, hi = g_slab_dir_len;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2u;
-        if ((uintptr_t)g_slab_dir[mid] <= (uintptr_t)ptr)
-            lo = mid + 1u;
-        else
-            hi = mid;
-    }
-    if (lo == 0u)
-        return NULL;
-    SlabPage *s = g_slab_dir[lo - 1u];
-    if ((uintptr_t)ptr < (uintptr_t)s + SLAB_SIZE)
-        return s;
-    return NULL;
-}
-
-static void slab_dir_remove(const SlabPage *s)
-{
-    size_t lo = 0, hi = g_slab_dir_len;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2u;
-        if ((uintptr_t)g_slab_dir[mid] < (uintptr_t)s)
-            lo = mid + 1u;
-        else
-            hi = mid;
-    }
-    if (lo >= g_slab_dir_len || g_slab_dir[lo] != s)
-        pal_abort();
-    for (size_t i = lo + 1u; i < g_slab_dir_len; i++)
-        g_slab_dir[i - 1u] = g_slab_dir[i];
-    g_slab_dir_len--;
-}
-
 static ArcHeader *slab_alloc(uint32_t total_bytes)
 {
     int cls = size_class_for(total_bytes);
@@ -882,7 +815,7 @@ static ArcHeader *slab_alloc(uint32_t total_bytes)
         uint32_t step = k_class_sizes[cls];
         SlabPage *s = g_partial_slabs[cls];
         if (s == NULL) {
-            s = (SlabPage *)pal_page_alloc(SLAB_SIZE);
+            s = pal_page_alloc_aligned(SLAB_SIZE, SLAB_SIZE);
             if (s == NULL) {
                 arc_unlock(&g_alloc_lock);
                 pal_abort();
@@ -894,7 +827,6 @@ static ArcHeader *slab_alloc(uint32_t total_bytes)
             s->used_slots = 0u;
             s->bump_off = (uint32_t)sizeof(SlabPage);
             s->is_full = 0u;
-            slab_dir_insert(s);
             slab_list_push(&g_partial_slabs[cls], s);
             g_class_slab_count[cls]++;
             atomic_fetch_add_explicit(&g_active_slabs, 1, memory_order_relaxed);
@@ -931,8 +863,8 @@ static void slab_free(ArcHeader *hdr)
     int cls = size_class_for(total_bytes);
     if (cls >= 0) {
         arc_lock(&g_alloc_lock);
-        SlabPage *s = slab_dir_find(hdr);
-        if (s == NULL || s->cls != (uint32_t)cls) {
+        SlabPage *s = (SlabPage *)((uintptr_t)hdr & ~((uintptr_t)SLAB_SIZE - 1u));
+        if (s->cls != (uint32_t)cls) {
             arc_unlock(&g_alloc_lock);
             pal_abort();
         }
@@ -945,7 +877,6 @@ static void slab_free(ArcHeader *hdr)
                 slab_list_remove(&g_full_slabs[cls], s);
             else
                 slab_list_remove(&g_partial_slabs[cls], s);
-            slab_dir_remove(s);
             g_class_slab_count[cls]--;
             atomic_fetch_sub_explicit(&g_active_slabs, 1, memory_order_relaxed);
             arc_unlock(&g_alloc_lock);

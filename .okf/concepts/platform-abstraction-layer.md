@@ -24,11 +24,11 @@ sources:
 
 # Schema
 
-`runtime/pal.h` declares exactly 6 hooks; everything else in the runtime
-(ARC, fibers, scheduler) is freestanding C on top of them[^design-doc]:
+`runtime/pal.h` groups platform support under six areas. ARC, fibers,
+and the scheduler build on these services.[^design-doc]
 
-1. `pal_page_alloc` / `pal_page_free` — mmap/munmap on Linux; libSystem /
-   Bionic on mobile.
+1. `pal_page_alloc`, `pal_page_alloc_aligned`, and `pal_page_free` map
+   and unmap pages through the platform's POSIX APIs.
 2. `pal_abort` — `exit_group` syscall / `__builtin_trap()`.
 3. `pal_monotonic_ns` — `clock_gettime`.
 4. `pal_poll_wait` — epoll / kqueue / libdispatch.
@@ -58,3 +58,8 @@ slots for every implemented ABI (16-byte-aligned top of stack, SysV/Win64 also r
 each `pal_ctx_swap` section (store extent, sp/pc slots, callee-saved FP registers) and cross-checks
 it against the `pal.h` ladder plus forced-branch compile probes of all four ABIs, so the assembly
 frame, the struct size, and `pal_ctx_make` cannot drift apart per architecture.
+
+`pal_page_alloc_aligned` provides aligned slab mappings. When the requested
+alignment exceeds the system page size, PAL maps extra whole pages and trims
+the prefix and suffix. `pal_page_free` releases the retained range using
+the requested slab size.

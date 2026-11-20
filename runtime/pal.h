@@ -14,6 +14,8 @@
 
 /* 1. Page allocation (mmap/munmap on Linux; libSystem/Bionic on mobile). */
 void *pal_page_alloc(size_t size);
+/* Preserve mmap ownership while aligning a whole-page mapping. */
+void *pal_page_alloc_aligned(size_t size, size_t alignment);
 void  pal_page_free(void *ptr, size_t size);
 int   pal_page_protect_none(void *ptr, size_t size);
 

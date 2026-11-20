@@ -233,6 +233,38 @@ void *pal_page_alloc(size_t size)
 
 void pal_page_free(void *ptr, size_t size) { munmap(ptr, size); }
 
+void *pal_page_alloc_aligned(size_t size, size_t alignment)
+{
+    if (size == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0)
+        return NULL;
+    long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0)
+        return NULL;
+    size_t page = (size_t)page_size;
+    if (alignment <= page)
+        return page % alignment == 0 ? pal_page_alloc(size) : NULL;
+    if (size % page != 0 || alignment % page != 0)
+        return NULL;
+
+    /* The mapping base is already page-aligned. Map only the additional
+       whole pages that can precede an aligned address, then trim both ends. */
+    size_t padding = alignment - page;
+    if (size > SIZE_MAX - padding)
+        return NULL;
+    size_t mapped = size + padding;
+    char *raw = pal_page_alloc(mapped);
+    if (raw == NULL)
+        return NULL;
+    size_t prefix = (size_t)(-(uintptr_t)raw & (alignment - 1));
+    char *aligned = raw + prefix;
+    size_t suffix = mapped - prefix - size;
+    if (prefix != 0)
+        pal_page_free(raw, prefix);
+    if (suffix != 0)
+        pal_page_free(aligned + size, suffix);
+    return aligned;
+}
+
 int pal_page_protect_none(void *ptr, size_t size)
 {
     return mprotect(ptr, size, PROT_NONE);

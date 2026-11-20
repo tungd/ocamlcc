@@ -1072,8 +1072,45 @@ static void test_bulk_array_ownership(void)
     assert(arc_live_objects() == before);
 }
 
+static void test_aligned_slab_reclamation(void)
+{
+    enum { slab_bytes = 64 * 1024, slot_bytes = 2048, count = 96 };
+    uintptr_t mask = (uintptr_t)slab_bytes - 1;
+    int64_t objects = arc_live_objects();
+    int64_t slabs = ocamlcc_arc_slab_count(1) >> 1;
+    void *slots[count];
+    uintptr_t owner = 0;
+    int distinct = 0;
+
+    for (int i = 0; i < count; i++) {
+        slots[i] = arc_alloc(0, 0, slot_bytes - sizeof(ArcHeader));
+        uintptr_t header = (uintptr_t)((ArcHeader *)slots[i] - 1);
+        uintptr_t base = header & ~mask;
+        if (base != owner) {
+            /* The first slot in each fresh slab follows its header. */
+            assert((header & mask) < slot_bytes);
+            owner = base;
+            distinct++;
+        }
+        assert((header & mask) <= slab_bytes - slot_bytes);
+    }
+    assert(distinct == 4);
+    assert((ocamlcc_arc_slab_count(1) >> 1) == slabs + distinct);
+
+    /* The large-object mapping has its own retirement path. */
+    void *large = arc_alloc(0, 0, slot_bytes);
+    assert((ocamlcc_arc_slab_count(1) >> 1) == slabs + distinct);
+    arc_release(large);
+    for (int parity = 0; parity < 2; parity++)
+        for (int i = parity; i < count; i += 2)
+            arc_release(slots[i]);
+    assert(arc_live_objects() == objects);
+    assert((ocamlcc_arc_slab_count(1) >> 1) == slabs + 1);
+}
+
 int main(void)
 {
+    test_aligned_slab_reclamation();
     test_main_shadow_stack();
     test_bulk_array_ownership();
     test_float_format();
