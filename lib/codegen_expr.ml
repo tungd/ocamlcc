@@ -1181,6 +1181,12 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       emit b (Call_void { fn = Global "arc_retain_val"; args = [ (Long, gv) ] });
       gv
   | App (fn, args) -> apply hooks b tail fn args
+  | KeepAlive _ -> unit_const
+  | Recur args ->
+      let values = List.map (compile_atom hooks b) args in
+      b.cur_fn.tail_sites <- (b.cur_fn.open_label, values) :: b.cur_fn.tail_sites;
+      close_block b (Jmp b.cur_fn.entry_label);
+      unit_const
   | Fun _ -> failwith "codegen: Fun must be bound by Let"
   | Assign (id, rhs) | AssignImm (id, rhs) -> (
       let v = compile_atom hooks b rhs in

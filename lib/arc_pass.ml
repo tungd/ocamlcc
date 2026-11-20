@@ -105,7 +105,7 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | BytesGetN _ | BswapBint _ -> false
   | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
   | FloatArrayGet _ | FloatArraySet _ | FloatOfInt _ | IntOfFloat _
-  | FloatSign _ | FloatCompare _ -> true
+  | FloatSign _ | FloatCompare _ | KeepAlive _ -> true
   | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
   | Ccall (name, _) -> Ccalls.returns_imm name
   | DirectApp (target, _) -> target.returns_immediate
@@ -115,7 +115,7 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
       | None -> false)
   | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _ | BoxScalar _
   | BigarrayAccess _ | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _
-  | GetGlobal _ | Fun _ ->
+  | GetGlobal _ | Fun _ | Recur _ ->
       false
 
 let is_imm_cexpr env = cexpr_is_imm ~pure:env.pure ~imm_funs:env.imm_funs env.imm
@@ -124,7 +124,7 @@ let imm_params_of (lf : Anf.lfunction) : Ident.Set.t =
   List.fold_left
     (fun s (p, vk) ->
       match vk with Lambda.Pintval -> Ident.Set.add p s | _ -> s)
-    Ident.Set.empty lf.params
+    (Ident.Set.of_list (List.map fst lf.loop_scalars)) lf.params
 
 let set_imm imm id proven =
   if proven then Ident.Set.add id imm else Ident.Set.remove id imm
@@ -329,7 +329,8 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
       (Ident.Set.union (atom_vars arr) (atom_vars idx), [ v ])
   | MakeArrayInit (len, init) -> (atom_vars len, [ init ])
   | App (fn, args) -> (atom_vars fn, args)
-  | DirectApp (_, args) -> (Ident.Set.empty, args)
+  | DirectApp (_, args) | Recur args -> (Ident.Set.empty, args)
+  | KeepAlive args -> (atoms_vars args, [])
   | Builtin (_, _, a) -> (atom_vars a, [])
   | ScalarValue (_, a) | BoxScalar (_, a) | IntOfFloat a | FloatSign (_, a) ->
       (Anf.scalar_operand_vars Ident.Set.empty a, [])
@@ -348,6 +349,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | Fun _ -> (Ident.Set.empty, [])
 
 let pointer_parameters (lf : Anf.lfunction) =
+  if lf.loop_scalars <> [] then Ident.Set.empty else
   List.fold_left
     (fun set (id, kind) ->
       if kind = Lambda.Pintval then set else Ident.Set.add id set)
@@ -971,7 +973,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
         let cap =
           Anf.free_vars lf.body
           |> Ident.Set.filter (fun v ->
-                 not (List.exists (fun (p, _) -> Ident.same p v) lf.params)
+                 not (List.exists (Ident.same v) (Anf.bound_parameters lf))
                  && not (Ident.Set.mem v env.pure))
         in
         let cap_atoms = List.map (fun v -> Anf.Var v) (Ident.Set.elements cap) in
@@ -1084,7 +1086,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
             (fun (rb : Anf.rec_binding) ->
               Anf.free_vars rb.def.body
               |> Ident.Set.filter (fun v ->
-                     not (List.exists (fun (p, _) -> Ident.same p v) rb.def.params)
+                     not (List.exists (Ident.same v) (Anf.bound_parameters rb.def))
                      && not (Ident.Set.mem v rec_ids)
                      && not (Ident.Set.mem v env.pure))
               |> Ident.Set.elements)
@@ -1387,9 +1389,7 @@ and transform_fun (env : state) ~self_id ~has_closure
     ?(borrowed_params = Ident.Set.empty) (lf : Anf.lfunction) :
     Anf.lfunction =
   let params_set =
-    List.fold_left
-      (fun s (p, _) -> Ident.Set.add p s)
-      Ident.Set.empty lf.params
+    Ident.Set.of_list (Anf.bound_parameters lf)
   in
   let free = Anf.free_vars lf.body in
   let borrowed =
@@ -1443,6 +1443,7 @@ and rebuild_cexpr (ce : Anf.cexpr) (atoms' : Anf.atom list) : Anf.cexpr =
   | MakeArrayInit (len, _), [ init ] -> MakeArrayInit (len, init)
   | App (fn, _), args -> App (fn, args)
   | DirectApp (target, _), args -> DirectApp (target, args)
+  | Recur _, args -> Recur args
   | Assign (id, _), [ rhs ] -> Assign (id, rhs)
   | AssignImm (id, _), [ rhs ] -> AssignImm (id, rhs)
   | _ -> ce

@@ -149,6 +149,8 @@ type cexpr =
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
+  | Recur of atom list
+  | KeepAlive of atom list
   | DirectApp of imported_function * atom list
   | Builtin of string * Builtins.arg_kind * atom
   | Ccall of string * atom list
@@ -169,6 +171,7 @@ and imported_function = {
 and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;
   private_entry : bool;
+  loop_scalars : (Ident.t * (scalar_rep * Ident.t)) list;
   body : aexpr;
 }
 
@@ -230,6 +233,8 @@ val scalar_rep : Lambda.bigarray_kind -> scalar_rep option
 val scalar_operand_vars : Ident.Set.t -> scalar_operand -> Ident.Set.t
 val returns_scalar : aexpr -> bool
 val free_vars : aexpr -> Ident.Set.t
+val bound_parameters : lfunction -> Ident.t list
+
 val pure_defs : aexpr -> (Ident.t * lfunction) list
 
 val inline_export_leaves : Lambda.lambda -> aexpr -> Ident.t -> lfunction option

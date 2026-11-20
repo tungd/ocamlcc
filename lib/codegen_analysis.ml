@@ -6,9 +6,10 @@ let collect_pure_defs (e : Anf.aexpr) : (Ident.t * Anf.lfunction) list =
 
 let free_vars_of (b : Codegen_ctx.t) ?self_id (lf : Anf.lfunction) :
     Ident.t list =
+  let params = Ident.Set.of_list (Anf.bound_parameters lf) in
   Anf.free_vars lf.body
   |> Ident.Set.filter (fun v ->
-         not (List.exists (fun (p, _) -> Ident.same p v) lf.params)
+         not (Ident.Set.mem v params)
          && (match self_id with Some s -> not (Ident.same s v) | None -> true)
          &&
          match Hashtbl.find_opt b.funs v with

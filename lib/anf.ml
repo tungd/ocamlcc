@@ -141,6 +141,8 @@ type cexpr =
   | CreateBytes of atom
   | MakeArrayInit of atom * atom
   | App of atom * atom list
+  | Recur of atom list
+  | KeepAlive of atom list
   | DirectApp of imported_function * atom list
   | Builtin of string * Builtins.arg_kind * atom
   | Ccall of string * atom list
@@ -161,6 +163,7 @@ and imported_function = {
 and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;
   private_entry : bool;
+  loop_scalars : (Ident.t * (scalar_rep * Ident.t)) list;
   body : aexpr;
 }
 
@@ -396,7 +399,7 @@ and conv_atoms (lams : Lambda.lambda list) (k : atom list -> aexpr) : aexpr =
 
 and conv_fun (lf : Lambda.lfunction) : lfunction =
   match lf.kind with
-  | Curried -> { params = lf.params; private_entry = false; body = with_entry_poll (conv_tail lf.body) }
+  | Curried -> { params = lf.params; private_entry = false; loop_scalars = []; body = with_entry_poll (conv_tail lf.body) }
   | Tupled ->
       let tup = Ident.create_local "tup" in
       let rec bind_fields i = function
@@ -404,7 +407,7 @@ and conv_fun (lf : Lambda.lfunction) : lfunction =
         | (p, _) :: rest ->
             Let (p, Field (i, Immutable_field, Var tup), bind_fields (i + 1) rest)
       in
-      { params = [ (tup, Lambda.Pgenval) ]; private_entry = false; body = with_entry_poll (bind_fields 0 lf.params) }
+      { params = [ (tup, Lambda.Pgenval) ]; private_entry = false; loop_scalars = []; body = with_entry_poll (bind_fields 0 lf.params) }
 
 and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   match rhs with
@@ -911,7 +914,15 @@ let scalar_operand_vars acc = function
   | Boxed_scalar a -> atom_vars acc a
   | Raw_scalar id -> Ident.Set.add id acc
 
-let cexpr_vars free_aexpr acc = function
+let bound_parameters (lf : lfunction) =
+  List.map fst lf.params @ List.map (fun (_, (_, owner)) -> owner) lf.loop_scalars
+
+let cexpr_vars ?(include_raw = true) free_aexpr acc ce =
+  let scalar_operand_vars acc = function
+    | Raw_scalar _ when not include_raw -> acc
+    | operand -> scalar_operand_vars acc operand
+  in
+  match ce with
   | IntegerOfInt (_, value) -> atom_vars acc value
   | IntOfInteger (_, value) | IntegerConvert (_, _, value)
   | IntegerNeg (_, value) -> scalar_operand_vars acc value
@@ -946,7 +957,7 @@ let cexpr_vars free_aexpr acc = function
   | App (fn, args) ->
       List.fold_left atom_vars (atom_vars acc fn) args
   | Builtin (_, _, a) -> atom_vars acc a
-  | BigarrayAccess (_, args) | Ccall (_, args) | DirectApp (_, args) ->
+  | BigarrayAccess (_, args) | Ccall (_, args) | DirectApp (_, args) | Recur args | KeepAlive args ->
       List.fold_left atom_vars acc args
   | GetGlobal _ -> acc
   | Assign (id, a) | AssignImm (id, a) -> Ident.Set.add id (atom_vars acc a)
@@ -954,8 +965,8 @@ let cexpr_vars free_aexpr acc = function
       let body_free = free_aexpr lf.body in
       let body_free =
         List.fold_left
-          (fun s (p, _) -> Ident.Set.remove p s)
-          body_free lf.params
+          (fun s p -> Ident.Set.remove p s)
+          body_free (bound_parameters lf)
       in
       Ident.Set.union acc body_free
 
@@ -983,8 +994,8 @@ let rec free_vars (e : aexpr) : Ident.Set.t =
             let f_b = free_vars rb.def.body in
             let f_b =
               List.fold_left
-                (fun s (p, _) -> Ident.Set.remove p s)
-                f_b rb.def.params
+                (fun s p -> Ident.Set.remove p s)
+                f_b (bound_parameters rb.def)
             in
             Ident.Set.union acc (Ident.Set.diff f_b rec_ids))
           Ident.Set.empty bindings
@@ -1253,6 +1264,173 @@ and specialize_scalar_arm rep bindings = function
                           Let (raw, ScalarValue (rep, Boxed_scalar (Var boxed)), HaltScalar raw)) in
       specialize_scalar_chain bindings tail
 
+(* A raw backedge is only emitted when every occurrence of the function
+   rewrites to a jump and the selected inputs have exclusively scalar uses.
+   The public entry and all results use the ordinary boxed calling convention. *)
+let map_loop_children visit ~tail = function
+  | Let (id, ce, body) -> Let (id, ce, visit ~tail body)
+  | MutLet (id, ce, body) -> MutLet (id, ce, visit ~tail body)
+  | LetJoin (id, rhs, body) -> LetJoin (id, visit ~tail:false rhs, visit ~tail body)
+  | LetRec (defs, body) -> LetRec (defs, visit ~tail body)
+  | If (cond, yes, no) -> If (cond, visit ~tail yes, visit ~tail no)
+  | ScalarIf (rep, cond, yes, no) ->
+      ScalarIf (rep, cond, visit ~tail:false yes, visit ~tail:false no)
+  | Switch (value, cases) ->
+      let arm (tag, body) = tag, visit ~tail body in
+      Switch (value, { cases with consts = List.map arm cases.consts;
+                                  blocks = List.map arm cases.blocks;
+                                  fail = Option.map (visit ~tail) cases.fail })
+  | StringSwitch (value, cases, fail) ->
+      StringSwitch (value, List.map (fun (tag, body) -> tag, visit ~tail body) cases,
+                    Option.map (visit ~tail) fail)
+  | StaticCatch (body, label, params, handler, rep) ->
+      let tail = tail && Option.is_none rep in
+      StaticCatch (visit ~tail body, label, params, visit ~tail handler, rep)
+  | TryWith (body, exn, handler) ->
+      TryWith (visit ~tail:false body, exn, visit ~tail:false handler)
+  | While (cond, body) -> While (visit ~tail:false cond, visit ~tail:false body)
+  | For (id, start, stop, dir, body) -> For (id, start, stop, dir, visit ~tail:false body)
+  | expr -> expr
+
+let scalarize_loop specialize (rb : rec_binding) =
+  let lf = rb.def in
+  let reps =
+    List.map (fun (_, kind) ->
+      match kind with
+      | Lambda.Pfloatval -> Some Double_scalar
+      | Pboxedintval kind -> Some (Integer_scalar kind)
+      | _ -> None) lf.params
+  in
+  let loop_scalars =
+    List.filter_map Fun.id
+      (List.map2 (fun (id, _) rep ->
+        Option.map (fun rep -> id, (rep, Ident.create_local "loop_box")) rep) lf.params reps)
+  in
+  if loop_scalars = [] || not (Ident.Set.mem rb.id (free_vars lf.body)) then None
+  else
+    let exception Boxed_use in
+    let raw_ids = Ident.Set.of_list (List.map fst loop_scalars) in
+    let raw_rep id = Option.map fst (List.assoc_opt id loop_scalars) in
+    let owners = List.map (fun (_, (_, owner)) -> Var owner) loop_scalars in
+    let keep_alive body = Let (Ident.create_local "keep", KeepAlive owners, body) in
+    let found = ref false in
+    let rec prepare ~tail expr =
+      match expr with
+      | Let (id, App (Var fn, args), Halt (Var result))
+        when tail && Ident.same rb.id fn && Ident.same id result
+             && List.length args = List.length reps ->
+          found := true;
+          let args = List.map2 (fun rep arg ->
+            match rep with
+            | None -> arg, None
+            | Some rep ->
+                let raw = Ident.create_local "loop_scalar" in
+                Var raw, Some (raw, ScalarValue (rep, Boxed_scalar arg))) reps args
+          in
+          List.fold_right (fun (_, binding) body ->
+            match binding with
+            | None -> body
+            | Some (raw, ce) -> Let (raw, ce, body))
+            args (Let (id, Recur (List.map fst args), Halt (Var result)))
+      | Halt (Var id) when tail ->
+          keep_alive (match List.assoc_opt id loop_scalars with
+          | None -> expr
+          | Some (rep, owner) ->
+              let boxed = Ident.create_local "loop_result" in
+              If (Var owner, Halt (Var owner),
+                  Let (boxed, BoxScalar (rep, Raw_scalar id), Halt (Var boxed))))
+      | Halt _ when tail -> keep_alive expr
+      | expr -> map_loop_children prepare ~tail expr
+    in
+    let scalar_operand rep = function
+      | Boxed_scalar (Var id) when raw_rep id = Some rep -> Raw_scalar id
+      | operand -> operand
+    in
+    let float = scalar_operand Double_scalar in
+    let int kind = scalar_operand (Integer_scalar kind) in
+    let check_ids uses =
+      if not (Ident.Set.disjoint raw_ids uses) then raise Boxed_use
+    in
+    let check_atom value = check_ids (atom_vars Ident.Set.empty value) in
+    let rewrite_ce ce =
+      let ce =
+        match ce with
+        | ScalarValue (rep, value) -> ScalarValue (rep, scalar_operand rep value)
+        | BoxScalar (rep, value) -> BoxScalar (rep, scalar_operand rep value)
+        | FloatBinop (op, lhs, rhs) -> FloatBinop (op, float lhs, float rhs)
+        | FloatCompare (op, lhs, rhs) -> FloatCompare (op, float lhs, float rhs)
+        | FloatSign (op, value) -> FloatSign (op, float value)
+        | IntOfFloat value -> IntOfFloat (float value)
+        | FloatArraySet (safe, arr, index, value) -> FloatArraySet (safe, arr, index, float value)
+        | ScalarStore (access, arr, index, value) ->
+            let rep = Option.get (scalar_rep access.kind) in
+            ScalarStore (access, arr, index, scalar_operand rep value)
+        | IntegerBinop (kind, op, lhs, rhs) ->
+            IntegerBinop (kind, op, int kind lhs, int kind rhs)
+        | IntegerCompare (kind, op, lhs, rhs) ->
+            IntegerCompare (kind, op, int kind lhs, int kind rhs)
+        | IntOfInteger (kind, value) -> IntOfInteger (kind, int kind value)
+        | IntegerConvert (src, dst, value) -> IntegerConvert (src, dst, int src value)
+        | IntegerNeg (kind, value) -> IntegerNeg (kind, int kind value)
+        | IntegerShift (kind, op, value, count) -> IntegerShift (kind, op, int kind value, count)
+        | ce -> ce
+      in
+      check_ids (cexpr_vars ~include_raw:false free_vars Ident.Set.empty ce);
+      ce
+    in
+    (* The scalar pass has decided whether a backedge input still has an
+       observable box. Keep that box as an owner when present. *)
+    let boxes = Hashtbl.create 8 in
+    let box_for_operand = function
+      | Boxed_scalar value -> Some value
+      | Raw_scalar value ->
+          (match List.assoc_opt value loop_scalars with
+          | Some (_, owner) -> Some (Var owner)
+          | None -> Option.value ~default:(Some Unit) (Hashtbl.find_opt boxes value))
+    in
+    let rec validate ~tail expr =
+      match expr with
+      | Let (id, Recur args, body) ->
+          List.iter check_atom args;
+          let backedge_boxes =
+            List.filter_map Fun.id (List.map2 (fun rep arg ->
+              match rep, arg with
+              | None, _ -> None
+              | Some _, Var arg ->
+                  (match Hashtbl.find boxes arg with
+                  | Some value -> Some value
+                  | None -> raise Boxed_use)
+              | Some _, _ -> assert false) reps args)
+          in
+          keep_alive (Let (id, Recur (args @ backedge_boxes), body))
+      | Let (id, ce, body) ->
+          let ce = rewrite_ce ce in
+          (match ce with
+          | ScalarValue (_, value) -> Hashtbl.add boxes id (box_for_operand value)
+          | _ -> ());
+          Let (id, ce, validate ~tail body)
+      | LetJoin (id, rhs, body) when returns_scalar rhs ->
+          Hashtbl.add boxes id None;
+          LetJoin (id, validate ~tail:false rhs, validate ~tail body)
+      | MutLet (id, ce, body) -> MutLet (id, rewrite_ce ce, validate ~tail body)
+      | expr ->
+          (match expr with
+          | Halt value | Raise value | If (value, _, _) | ScalarIf (_, value, _, _)
+          | Switch (value, _) | StringSwitch (value, _, _) -> check_atom value
+          | StaticRaise (_, args) -> List.iter check_atom args
+          | For (_, first, last, _, _) -> List.iter check_atom [first; last]
+          | LetRec (defs, _) ->
+              List.iter (fun (rb : rec_binding) -> check_ids (free_vars rb.def.body)) defs
+          | _ -> ());
+          map_loop_children validate ~tail expr
+    in
+    let body = prepare ~tail:true lf.body in
+    if not !found || Ident.Set.mem rb.id (free_vars body) then None
+    else
+      match validate ~tail:true (specialize body) with
+      | body -> Some { lf with body; loop_scalars }
+      | exception Boxed_use -> None
+
 let rec specialize_scalar_bindings = function
   | Let _ as expr -> specialize_let_chain [] expr
   | LetJoin (_, rhs, _) as expr when boxed_branch rhs ->
@@ -1263,7 +1441,14 @@ let rec specialize_scalar_bindings = function
       LetJoin (id, specialize_scalar_bindings rhs, specialize_scalar_bindings body)
   | LetRec (defs, body) ->
       let defs =
-        List.map (fun rb -> { rb with def = specialize_scalar_function rb.def }) defs
+        match defs with
+        | [rb] ->
+            let def = match scalarize_loop specialize_scalar_bindings rb with
+              | Some def -> def
+              | None -> specialize_scalar_function rb.def
+            in
+            [{ rb with def }]
+        | _ -> List.map (fun rb -> { rb with def = specialize_scalar_function rb.def }) defs
       in
       LetRec (defs, specialize_scalar_bindings body)
   | If (v, yes, no) ->
@@ -1327,7 +1512,7 @@ and specialize_scalar_case : 'a. 'a * aexpr -> 'a * aexpr =
 let pure_defs (e : aexpr) : (Ident.t * lfunction) list =
   let is_pure known (lf : lfunction) =
     let params =
-      List.fold_left (fun s (p, _) -> Ident.Set.add p s) Ident.Set.empty lf.params
+      Ident.Set.of_list (bound_parameters lf)
     in
     let free = free_vars lf.body in
     Ident.Set.for_all

@@ -115,3 +115,14 @@ width through arithmetic, shifts, and conversions. A chain boxes its result
 where an ordinary OCaml value is required. Checked array operations preserve
 bounds exceptions, and boxed-integer division preserves zero-divisor and
 signed overflow behavior.
+
+## Numeric self-tail loops
+
+A function with direct self-tail calls can carry typed numeric inputs through
+the loop header as QBE doubles, words, or longs. It unboxes the incoming
+arguments at the ordinary boxed entry. A fresh scalar result moves over the
+backedge directly. A separate ownership value preserves the original box
+when the input is forwarded or returned, including zero-iteration calls.
+A loop that needs a selected input as a boxed value, or whose self calls
+leave the tail position, uses ordinary boxed calls. Loop returns keep the
+ordinary OCaml ABI and numeric checks preserve their exception paths.

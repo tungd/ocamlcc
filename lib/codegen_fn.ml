@@ -8,7 +8,7 @@ let insert_header_phis b header_label binder_names start_values =
     let sites = List.rev b.cur_fn.tail_sites in
     let phis =
       List.mapi
-        (fun i name ->
+        (fun i (ty, name) ->
           let args =
             ("start", List.nth start_values i)
             :: List.filter_map
@@ -18,7 +18,7 @@ let insert_header_phis b header_label binder_names start_values =
                    | None -> None)
                  sites
           in
-          Phi (Long, Temp name, args))
+          Phi (ty, Temp name, args))
         binder_names
     in
     b.cur_fn.blocks <-
@@ -134,11 +134,20 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
   in
   let shadowed_ids =
     (if has_closure then [ id ] else [])
-    @ List.map fst param_binders
+    @ Anf.bound_parameters lf
     @ env
   in
   let clos_param = fresh_name b "clos" in
-  let loop_binders = List.map (fun _ -> fresh_name b "loop") lf.params in
+  let loop_binders =
+    List.map (fun (pid, _) ->
+      let ty =
+        match List.assoc_opt pid lf.loop_scalars with
+        | None -> Long
+        | Some (rep, _) -> Codegen_expr.scalar_type rep
+      in
+      ty, fresh_name b "loop") lf.params
+    @ List.map (fun _ -> Long, fresh_name b "loop_box") lf.loop_scalars
+  in
   with_fn_state b ~self:(Some id) ~cur_group:None ~entry_label:"loop"
     ~in_init:false (fun () ->
       with_shadowed_vars b shadowed_ids (fun () ->
@@ -157,16 +166,24 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
                 Hashtbl.replace b.vars ev dst)
               env
           end;
+          let start_values =
+            List.map (fun (id, formal) ->
+              let boxed = Temp formal in
+              match List.assoc_opt id lf.loop_scalars with
+              | None -> boxed
+              | Some (Anf.Double_scalar, _) -> Codegen_expr.load_double b boxed
+              | Some (Integer_scalar kind, _) -> Codegen_expr.unbox_bint b kind boxed)
+              param_binders
+            @ List.map (fun (id, _) -> Temp (List.assoc id param_binders)) lf.loop_scalars
+          in
           close_block b (Jmp "loop");
           start_block b "loop";
           List.iter2
-            (fun (pid, _) loop_name ->
-              Hashtbl.replace b.vars pid (Temp loop_name))
-            param_binders loop_binders;
+            (fun pid (_, loop_name) -> Hashtbl.replace b.vars pid (Temp loop_name))
+            (Anf.bound_parameters lf) loop_binders;
           let result = compile_aexpr b true lf.body in
           close_ret b (Some result);
-          insert_header_phis b "loop" loop_binders
-            (List.map (fun (_, formal) -> Temp formal) param_binders);
+          insert_header_phis b "loop" loop_binders start_values;
           let func =
             { name = g;
               export = not has_closure && not lf.private_entry;
@@ -268,7 +285,7 @@ let compile_scc_group compile_aexpr b gname ~export ~with_closure
         (match formal_clos with Some c -> [ Temp c ] | None -> [])
         @ (Temp formal_sel :: List.map (fun n -> Temp n) formal_slots)
       in
-      insert_header_phis b "dispatch" phi_binders init_args;
+      insert_header_phis b "dispatch" (List.map (fun name -> Long, name) phi_binders) init_args;
       let func =
         { name = gname;
           export;
