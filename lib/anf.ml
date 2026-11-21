@@ -165,6 +165,7 @@ and imported_function = {
 
 and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;
+  return : Lambda.value_kind;
   private_entry : bool;
   loop_scalars : (Ident.t * (scalar_rep * Ident.t)) list;
   body : aexpr;
@@ -214,6 +215,7 @@ type exports = (int list * imported_function) list
 type program = {
   module_ident : Ident.t;
   code : aexpr;
+  value_kinds : Lambda.value_kind Ident.Map.t;
 }
 
 exception Unsupported of string
@@ -412,25 +414,29 @@ and conv_atoms (lams : Lambda.lambda list) (k : atom list -> aexpr) : aexpr =
 
 and conv_fun (lf : Lambda.lfunction) : lfunction =
   match lf.kind with
-  | Curried -> { params = lf.params; private_entry = false; loop_scalars = []; body = with_entry_poll (conv_tail lf.body) }
+  | Curried ->
+      { params = lf.params; return = lf.return; private_entry = false;
+        loop_scalars = []; body = with_entry_poll (conv_tail lf.body) }
   | Tupled ->
       let tup = Ident.create_local "tup" in
       let rec bind_fields i = function
         | [] -> conv_tail lf.body
-        | (p, _) :: rest ->
-            Let (p, Field (i, Immutable_field, Var tup), bind_fields (i + 1) rest)
+        | (p, vk) :: rest ->
+            let kind = if vk = Lambda.Pintval then Immediate_field else Immutable_field in
+            Let (p, Field (i, kind, Var tup), bind_fields (i + 1) rest)
       in
-      { params = [ (tup, Lambda.Pgenval) ]; private_entry = false; loop_scalars = []; body = with_entry_poll (bind_fields 0 lf.params) }
+      { params = [ (tup, Lambda.Pgenval) ]; return = lf.return; private_entry = false;
+        loop_scalars = []; body = with_entry_poll (bind_fields 0 lf.params) }
 
-and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
+and conv_bind vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   match rhs with
   | Levent (l, _) | Lifused (_, l) ->
-      conv_bind id l k
-  | Lprim (Psetglobal _, [ l ], _) -> conv_bind id l k
-  | Llet (_, _, id1, arg1, body1) ->
-      conv_bind id1 arg1 (fun () -> conv_bind id body1 k)
-  | Lmutlet (_, id1, arg1, body1) ->
-      conv_mut_bind id1 arg1 (fun () -> conv_bind id body1 k)
+      conv_bind vk id l k
+  | Lprim (Psetglobal _, [ l ], _) -> conv_bind vk id l k
+  | Llet (_, vk1, id1, arg1, body1) ->
+      conv_bind vk1 id1 arg1 (fun () -> conv_bind vk id body1 k)
+  | Lmutlet (vk1, id1, arg1, body1) ->
+      conv_mut_bind vk1 id1 arg1 (fun () -> conv_bind vk id body1 k)
   | Lletrec (bindings, body1) ->
       let rbs =
         List.map
@@ -438,9 +444,9 @@ and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
             { id = rb.id; def = conv_fun rb.def })
           bindings
       in
-      LetRec (rbs, conv_bind id body1 k)
+      LetRec (rbs, conv_bind vk id body1 k)
   | Lsequence (a, b) ->
-      conv_expr a (fun _ -> conv_bind id b k)
+      conv_expr a (fun _ -> conv_bind vk id b k)
   | Lconst c -> Let (id, Atom (conv_const c), k ())
   | Lvar v -> Let (id, Atom (Var v), k ())
   | Lmutvar v -> conv_mut_read v id k
@@ -452,7 +458,7 @@ and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
       | Lprim (Psequand, _, _)
       | Lprim (Psequor, _, _) ->
           LetJoin (id, conv_tail rhs, k ())
-      | _ -> conv_simple id rhs k)
+      | _ -> conv_simple ~result_kind:vk id rhs k)
   | Lifthenelse _ | Lswitch _ | Lstringswitch _ | Lstaticcatch _
   | Ltrywith _ ->
       LetJoin (id, conv_tail rhs, k ())
@@ -466,10 +472,10 @@ and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
       conv_atoms args (fun vs -> StaticRaise (i, vs))
   | Lsend _ -> raise (Unsupported (describe rhs))
 
-and conv_mut_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) :
+and conv_mut_bind vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) :
     aexpr =
   let t = Ident.create_local (Ident.name id ^ "_init") in
-  conv_bind t rhs (fun () ->
+  conv_bind vk t rhs (fun () ->
     let init = match Ident.Map.find_opt id !mutable_scalars with
       | None -> Atom (Var t)
       | Some rep -> ScalarValue (rep, Boxed_scalar (Var t))
@@ -489,7 +495,8 @@ and mut_assignment slot value =
   | None -> Assign (slot, value)
   | Some rep -> AssignScalar (slot, rep, Boxed_scalar value)
 
-and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr =
+and conv_simple ?(result_kind = Lambda.Pgenval) (id : Ident.t)
+    (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   let emit_cexpr ce = Let (id, ce, k ()) in
   match lam with
   | Lapply { ap_func; ap_args; ap_inlined; _ } -> (
@@ -544,10 +551,10 @@ and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr
       emit_cexpr (MakeArray (kind, List.map (fun s -> Float (parse_const_float s)) sl))
   | Lprim (Pfield (i, repr, mutability), [ arg ], _) ->
       let kind =
-        match repr, mutability with
-        | Lambda.Immediate, _ -> Immediate_field
-        | Pointer, Immutable -> Immutable_field
-        | Pointer, Mutable -> Mutable_field
+        match result_kind, repr, mutability with
+        | Lambda.Pintval, _, _ | _, Lambda.Immediate, _ -> Immediate_field
+        | _, Pointer, Immutable -> Immutable_field
+        | _, Pointer, Mutable -> Mutable_field
       in
       conv_expr arg (fun a -> emit_cexpr (Field (i, kind, a)))
   | Lprim (Pfield_computed, [ arg; idx ], _) ->
@@ -855,10 +862,10 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
   | Levent (l, _) | Lifused (_, l) ->
       conv_expr l k
   | Lprim (Psetglobal _, [ body ], _) -> conv_expr body k
-  | Llet (_, _, id, arg, body) ->
-      conv_bind id arg (fun () -> conv_expr body k)
-  | Lmutlet (_, id, arg, body) ->
-      conv_mut_bind id arg (fun () -> conv_expr body k)
+  | Llet (_, vk, id, arg, body) ->
+      conv_bind vk id arg (fun () -> conv_expr body k)
+  | Lmutlet (vk, id, arg, body) ->
+      conv_mut_bind vk id arg (fun () -> conv_expr body k)
   | Lletrec (bindings, body) ->
       let rbs =
         List.map
@@ -1947,13 +1954,14 @@ let resolve_module_projections code =
 let promote_local_refs code =
   let open Lambda in
   let exception Escapes in
-  let rec replace slot aliases = function
+  let rec replace slot aliases may_store_pointer = function
     | Llet (_, _, alias, Lvar id, body) when Ident.Set.mem id aliases ->
-        replace slot (Ident.Set.add alias aliases) body
+        replace slot (Ident.Set.add alias aliases) may_store_pointer body
     | Lprim (Pfield (0, _, _), [ Lvar id ], _) when Ident.Set.mem id aliases ->
         Lmutvar slot
-    | Lprim (Psetfield (0, _, _), [ Lvar id; rhs ], _) when Ident.Set.mem id aliases ->
-        Lassign (slot, replace slot aliases rhs)
+    | Lprim (Psetfield (0, repr, _), [ Lvar id; rhs ], _) when Ident.Set.mem id aliases ->
+        if repr = Pointer then may_store_pointer := true;
+        Lassign (slot, replace slot aliases may_store_pointer rhs)
     | Lprim (Poffsetref offset, [ Lvar id ], loc) when Ident.Set.mem id aliases ->
         Lassign (slot, Lprim (Poffsetint offset, [ Lmutvar slot ], loc))
     | Lvar id | Lmutvar id | Lassign (id, _) | Lifused (id, _)
@@ -1965,16 +1973,20 @@ let promote_local_refs code =
         List.iter (fun def ->
           if not (Ident.Set.disjoint aliases (free_variables (Lfunction def.def))) then
             raise Escapes) defs;
-        Lletrec (defs, replace slot aliases body)
-    | expr -> shallow_map (replace slot aliases) expr
+        Lletrec (defs, replace slot aliases may_store_pointer body)
+    | expr -> shallow_map (replace slot aliases may_store_pointer) expr
   in
   let rec visit = function
     | Llet (mode, kind, id, Lprim ((Pmakeblock (0, Mutable, shape) as p), [init], loc), body) ->
         let init = visit init in
         let body = visit body in
-        (match replace id (Ident.Set.singleton id) body with
+        let may_store_pointer = ref false in
+        (match replace id (Ident.Set.singleton id) may_store_pointer body with
         | body ->
-            let slot_kind = match shape with Some [kind] -> kind | _ -> Pgenval in
+            let slot_kind = match shape with
+              | Some [kind] when not !may_store_pointer -> kind
+              | _ -> Pgenval
+            in
             Lmutlet (slot_kind, id, init, body)
         | exception Escapes -> Llet (mode, kind, id, Lprim (p, [init], loc), body))
     | expr -> shallow_map visit expr
@@ -2453,6 +2465,22 @@ let specialize_mutable_slots code =
   let code = visit code in
   code, !slots
 
+(* The Lambda identifiers survive ANF conversion. Keep source representation
+   facts alongside the tree so later rewrites can keep using the same binders. *)
+let binding_kinds code =
+  let kinds = ref Ident.Map.empty in
+  let add id kind = kinds := Ident.Map.add id kind !kinds in
+  let rec visit expr =
+    (match expr with
+    | Lambda.Llet (_, kind, id, _, _) | Lmutlet (kind, id, _, _) -> add id kind
+    | Lstaticcatch (_, (_, binders), _) ->
+        List.iter (fun (id, kind) -> add id kind) binders
+    | _ -> ());
+    Lambda.iter_head_constructor visit expr
+  in
+  visit code;
+  !kinds
+
 let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = [])
     ?(load_exports = fun _ -> None) ?on_export_ids (program : Lambda.program) : (program, string) result =
   let saved = !builtin_tables in
@@ -2495,7 +2523,7 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
         mutable_scalars := scalars;
         Option.iter (fun save -> save (exported_functions cleaned)) on_export_ids;
         let code = conv_tail cleaned |> specialize_scalar_bindings in
-        Ok { module_ident = program.module_ident; code }
+        Ok { module_ident = program.module_ident; code; value_kinds = binding_kinds cleaned }
       with Unsupported what -> Error what)
 
 (* A small closed expression over tagged scalar parameters can be copied into

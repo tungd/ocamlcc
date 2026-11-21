@@ -173,6 +173,7 @@ and imported_function = {
 
 and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;
+  return : Lambda.value_kind;
   private_entry : bool;
   loop_scalars : (Ident.t * (scalar_rep * Ident.t)) list;
   body : aexpr;
@@ -224,6 +225,7 @@ val native_scalar : Primitive.native_repr -> scalar_rep option
 type program = {
   module_ident : Ident.t;
   code : aexpr;
+  value_kinds : Lambda.value_kind Ident.Map.t;
 }
 
 val of_lambda :

@@ -35,6 +35,17 @@ This is a deliberate break from OCaml's tagged-pointer scheme: no boxing
 overhead across the C ABI, which is what makes the planned Swift/Kotlin
 header generation clean.
 
+## Tagged immediate binders
+
+ANF preserves the frontend's value kinds on let bindings, mutable slots,
+static-catch parameters, and function returns. A tuple projection into a
+`Pintval` binding skips the field retain even when Lambda lowered it as a
+pointer projection. ARC treats `Pintval` slots and handler parameters as
+unmanaged and carries the return fact to saturated local and imported calls.
+Promoted local refs whose initializer is immediate can still contain a heap
+value after a pointer store. The promotion leaves those slots eligible for
+ordinary ARC inference.
+
 # Codegen arithmetic
 
 The QBE code generator uses the tagging invariant to minimize instructions:

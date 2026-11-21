@@ -6,7 +6,7 @@ let collect_then_return value =
   Let (id "collected", Ccall ("caml_gc_major", [Unit]), Halt value)
 
 let qbe code =
-  { module_ident = id "Immediate_edges"; code }
+  { module_ident = id "Immediate_edges"; code; value_kinds = Ident.Map.empty }
   |> Arc_pass.run
   |> Codegen.compile_program
   |> Qbe_il.to_string
@@ -48,7 +48,78 @@ let mutable_slot ~mixed =
     LetJoin (id "join", If (Int 0, update, Halt Unit),
       Let (read, Atom (MutVar slot), collect_then_return (Var read))))
 
+let lambda_il code =
+  let program : Lambda.program =
+    { module_ident = id "Typed_edges"; main_module_block_size = 0;
+      required_globals = Ident.Set.empty; code }
+  in
+  match Anf.of_lambda ~use_builtins:false program with
+  | Error message -> failwith message
+  | Ok anf ->
+      let anf, effects = Arc_pass.run_with_effects anf in
+      Codegen.compile_program anf |> Qbe_il.to_string, effects
+
+let typed_edges () =
+  let open Lambda in
+  let loc = Debuginfo.Scoped_location.Loc_unknown in
+  let prim p args = Lprim (p, args, loc) in
+  let zero = Lconst (Const_int 0) in
+  let collect value =
+    Lsequence (prim (Pccall (Primitive.simple ~name:"caml_gc_major" ~arity:1
+      ~alloc:true)) [zero], value)
+  in
+  let tuple = id "tuple" and n = id "field" in
+  let project kind =
+    Llet (Strict, kind, n,
+      prim (Pfield (0, Pointer, Immutable)) [Lvar tuple],
+      collect (Lvar n))
+  in
+  let wrap ?(return = Pgenval) body =
+    let fn = id "read" in
+    let lf = lfunction ~kind:Curried ~params:[tuple, Pgenval] ~return ~body
+      ~attr:default_function_attribute ~loc in
+    fn, Llet (Strict, Pgenval, fn, lf, Lvar fn)
+  in
+  let _, immediate = wrap (project Pintval) in
+  let il, _ = lambda_il immediate in
+  check "typed tuple projection" 0 il;
+  if count "call extern $arc_retain(" il <> 0 then
+    failwith "typed tuple projection emitted ARC";
+  let _, pointer = wrap (project Pgenval) in
+  check "pointer tuple projection" 1 (fst (lambda_il pointer));
+  let external_int = prim (Pccall (Primitive.simple ~name:"opaque_int"
+    ~arity:1 ~alloc:true)) [zero] in
+  let slot = id "slot" in
+  let _, mutable_slot =
+    wrap (Lmutlet (Pintval, slot, zero,
+      Lsequence (Lassign (slot, external_int), collect (Lmutvar slot))))
+  in
+  check "typed mutable slot" 0 (fst (lambda_il mutable_slot));
+  let handler = id "handler" in
+  let _, catch =
+    wrap (Lstaticcatch (Lstaticraise (1, [external_int]),
+      (1, [handler, Pintval]), collect (Lvar handler)))
+  in
+  check "typed handler parameter" 0 (fst (lambda_il catch));
+  let fn, producer = wrap ~return:Pintval external_int in
+  let _, effects = lambda_il producer in
+  if not (snd (effects fn)) then failwith "typed return missing from call facts";
+  let choice = id "choice" in
+  let _, join =
+    wrap (Llet (Strict, Pintval, choice,
+      Lifthenelse (zero, external_int, zero), collect (Lvar choice)))
+  in
+  check "typed let join" 0 (fst (lambda_il join));
+  let _, promoted =
+    wrap (Llet (Strict, Pgenval, slot, prim (Pmakeblock (0, Mutable, Some [Pintval])) [zero],
+      Lsequence (prim (Psetfield (0, Pointer, Assignment))
+        [Lvar slot; prim (Pmakeblock (0, Immutable, None)) [Lvar tuple]],
+        collect (prim (Pfield (0, Pointer, Mutable)) [Lvar slot]))))
+  in
+  check "promoted slot with a pointer write" 1 (fst (lambda_il promoted))
+
 let () =
+  typed_edges ();
   check "immediate handler binders" 0
     (qbe (catch ~mixed:false (fun r -> collect_then_return (Var r))));
   check "mixed handler binders" 1

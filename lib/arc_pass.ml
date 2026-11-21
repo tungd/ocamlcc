@@ -34,6 +34,7 @@ type state = {
   borrowed : Ident.Set.t;
   frame_borrowed : Ident.Set.t;
   imm : Ident.Set.t;
+  typed_imm : Ident.Set.t;
   pure : Ident.Set.t;
   known_funs : int Ident.Map.t;
   yielding_funs : Ident.Set.t;
@@ -142,16 +143,20 @@ let observe_exit imm_args args =
       Some (List.map2 ( && ) previous incoming)
   | Some _ -> Some []
 
-let binders_imm binders observed =
+let binders_imm typed_imm binders observed =
+  let typed = Ident.Set.inter typed_imm (Ident.Set.of_list binders) in
   match observed with
   | Some kinds when List.length kinds = List.length binders ->
-      List.fold_left2 set_imm Ident.Set.empty binders kinds
-  | _ -> Ident.Set.empty
+      List.fold_left2
+        (fun imm id inferred -> if inferred then Ident.Set.add id imm else imm)
+        typed binders kinds
+  | _ -> typed
 
 (* A mutable slot can use the immediate convention for its whole scope
    only if every write is immediate and the slot is local to this frame. *)
-let scan_immediates ~pure ~imm_funs ?(exits = []) ?mutable_slot imm e =
+let scan_immediates ~typed_imm ~pure ~imm_funs ?(exits = []) ?mutable_slot imm e =
   let ce_imm = cexpr_is_imm ~pure ~imm_funs in
+  let bind imm id inferred = set_imm imm id (inferred || Ident.Set.mem id typed_imm) in
   let check_closure (lf : Anf.lfunction) =
     Option.iter
       (fun (slot, valid) ->
@@ -178,13 +183,13 @@ let scan_immediates ~pure ~imm_funs ?(exits = []) ?mutable_slot imm e =
         true
     | Let (id, ce, body) ->
         observe_binding imm ce;
-        scan exits (set_imm imm id (ce_imm imm ce)) body
+        scan exits (bind imm id (ce_imm imm ce)) body
     | MutLet (id, ce, body) ->
         observe_binding imm ce;
-        scan exits (Ident.Set.remove id imm) body
+        scan exits (bind imm id false) body
     | LetJoin (id, rhs, body) ->
         let immediate = scan exits imm rhs in
-        scan exits (set_imm imm id immediate) body
+        scan exits (bind imm id immediate) body
     | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) ->
         let immediate = scan exits imm a in
         scan exits imm b && immediate
@@ -197,7 +202,7 @@ let scan_immediates ~pure ~imm_funs ?(exits = []) ?mutable_slot imm e =
         let handler_imm =
           Ident.Set.union
             (Ident.Set.diff imm (Ident.Set.of_list binders))
-            (binders_imm binders !observed)
+            (binders_imm typed_imm binders !observed)
         in
         scan exits handler_imm handler && immediate
     | Switch (_, sw) -> scan_arms exits imm (sw.consts @ sw.blocks) sw.fail
@@ -225,23 +230,24 @@ let scan_immediates ~pure ~imm_funs ?(exits = []) ?mutable_slot imm e =
   in
   scan exits imm e
 
-let aexpr_returns_imm ~pure ~imm_funs imm e =
-  scan_immediates ~pure ~imm_funs imm e
+let aexpr_returns_imm ~typed_imm ~pure ~imm_funs imm e =
+  scan_immediates ~typed_imm ~pure ~imm_funs imm e
 
 let handler_immediates env hid binders body =
   match binders with
   | [] -> Ident.Set.empty
   | _ ->
       let observed = ref None in
-      ignore (scan_immediates ~pure:env.pure ~imm_funs:env.imm_funs
+      ignore (scan_immediates ~typed_imm:env.typed_imm ~pure:env.pure ~imm_funs:env.imm_funs
                 ~exits:[hid, observed] env.imm body);
-      binders_imm binders !observed
+      binders_imm env.typed_imm binders !observed
 
 let mutlet_is_imm env slot init body =
-  if not (is_imm_cexpr env init) then false
+  if Ident.Set.mem slot env.typed_imm then true
+  else if not (is_imm_cexpr env init) then false
   else
     let valid = ref true in
-    ignore (scan_immediates ~pure:env.pure ~imm_funs:env.imm_funs
+    ignore (scan_immediates ~typed_imm:env.typed_imm ~pure:env.pure ~imm_funs:env.imm_funs
               ~mutable_slot:(slot, valid) (Ident.Set.add slot env.imm) body);
     !valid
 
@@ -249,7 +255,7 @@ let specialize_assignment env = function
   | Anf.Assign (slot, rhs) when Ident.Set.mem slot env.imm -> Anf.AssignImm (slot, rhs)
   | ce -> ce
 
-let compute_imm_funs ~pure (e : Anf.aexpr) : int Ident.Map.t =
+let compute_imm_funs ~typed_imm ~pure (e : Anf.aexpr) : int Ident.Map.t =
   let funs = ref [] in
   let rec collect = function
     | Anf.Let (id, Fun lf, body) ->
@@ -288,7 +294,8 @@ let compute_imm_funs ~pure (e : Anf.aexpr) : int Ident.Map.t =
       List.fold_left
         (fun (acc, ch) (id, (lf : Anf.lfunction)) ->
           if Ident.Map.mem id acc then (acc, ch)
-          else if aexpr_returns_imm ~pure ~imm_funs (imm_params_of lf) lf.body
+          else if lf.return = Lambda.Pintval
+                  || aexpr_returns_imm ~typed_imm ~pure ~imm_funs (imm_params_of lf) lf.body
           then (Ident.Map.add id (List.length lf.params) acc, true)
           else (acc, ch))
         (imm_funs, false) !funs
@@ -1067,8 +1074,8 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       in
       let rhs' = transform_aexpr env_rhs rhs in
       let imm =
-        if Anf.returns_scalar rhs
-           || aexpr_returns_imm ~pure:env.pure ~imm_funs:env.imm_funs env.imm rhs
+        if Ident.Set.mem id env.typed_imm || Anf.returns_scalar rhs
+           || aexpr_returns_imm ~typed_imm:env.typed_imm ~pure:env.pure ~imm_funs:env.imm_funs env.imm rhs
         then Ident.Set.add id env.imm
         else Ident.Set.remove id env.imm
       in
@@ -1308,7 +1315,7 @@ and transform_let env id ce body =
       in
       let dead_after = Ident.Set.diff rem_after_before live_for_after_ce in
       let live_for_body = Ident.Set.diff rem_after_before dead_after in
-      let is_imm = is_imm_cexpr env ce in
+      let is_imm = Ident.Set.mem id env.typed_imm || is_imm_cexpr env ce in
       let env_body =
         { env with
           owned = Ident.Set.add id live_for_body;
@@ -1461,12 +1468,18 @@ let run_with_effects (prog : Anf.program) =
     Anf.pure_defs prog.code |> List.map fst |> Ident.Set.of_list
   in
   let known_funs, yielding_funs = compute_yield_info prog.code in
-  let imm_funs = compute_imm_funs ~pure prog.code in
+  let typed_imm =
+    Ident.Map.fold
+      (fun id kind acc -> if kind = Lambda.Pintval then Ident.Set.add id acc else acc)
+      prog.value_kinds Ident.Set.empty
+  in
+  let imm_funs = compute_imm_funs ~typed_imm ~pure prog.code in
   let init_env =
     { owned = Ident.Set.empty;
       borrowed = Ident.Set.empty;
       frame_borrowed = Ident.Set.empty;
       imm = Ident.Set.empty;
+      typed_imm;
       pure;
       known_funs;
       yielding_funs;

@@ -59,7 +59,8 @@ let () =
     Anf.MutLet (m, MakeBlock (0, [Int 0]), While (Halt (Int 0), Halt Unit))
   in
   let m_id = Ident.create_persistent "M" in
-  let prog1 = Arc_pass.run { Anf.module_ident = m_id; code = tail_while } in
+  let prog1 = Arc_pass.run { Anf.module_ident = m_id; code = tail_while;
+                           value_kinds = Ident.Map.empty } in
   let rm_while = count_release_mut prog1.code in
 
   (* 2. Tail-position For with owning MutLet must emit ReleaseMut on normal exit. *)
@@ -69,7 +70,8 @@ let () =
     Anf.MutLet
       (m2, MakeBlock (0, [Int 0]), For (idx, Int 0, Int 3, Asttypes.Upto, Halt Unit))
   in
-  let prog2 = Arc_pass.run { Anf.module_ident = m_id; code = tail_for } in
+  let prog2 = Arc_pass.run { Anf.module_ident = m_id; code = tail_for;
+                           value_kinds = Ident.Map.empty } in
   let rm_for = count_release_mut prog2.code in
 
   (* 3. StaticRaise inside While inside StaticCatch must drop dead frame_borrowed x. *)
@@ -86,7 +88,8 @@ let () =
             None ) )
   in
   let prog3 =
-    Arc_pass.run { Anf.module_ident = m_id; code = static_raise_in_while }
+    Arc_pass.run { Anf.module_ident = m_id; code = static_raise_in_while;
+                   value_kinds = Ident.Map.empty }
   in
   let rel_x = count_release_of x prog3.code in
   Printf.printf "rm_while=%d rm_for=%d rel_x=%d\n" rm_while rm_for rel_x
