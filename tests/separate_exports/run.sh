@@ -25,7 +25,7 @@ test "$(exception_checks "$work/consumer/consumer.ssa")" -eq 1
 
 mkdir -p "$work/legacy"
 cp "$work/units/implementation.o" "$work/units/provider.cmi" "$work/legacy"
-awk 'NR == 1 { sub(/exports-v3/, "exports-v1") } NR > 2 && NF { NF-- } { print }' \
+awk 'NR == 1 { sub(/exports-v[0-9]+/, "exports-v1") } NR > 2 && NF { NF = 7 } { print }' \
     "$work/units/provider.exports" > "$work/legacy/provider.exports"
 "$compiler" build -c --stdlib-dir "$stdlib" -I "$work/legacy" --work-dir "$work/legacy-work" \
     "$src/consumer.ml" -o "$work/legacy/consumer.o"

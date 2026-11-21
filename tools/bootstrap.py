@@ -4,7 +4,7 @@ Multi-stage self-hosting bootstrap orchestrator for ocamlcc.
 
   Stage 0: host Dune / ocamlopt -> build/bin/ocamlcc
   Stage 1: stage0 compiles stdlib_compat (72) + compiler-libs subset (104+4)
-           + bootstrap/unix + ocamlcc (16) -> build/bootstrap/stage1/ocamlcc
+           + bootstrap/unix + ocamlcc -> build/bootstrap/stage1/ocamlcc
   Stage 2: stage1 compiles the exact same ~193 modules -> build/bootstrap/stage2/ocamlcc
   Verify:  bit-for-bit .ssa and .s diff between stage1 and stage2 + smoke tests.
 """
@@ -35,6 +35,7 @@ OCAMLCC_MODULES: list[tuple[str, bool, bool]] = [
     ("ccalls", True, True),
     ("builtins", True, True),
     ("frontend", True, True),
+    ("bounds", True, True),
     ("anf", True, True),
     ("arc_pass", True, True),
     ("codegen_ctx", False, True),

@@ -5,8 +5,8 @@ description: Stage 0 -> Stage 1 -> Stage 2 self-hosted compiler bootstrap, compi
 tags: [bootstrap, self-hosting, compiler-libs, runtime]
 status: draft
 generated:
-  by: antigravity/1
-  at: 2026-11-19
+  by: codex/1
+  at: 2026-11-22
 sources:
   - id: compiler-stubs
     resource: ../bootstrap/stubs/compiler_stubs.c
@@ -35,7 +35,8 @@ tracing GC):
    `build/bootstrap/stdlib_src`), the 104-module transitive subset of OCaml
    5.5.0 `compiler-libs.common` (+ 4 `.mli`-only interfaces, fetched on demand
    from a SHA-256-pinned OCaml 5.5.0 release tarball), `bootstrap/unix/`, and
-   `ocamlcc` (16 modules), linking against `libocamlrt.a` and compiler-only C
+   the compiler modules listed in `tools/bootstrap.py`, linking against
+   `libocamlrt.a` and compiler-only C
    stubs (`bootstrap/stubs/compiler_stubs.c` + `-lzstd`). Because `ocamlcc`
    emits left-to-right argument evaluation, the Stage 1 binary runs with
    `ocamlcc`'s own left-to-right semantics.
@@ -74,3 +75,6 @@ scheduler, `Sys`/`Callback`) can live in OCaml, keeping `runtime/` focused on
 the irreducible C/asm kernel (`pal_ctx.S`, `pal.c`, ARC allocator/cycle
 collector/weak/finalizers, `closure.c`, fiber stack/shadow-stack core, and thin
 POSIX/libm/Bigarray primitives).
+
+The bootstrap source order includes the Lambda bounds proof pass before ANF
+so every stage can compile the same guarded-indexing pipeline.
