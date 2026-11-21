@@ -1655,24 +1655,7 @@ static void cc_visit_children(ArcHeader *hdr, CcChildFn fn, void *ctx)
         for (uint32_t i = 0; i < n; i++)
             fn(arr[i], ctx);
     } else if (tag == (uint16_t)ARC_TAG_FIBER) {
-        /* The fiber owns its shadow-stack values (live across suspension
-           points), the entry closure, the resume/suspend payload, and its
-           per-fiber exception slots — each is an owning child edge. */
-        const Fiber *f = (const Fiber *)(hdr + 1);
-        if (f->shadow_base != NULL) {
-            for (const uint64_t *p = f->shadow_base; p < f->shadow_sp; p++)
-                fn((int64_t)*p, ctx);
-        }
-        if (f->entry_closure != 0)
-            fn(f->entry_closure, ctx);
-        if (f->result != 0)
-            fn(f->result, ctx);
-        if (f->exn_slot != 0)
-            fn(f->exn_slot, ctx);
-        if (f->pending_exn != 0)
-            fn(f->pending_exn, ctx);
-        for (size_t i = 0; i < FIBER_HANDLER_COUNT; i++)
-            fn(f->handlers[i], ctx);
+        fiber_visit_owned_values((Fiber *)(hdr + 1), fn, ctx);
     } else if (!is_unscanned_leaf_tag(tag)) {
         int64_t *fields = (int64_t *)(hdr + 1);
         uint32_t n = arc_scan_count(hdr);
@@ -2068,45 +2051,12 @@ static int64_t collect_cycles(int discover_finalizers)
     OutgoingEdges outgoing = { &tm, &leaves };
     for (size_t i = 0; i < dead.len; i++) {
         ArcHeader *w = dead.data[i];
-        int is_fiber = (w->tag == (uint16_t)ARC_TAG_FIBER);
-        Fiber *f = is_fiber ? (Fiber *)(w + 1) : NULL;
-        if (is_fiber) {
-            while (f->reuse_sp > f->reuse_base) {
-                f->reuse_sp--;
-                arc_free_reuse(*f->reuse_sp);
-            }
-        }
         if (might_be_weak_target(w))
             clear_weak_target(w);
-        cc_visit_children(w, cc_collect_outgoing_cb, &outgoing);
-        if (is_fiber) {
-            f->entry_closure = 0;
-            f->result = 0;
-            f->exn_slot = 0;
-            f->pending_exn = 0;
-            if (f->shadow_base != NULL) {
-                pal_page_free(f->shadow_base,
-                              (size_t)(f->shadow_end - f->shadow_base) *
-                                  sizeof(uint64_t));
-                f->shadow_base = NULL;
-                f->shadow_sp = NULL;
-                f->shadow_end = NULL;
-            }
-            if (f->reuse_base != NULL) {
-                pal_page_free(f->reuse_base,
-                              (size_t)(f->reuse_end - f->reuse_base) *
-                                  sizeof(void *));
-                f->reuse_base = NULL;
-                f->reuse_sp = NULL;
-                f->reuse_end = NULL;
-            }
-            if (f->c_stack != NULL) {
-                pal_page_free(f->c_stack, f->c_stack_bytes);
-                f->c_stack = NULL;
-                f->c_stack_bytes = 0;
-            }
-            f->state = FIBER_DONE;
-        }
+        if (w->tag == ARC_TAG_FIBER)
+            fiber_collect_dead((Fiber *)(w + 1), cc_collect_outgoing_cb, &outgoing);
+        else
+            cc_visit_children(w, cc_collect_outgoing_cb, &outgoing);
     }
 
     atomic_store_explicit(&g_cc_active, 0, memory_order_release);

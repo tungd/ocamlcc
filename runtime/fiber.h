@@ -67,6 +67,16 @@ void arc_fiber_pop(int64_t n);
 void arc_fiber_push_reuse(void *tok);
 void arc_fiber_pop_reuse(int64_t n);
 
+/* Observe each owning value edge on a stack excluded from mutation.
+ * Aliased slots are reported separately. The visitor does not take ownership. */
+typedef void (*FiberValueVisitor)(int64_t value, void *ctx);
+void fiber_visit_owned_values(Fiber *fiber, FiberValueVisitor visit, void *ctx);
+
+/* Tear down a dead fiber under the cycle collector's lock. The visitor
+ * records outgoing values for later release and must not release them here.
+ * The caller reclaims the Fiber allocation after leaving the locked phase. */
+void fiber_collect_dead(Fiber *fiber, FiberValueVisitor record, void *ctx);
+
 /* Called by ARC release_subtree when ARC_TAG_FIBER refcount hits 0. */
 void fiber_destroy(Fiber *fiber);
 

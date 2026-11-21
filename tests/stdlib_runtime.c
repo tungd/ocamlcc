@@ -645,6 +645,56 @@ static void test_wren_suspend_through_effect_stack(void)
     assert(!ocamlcc_get_exn() && arc_live_objects() == before);
 }
 
+typedef struct {
+    int64_t handler;
+    unsigned count;
+} HandlerEdges;
+
+static void count_handler_edges(int64_t value, void *ctx)
+{
+    HandlerEdges *edges = ctx;
+    if (value == edges->handler)
+        edges->count++;
+}
+
+static void test_fiber_handler_ownership(void)
+{
+    int64_t before = arc_live_objects();
+
+    for (int cyclic = 0; cyclic < 2; cyclic++) {
+        ArcClosure *handler = arc_alloc(ARC_TAG_CLOSURE, 2,
+                                        sizeof(*handler) + 2 * sizeof(int64_t));
+        handler->code = (void *)noop_fiber_fn;
+        handler->arity = 1;
+        handler->env[0] = 1;
+        handler->env[1] = (uintptr_t)arc_alloc_bytes(8);
+        int64_t callback = (int64_t)(uintptr_t)handler;
+        int64_t stack = caml_alloc_stack(callback, callback, callback);
+
+        HandlerEdges edges = { .handler = callback, .count = 0 };
+        fiber_visit_owned_values((Fiber *)(uintptr_t)stack, count_handler_edges, &edges);
+        assert(edges.count == 3);
+
+        if (cyclic) {
+            arc_retain_val(stack);
+            handler->env[0] = (uintptr_t)stack;
+        }
+        arc_release(handler);
+        if (cyclic) {
+            /* A live stack keeps the shared handler and its leaf capture. */
+            ocamlcc_arc_collect(1);
+            assert(arc_live_objects() == before + 3);
+        }
+
+        arc_release_val(stack);
+        if (cyclic) {
+            assert(arc_live_objects() == before + 3);
+            assert(ocamlcc_arc_collect(1) >= tagged(2));
+        }
+        assert(arc_live_objects() == before);
+    }
+}
+
 static void test_fiber_robustness(void)
 {
     int64_t before = arc_live_objects();
@@ -1273,6 +1323,7 @@ int main(void)
     test_bounds_and_marshal_dos();
     test_fiber_robustness();
     test_wren_suspend_through_effect_stack();
+    test_fiber_handler_ownership();
     test_runtime_3_3();
     test_reachable_words();
     test_view_lifetime();

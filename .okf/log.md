@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Centralize fiber-owned values and stack teardown for ARC and trial deletion. See [Wren-style stackful fibers](/concepts/wren-fibers.md#owned-values-and-stack-teardown).
+
 - 2026-11-22 (codex/1) — Compile the bounds pass before ANF in bootstrap and exercise v1 export compatibility with a seven-field fixture. See [Self-hosting](/concepts/self-hosting.md).
 
 - 2026-11-22 (codex/1) — Isolate TLS materialization behind cold foreign-release calls. See [Perceus ARC](/concepts/perceus-arc.md).

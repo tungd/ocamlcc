@@ -7,6 +7,7 @@
 #include "arc.h"
 
 #include <pthread.h>
+#include <stdbool.h>
 #include <stdlib.h>
 
 #define FIBER_GUARD_BYTES (16u * 1024u)
@@ -34,29 +35,44 @@ static pthread_once_t g_fiber_tls_once = PTHREAD_ONCE_INIT;
 static pthread_key_t  g_fiber_tls_key;
 static int            g_fiber_tls_key_ok = 0;
 
-static void fiber_free_buffers(Fiber *f)
+static void fiber_drain_reuse(Fiber *f)
 {
     if (f->reuse_base != NULL) {
-        while (f->reuse_sp > f->reuse_base) {
-            f->reuse_sp--;
-            arc_free_reuse(*f->reuse_sp);
-        }
-        size_t rbytes = (size_t)(f->reuse_end - f->reuse_base) * sizeof(void *);
-        pal_page_free(f->reuse_base, rbytes);
-        f->reuse_base = NULL;
-        f->reuse_sp = NULL;
-        f->reuse_end = NULL;
+        while (f->reuse_sp > f->reuse_base)
+            arc_free_reuse(*--f->reuse_sp);
     }
+}
+
+static void fiber_free_reuse_buffer(Fiber *f)
+{
+    if (f->reuse_base == NULL)
+        return;
+    size_t bytes = (size_t)(f->reuse_end - f->reuse_base) * sizeof(*f->reuse_base);
+    pal_page_free(f->reuse_base, bytes);
+    f->reuse_base = NULL;
+    f->reuse_sp = NULL;
+    f->reuse_end = NULL;
+}
+
+static void fiber_free_shadow_buffer(Fiber *f)
+{
+    if (f->shadow_base == NULL)
+        return;
+    size_t bytes = (size_t)(f->shadow_end - f->shadow_base) * sizeof(*f->shadow_base);
+    pal_page_free(f->shadow_base, bytes);
+    f->shadow_base = NULL;
+    f->shadow_sp = NULL;
+    f->shadow_end = NULL;
+}
+
+static void fiber_free_buffers(Fiber *f)
+{
+    fiber_drain_reuse(f);
+    fiber_free_reuse_buffer(f);
     if (f->shadow_base != NULL) {
-        while (f->shadow_sp > f->shadow_base) {
-            f->shadow_sp--;
-            arc_release_val((int64_t)*f->shadow_sp);
-        }
-        size_t sbytes = (size_t)(f->shadow_end - f->shadow_base) * sizeof(uint64_t);
-        pal_page_free(f->shadow_base, sbytes);
-        f->shadow_base = NULL;
-        f->shadow_sp = NULL;
-        f->shadow_end = NULL;
+        while (f->shadow_sp > f->shadow_base)
+            arc_release_val((int64_t)*--f->shadow_sp);
+        fiber_free_shadow_buffer(f);
     }
 }
 
@@ -214,39 +230,74 @@ void arc_fiber_pop_reuse(int64_t n)
     cur->reuse_sp -= (size_t)n;
 }
 
-void fiber_destroy(Fiber *f)
+static void fiber_visit_slot(int64_t *slot, FiberValueVisitor visit, void *ctx,
+                             bool take)
 {
-    if (f == NULL || (tls_state != NULL && f == &tls_state->main_fiber))
+    int64_t value = *slot;
+    if (value == 0)
         return;
-    fiber_free_buffers(f);
-    if (f->entry_closure != 0) {
-        int64_t clos = f->entry_closure;
-        f->entry_closure = 0;
-        arc_release_val(clos);
-    }
-    if (f->result != 0) {
-        int64_t r = f->result;
-        f->result = 0;
-        arc_release_val(r);
-    }
-    if (f->exn_slot != 0) {
-        int64_t ex = f->exn_slot;
-        f->exn_slot = 0;
-        arc_release_val(ex);
-    }
-    if (f->pending_exn != 0) {
-        int64_t ex = f->pending_exn;
-        f->pending_exn = 0;
-        arc_release_val(ex);
-    }
+    if (take)
+        *slot = 0;
+    visit(value, ctx);
+}
+
+static void fiber_visit_fields(Fiber *f, FiberValueVisitor visit, void *ctx,
+                               bool take)
+{
+    int64_t *slots[] = { &f->entry_closure, &f->result, &f->exn_slot, &f->pending_exn };
+    for (size_t i = 0; i < sizeof(slots) / sizeof(slots[0]); i++)
+        fiber_visit_slot(slots[i], visit, ctx, take);
     for (size_t i = 0; i < FIBER_HANDLER_COUNT; i++)
-        arc_release_val(f->handlers[i]);
+        fiber_visit_slot(&f->handlers[i], visit, ctx, take);
+}
+
+static void fiber_visit_shadow(const Fiber *f, FiberValueVisitor visit, void *ctx)
+{
+    if (f->shadow_base != NULL) {
+        for (const uint64_t *p = f->shadow_base; p < f->shadow_sp; p++)
+            visit((int64_t)*p, ctx);
+    }
+}
+
+void fiber_visit_owned_values(Fiber *f, FiberValueVisitor visit, void *ctx)
+{
+    fiber_visit_shadow(f, visit, ctx);
+    fiber_visit_fields(f, visit, ctx, false);
+}
+
+static void fiber_finish_destroy(Fiber *f)
+{
     if (f->c_stack != NULL) {
         pal_page_free(f->c_stack, f->c_stack_bytes);
         f->c_stack = NULL;
         f->c_stack_bytes = 0;
     }
     f->state = FIBER_DONE;
+}
+
+void fiber_collect_dead(Fiber *f, FiberValueVisitor record, void *ctx)
+{
+    fiber_drain_reuse(f);
+    fiber_visit_shadow(f, record, ctx);
+    fiber_visit_fields(f, record, ctx, true);
+    fiber_free_shadow_buffer(f);
+    fiber_free_reuse_buffer(f);
+    fiber_finish_destroy(f);
+}
+
+static void fiber_drop_value(int64_t value, void *ctx)
+{
+    (void)ctx;
+    arc_release_val(value);
+}
+
+void fiber_destroy(Fiber *f)
+{
+    if (f == NULL || (tls_state != NULL && f == &tls_state->main_fiber))
+        return;
+    fiber_free_buffers(f);
+    fiber_visit_fields(f, fiber_drop_value, NULL, true);
+    fiber_finish_destroy(f);
 }
 
 static void fiber_swap_to(Fiber *next)
