@@ -384,18 +384,19 @@ let borrowed_flags env id =
 let read_only_parameters ~borrowed (lf : Anf.lfunction) =
   let remove_uses params args = Ident.Set.diff params (atoms_vars args) in
   let cexpr params = function
-    | Anf.App (Var fn, args) -> (
-        match borrowed fn with
-        | Some flags when List.length flags = List.length args ->
-            List.fold_left2
-              (fun params borrows arg ->
-                if borrows then params else Ident.Set.diff params (atom_vars arg))
-              params flags args
-        | _ -> Ident.Set.empty)
-    | App _ | DirectApp _ | Fun _ -> Ident.Set.empty
-    | Ccall (("ocamlcc_finalizers_due" | "ocamlcc_poll_finalizers"), []) ->
-        params
-    | Ccall _ | NativeCcall _ -> Ident.Set.empty
+    | Anf.App (Var fn, args) ->
+        let params = Ident.Set.remove fn params in
+        (match borrowed fn with
+         | Some flags when List.length flags = List.length args ->
+             List.fold_left2
+               (fun params borrows arg ->
+                 if borrows then params else Ident.Set.diff params (atom_vars arg))
+               params flags args
+         | _ -> remove_uses params args)
+    | App (fn, args) -> remove_uses params (fn :: args)
+    | DirectApp (_, args) -> remove_uses params args
+    | Ccall _ | NativeCcall _ -> params
+    | Fun _ -> Ident.Set.empty
     | (SetField _ | SetFloatField _ | OffsetRef _ | BytesSet _ | BytesSetN _
       | ArraySet _ | FloatArraySet _ | ScalarStore _ | BigarrayAccess _) as ce ->
         let uses, consumed = atom_operands ce in

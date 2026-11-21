@@ -106,3 +106,9 @@ keeps a reference to the original value. When both arms of a conditional
 leave their result owned by the same slot, the continuation can read the slot
 once after the join. This covers a buffer growth arm that stores the new
 buffer and a fast arm that keeps the existing buffer.
+
+Private workers can borrow a parameter across calls that leave the caller's
+owner in place. C primitives and native externals borrow their OCaml
+arguments under the C ABI. OCaml calls disqualify only values in owning
+argument positions. Saturated local calls can forward to another worker's
+borrowed positions. Functions that can suspend keep the owning convention.
