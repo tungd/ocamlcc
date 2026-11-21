@@ -1,0 +1,49 @@
+#!/bin/sh
+set -eu
+compiler=build/bin/ocamlcc
+stdlib=build/stdlib
+src=tests/separate_exports
+work=build/separate_exports_test
+mkdir -p "$work/units" "$work/replacement"
+
+# The module name comes from its interface even if the object was renamed.
+"$compiler" build -c --stdlib-dir "$stdlib" "$src/provider.mli" "$src/provider.ml" \
+    -o "$work/units/implementation.o"
+test -f "$work/units/provider.cmi"
+test -f "$work/units/provider.exports"
+"$compiler" build -c --stdlib-dir "$stdlib" -I "$work/units" --work-dir "$work/consumer" \
+    "$src/consumer.ml" -o "$work/units/consumer.o"
+grep -Eq 'call extern \$ocamlcc_direct_Provider_' "$work/consumer/consumer.ssa"
+"$compiler" build --stdlib-dir "$stdlib" -I "$work/units" "$src/entry.ml" \
+    "$work/units/consumer.o" "$work/units/implementation.o" -o "$work/run"
+"$work/run"
+
+sed 's/x + !bias/x + !bias + 1/' "$src/provider.ml" > "$work/replacement/provider.ml"
+cp "$src/provider.mli" "$work/replacement/provider.mli"
+"$compiler" build -c --stdlib-dir "$stdlib" "$work/replacement/provider.mli" \
+    "$work/replacement/provider.ml" -o "$work/replacement/implementation.o"
+"$compiler" build -c --stdlib-dir "$stdlib" -I "$work/units" -I "$work/replacement" \
+    --work-dir "$work/shadow" "$src/consumer.ml" -o "$work/shadow.o"
+grep -Eq 'call extern \$ocamlcc_direct_Provider_' "$work/shadow/consumer.ssa"
+sed 's/= 42/= 43/' "$src/entry.ml" > "$work/entry.ml"
+"$compiler" build --stdlib-dir "$stdlib" -I "$work" -I "$work/replacement" "$work/entry.ml" \
+    "$work/shadow.o" "$work/replacement/implementation.o" -o "$work/run"
+"$work/run"
+cp "$work/replacement/implementation.o" "$work/units/implementation.o"
+
+# A precompiled consumer requires the exact implementation used for its direct call.
+if "$compiler" build --stdlib-dir "$stdlib" -I "$work/units" "$src/entry.ml" \
+    "$work/units/consumer.o" "$work/units/implementation.o" -o "$work/relinked" \
+    > "$work/relink.log" 2>&1; then
+    exit 1
+fi
+grep -q 'ocamlcc_direct_Provider_' "$work/relink.log"
+
+# New compilations can fall back to closure application with the replacement.
+"$compiler" build -c --stdlib-dir "$stdlib" -I "$work/units" --work-dir "$work/fallback" \
+    "$src/consumer.ml" -o "$work/units/consumer.o"
+grep -Fq 'call extern $ocamlcc_apply1_raw(' "$work/fallback/consumer.ssa"
+"$compiler" build --stdlib-dir "$stdlib" -I "$work/units" "$work/entry.ml" \
+    "$work/units/consumer.o" "$work/units/implementation.o" -o "$work/run"
+"$work/run"
+echo 'separate export summaries: PASS'

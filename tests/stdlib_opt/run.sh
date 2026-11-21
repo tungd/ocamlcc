@@ -19,6 +19,17 @@ cp "$stdlib/"*.cmi "$stdlib/libocamlstdlib.a" "$stdlib/libocamlstdlib.a.opt" "$p
 grep -Eq 'call extern \$ocamlcc_(direct_)?Stdlib__option_' "$work/driver/main.ssa"
 "$work/run"
 
+"$compiler" build -c --work-dir "$work/object" --stdlib-dir "$pack" "$main" -o "$work/main.o"
+grep -Eq 'call extern \$ocamlcc_(direct_)?Stdlib__option_' "$work/object/main.ssa"
+
+# Loose object packs can use their per-unit summaries without an archive.
+loose="$work/loose"
+mkdir -p "$loose"
+cp "$stdlib/"*.cmi "$stdlib/"*.o "$stdlib/"*.exports "$loose"
+"$compiler" build --work-dir "$work/loose-build" --stdlib-dir "$loose" "$main" -o "$work/run"
+grep -Eq 'call extern \$ocamlcc_(direct_)?Stdlib__option_' "$work/loose-build/main.ssa"
+"$work/run"
+
 # Old packs can be linked without optimization metadata.
 rm "$pack/libocamlstdlib.a.opt"
 "$compiler" build --work-dir "$work/fallback" --stdlib-dir "$pack" "$main" -o "$work/run"

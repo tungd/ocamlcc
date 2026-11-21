@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Publish .exports for loose stdlib objects and separate -c builds. Resolve metadata from the selected interface and bind direct entries to the implementation. See [build pipeline](/concepts/build-pipeline.md#persisted-export-summaries).
+
 - 2026-11-21 (codex/1) — Flatten strict Lambda bindings after inlining so returned refs and immutable blocks can be scalar-replaced. Support up to four fields in direct bindings and matching branch joins. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-20 (codex/1) — Inline known local functor applications and resolve calls through their immutable module fields. See [compiler pipeline](/concepts/compiler-pipeline.md#local-functor-applications).

@@ -6,7 +6,7 @@ tags: [build, ninja, dune, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-20
+  at: 2026-11-21
 sources:
   - id: build-ninja
     resource: ../build.ninja
@@ -77,22 +77,29 @@ hiding internal runtime/stdlib symbols on `--shared` via Darwin
 packaging (only emitting/attaching `-headers` for `ios-xcframework` when a `.mli`
 is present or `--emit-header` is explicitly passed).
 
-# Prebuilt stdlib export summaries
+# Persisted export summaries
 
 The bundled and compatibility archives ship a versioned `.a.opt` companion.
-`compile --emit-opt` emits per-unit records beside the CMI. `archive-opt`
-combines the records for the archived objects and records the archive
-digest. The consumer also checks the digest of each interface it resolves.
+`compile --emit-opt` emits per-unit records with the SSA. `archive-opt`
+combines the records for the archive and writes a `.exports` companion for
+each loose object. The archive and object companions carry binary and
+interface digests.
 
-`ocamlcc build` loads the companion when it links a prebuilt stdlib archive
-into an executable. A separate `compile --stdlib-dir DIR` invocation can
-use the same archive and companion for the later link. Saturated calls
-to exports such as `Option.map`, `Result.bind`, and `List.fold_left`
-can then use their direct entries. Suspending callbacks still receive
-shadow-stack protection. Partial applications and clients of archives
-without matching metadata use closure dispatch. The companion records
-entry points, arity, suspension, and immediate-result facts. Inline bodies
-are available through the existing in-process summary.
+`ocamlcc build -c` publishes the unit's `.cmi` and `.exports` next to the
+output object. The CMI and summary use the OCaml unit name. The summary
+records the object basename, including a custom `-o` name. Consumers look up
+metadata for the interface the typechecker selected, including interfaces
+from `-I` and `--stdlib-dir`. Executable, object, and assembly builds can
+consume the prebuilt stdlib archive summary. Loose object packs use the
+per-unit companions.
+
+Saturated calls can use the resolved entry, suspension, and immediate-result
+facts. Suspending callbacks retain shadow-stack protection. Partial
+applications and calls without matching metadata use closure dispatch.
+Persisted entry names identify the implementation and its call facts, so
+relinking a previously optimized caller against a changed implementation
+requires recompiling the caller. Inline bodies are available through the
+in-process summary.
 
 # Executable startup
 

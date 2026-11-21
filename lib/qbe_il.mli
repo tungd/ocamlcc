@@ -89,4 +89,4 @@ type data = {
 
 type module_ = { funcs : func list; datas : data list }
 
-val to_string : ?pic:bool -> module_ -> string
+val to_string : ?pic:bool -> ?name:(string -> string) -> module_ -> string

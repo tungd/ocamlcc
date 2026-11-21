@@ -57,7 +57,7 @@ let with_flags ~include_dirs ~emit_cmi ~nopervasives ~nostdlib
 
 let compile_implementation ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
-    ?(nolabels = false) ?(open_modules = []) ~filename ~modname source :
+    ?(nolabels = false) ?(open_modules = []) ?on_cmis ~filename ~modname source :
     (Lambda.program, error) result =
   try
     with_flags ~include_dirs ~emit_cmi ~nopervasives ~nostdlib ~no_alias_deps
@@ -78,6 +78,13 @@ let compile_implementation ?(include_dirs = []) ?output_prefix ?(emit_cmi = fals
           Translmod.transl_implementation modname
             (impl.Typedtree.structure, impl.Typedtree.coercion)
         in
+        Option.iter (fun save ->
+          let names = modname :: List.map fst (Env.imports ()) in
+          let cmis = List.filter_map (fun name ->
+            match Load_path.find_normalized (name ^ ".cmi") with
+            | path -> Some (name, path)
+            | exception Not_found -> None) names in
+          save cmis) on_cmis;
         Ok program)
   with exn -> Error { msg = error_msg exn }
 

@@ -9,6 +9,7 @@ val compile_implementation :
   ?no_alias_deps:bool ->
   ?nolabels:bool ->
   ?open_modules:string list ->
+  ?on_cmis:((string * string) list -> unit) ->
   filename:string ->
   modname:string ->
   string ->

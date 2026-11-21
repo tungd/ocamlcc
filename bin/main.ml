@@ -180,27 +180,21 @@ let compile opts =
         | Some p -> Pipeline.module_name_of_file (p ^ ".ml")
         | None -> Pipeline.module_name_of_file file
       in
-      let include_dirs, imports =
+      let include_dirs =
         match opts.stdlib_dir with
-        | None -> opts.include_dirs, []
-        | Some dir ->
-            let include_dirs =
-              if List.mem dir opts.include_dirs then opts.include_dirs
-              else opts.include_dirs @ [dir]
-            in
-            let imports =
-              Option.fold ~none:[] ~some:(Export_summary.read_archive ~include_dirs)
-                (Export_summary.find_archive dir)
-            in
-            include_dirs, imports
+        | Some dir when not (List.mem dir opts.include_dirs) -> opts.include_dirs @ [dir]
+        | _ -> opts.include_dirs
       in
+      let archive = Option.bind opts.stdlib_dir Export_summary.find_archive in
+      let load_exports =
+        if opts.emit_opt then None else Some (Export_summary.loader ?archive ()) in
       let exports = ref [] in
       let on_exports =
         if opts.emit_opt then Some (fun entries -> exports := entries) else None
       in
       match
         Pipeline.compile_file ~include_dirs ?output_prefix
-          ?stdlib_dir:opts.stdlib_dir ~imports ?on_exports
+          ?stdlib_dir:opts.stdlib_dir ?load_exports ?on_exports ~seal_exports:opts.emit_opt
           ~emit_cmi:opts.emit_cmi ~nopervasives:opts.nopervasives
           ~nostdlib:opts.nostdlib ~no_alias_deps:opts.no_alias_deps
           ~nolabels:opts.nolabels ~open_modules:opts.open_modules

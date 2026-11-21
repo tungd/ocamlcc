@@ -6,7 +6,7 @@ tags: [stdlib, compatibility, testing, arc]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-20
+  at: 2026-11-21
 sources:
   - id: runner
     resource: tools/stdlib_compat.py
@@ -39,9 +39,9 @@ sources:
 ---
 
 
-The compatibility archive publishes direct-call metadata in
-`libocamlstdlib_compat.a.opt` for separately compiled clients.
-See [prebuilt stdlib export summaries](/concepts/build-pipeline.md#prebuilt-stdlib-export-summaries).
+The compatibility build publishes direct-call metadata in
+`libocamlstdlib_compat.a.opt` and per-unit `.exports` files for loose objects.
+See [persisted export summaries](/concepts/build-pipeline.md#persisted-export-summaries).
 
 # Build and test
 

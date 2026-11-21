@@ -229,6 +229,7 @@ val of_lambda :
   ?include_dirs:string list ->
   ?stdlib_dir:string ->
   ?imports:(string * exports) list ->
+  ?load_exports:(string -> exports option) ->
   ?on_export_ids:((int list * Ident.t) list -> unit) ->
   Lambda.program ->
   (program, string) result

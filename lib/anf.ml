@@ -283,7 +283,7 @@ let conv_const (c : Lambda.structured_constant) : atom =
   | Const_float_array sl -> ConstFloatArray (List.map parse_const_float sl)
   | Const_block (tag, items) -> ConstBlock (tag, List.map conv_const_item items)
 
-let unit_imports : (string * exports) list ref = ref []
+let unit_imports : (string -> exports option) ref = ref (fun _ -> None)
 
 let imported_callee callee =
   let open Lambda in
@@ -291,7 +291,7 @@ let imported_callee callee =
     | Lprim (Pfield (slot, Pointer, Immutable), [owner], _) ->
         resolve (slot :: path) owner
     | Lprim (Pgetglobal id, [], _) ->
-        Option.bind (List.assoc_opt (Ident.name id) !unit_imports)
+        Option.bind (!unit_imports (Ident.name id))
           (List.assoc_opt path)
     | _ -> None
   in
@@ -2287,7 +2287,7 @@ let exported_functions code =
   gather [] [] (scan Ident.Map.empty code)
 
 let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = [])
-    ?on_export_ids (program : Lambda.program) : (program, string) result =
+    ?(load_exports = fun _ -> None) ?on_export_ids (program : Lambda.program) : (program, string) result =
   let saved = !builtin_tables in
   let saved_imports = !unit_imports in
   let printing = if use_builtins then Some (Builtins.load ~include_dirs ()) else None in
@@ -2302,7 +2302,10 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
       stdlib_dir
   in
   builtin_tables := (printing, selectors);
-  unit_imports := imports;
+  unit_imports := (fun name ->
+    match List.assoc_opt name imports with
+    | Some _ as known -> known
+    | None -> load_exports name);
   Fun.protect
     ~finally:(fun () -> builtin_tables := saved; unit_imports := saved_imports)
     (fun () ->

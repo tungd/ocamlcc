@@ -888,7 +888,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                     | Some d when Sys.file_exists (Filename.concat d "stdlib.cmi") ->
                         let inputs =
                           match kind, Export_summary.find_archive d with
-                          | Kind_exe, Some archive -> [archive]
+                          | (Kind_exe | Kind_obj | Kind_asm), Some archive -> [archive]
                           | _ -> list_o_files d
                         in
                         if inputs = [] then try_src ()
@@ -917,14 +917,18 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                 | [] -> None
               in
               let asm_files = ref [] in
-              let imports = ref (
+              let imports = ref [] in
+              let archive =
                 match stdlib_plan with
-                | Stdlib_prebuilt (_, [archive]) when Filename.check_suffix archive ".a" ->
-                    Export_summary.read_archive ~include_dirs:inc_dirs archive
-                    |> List.filter (fun (unit_name, _) ->
-                         not (List.exists (fun (step : build_step) -> step.modname = unit_name)
-                                ml_steps))
-                | _ -> []) in
+                | Stdlib_prebuilt (_, [archive]) when Filename.check_suffix archive ".a" -> Some archive
+                | _ -> None in
+              let lookup = Export_summary.loader ?archive () in
+              let local_units =
+                List.map (fun (step : build_step) -> step.modname) ml_steps in
+              let load_exports ~unit_name ~cmi =
+                if List.mem unit_name local_units then None
+                else lookup ~unit_name ~cmi in
+              let object_interface = ref None in
               let shim_c_files = ref [] in
               let shim_exported_syms = ref [] in
               let has_mli modname =
@@ -959,10 +963,15 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                  | Some p -> p = s.path
                                  | None -> false)
                             in
+                            let on_interface =
+                              if kind = Kind_obj then
+                                Some (fun cmi -> object_interface := Some (s.modname, cmi))
+                              else None in
                             match
                               Pipeline.compile_file ~include_dirs:inc_dirs ?stdlib_dir
                                 ~output_prefix:prefix ~emit_cmi
-                                ~imports:!imports
+                                ~imports:!imports ~load_exports ?on_interface
+                                ~seal_exports:(kind = Kind_obj)
                                 ~on_exports:(fun exports ->
                                   imports := (s.modname, exports) :: !imports)
                                 ~nopervasives:cfg.nopervasives
@@ -1129,7 +1138,14 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                       asm out_path
                                   with
                                   | Error _ as e -> e
-                                  | Ok () -> Ok out_path)
+                                  | Ok () ->
+                                      (try
+                                         Option.iter (fun (unit_name, cmi) ->
+                                           let exports = List.assoc unit_name !imports in
+                                           Export_summary.publish_object ~unit_name ~cmi ~obj:out_path exports)
+                                           !object_interface;
+                                         Ok out_path
+                                       with Sys_error msg -> Error msg))
                               | _ ->
                                   Error
                                     "-c requires a single .ml compilation unit"))

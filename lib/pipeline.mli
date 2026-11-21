@@ -15,7 +15,10 @@ val compile_source :
   filename:string ->
   modname:string ->
   ?imports:(string * Anf.exports) list ->
+  ?load_exports:(unit_name:string -> cmi:string -> Anf.exports option) ->
+  ?on_interface:(string -> unit) ->
   ?on_exports:(Anf.exports -> unit) ->
+  ?seal_exports:bool ->
   string ->
   (string, string) result
 (** Compile an in-memory OCaml source string to QBE IL text. *)
@@ -35,7 +38,10 @@ val compile_file :
   filename:string ->
   modname:string ->
   ?imports:(string * Anf.exports) list ->
+  ?load_exports:(unit_name:string -> cmi:string -> Anf.exports option) ->
+  ?on_interface:(string -> unit) ->
   ?on_exports:(Anf.exports -> unit) ->
+  ?seal_exports:bool ->
   unit ->
   (string, string) result
 (** Compile an OCaml source file to QBE IL text. [modname] defaults to

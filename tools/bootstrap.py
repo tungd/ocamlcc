@@ -42,9 +42,9 @@ OCAMLCC_MODULES: list[tuple[str, bool, bool]] = [
     ("codegen_expr", False, True),
     ("codegen_fn", False, True),
     ("codegen", True, True),
+    ("export_summary", True, True),
     ("pipeline", True, True),
     ("c_bindgen", True, True),
-    ("export_summary", True, True),
     ("driver", True, True),
     ("main", False, False),
 ]
