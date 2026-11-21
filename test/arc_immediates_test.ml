@@ -57,7 +57,7 @@ let lambda_il code =
   match Anf.of_lambda ~use_builtins:false program with
   | Error message -> failwith message
   | Ok anf ->
-      let anf, effects = Arc_pass.run_with_effects anf in
+      let anf, effects, _ = Arc_pass.run_with_effects anf in
       Codegen.compile_program anf |> Qbe_il.to_string, effects
 
 let typed_edges () =
@@ -166,3 +166,23 @@ let () =
   if retains direct <> 0 then failwith "read-only slot snapshot retained its value";
   if retains joined <> 0 then failwith "grow-or-read join retained its value";
   if retains delayed = 0 then failwith "snapshot across a slot overwrite lost its owner"
+
+let () =
+  let slot = id "widths" and snapshot = id "some" and width = id "width" in
+  let fresh = id "fresh" and option = id "option" and allocated = id "allocated" in
+  let init =
+    Let (fresh, CreateBytes (Int 2),
+      Let (option, MakeBlock (0, [Var fresh]),
+        Let (id "write", Assign (slot, Var option), Halt (Var fresh)))) in
+  let choose =
+    Let (snapshot, Atom (MutVar slot),
+      If (Var snapshot,
+          Let (width, Field (0, Immutable_field, Var snapshot), Halt (Var width)),
+          init)) in
+  let write = Let (id "set", BytesSet (false, Var allocated, Int 0, Char 'a'), Halt Unit) in
+  let compile cont =
+    qbe (MutLet (slot, Atom (Int 0), LetJoin (allocated, choose, cont))) in
+  let retains il = count "call extern $arc_retain(" il in
+  if retains (compile write) <> 0 then failwith "lazy option join retained its payload";
+  let overwrite = Let (id "clear", Assign (slot, Int 0), write) in
+  if retains (compile overwrite) = 0 then failwith "option payload outlived its slot without an owner"

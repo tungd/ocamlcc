@@ -658,25 +658,47 @@ let read_only_slot_snapshot slot id body =
   in
   Option.is_some (scan body)
 
-(* Both arms of a grow-or-read join can return a unit token if the same
-   slot owns their selected value. Read that slot once at the join. *)
-let rec mutable_slot_result = function
-  | Anf.Halt (MutVar slot) -> Some (slot, Anf.Halt Unit)
-  | Let (id, (Assign (slot, Var value) as assign), Halt (Var result))
-    when Ident.same value result ->
-      Some (slot, Let (id, assign, Halt Unit))
-  | Let (id, ce, body) ->
-      Option.map (fun (slot, body) -> slot, Anf.Let (id, ce, body))
-        (mutable_slot_result body)
-  | LetJoin (id, rhs, body) ->
-      Option.map (fun (slot, body) -> slot, Anf.LetJoin (id, rhs, body))
-        (mutable_slot_result body)
-  | If (cond, yes, no) ->
-      (match mutable_slot_result yes, mutable_slot_result no with
-       | Some (slot, yes), Some (other, no) when Ident.same slot other ->
-           Some (slot, If (cond, yes, no))
-       | _ -> None)
-  | _ -> None
+(* Every branch must leave the result owned by the same slot. A lazy option
+   can also establish ownership of the result through its immutable payload. *)
+let mutable_slot_result body =
+  let open Anf in
+  let read_slot snapshots = function
+    | MutVar slot -> Some slot
+    | Var value -> Ident.Map.find_opt value snapshots
+    | _ -> None in
+  let keep construct = Option.map (fun (slot, field, body) -> slot, field, construct body) in
+  let rec scan snapshots = function
+    | Halt value -> Option.map (fun slot -> slot, None, Halt Unit) (read_slot snapshots value)
+    | Let (id, (Assign (slot, Var value) as assign), Halt (Var result))
+      when Ident.same value result ->
+        Some (slot, None, Let (id, assign, Halt Unit))
+    | Let (box, (MakeBlock (0, [Var value]) as make),
+        Let (id, (Assign (slot, Var stored) as assign), Halt (Var result)))
+      when Ident.same box stored && Ident.same value result ->
+        Some (slot, Some 0, Let (box, make, Let (id, assign, Halt Unit)))
+    | Let (id, Field (0, Immutable_field, owner), Halt (Var result))
+      when Ident.same id result ->
+        Option.map (fun slot -> slot, Some 0, Halt Unit) (read_slot snapshots owner)
+    | Let (id, ce, body) ->
+        let snapshots =
+          match ce with
+          | Atom value -> Option.fold ~none:snapshots
+              ~some:(fun slot -> Ident.Map.add id slot snapshots) (read_slot snapshots value)
+          | Assign (slot, _) | AssignImm (slot, _) | AssignScalar (slot, _, _) ->
+              Ident.Map.filter (fun _ owner -> not (Ident.same owner slot)) snapshots
+          | _ -> snapshots in
+        keep (fun body -> Let (id, ce, body)) (scan snapshots body)
+    | LetJoin (id, rhs, body) ->
+        keep (fun body -> LetJoin (id, rhs, body)) (scan Ident.Map.empty body)
+    | If (cond, yes, no) ->
+        (match scan snapshots yes, scan snapshots no with
+         | Some (slot, field, yes), Some (other, other_field, no)
+           when Ident.same slot other && field = other_field ->
+             Some (slot, field, If (cond, yes, no))
+         | _ -> None)
+    | _ -> None
+  in
+  scan Ident.Map.empty body
 
 let borrowed_call env live = function
   | Anf.App (Var fn, args) -> (
@@ -1205,9 +1227,9 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       | None when stable && field_is_read_only_in_loop id body ->
           transform_view env id (Anf.BorrowedField (index, owner)) body
       | None -> transform_let env id ce body)
-  | Let (id, Atom (MutVar slot), body)
+  | Let (id, Atom ((MutVar slot | BorrowedField (_, MutVar slot)) as source), body)
     when Ident.Set.mem slot env.muts && read_only_slot_snapshot slot id body ->
-      transform_view env id (Anf.MutVar slot) body
+      transform_view env id source body
   | Let (id, ce, body) -> transform_let env id ce body
   | MutLet (id, ce, body) ->
       let immediate = mutlet_is_imm env id ce body in
@@ -1250,10 +1272,13 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           emit_drops env dead_before node)
   | LetJoin (id, rhs, body) -> (
       match mutable_slot_result rhs with
-      | Some (slot, rhs)
+      | Some (slot, field, rhs)
         when Ident.Set.mem slot env.muts && read_only_slot_snapshot slot id body ->
           let ignored = Ident.create_local "slot_join" in
-          transform_join env ignored rhs (Anf.Let (id, Atom (MutVar slot), body))
+          let source = match field with
+            | None -> Anf.MutVar slot
+            | Some index -> Anf.BorrowedField (index, MutVar slot) in
+          transform_join env ignored rhs (Anf.Let (id, Atom source, body))
       | _ -> transform_join env id rhs body)
   | LetRec (bindings, body) ->
       let rec_ids =

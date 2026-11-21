@@ -156,3 +156,7 @@ profile keeps its queue in ordinary static storage. Weak lookup starts only
 after the inline header test, with the existing fallback for oversized
 headers. Single-thread live-object accounting uses atomic snapshots and
 load/store updates without atomic read-modify-write.
+
+A lazy option join can return a view of the immutable payload when every arm
+leaves that payload owned by the same local slot. An overwrite before a later
+use, or a use that transfers ownership, keeps the owning path.
