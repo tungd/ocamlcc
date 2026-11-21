@@ -160,3 +160,7 @@ load/store updates without atomic read-modify-write.
 A lazy option join can return a view of the immutable payload when every arm
 leaves that payload owned by the same local slot. An overwrite before a later
 use, or a use that transfers ownership, keeps the owning path.
+
+The fiber and foreign-owner branches call out to cold helpers. This keeps
+Darwin's dynamic TLS address lookup outside the ordinary release traversal
+even when the C compiler hoists TLS addresses out of conditional blocks.

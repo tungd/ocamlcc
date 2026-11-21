@@ -130,10 +130,17 @@ static _Thread_local ForeignRelease *pending_foreign_releases;
 static _Thread_local unsigned foreign_release_depth;
 #endif
 
-static void enqueue_foreign_batch(ForeignRelease *head, ForeignRelease *tail)
+/* Keep TLS address materialization in the cold calls. Optimizers can
+ * otherwise hoist it out of the branch even when accesses are guarded. */
+static __attribute__((noinline)) void before_fiber_release(
+    int deferred, ForeignRelease *head, ForeignRelease *tail)
 {
-    tail->next = pending_foreign_releases;
-    pending_foreign_releases = head;
+    if (!deferred)
+        foreign_release_depth++;
+    if (head != NULL) {
+        tail->next = pending_foreign_releases;
+        pending_foreign_releases = head;
+    }
 }
 
 /* A callback may call a generated binding, collect, or release another view.
@@ -158,6 +165,19 @@ static void drain_foreign_releases(void)
     }
     ocamlcc_set_exn(saved_exn);
     foreign_release_depth--;
+}
+
+static __attribute__((noinline)) void finish_subtree_foreign_releases(
+    int deferred, ForeignRelease *head, ForeignRelease *tail)
+{
+    if (head != NULL) {
+        tail->next = pending_foreign_releases;
+        pending_foreign_releases = head;
+    }
+    if (deferred)
+        foreign_release_depth--;
+    if (pending_foreign_releases)
+        drain_foreign_releases();
 }
 
 /* Module-init re-entrancy: generated init functions call each other's
@@ -1426,15 +1446,10 @@ static void release_subtree(ArcHeader *root, int free_root)
             weak_unlink((ArcWeakArray *)(cur + 1));
         } else if (tag == ARC_TAG_FIBER) {
             /* Destroying a fiber can recursively drop its shadow roots. */
-            if (!defer_nested_releases) {
-                foreign_release_depth++;
-                defer_nested_releases = 1;
-            }
-            if (foreign_head != NULL) {
-                enqueue_foreign_batch(foreign_head, foreign_tail);
-                foreign_head = NULL;
-                foreign_tail = NULL;
-            }
+            before_fiber_release(defer_nested_releases, foreign_head, foreign_tail);
+            defer_nested_releases = 1;
+            foreign_head = NULL;
+            foreign_tail = NULL;
             fiber_destroy((Fiber *)(cur + 1));
         } else if (tag == ARC_TAG_CUSTOM) {
             void *p = (void *)(uintptr_t)(*(uint64_t *)(cur + 1));
@@ -1480,12 +1495,8 @@ static void release_subtree(ArcHeader *root, int free_root)
 
         cur = (tail != NULL) ? tail : work_pop(&w);
     }
-    if (foreign_head != NULL)
-        enqueue_foreign_batch(foreign_head, foreign_tail);
-    if (defer_nested_releases)
-        foreign_release_depth--;
-    if ((foreign_head != NULL || defer_nested_releases) && pending_foreign_releases)
-        drain_foreign_releases();
+    if (foreign_head != NULL || defer_nested_releases)
+        finish_subtree_foreign_releases(defer_nested_releases, foreign_head, foreign_tail);
 }
 
 void arc_release(void *obj)
