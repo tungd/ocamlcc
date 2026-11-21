@@ -83,6 +83,27 @@ static void check_allocation_accounting(void)
     assert((ocamlcc_arc_slab_count(1) >> 1) == slabs + 1);
 }
 
+static void check_slab_boundary_reuse(void)
+{
+    enum { first_slab_slots = 31, bytes = 2048 - sizeof(ArcHeader) };
+    void *keepers[first_slab_slots];
+    for (int i = 0; i < first_slab_slots; i++)
+        keepers[i] = arc_alloc(0, 0, bytes);
+    int64_t slabs = ocamlcc_arc_slab_count(1);
+    void *last = arc_alloc(0, 0, bytes);
+    assert(ocamlcc_arc_slab_count(1) == slabs + 2);
+    for (int i = 0; i < 32; i++) {
+        arc_release(last);
+        assert(ocamlcc_arc_slab_count(1) == slabs + 2);
+        void *next = arc_alloc(0, 0, bytes);
+        assert(next == last);
+        last = next;
+    }
+    arc_release(last);
+    for (int i = first_slab_slots - 1; i >= 0; i--)
+        arc_release(keepers[i]);
+}
+
 int main(int argc, char **argv)
 {
     int entered = arc_mutator_enter();
@@ -100,6 +121,7 @@ int main(int argc, char **argv)
     } else {
         check_reference_counts();
         check_allocation_accounting();
+        check_slab_boundary_reuse();
     }
     arc_mutator_leave(entered);
     return 0;

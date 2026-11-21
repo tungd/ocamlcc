@@ -978,12 +978,19 @@ static void slab_return_slots(ArcHeader *const *slots, uint32_t count)
         pal_page_free(retired[i], SLAB_SIZE);
 }
 
-#ifndef OCAMLCC_SINGLE_THREAD_RC
 typedef struct {
     ArcHeader *slots[SLAB_MAGAZINE_CAPACITY];
     uint32_t count;
 } SlabMagazine;
 
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+static SlabMagazine single_magazines[NUM_SIZE_CLASSES];
+
+static inline SlabMagazine *slab_magazine(int cls)
+{
+    return &single_magazines[cls];
+}
+#else
 typedef struct {
     SlabMagazine magazines[NUM_SIZE_CLASSES];
 } SlabThreadCache;
@@ -1045,29 +1052,31 @@ static inline SlabMagazine *slab_magazine(int cls)
         cache = slab_cache_init();
     return cache == NULL ? NULL : &cache->magazines[cls];
 }
+#endif
 
 static inline void slab_cache_slot(SlabMagazine *m, ArcHeader *hdr)
 {
     if (m->count == SLAB_MAGAZINE_CAPACITY) {
         m->count /= 2u;
-        slab_return_slots(m->slots + m->count, m->count);
+        /* Return the older slots so a short burst cannot pin an old slab
+         * indefinitely as newer slots move through the magazine. */
+        slab_return_slots(m->slots, m->count);
+        pal_memmove(m->slots, m->slots + m->count,
+                    m->count * sizeof(*m->slots));
     }
     m->slots[m->count++] = hdr;
 }
-#endif
 
 static ArcHeader *slab_alloc(uint32_t total_bytes)
 {
     int cls = size_class_for(total_bytes);
     if (cls >= 0) {
-#ifndef OCAMLCC_SINGLE_THREAD_RC
         SlabMagazine *m = slab_magazine(cls);
         if (m != NULL) {
             if (m->count != 0)
                 return m->slots[--m->count];
             return slab_alloc_shared(cls, m->slots, &m->count);
         }
-#endif
         return slab_alloc_shared(cls, NULL, NULL);
     }
 
@@ -1086,13 +1095,11 @@ static void slab_free(ArcHeader *hdr)
         SlabPage *s = slab_owner(hdr);
         if (s->cls != (uint32_t)cls)
             pal_abort();
-#ifndef OCAMLCC_SINGLE_THREAD_RC
         SlabMagazine *m = slab_magazine(cls);
         if (m != NULL) {
             slab_cache_slot(m, hdr);
             return;
         }
-#endif
         slab_return_slots(&hdr, 1u);
     } else {
         pal_page_free(hdr, align_up_large(total_bytes));

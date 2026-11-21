@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Reuse cached slab slots across allocation boundaries in the single-thread runtime and drain older entries from full magazines. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-21 (codex/1) — Skip ARC destruction, cycle candidacy, and bulk tag scans on word arrays known to contain only immediates. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-21 (codex/1) — Fuse a mutable field projection with its immediate read-only consumer. See [Perceus ARC](/concepts/perceus-arc.md).

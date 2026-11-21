@@ -42,6 +42,12 @@ Phase 2 replaces libc `malloc`/`free` with a freestanding slab allocator and sta
 - **Large blocks**: allocations `> 2048` bytes round up to `16 KB` page alignment and release directly via `pal_page_free`.
 - **O(1)-stack tail drop**: `release_subtree` tail-iterates on the last dying child (`tail`) and uses a `256`-entry stack buffer plus lazy `pal_page_alloc` overflow pages (`DropPage`) for deep non-tail trees. `cc_roots_add` is invoked before `atomic_fetch_sub` when `rc > 1`, preventing any race with a concurrent final drop.
 
+The single-thread runtime uses one static magazine per size class under
+the existing mutator ownership rule. It accesses cached slots without
+pthread TLS or allocator locking. In both profiles, a full magazine returns
+its older half in one batch so retired slabs can be reclaimed as frees
+continue.
+
 ## Middle-End ARC Pass (`lib/arc_pass.ml`)
 - **Ownership**: `Let`-bindings and function parameters start owned (`+1` rc); `Pure` global functions and static literals/immediates omit refcount traffic; closure captures (`env`), self-refs, and `LetJoin`/`While`/`For` outer references are **borrowed** (with `frame_borrowed` distinguished so exceptional unwinding cleans them up cleanly).
 - **Pure-defs analysis** (`Anf.pure_defs`, shared by `arc_pass` and `codegen`): a function (or whole mutual `let rec` group) whose free variables are only its own parameters plus already-collected pure functions is an immortal static function — its binding gets no refcount traffic (no `Release`, no `DropReuse`), and codegen defines it with `has_closure = false` and groups mutual tail calls into trampoline SCCs. The analysis recurses into function bodies and every branch/join region (`LetJoin` rhs, `If`, `Switch`, `TryWith`, `While`, `For`, `StaticCatch`), so non-capturing helpers nested inside other functions are static too; a spine-only walk used to own+release them, forcing codegen to synthesize an immortal `clos.N` wrapper purely to feed `arc_release_val`. Regression-tested in `test/pure_nested_test.ml` (fronted through `Frontend.compile_implementation`, asserting non-capturing funs are never `Release`d).
