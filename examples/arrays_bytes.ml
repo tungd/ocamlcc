@@ -43,17 +43,19 @@ let () =
   print_endline ""
 
 let check_buffer_snapshots grow =
-  let slot = ref (Bytes.make 1 'a') in
+  let slot = ref (Bytes.create 1) in
   let current =
     if grow then begin
-      let fresh = Bytes.make 2 'b' in
+      let fresh = Bytes.create 2 in
       slot := fresh;
       fresh
     end else !slot
   in
   Bytes.unsafe_set current 0 'x';
   let previous = !slot in
-  slot := Bytes.make 1 'z';
+  let replacement = Bytes.create 1 in
+  Bytes.unsafe_set replacement 0 'z';
+  slot := replacement;
   assert (Bytes.unsafe_get previous 0 = 'x');
   assert (Bytes.unsafe_get !slot 0 = 'z')
 
@@ -77,7 +79,9 @@ external live_objects : unit -> int = "ocamlcc_arc_live"
 
 let check_option_array () =
   let store (options : bytes option array) =
-    options.(0) <- Some (Bytes.make 2 'x')
+    let buffer = Bytes.create 2 in
+    Bytes.unsafe_set buffer 1 'x';
+    options.(0) <- Some buffer
   in
   let before = live_objects () in
   let check () =

@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Exercise mutable snapshots and array scan promotion using the standalone smoke-test primitives. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-21 (codex/1) — Cover borrowable mutable projections and the owning snapshot required across callbacks in the immediate-access suite. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-21 (codex/1) — Reuse cached slab slots across allocation boundaries in the single-thread runtime and drain older entries from full magazines. See [Perceus ARC](/concepts/perceus-arc.md).
