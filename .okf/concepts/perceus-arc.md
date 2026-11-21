@@ -111,7 +111,9 @@ precedes any overwrite on its path. A snapshot across a possible overwrite
 keeps a reference to the original value. When both arms of a conditional
 leave their result owned by the same slot, the continuation can read the slot
 once after the join. This covers a buffer growth arm that stores the new
-buffer and a fast arm that keeps the existing buffer.
+buffer and a fast arm that keeps the existing buffer. A guarded option payload
+can use the same rule when its checked slot snapshot is bound before the
+join. The borrow proof still rejects a payload use after a possible slot write.
 
 Private workers can borrow a parameter across calls that leave the caller's
 owner in place. C primitives and native externals borrow their OCaml
@@ -140,8 +142,15 @@ when using them with this runtime. Earlier generated address-array
 stores wrote pointers directly and could miss the scan mark.
 
 A borrowed parameter can receive a byte, scalar, or immediate store. Pointer
-stores transfer the new value but borrow the receiver. Worker inference
-conservatively excludes other pointer parameters at a pointer overwrite.
+stores transfer the new value and borrow the receiver. After excluding
+consumed values, a sole remaining parameter can stay borrowed through a
+pointer store to a projected child. With multiple candidates, worker
+inference conservatively keeps only the direct receiver.
+
+In five paired tterm replay trials, this change and the slot-join change
+reduced Unicode medians from 166.88 to 158.46 ms per payload on default
+ARC and from 145.47 to 141.24 on single-thread ARC. Plain replay went
+from 32.95 to 32.49 and from 31.17 to 30.17 respectively.
 
 Object and archive summaries carry the alternate entry symbol and a mask in
 parameter order. The implementation stamp covers both entry points and the

@@ -175,14 +175,18 @@ let () =
       Let (option, MakeBlock (0, [Var fresh]),
         Let (id "write", Assign (slot, Var option), Halt (Var fresh)))) in
   let choose =
-    Let (snapshot, Atom (MutVar slot),
-      If (Var snapshot,
-          Let (width, Field (0, Immutable_field, Var snapshot), Halt (Var width)),
-          init)) in
+    If (Var snapshot,
+        Let (width, Field (0, Immutable_field, Var snapshot), Halt (Var width)),
+        init) in
+  let bind_snapshot body = Let (snapshot, Atom (MutVar slot), body) in
   let write = Let (id "set", BytesSet (false, Var allocated, Int 0, Char 'a'), Halt Unit) in
-  let compile cont =
-    qbe (MutLet (slot, Atom (Int 0), LetJoin (allocated, choose, cont))) in
+  let compile body = qbe (MutLet (slot, Atom (Int 0), body)) in
+  let join cont = compile (LetJoin (allocated, bind_snapshot choose, cont)) in
+  let hoisted_join cont = compile (bind_snapshot (LetJoin (allocated, choose, cont))) in
   let retains il = count "call extern $arc_retain(" il in
-  if retains (compile write) <> 0 then failwith "lazy option join retained its payload";
-  let overwrite = Let (id "clear", Assign (slot, Int 0), write) in
-  if retains (compile overwrite) = 0 then failwith "option payload outlived its slot without an owner"
+  List.iter (fun (shape, compile) ->
+    if retains (compile write) <> 0 then failwith (shape ^ " retained its payload");
+    let overwrite = Let (id "clear", Assign (slot, Int 0), write) in
+    if retains (compile overwrite) = 0 then
+      failwith (shape ^ " outlived its slot without an owner"))
+    ["lazy option join", join; "hoisted lazy option join", hoisted_join]

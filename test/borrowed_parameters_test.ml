@@ -132,13 +132,31 @@ let () =
     let[@inline never] replace row next = row.content <- next
     let write_then_length buffer = write buffer; length buffer
     let replace_then_read row next = replace row next; row.content
+    external put_at : bytes option array -> int -> bytes option -> unit = "%array_unsafe_set"
+    external array_length : bytes option array -> int = "%array_length"
+    type projected = { entries : bytes option array }
+    let[@inline never] replace_in_child row next = put_at row.entries 0 next
+    let replace_child_then_length row next =
+      replace_in_child row next;
+      array_length row.entries
+    let[@inline never] replace_with_sibling row next sibling =
+      put_at row.entries 0 next;
+      length sibling
+    let replace_then_use_sibling row next sibling =
+      let n = replace_with_sibling row next sibling in
+      let _ = array_length row.entries in
+      let _ = length sibling in
+      n
   |} in
   require (function_body il "write_then_length")
     "call $ocamlcc_Borrow_params_write_borrowed(";
   forbid (function_body il "write_borrowed") "arc_release";
   require (function_body il "replace_then_read")
     "call $ocamlcc_Borrow_params_replace_borrowed(";
-  forbid (function_body il "replace_borrowed") "arc_retain"
+  forbid (function_body il "replace_borrowed") "arc_retain";
+  require (function_body il "replace_child_then_length")
+    "call $ocamlcc_Borrow_params_replace_in_child_borrowed(";
+  forbid il "$ocamlcc_Borrow_params_replace_with_sibling_borrowed"
 
 let () =
   let dir = Filename.temp_dir "ocamlcc_borrow_import" "" in

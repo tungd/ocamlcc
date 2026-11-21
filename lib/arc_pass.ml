@@ -34,6 +34,7 @@ type state = {
   borrowed : Ident.Set.t;
   frame_borrowed : Ident.Set.t;
   view_owners : Ident.Set.t Ident.Map.t;
+  slot_snapshots : Ident.t Ident.Map.t;
   imm : Ident.Set.t;
   typed_imm : Ident.Set.t;
   pure : Ident.Set.t;
@@ -408,9 +409,11 @@ let read_only_parameters ~borrowed (lf : Anf.lfunction) =
     | (SetField (_, Lambda.Pointer, target, _)
       | SetBoxedFloatField (_, target, _)
       | ArraySet (_, (Lambda.Paddrarray | Lambda.Pgenarray), target, _, _)) as ce ->
-        (* A pointer overwrite can retire the old child. Keep the
-           receiver eligible while conservatively excluding its siblings. *)
-        Ident.Set.inter (remove_uses params (snd (atom_operands ce))) (atom_vars target)
+        let remaining = remove_uses params (snd (atom_operands ce)) in
+        (* The caller keeps a sole borrowed parameter alive. With multiple
+           borrowed parameters, an overwrite may retire a sibling's owner. *)
+        if Ident.Set.cardinal remaining <= 1 then remaining
+        else Ident.Set.inter remaining (atom_vars target)
     | ce -> remove_uses params (snd (atom_operands ce))
   in
   let rec scan params expr =
@@ -666,7 +669,7 @@ let read_only_slot_snapshot slot id body =
 
 (* Every branch must leave the result owned by the same slot. A lazy option
    can also establish ownership of the result through its immutable payload. *)
-let mutable_slot_result body =
+let mutable_slot_result snapshots body =
   let open Anf in
   let read_slot snapshots = function
     | MutVar slot -> Some slot
@@ -704,7 +707,7 @@ let mutable_slot_result body =
          | _ -> None)
     | _ -> None
   in
-  scan Ident.Map.empty body
+  scan snapshots body
 
 let can_borrow_arguments env live flags args =
   let valid borrow a =
@@ -1287,7 +1290,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           in
           emit_drops env dead_before node)
   | LetJoin (id, rhs, body) -> (
-      match mutable_slot_result rhs with
+      match mutable_slot_result env.slot_snapshots rhs with
       | Some (slot, field, rhs)
         when Ident.Set.mem slot env.muts && read_only_slot_snapshot slot id body ->
           let ignored = Ident.create_local "slot_join" in
@@ -1489,7 +1492,15 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
 
 and transform_view env id source body =
   let owners = keep_view_owners env (atom_vars source) in
-  let env = { env with view_owners = Ident.Map.add id owners env.view_owners } in
+  (* Only a direct, checked snapshot represents the complete slot value.
+     The view check ensures any use of this alias precedes an overwrite. *)
+  let slot_snapshots =
+    match source with
+    | Anf.MutVar slot -> Ident.Map.add id slot env.slot_snapshots
+    | _ -> env.slot_snapshots in
+  let env =
+    { env with view_owners = Ident.Map.add id owners env.view_owners;
+               slot_snapshots } in
   let live = Ident.Set.union owners (live_with_handlers env body) in
   let live = if can_raise env body then Ident.Set.union live env.try_owned else live in
   let dead = Ident.Set.diff env.owned live in
@@ -1683,6 +1694,7 @@ and transform_fun (env : state) ~self_id ~has_closure
       borrowed = Ident.Set.union borrowed borrowed_params;
       frame_borrowed = Ident.Set.empty;
       view_owners = Ident.Map.empty;
+      slot_snapshots = Ident.Map.empty;
       muts = Ident.Set.empty;
       no_release_muts = Ident.Set.empty;
       handlers = Hashtbl.create 8;
@@ -1737,6 +1749,7 @@ let run_with_effects ?(exported = []) (prog : Anf.program) =
       borrowed = Ident.Set.empty;
       frame_borrowed = Ident.Set.empty;
       view_owners = Ident.Map.empty;
+      slot_snapshots = Ident.Map.empty;
       imm = Ident.Set.empty;
       typed_imm;
       pure;

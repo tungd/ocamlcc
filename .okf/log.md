@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Borrow sole receivers through child stores and carry checked slot snapshots into lazy option joins. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-22 (codex/1) — Preserve owning call entries for dying imported arguments so callee reuse remains available. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-22 (codex/1) — Centralize fiber-owned values and stack teardown for ARC and trial deletion. See [Wren-style stackful fibers](/concepts/wren-fibers.md#owned-values-and-stack-teardown).
