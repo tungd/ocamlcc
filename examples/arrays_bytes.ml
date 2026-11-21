@@ -60,3 +60,15 @@ let check_buffer_snapshots grow =
 let () =
   check_buffer_snapshots false;
   check_buffer_snapshots true
+
+type cursor = { row : int; col : int }
+type state = { mutable cursor : cursor }
+
+let check_cursor_snapshots state replacement =
+  let row = state.cursor.row in
+  let old = state.cursor in
+  state.cursor <- replacement;
+  assert (row = old.row && state.cursor.col = replacement.col)
+
+let () =
+  check_cursor_snapshots { cursor = { row = 1; col = 2 } } { row = 3; col = 4 }

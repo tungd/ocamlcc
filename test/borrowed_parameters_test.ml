@@ -103,3 +103,22 @@ let () =
   require (function_body il "call") "call $ocamlcc_Borrow_params_route_borrowed(";
   let worker = function_body il "route_borrowed" in
   require worker "call extern $ocamlcc_Borrow_params_consume("
+
+let () =
+  let il = compile {|
+    external ( + ) : int -> int -> int = "%addint"
+    type cursor = { row : int; col : int }
+    type state = { mutable cursor : cursor }
+    let read state = state.cursor.row + state.cursor.col
+    let save state replacement =
+      let old = state.cursor in
+      state.cursor <- replacement;
+      old.row
+    let read_and_allocate state =
+      let row = state.cursor.row in
+      let col = state.cursor.col in
+      (col, row)
+  |} in
+  forbid (function_body il "read") "arc_retain";
+  forbid (function_body il "read_and_allocate") "arc_retain";
+  require (function_body il "save") "call extern $arc_retain("

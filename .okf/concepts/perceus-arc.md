@@ -112,3 +112,8 @@ owner in place. C primitives and native externals borrow their OCaml
 arguments under the C ABI. OCaml calls disqualify only values in owning
 argument positions. Saturated local calls can forward to another worker's
 borrowed positions. Functions that can suspend keep the owning convention.
+
+A mutable field can lend its value to the immediately following projection
+or other supported local reader. This removes ownership traffic for chains
+such as `state.cursor.row`. A snapshot that survives an intervening call or
+store keeps its own reference.

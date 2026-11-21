@@ -467,10 +467,10 @@ let add_borrowed_entry env id borrow =
     imm_funs;
     borrowed_entries = Ident.Map.add id { worker; borrow } env.borrowed_entries }
 
-(* Fuse an immutable field into local operations on its value. The receiver
-   stays live through those operations via their borrowed operands. Do not
-   substitute a projected value that is transferred into an owning slot. *)
-let fuse_field_read id index owner body =
+(* Fuse a field into local borrowed operands, keeping its receiver live.
+   A mutable projection only fuses with its immediate, final consumer so
+   it cannot be reloaded after an intervening operation. *)
+let fuse_field_read ~stable id index owner body =
   let open Anf in
   let uses atom = Ident.Set.mem id (atom_vars atom) in
   let live expr = Ident.Set.mem id (Anf.free_vars expr) in
@@ -522,12 +522,12 @@ let fuse_field_read id index owner body =
         | Some ce' when not (use_in ce') ->
             let next =
               if not (live next) then Some next
-              else if can_cross ce then fuse next
+              else if stable && can_cross ce then fuse next
               else None
             in
             Option.map (fun next -> Let (result, ce', next)) next
         | _ -> None)
-    | Let (result, ce, next) when can_cross ce ->
+    | Let (result, ce, next) when stable && can_cross ce ->
         Option.map (fun next -> Let (result, ce, next)) (fuse next)
     | LetJoin (result, rhs, next) when not (live next) ->
         Option.map (fun rhs -> LetJoin (result, rhs, next)) (fuse rhs)
@@ -1176,10 +1176,12 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
               transform_aexpr { env with owned = owned_body } body
             in
             emit_drops env dead_before (Let (id, Fun lf', body')))
-  | Let (id, (Field (index, Immutable_field, ((Var _ | BorrowedField _) as owner)) as ce), body) -> (
-      match fuse_field_read id index owner body with
+  | Let (id, (Field (index, ((Immutable_field | Mutable_field) as kind),
+                     ((Var _ | BorrowedField _) as owner)) as ce), body) -> (
+      let stable = kind = Immutable_field in
+      match fuse_field_read ~stable id index owner body with
       | Some fused -> transform_aexpr env fused
-      | None when field_is_read_only_in_loop id body ->
+      | None when stable && field_is_read_only_in_loop id body ->
           transform_view env id (Anf.BorrowedField (index, owner)) body
       | None -> transform_let env id ce body)
   | Let (id, Atom (MutVar slot), body)
