@@ -1832,6 +1832,24 @@ let inline_local_calls code =
   in
   visit 0 Ident.Map.empty code
 
+(* Inlining introduces argument bindings around the returned value.
+   Move those bindings and any preceding effects out of strict right-hand
+   sides so later passes can see the allocation being bound. Keep optional
+   right-hand sides and control-flow regions separate. *)
+let flatten_let_rhs code =
+  let open Lambda in
+  let rec visit next = function
+    | Llet (mode, kind, id, rhs, body) ->
+        let bind rhs = Llet (mode, kind, id, rhs, visit next body) in
+        (match mode with
+        | Strict -> visit bind rhs
+        | Alias | StrictOpt -> bind (visit Fun.id rhs))
+    | Lsequence (action, body) ->
+        Lsequence (visit Fun.id action, visit next body)
+    | expr -> next (shallow_map (visit Fun.id) expr)
+  in
+  visit Fun.id code
+
 (* A known module block contains already-evaluated fields. Expose bindings
    introduced by a functor's inlined initializer so a later module
    projection can still name the original function. *)
@@ -1933,6 +1951,9 @@ let promote_local_refs code =
 let replace_local_aggregates code =
   let open Lambda in
   let exception Escapes in
+  let small_aggregate fields =
+    fields <> [] && List.compare_length_with fields 4 <= 0
+  in
   let labels = lazy (
     let last = ref 0 in
     let rec scan expr =
@@ -1986,7 +2007,7 @@ let replace_local_aggregates code =
   let join_fields id init body =
     let rec shape = function
       | Lprim (Pmakeblock (tag, Immutable, _), args, _)
-        when args <> [] && List.length args <= 2 -> Some (tag, List.length args)
+        when small_aggregate args -> Some (tag, List.length args)
       | Lstaticraise _ | Lprim (Praise _, _, _) -> None
       | Llet (_, _, _, _, tail) | Lmutlet (_, _, _, tail) | Lsequence (_, tail) ->
           shape tail
@@ -2031,7 +2052,7 @@ let replace_local_aggregates code =
   in
   let rec visit = function
     | Llet (mode, kind, id, Lprim ((Pmakeblock (tag, Immutable, shape) as prim), args, loc), body)
-      when args <> [] && List.length args <= 2 ->
+      when small_aggregate args ->
         let args = List.map visit args in
         let body = visit body in
         let fields = List.map (fun _ -> Ident.create_local "component") args in
@@ -2292,7 +2313,7 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
           | None -> program.code
         in
         let cleaned =
-          code |> inline_local_calls |> resolve_module_projections
+          code |> inline_local_calls |> flatten_let_rhs |> resolve_module_projections
           |> drop_unused_alias_lets |> promote_local_refs
           |> replace_local_aggregates |> lift_recursive_calls
         in

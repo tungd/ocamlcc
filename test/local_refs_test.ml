@@ -10,6 +10,13 @@ let source = {|
     done;
     !r
 
+  let[@inline] make n = ref (n + 1)
+
+  let from_helper n =
+    let r = make n in
+    incr r;
+    !r
+
   let escaped n =
     let r = ref n in
     escape r;
@@ -42,6 +49,8 @@ let () =
   List.iter (fun fragment ->
     if contains count fragment then failwith ("ARC on immediate slot: " ^ fragment))
     ["call extern $arc_release"; "call extern $arc_retain"; "call extern $arc_fiber_push"];
+  if contains (function_body il "from_helper") "call extern $arc_alloc" then
+    failwith "non-escaping ref returned by inlined helper was allocated";
   List.iter (fun name ->
     if not (contains (function_body il name) alloc) then
       failwith ("the ref's address escapes from " ^ name))

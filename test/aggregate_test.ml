@@ -26,6 +26,28 @@ let () =
           | _ -> (observe 5, observe 6)
         in
         fst pair + snd pair
+      let[@inline] make_pair a b =
+        let lhs = observe a in
+        (lhs, observe b)
+      let from_helper a b =
+        let pair = make_pair (observe (a + 1)) b in
+        fst pair + snd pair
+      let from_sequence a =
+        let value = (ignore (observe a); Some (observe (a + 1))) in
+        match value with Some n -> n | None -> 0
+      type record = { first : int; second : int; third : int; fourth : int }
+      let tuple_four a =
+        let tuple = observe a, observe 2, observe 3, observe 4 in
+        let first, _, third, fourth = tuple in
+        first + third + fourth
+      let record_four flag a =
+        let r =
+          if flag then
+            { first = observe a; second = observe 2; third = observe 3; fourth = observe 4 }
+          else
+            { first = observe 5; second = observe 6; third = observe 7; fourth = observe 8 }
+        in
+        r.first + r.third + r.fourth
       let escape a = Some (observe a)
       let capture a =
         let value = (observe a, observe 10) in
@@ -39,7 +61,7 @@ let () =
     let start = find ("function l $ocamlcc_Aggregates_" ^ name ^ "(") 0 in
     let finish = find "\n}" start in
     let has_alloc =
-      match find "call extern $arc_alloc(" start with
+      match find "call extern $arc_alloc" start with
       | index -> index < finish
       | exception Not_found -> false
     in
@@ -51,5 +73,9 @@ let () =
   check "select_pair" false;
   check "select_result" false;
   check "match_pair" false;
+  check "from_helper" false;
+  check "from_sequence" false;
+  check "tuple_four" false;
+  check "record_four" false;
   check "escape" true;
   check "capture" true

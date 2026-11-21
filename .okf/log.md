@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Flatten strict Lambda bindings after inlining so returned refs and immutable blocks can be scalar-replaced. Support up to four fields in direct bindings and matching branch joins. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-20 (codex/1) — Inline known local functor applications and resolve calls through their immutable module fields. See [compiler pipeline](/concepts/compiler-pipeline.md#local-functor-applications).
 
 - 2026-11-20 (codex/1) — Persist direct-call facts with bundled and compatibility stdlib archives. Use matching archive and interface digests when compiling separately linked clients. See [build pipeline](/concepts/build-pipeline.md).
