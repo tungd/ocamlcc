@@ -1,4 +1,4 @@
-let check ?(owner_releases = 1) ~retains name source =
+let check ?(owner_releases = Some 1) ~retains name source =
   let il =
     match
       Pipeline.compile_source ~nopervasives:true ~nostdlib:true
@@ -20,9 +20,11 @@ let check ?(owner_releases = 1) ~retains name source =
   if actual <> retains then
     failwith (Printf.sprintf "%s: expected %d retains, got %d" name retains actual);
   if retains = 0 then
-    let actual = count_calls "arc_release_val" + count_calls "arc_release" in
-    if actual <> owner_releases then
-      failwith (Printf.sprintf "%s: expected only the owner's releases, got %d" name actual)
+    Option.iter (fun expected ->
+      let actual = count_calls "arc_release_val" + count_calls "arc_release" in
+      if actual <> expected then
+        failwith (Printf.sprintf "%s: expected only the owner's releases, got %d" name actual))
+      owner_releases
 
 let () =
   check ~retains:0 "int_field"
@@ -45,7 +47,7 @@ let () =
     {|type t = { v : string }
       external use : string -> int = "foreign_use"
       let f r = use r.v|};
-  check ~retains:1 "field_live_across_callback"
+  check ~owner_releases:None ~retains:0 "field_live_across_callback"
     {|type t = { v : string }
       external length : string -> int = "%string_length"
       let f r callback = let value = r.v in callback (); length value|};
@@ -54,7 +56,7 @@ let () =
       type outer = { inner : inner }
       external length : string -> int = "%string_length"
       let f r = let item = r.inner in length item.data|};
-  check ~owner_releases:2 ~retains:0 "field_used_for_dispatch"
+  check ~owner_releases:(Some 2) ~retains:0 "field_used_for_dispatch"
     {|type choice = Empty | Filled of string
       type t = { choice : choice }
       let f r = match r.choice with Empty -> 1 | Filled _ -> 2|};
@@ -85,4 +87,18 @@ let () =
       let f r = r.v|};
   check ~retains:1 "pointer_array"
     {|external get : 'a array -> int -> 'a = "%array_unsafe_get"
-      let f (a : string array) i = get a i|}
+      let f (a : string array) i = get a i|};
+  check ~owner_releases:None ~retains:0 "field_reads_in_loops"
+    {|type t = { data : int array; label : string }
+      external length : string -> int = "%string_length"
+      external get : 'a array -> int -> 'a = "%array_unsafe_get"
+      external set : 'a array -> int -> 'a -> unit = "%array_unsafe_set"
+      external ( < ) : int -> int -> bool = "%lessthan"
+      external ( + ) : int -> int -> int = "%addint"
+      let f r high =
+        let data = r.data in
+        let label = r.label in
+        for i = 0 to high do
+          set data i (get data i + length label)
+        done;
+        while get data 0 < high do set data 0 (get data 0 + 1) done|}

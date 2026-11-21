@@ -33,6 +33,7 @@ type state = {
   owned : Ident.Set.t;
   borrowed : Ident.Set.t;
   frame_borrowed : Ident.Set.t;
+  view_owners : Ident.Set.t Ident.Map.t;
   imm : Ident.Set.t;
   typed_imm : Ident.Set.t;
   pure : Ident.Set.t;
@@ -535,6 +536,42 @@ let fuse_field_read id index owner body =
   in
   fuse body
 
+(* A view may read or update the object reached through an immutable
+   projection. It cannot transfer the pointer or expose it to a closure or
+   call with an unknown ownership convention. *)
+let field_is_read_only id body =
+  let open Anf in
+  let uses a = Ident.Set.mem id (atom_vars a) in
+  let closure_uses lf = Ident.Set.mem id (Anf.free_vars lf.body) in
+  let safe_ce = function
+    | Fun lf -> not (closure_uses lf)
+    | (App _ | DirectApp _ | Ccall _ | NativeCcall _) as ce ->
+        let read, take = atom_operands ce in
+        not (Ident.Set.mem id read || List.exists uses take)
+    | ce -> not (List.exists uses (snd (atom_operands ce)))
+  in
+  let rec scan = function
+    | Halt a | Raise a -> not (uses a)
+    | HaltScalar _ | Unwind -> true
+    | StaticRaise (_, args) -> not (List.exists uses args)
+    | Let (_, ce, body) | MutLet (_, ce, body) -> safe_ce ce && scan body
+    | LetRec (defs, body) ->
+        List.for_all (fun (rb : Anf.rec_binding) -> not (closure_uses rb.def)) defs
+        && scan body
+    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b)
+    | While (a, b) | TryWith (a, _, b) | StaticCatch (a, _, _, b, _) ->
+        scan a && scan b
+    | For (_, _, _, _, body) -> scan body
+    | Switch (_, sw) -> cases sw.consts sw.fail && cases sw.blocks None
+    | StringSwitch (_, arms, fail) -> cases arms fail
+    | _ -> false
+  and cases : 'a. ('a * aexpr) list -> aexpr option -> bool =
+    fun arms fail ->
+      List.for_all (fun (_, arm) -> scan arm) arms
+      && Option.fold ~none:true ~some:scan fail
+  in
+  scan body
+
 let borrowed_call env live = function
   | Anf.App (Var fn, args) -> (
       match Ident.Map.find_opt fn env.borrowed_entries with
@@ -735,8 +772,16 @@ let handler_live_vars (env : state) (e : Anf.aexpr) : Ident.Set.t =
       | None -> acc)
     ids Ident.Set.empty
 
+let keep_view_owners env vars =
+  if Ident.Map.is_empty env.view_owners then vars
+  else
+    Ident.Set.fold (fun id live ->
+      match Ident.Map.find_opt id env.view_owners with
+      | Some owners -> Ident.Set.union owners live
+      | None -> live) vars vars
+
 let live_with_handlers (env : state) (e : Anf.aexpr) : Ident.Set.t =
-  Ident.Set.union (Anf.free_vars e) (handler_live_vars env e)
+  keep_view_owners env (Ident.Set.union (Anf.free_vars e) (handler_live_vars env e))
 
 (* Each live reuse token is shadowed until the protected call returns.
    Already-inserted token cleanups may wrap the same error-side pop. *)
@@ -1013,6 +1058,14 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
   | Let (id, (Field (index, Immutable_field, ((Var _ | BorrowedField _) as owner)) as ce), body) -> (
       match fuse_field_read id index owner body with
       | Some fused -> transform_aexpr env fused
+      | None when field_is_read_only id body ->
+          let owners = keep_view_owners env (atom_vars owner) in
+          let env = { env with view_owners = Ident.Map.add id owners env.view_owners } in
+          let live = Ident.Set.union owners (live_with_handlers env body) in
+          let live = if can_raise body then Ident.Set.union live env.try_owned else live in
+          let dead = Ident.Set.diff env.owned live in
+          let body = transform_aexpr { env with owned = Ident.Set.diff env.owned dead } body in
+          emit_drops env dead (Let (id, Atom (BorrowedField (index, owner)), body))
       | None -> transform_let env id ce body)
   | Let (id, ce, body) -> transform_let env id ce body
   | MutLet (id, ce, body) ->
@@ -1020,6 +1073,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let ce = specialize_assignment env ce in
       let ce_may_raise = ce_may_raise_fn ce in
       let borrowed_in_ce, consumed_in_ce = atom_operands ce in
+      let borrowed_in_ce = keep_view_owners env borrowed_in_ce in
       let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
       let live_before_ce =
         Ident.Set.union base_live_body
@@ -1297,6 +1351,7 @@ and transform_let env id ce body =
         let rebuild consumed = Anf.App (Var worker, restore pairs consumed) in
         atoms_vars borrowed, consumed, rebuild
   in
+  let borrowed_in_ce = keep_view_owners env borrowed_in_ce in
   let live_before_ce =
     Ident.Set.union base_live_body
       (if ce_may_raise || can_raise body then env.try_owned
@@ -1431,6 +1486,7 @@ and transform_fun (env : state) ~self_id ~has_closure
       owned = owned_params;
       borrowed = Ident.Set.union borrowed borrowed_params;
       frame_borrowed = Ident.Set.empty;
+      view_owners = Ident.Map.empty;
       muts = Ident.Set.empty;
       no_release_muts = Ident.Set.empty;
       handlers = Hashtbl.create 8;
@@ -1481,6 +1537,7 @@ let run_with_effects (prog : Anf.program) =
     { owned = Ident.Set.empty;
       borrowed = Ident.Set.empty;
       frame_borrowed = Ident.Set.empty;
+      view_owners = Ident.Map.empty;
       imm = Ident.Set.empty;
       typed_imm;
       pure;
