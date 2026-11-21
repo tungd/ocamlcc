@@ -62,5 +62,30 @@ let () =
   |} in
   List.iter (fun name ->
     let body = function_body il name in
-    require body "call $ocamlcc_Lambda_inline_project";
+    require body "$ocamlcc_Lambda_inline_project";
     forbid body "call extern $ocamlcc_apply") ["asc"; "desc"]
+
+let () =
+  let il = compile {|
+    external length : string -> int = "%string_length"
+    external initial : unit -> string = "probe_initial"
+    module Classifier = struct
+      let slots = 256
+      let[@inline never] classify cp = cp land (slots - 1)
+    end
+    let secret = initial ()
+    let[@inline never] score text = length text + length secret
+    let use text = score text + score text
+    let local n =
+      let[@inline never] add_local x = x + n in
+      add_local
+  |} in
+  let classify = function_body il "classify" in
+  forbid classify "%clos.";
+  let score = function_body il "score" in
+  forbid score "%clos.";
+  require score "loadl $ocamlcc_modvar_Lambda_inline_secret";
+  let use = function_body il "use" in
+  require use "call $ocamlcc_Lambda_inline_score_borrowed(";
+  forbid use "call extern $ocamlcc_apply";
+  require (function_body il "add_local") "%clos."

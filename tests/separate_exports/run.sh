@@ -13,7 +13,7 @@ test -f "$work/units/provider.cmi"
 test -f "$work/units/provider.exports"
 "$compiler" build -c --stdlib-dir "$stdlib" -I "$work/units" --work-dir "$work/consumer" \
     "$src/consumer.ml" -o "$work/units/consumer.o"
-grep -Eq 'call extern \$ocamlcc_direct_Provider_' "$work/consumer/consumer.ssa"
+grep -Eq 'call extern \$ocamlcc_Provider_add__' "$work/consumer/consumer.ssa"
 "$compiler" build --stdlib-dir "$stdlib" -I "$work/units" "$src/entry.ml" \
     "$work/units/consumer.o" "$work/units/implementation.o" -o "$work/run"
 "$work/run"
@@ -24,7 +24,7 @@ cp "$src/provider.mli" "$work/replacement/provider.mli"
     "$work/replacement/provider.ml" -o "$work/replacement/implementation.o"
 "$compiler" build -c --stdlib-dir "$stdlib" -I "$work/units" -I "$work/replacement" \
     --work-dir "$work/shadow" "$src/consumer.ml" -o "$work/shadow.o"
-grep -Eq 'call extern \$ocamlcc_direct_Provider_' "$work/shadow/consumer.ssa"
+grep -Eq 'call extern \$ocamlcc_Provider_add__' "$work/shadow/consumer.ssa"
 sed 's/= 42/= 43/' "$src/entry.ml" > "$work/entry.ml"
 "$compiler" build --stdlib-dir "$stdlib" -I "$work" -I "$work/replacement" "$work/entry.ml" \
     "$work/shadow.o" "$work/replacement/implementation.o" -o "$work/run"
@@ -37,7 +37,7 @@ if "$compiler" build --stdlib-dir "$stdlib" -I "$work/units" "$src/entry.ml" \
     > "$work/relink.log" 2>&1; then
     exit 1
 fi
-grep -q 'ocamlcc_direct_Provider_' "$work/relink.log"
+grep -q 'ocamlcc_Provider_add__' "$work/relink.log"
 
 # New compilations can fall back to closure application with the replacement.
 "$compiler" build -c --stdlib-dir "$stdlib" -I "$work/units" --work-dir "$work/fallback" \

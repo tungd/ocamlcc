@@ -246,7 +246,7 @@ let () =
            let checks =
              [ "scalar inlining", not (has "printable" "ocamlcc_Provider_printable")
                                     && has "printable" "csgel";
-               "captured call", has "classify" "call extern $ocamlcc_direct_Provider_"
+               "static call", has "classify" "call extern $ocamlcc_Provider_classify"
                                 && not (has "classify" "arc_fiber_push");
                "suspending call", has "paused" "call extern $ocamlcc_Provider_pause("
                                   && has "paused" "arc_fiber_push";
@@ -255,7 +255,7 @@ let () =
            in
            List.iter (fun (name, ok) ->
              if not ok then Printf.printf "cross-unit %s failed\n" name) checks;
-           check "cross-unit scalar inlining and captured direct call"
+           check "cross-unit scalar inlining and static direct call"
              (List.for_all snd checks));
 
       let registry = write_tmp "registry.ml" "let count = ref 0" in

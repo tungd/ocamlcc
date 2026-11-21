@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Propagate tagged literals and store captures rooted by published module functions in private module slots. See [compiler pipeline](/concepts/compiler-pipeline.md#captures-rooted-by-a-module).
+
 - 2026-11-21 (codex/1) — Carry tagged-immediate value kinds through ANF bindings, mutable slots, static catches, and saturated function returns. See [value representation](/concepts/value-representation.md#tagged-immediate-binders).
 
 - 2026-11-21 (codex/1) — Batch small-slot transfers through bounded per-thread magazines in the default ARC runtime. Drain cached slots at thread exit so fully retired slabs can be unmapped. See [Perceus ARC](/concepts/perceus-arc.md).

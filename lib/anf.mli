@@ -20,6 +20,7 @@ type const_item =
 type atom =
   | Var of Ident.t
   | MutVar of Ident.t
+  | ModuleSlot of Ident.t * Lambda.value_kind
   | BorrowedField of int * atom
       (** Read-only operand introduced by ARC. Its base stays live through
           the operation that reads it. It carries no reference of its own. *)
@@ -156,6 +157,7 @@ type cexpr =
   | Ccall of string * atom list
   | NativeCcall of Primitive.description * atom list
   | GetGlobal of string
+  | StoreModuleSlot of Ident.t * atom
   | Fun of lfunction
   | Assign of Ident.t * atom
   | AssignImm of Ident.t * atom

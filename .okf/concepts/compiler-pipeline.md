@@ -254,5 +254,15 @@ keep ordinary closure behavior. Project modules named `Int` and units
 with a competing `Stdlib__Int.cmi` also keep ordinary application. See
 `test/int_selection_test.ml` for the emitted IL checks.
 
+## Captures rooted by a module
+
+Tagged literal bindings propagate before Lambda inlining. For a function
+reachable through the published module structure, references to immutable
+module-initialization bindings can use private module slots. The initializer
+transfers one owned value to each slot. Reads borrow that root and retain it
+when transferring ownership. The slot preserves the identity of the value
+created at initialization. Locals with per-invocation captures keep their
+closure environments.
+
 [^design-doc]: Stage structure, goals, and the exception/fiber lowering
   plans are specified in `docs/design.md` §3–§4.

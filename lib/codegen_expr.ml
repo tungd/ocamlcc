@@ -53,8 +53,15 @@ let shadow_call b fn value =
 let shadow_pop b fn count =
   if count > 0 then shadow_call b fn (Int (Int64.of_int count))
 
+let module_slot b id =
+  "ocamlcc_modvar_" ^ b.prefix ^ "_" ^ sanitize (Ident.unique_name id)
+
 let rec compile_atom hooks b (a : Anf.atom) : t =
   match a with
+  | ModuleSlot (id, _) ->
+      let value = fresh_temp b "modvar" in
+      emit b (Load (Loadl, Long, value, Global (module_slot b id)));
+      value
   | BorrowedField (index, owner) -> load_field b (compile_atom hooks b owner) index
   | Int n -> Int (tag_int n)
   | Char c -> Int (tag_int (Char.code c))
@@ -1202,6 +1209,12 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       emit b (Load (Loadl, Long, gv, Global gsym));
       emit b (Call_void { fn = Global "arc_retain_val"; args = [ (Long, gv) ] });
       gv
+  | StoreModuleSlot (id, atom) ->
+      let name = module_slot b id in
+      b.datas <- { name; export = false; align = Some 8; items = [D_long 0L] } :: b.datas;
+      let value = compile_atom hooks b atom in
+      emit b (Store (Storel, value, Global name));
+      unit_const
   | App (fn, args) -> apply hooks b tail fn args
   | KeepAlive _ -> unit_const
   | Recur args ->

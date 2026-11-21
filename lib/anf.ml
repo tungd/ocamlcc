@@ -14,6 +14,7 @@ type const_item =
 type atom =
   | Var of Ident.t
   | MutVar of Ident.t
+  | ModuleSlot of Ident.t * Lambda.value_kind
   | BorrowedField of int * atom
   | Int of int
   | Char of char
@@ -148,6 +149,7 @@ type cexpr =
   | Ccall of string * atom list
   | NativeCcall of Primitive.description * atom list
   | GetGlobal of string
+  | StoreModuleSlot of Ident.t * atom
   | Fun of lfunction
   | Assign of Ident.t * atom
   | AssignImm of Ident.t * atom
@@ -290,6 +292,12 @@ let conv_const (c : Lambda.structured_constant) : atom =
 let mutable_scalars : scalar_rep Ident.Map.t ref = ref Ident.Map.empty
 
 let unit_imports : (string -> exports option) ref = ref (fun _ -> None)
+let module_slots = ref Ident.Map.empty
+
+let variable id =
+  match Ident.Map.find_opt id !module_slots with
+  | Some kind -> ModuleSlot (id, kind)
+  | None -> Var id
 
 let imported_callee callee =
   let open Lambda in
@@ -434,7 +442,7 @@ and conv_bind vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexp
       conv_bind vk id l k
   | Lprim (Psetglobal _, [ l ], _) -> conv_bind vk id l k
   | Llet (_, vk1, id1, arg1, body1) ->
-      conv_bind vk1 id1 arg1 (fun () -> conv_bind vk id body1 k)
+      conv_let vk1 id1 arg1 (fun () -> conv_bind vk id body1 k)
   | Lmutlet (vk1, id1, arg1, body1) ->
       conv_mut_bind vk1 id1 arg1 (fun () -> conv_bind vk id body1 k)
   | Lletrec (bindings, body1) ->
@@ -448,7 +456,7 @@ and conv_bind vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexp
   | Lsequence (a, b) ->
       conv_expr a (fun _ -> conv_bind vk id b k)
   | Lconst c -> Let (id, Atom (conv_const c), k ())
-  | Lvar v -> Let (id, Atom (Var v), k ())
+  | Lvar v -> Let (id, Atom (variable v), k ())
   | Lmutvar v -> conv_mut_read v id k
   | Lfunction lf -> Let (id, Fun (conv_fun lf), k ())
   | Lassign (v, arg) ->
@@ -471,6 +479,12 @@ and conv_bind vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexp
          [Lstaticraise] at the tail of a let chain used as a binding RHS. *)
       conv_atoms args (fun vs -> StaticRaise (i, vs))
   | Lsend _ -> raise (Unsupported (describe rhs))
+
+and conv_let vk id rhs k =
+  conv_bind vk id rhs (fun () ->
+    if Ident.Map.mem id !module_slots then
+      Let (Ident.create_local "publish", StoreModuleSlot (id, Var id), k ())
+    else k ())
 
 and conv_mut_bind vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) :
     aexpr =
@@ -852,7 +866,7 @@ and binop op a c emit_cexpr =
 and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
   match lam with
   | Lconst c -> k (conv_const c)
-  | Lvar id -> k (Var id)
+  | Lvar id -> k (variable id)
   | Lmutvar slot ->
       (match Ident.Map.find_opt slot !mutable_scalars with
       | None -> k (MutVar slot)
@@ -863,7 +877,7 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
       conv_expr l k
   | Lprim (Psetglobal _, [ body ], _) -> conv_expr body k
   | Llet (_, vk, id, arg, body) ->
-      conv_bind vk id arg (fun () -> conv_expr body k)
+      conv_let vk id arg (fun () -> conv_expr body k)
   | Lmutlet (vk, id, arg, body) ->
       conv_mut_bind vk id arg (fun () -> conv_expr body k)
   | Lletrec (bindings, body) ->
@@ -958,7 +972,7 @@ let rec atom_vars acc = function
   | Var id | MutVar id -> Ident.Set.add id acc
   | BorrowedField (_, owner) -> atom_vars acc owner
   | Int _ | Char _ | String _ | Float _ | Int32 _ | Int64 _ | Nativeint _
-  | ConstFloatArray _ | ConstBlock _ | Unit ->
+  | ConstFloatArray _ | ConstBlock _ | Unit | ModuleSlot _ ->
       acc
 
 let scalar_operand_vars acc = function
@@ -1008,6 +1022,7 @@ let cexpr_vars ?(include_raw = true) free_aexpr acc ce =
   | App (fn, args) ->
       List.fold_left atom_vars (atom_vars acc fn) args
   | Builtin (_, _, a) -> atom_vars acc a
+  | StoreModuleSlot (_, a) -> atom_vars acc a
   | BigarrayAccess (_, args) | Ccall (_, args) | NativeCcall (_, args)
   | DirectApp (_, args) | Recur args | KeepAlive args ->
       List.fold_left atom_vars acc args
@@ -2334,6 +2349,51 @@ let exported_functions code =
   in
   gather [] [] (scan Ident.Map.empty code)
 
+let propagate_immediate_constants code =
+  let open Lambda in
+  let rec visit constants = function
+    | Lvar id as expr -> Option.value ~default:expr (Ident.Map.find_opt id constants)
+    | Llet (mode, kind, id, rhs, body) ->
+        (match visit constants rhs with
+         | Lconst (Const_int _ | Const_char _) as value ->
+             visit (Ident.Map.add id value constants) body
+         | rhs -> Llet (mode, kind, id, rhs, visit constants body))
+    | expr -> shallow_map (visit constants) expr
+  in
+  visit Ident.Map.empty code
+
+(* Make a module slot only for values already rooted by a published closure.
+   Local functions and values that die in the initializer retain their normal
+   lifetimes. Follow private direct helpers from the published definitions. *)
+let module_captures code exported =
+  let open Lambda in
+  let rec bindings defs = function
+    | Llet (_, kind, id, rhs, body) ->
+        bindings (Ident.Map.add id (kind, rhs) defs) body
+    | Lletrec (group, body) ->
+        let defs = List.fold_left (fun defs rb ->
+          Ident.Map.add rb.id (Pgenval, Lfunction rb.def) defs) defs group
+        in
+        bindings defs body
+    | Lmutlet (_, _, _, body) | Lsequence (_, body) | Levent (body, _)
+    | Lprim (Psetglobal _, [body], _) -> bindings defs body
+    | _ -> defs
+  in
+  let defs = bindings Ident.Map.empty code in
+  let rec follow (seen, slots) id =
+    if Ident.Set.mem id seen then seen, slots
+    else
+      let seen = Ident.Set.add id seen in
+      match Ident.Map.find_opt id defs with
+      | Some (_, (Lfunction _ as fn)) ->
+          Ident.Set.fold (fun capture state -> follow state capture)
+            (free_variables fn) (seen, slots)
+      | Some (kind, _) -> seen, Ident.Map.add id kind slots
+      | None -> seen, slots
+  in
+  snd (List.fold_left (fun state (_, id) -> follow state id)
+         (Ident.Set.empty, Ident.Map.empty) exported)
+
 (* Only private numeric values can lose their boxes. The slot initializer and
    writes must produce their own values, and a read that needs an OCaml value
    must leave the slot's scope. References that escape have already been
@@ -2486,6 +2546,7 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
   let saved = !builtin_tables in
   let saved_imports = !unit_imports in
   let saved_scalars = !mutable_scalars in
+  let saved_slots = !module_slots in
   let printing = if use_builtins then Some (Builtins.load ~include_dirs ()) else None in
   let stdlib_dir =
     match stdlib_dir with
@@ -2506,7 +2567,8 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
     ~finally:(fun () ->
       builtin_tables := saved;
       unit_imports := saved_imports;
-      mutable_scalars := saved_scalars)
+      mutable_scalars := saved_scalars;
+      module_slots := saved_slots)
     (fun () ->
       try
         let code =
@@ -2515,13 +2577,16 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
           | None -> program.code
         in
         let cleaned =
-          code |> inline_local_calls |> flatten_let_rhs |> resolve_module_projections
+          code |> propagate_immediate_constants |> inline_local_calls
+          |> flatten_let_rhs |> resolve_module_projections
           |> drop_unused_alias_lets |> promote_local_refs
           |> replace_local_aggregates |> lift_recursive_calls
         in
         let cleaned, scalars = specialize_mutable_slots cleaned in
         mutable_scalars := scalars;
-        Option.iter (fun save -> save (exported_functions cleaned)) on_export_ids;
+        let exports = exported_functions cleaned in
+        module_slots := module_captures cleaned exports;
+        Option.iter (fun save -> save exports) on_export_ids;
         let code = conv_tail cleaned |> specialize_scalar_bindings in
         Ok { module_ident = program.module_ident; code; value_kinds = binding_kinds cleaned }
       with Unsupported what -> Error what)

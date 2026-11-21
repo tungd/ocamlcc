@@ -72,6 +72,7 @@ and dump_atom (a : Anf.atom) : string =
   match a with
   | Anf.Var id -> dump_ident id
   | Anf.MutVar id -> "*" ^ dump_ident id
+  | Anf.ModuleSlot (id, _) -> "global " ^ dump_ident id
   | Anf.Int n -> string_of_int n
   | Anf.Char c -> Printf.sprintf "%C" c
   | Anf.String s -> Printf.sprintf "%S" s
@@ -151,7 +152,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.BorrowedField _ -> acc
     | Anf.Var _ | Anf.MutVar _ | Anf.Int _ | Anf.Char _ | Anf.String _
     | Anf.Float _ | Anf.Int32 _ | Anf.Int64 _ | Anf.Nativeint _
-    | Anf.ConstFloatArray _ | Anf.ConstBlock _ | Anf.Unit ->
+    | Anf.ConstFloatArray _ | Anf.ConstBlock _ | Anf.Unit | Anf.ModuleSlot _ ->
         acc
   in
   let count_ce acc = function
@@ -185,7 +186,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.FloatOfInt _ | Anf.IntOfFloat _ | Anf.BoxScalar _
     | Anf.ScalarLoad _ | Anf.ScalarStore _ | Anf.FloatBinop _ | Anf.IntegerBinop _ | Anf.IntegerCompare _ | Anf.IntegerNeg _ | Anf.IntegerShift _ | Anf.ScalarValue _ | Anf.GetGlobal _ -> acc
     | Anf.Fun lf -> count_release_mut id lf.Anf.body
-    | Anf.Assign (_, a) | Anf.AssignImm (_, a) -> count_atom acc a
+    | Anf.Assign (_, a) | Anf.AssignImm (_, a) | Anf.StoreModuleSlot (_, a) -> count_atom acc a
     | Anf.ReadScalarSlot _ | Anf.AssignScalar _ -> acc
   in
   match e with

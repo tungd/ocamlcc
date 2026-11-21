@@ -72,6 +72,7 @@ let atom_is_imm ~pure imm (a : Anf.atom) =
       true
   | Var id -> Ident.Set.mem id imm || Ident.Set.mem id pure
   | MutVar id -> Ident.Set.mem id imm
+  | ModuleSlot (_, kind) -> kind = Lambda.Pintval
   | BorrowedField _ -> false
 
 let is_imm_atom env = atom_is_imm ~pure:env.pure env.imm
@@ -101,7 +102,7 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | IntSelect _ | Field (_, Immediate_field, _) | ArrayGet (_, Lambda.Pintarray, _, _)
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
   | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ | AssignImm _
-  | ReadScalarSlot _ | AssignScalar _ ->
+  | ReadScalarSlot _ | AssignScalar _ | StoreModuleSlot _ ->
       true
   | BytesGetN (_, 2, _, _) -> true
   | BytesGetN _ | BswapBint _ -> false
@@ -309,7 +310,7 @@ let rec atom_vars (a : Anf.atom) : Ident.Set.t =
   | Var id | MutVar id -> Ident.Set.singleton id
   | BorrowedField (_, owner) -> atom_vars owner
   | Int _ | Char _ | String _ | Float _ | Int32 _ | Int64 _ | Nativeint _
-  | ConstFloatArray _ | ConstBlock _ | Unit ->
+  | ConstFloatArray _ | ConstBlock _ | Unit | ModuleSlot _ ->
       Ident.Set.empty
 
 let atoms_vars (xs : Anf.atom list) : Ident.Set.t =
@@ -355,6 +356,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | FloatBinop (_, a, b) | FloatCompare (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> (Anf.scalar_operand_vars (Anf.scalar_operand_vars Ident.Set.empty a) b, [])
   | BigarrayAccess (_, args) | Ccall (_, args) | NativeCcall (_, args) -> (atoms_vars args, [])
   | GetGlobal _ -> (Ident.Set.empty, [])
+  | StoreModuleSlot (_, a) -> (Ident.Set.empty, [ a ])
   | Assign (_, rhs) | AssignImm (_, rhs) -> (Ident.Set.empty, [ rhs ])
   | ReadScalarSlot (_, slot) -> (Ident.Set.singleton slot, [])
   | AssignScalar (slot, _, value) ->
@@ -852,9 +854,9 @@ let prepare_consumed (env : state) ~(borrowed_also : Ident.Set.t)
     List.map
       (fun (a : Anf.atom) ->
         match a with
-        | MutVar m ->
+        | MutVar _ | ModuleSlot _ ->
             let tmp = Ident.create_local "mval" in
-            mat_binds := (tmp, m, Ident.Set.mem m env.imm) :: !mat_binds;
+            mat_binds := (tmp, a) :: !mat_binds;
             Anf.Var tmp
         | Var id ->
             if not (Ident.Set.mem id env.imm || Ident.Set.mem id env.pure) then
@@ -889,9 +891,9 @@ let prepare_consumed (env : state) ~(borrowed_also : Ident.Set.t)
     List.fold_left (fun acc id -> Anf.Retain (id, acc)) body !retains
   in
   List.fold_left
-    (fun acc (tmp, m, immediate) ->
-      let next = if immediate then acc else Anf.Retain (tmp, acc) in
-      Anf.Let (tmp, Atom (MutVar m), next))
+    (fun acc (tmp, source) ->
+      let next = if is_imm_atom env source then acc else Anf.Retain (tmp, acc) in
+      Anf.Let (tmp, Atom source, next))
     body !mat_binds
 
 let unwind_cleanup (env : state) (live_vars : Ident.Set.t)
@@ -1461,6 +1463,7 @@ and rebuild_cexpr (ce : Anf.cexpr) (atoms' : Anf.atom list) : Anf.cexpr =
   | Recur _, args -> Recur args
   | Assign (id, _), [ rhs ] -> Assign (id, rhs)
   | AssignImm (id, _), [ rhs ] -> AssignImm (id, rhs)
+  | StoreModuleSlot (id, _), [ value ] -> StoreModuleSlot (id, value)
   | _ -> ce
 
 let run_with_effects (prog : Anf.program) =
