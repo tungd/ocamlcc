@@ -2705,11 +2705,16 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
           | Some table -> specialize_int_selector_aliases table program.code
           | None -> program.code
         in
+        let is_array_initializer =
+          Option.fold ~none:(fun _ -> false)
+            ~some:(fun stdlib_dir -> Builtins.array_initializer ~include_dirs ~stdlib_dir)
+            stdlib_dir in
         let cleaned =
           code |> propagate_immediate_constants |> inline_local_calls
           |> flatten_let_rhs |> resolve_module_projections
           |> drop_unused_alias_lets |> promote_local_refs
-          |> replace_local_aggregates |> Bounds.remove_redundant_checks |> lift_recursive_calls
+          |> replace_local_aggregates
+          |> Bounds.remove_redundant_checks ~is_array_initializer |> lift_recursive_calls
         in
         let cleaned, scalars = specialize_mutable_slots cleaned in
         mutable_scalars := scalars;

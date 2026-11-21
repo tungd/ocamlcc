@@ -220,3 +220,25 @@ let () =
   require (function_body il "handled_call") "$ocamlcc_automatic_finalizer_raised";
   forbid (function_body il "rethrow_call") "$ocamlcc_automatic_finalizer_raised";
   require (function_body il "rethrow_call") "call extern $ocamlcc_get_exn("
+
+let () =
+  let il =
+    match Pipeline.compile_source ~filename:"borrow_params.ml" ~modname:"Borrow_params" {|
+      type entry = Entry of int
+      let values = Array.init 256 (fun i -> Entry i)
+      let short = Array.init 255 (fun i -> Entry i)
+      let safe n = if n >= 0 && n < 256 then values.(n) else Entry n
+      let short_checked n = if n >= 0 && n < 256 then short.(n) else Entry n
+      let negative_checked n = if n < 256 then values.(n) else Entry n
+      module Custom = struct
+        let[@inline never] init _ f = Array.init 1 f
+      end
+      let custom = Custom.init 256 (fun i -> Entry i)
+      let custom_checked n = if n >= 0 && n < 256 then custom.(n) else Entry n
+    |} with
+    | Ok il -> il
+    | Error message -> failwith message
+  in
+  forbid (function_body il "safe") "@bnd_oob.";
+  List.iter (fun name -> require (function_body il name) "@bnd_oob.")
+    ["short_checked"; "negative_checked"; "custom_checked"]

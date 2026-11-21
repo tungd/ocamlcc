@@ -27,3 +27,7 @@ val load_int_selection :
 
 val resolve_int_selection :
   int_selection_table Lazy.t -> Lambda.lambda -> int_selection option
+
+val array_initializer :
+  include_dirs:string list -> stdlib_dir:string -> Lambda.lambda -> bool
+(** Recognize the selected standard library's [Array.init] callee. *)

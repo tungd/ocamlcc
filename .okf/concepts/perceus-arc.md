@@ -82,6 +82,13 @@ Thread-local magazines retain their existing spill order and drain at thread exi
 ## Zero-Leak Exceptions, Cycle Collection & Weak Clearing
 - **Zero-leak exceptions & `in_tail` tracking**: The exception slot carries raised values and is swapped per fiber by `fiber_swap_to`; `CheckExn`/`Unwind` execute local frame cleanup before branching to enclosing `TryWith` handlers or returning `1` to callers. `Arc_pass` tracks `env.in_tail` (`false` inside `LetJoin` rhs, `TryWith` body, and `While`/`For` loops) so `is_pure_tail` never suppresses `CheckExn` or shadow push/pop on a `Halt` that flows into a downstream join point or loop continuation (regression-tested in `test/arc_checkexn_join_test.ml`). The raising analysis treats unknown and over-applied calls, yielding `Ccall`s, `Weak` `Ccall`s, structural/total-order comparison `Ccall`s (`caml_equal`/`caml_notequal`/`caml_compare`/`caml_lessthan`/`caml_lessequal`/`caml_greaterthan`/`caml_greaterequal`, which raise `Invalid_argument` on cyclic structures or functional values), `Binop ((Div | Mod), _, _)`, safe indexing (`StringGet`/`BytesSet`/`ArrayGet`/`ArraySet` with `safe = true`), `CreateBytes`, and `MakeArrayInit` as potentially raising so enclosing `TryWith` handlers retain live values, `CheckExn` unwinds frame values/reuse tokens, and `arc_alloc_bytes`/`arc_alloc_array`/`ocamlcc_weak_*` raise `Invalid_argument` (releasing consumed `init` on invalid array length) instead of aborting. `TryWith` preserves `env.frame_borrowed` alongside `catch_owned` in `try_owned` so raising inside joined expressions keeps borrowed references alive across handler and continuation execution.
 - **Exception checks on the slow path.** A failed inline bounds check raises and enters the same ARC cleanup as a checked call. Success continues directly after the access. A fixed-point analysis follows saturated local calls and imported raising facts. Unknown calls and automatic finalizer callbacks remain potentially raising.
+- **Fixed-length array indexing.** Bounds analysis follows immutable
+  Lambda bindings created by a literal array or the selected Stdlib's
+  `Array.init` with a constant nonnegative length. Captured arrays carry
+  their length into local functions. A branch must prove both nonnegative
+  index and a compatible upper bound. The tterm `Types.simple` export now
+  has only the automatic finalizer exception effect. For this slice,
+  tterm replay medians increased by 0.04% to 0.52% in five paired trials.
 - **Empty exception checks.** Default ARC keeps the exception value per
   OS thread and publishes a count of active slots. Generated checks skip
   the TLS call while the count is zero. A nonzero count still requires
@@ -207,3 +214,20 @@ use, or a use that transfers ownership, keeps the owning path.
 The fiber and foreign-owner branches call out to cold helpers. This keeps
 Darwin's dynamic TLS address lookup outside the ordinary release traversal
 even when the C compiler hoists TLS addresses out of conditional blocks.
+
+
+## Round 4 tterm replay
+
+Five interleaved trials per variant on Apple M4 Pro used the same frozen
+plain and Unicode replay payloads and the same tterm sources. The direct
+comparison uses the pre-round compiler and runtime and the final Round 4
+compiler and runtime. Times are milliseconds per roughly 2 MiB payload.
+
+| ARC profile | Plain before | Plain after | Unicode before | Unicode after |
+|---|---:|---:|---:|---:|
+| Default | 31.16 | 29.93 | 163.53 | 138.19 |
+| Single-thread with inline ARC | 28.57 | 27.05 | 141.55 | 116.72 |
+
+On both profiles, CSI and colon parser allocation went from 45.06 to
+31.06 and from 52.56 to 46.56 words per event. All benchmark binaries
+matched the stock parser fixture output.

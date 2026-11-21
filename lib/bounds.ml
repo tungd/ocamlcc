@@ -7,14 +7,22 @@ type value =
   | Path of path
   | Integer of int
   | Length of kind * path
+  | Sized_array of path * int
 
-type fact = Nonnegative of path | Below of path * kind * path
+type fact =
+  | Nonnegative of path
+  | Below of path * kind * path
+  | Below_constant of path * int
 
 type binding = {
   value : value option;
   on_true : fact list;
   on_false : fact list;
 }
+
+let path_of_value = function
+  | Path path | Sized_array (path, _) -> Some path
+  | Integer _ | Length _ -> None
 
 let rec value bindings = function
   | Lvar id ->
@@ -23,14 +31,15 @@ let rec value bindings = function
        | _ -> Some (Path (Local id)))
   | Lconst (Const_int n) -> Some (Integer n)
   | Lprim (Pfield (index, Pointer, Immutable), [owner], _) ->
-      (match value bindings owner with
-       | Some (Path path) -> Some (Path (Field (path, index)))
+      (match Option.bind (value bindings owner) path_of_value with
+       | Some path -> Some (Path (Field (path, index)))
        | _ -> None)
   | Lprim ((Parraylength _ | Pstringlength | Pbyteslength as op), [arg], _) ->
       let kind = match op with Parraylength _ -> Array | _ -> Bytes in
       (match value bindings arg with
-       | Some (Path path) -> Some (Length (kind, path))
-       | _ -> None)
+       | Some (Sized_array (_, size)) when kind = Array -> Some (Integer size)
+       | value -> Option.map (fun path -> Length (kind, path))
+                    (Option.bind value path_of_value))
   | _ -> None
 
 let intersection a b = List.filter (fun fact -> List.mem fact b) a
@@ -40,6 +49,8 @@ let less_than strict lhs rhs = match lhs, rhs with
       [Nonnegative path]
   | Some (Path index), Some (Length (kind, receiver)) when strict ->
       [Below (index, kind, receiver)]
+  | Some (Path index), Some (Integer n) when strict || n < max_int ->
+      [Below_constant (index, if strict then n else n + 1)]
   | _ -> []
 
 let comparison bindings cmp lhs rhs =
@@ -70,16 +81,36 @@ let rec edges bindings = function
   | _ -> [], []
 
 let proves_index bindings facts kind receiver index =
-  match value bindings receiver, value bindings index with
-  | Some (Path receiver), Some (Path index) ->
-      List.mem (Nonnegative index) facts && List.mem (Below (index, kind, receiver)) facts
+  match value bindings index with
+  | Some (Path index) when List.mem (Nonnegative index) facts ->
+      (match value bindings receiver with
+       | Some (Sized_array (path, size)) when kind = Array ->
+           List.mem (Below (index, kind, path)) facts
+           || List.exists (function
+                | Below_constant (bounded, limit) -> bounded = index && limit <= size
+                | _ -> false) facts
+       | Some (Path path) -> List.mem (Below (index, kind, path)) facts
+       | _ -> false)
   | _ -> false
 
-let remove_redundant_checks code =
+let remove_redundant_checks ?(is_array_initializer = fun _ -> false) code =
+  let bind_value bindings id rhs =
+    match rhs with
+    | Lprim (Pmakearray _, fields, _) -> Some (Sized_array (Local id, List.length fields))
+    | Lapply { ap_func; ap_args = [length; _]; _ } when is_array_initializer ap_func ->
+        (match value bindings length with
+         | Some (Integer n) when n >= 0 -> Some (Sized_array (Local id, n))
+         | _ -> None)
+    | _ -> value bindings rhs
+  in
+  let captured_arrays =
+    Ident.Map.filter (fun _ binding ->
+      match binding.value with Some (Sized_array _) -> true | _ -> false)
+  in
   let rec visit bindings facts = function
     | Llet (mode, kind, id, rhs, body) ->
         let on_true, on_false = edges bindings rhs in
-        let binding = { value = value bindings rhs; on_true; on_false } in
+        let binding = { value = bind_value bindings id rhs; on_true; on_false } in
         Llet (mode, kind, id, visit bindings facts rhs,
               visit (Ident.Map.add id binding bindings) facts body)
     | Lifthenelse (cond, yes, no) ->
@@ -102,10 +133,10 @@ let remove_redundant_checks code =
           | _ -> op
         in
         Lprim (op, List.map (visit bindings facts) args, loc)
-    | Lfunction lf -> Lfunction (map_lfunction (visit Ident.Map.empty []) lf)
+    | Lfunction lf -> Lfunction (map_lfunction (visit (captured_arrays bindings) []) lf)
     | Lletrec (defs, body) ->
         let defs = List.map (fun rb ->
-          { rb with def = map_lfunction (visit Ident.Map.empty []) rb.def }) defs in
+          { rb with def = map_lfunction (visit (captured_arrays bindings) []) rb.def }) defs in
         Lletrec (defs, visit bindings facts body)
     | expr -> Lambda.shallow_map (visit bindings facts) expr
   in

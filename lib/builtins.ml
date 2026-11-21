@@ -100,32 +100,43 @@ let resolve ?table (func : Lambda.lambda) : builtin option =
 type int_selection = Min | Max
 type int_selection_table = (int * int_selection) list
 
-let int_cmi dir =
-  List.find_map
-    (fun name ->
-      let path = Filename.concat dir name in
-      if Sys.file_exists path then Some path else None)
-    [ "stdlib__Int.cmi"; "Stdlib__Int.cmi" ]
-
-let load_int_selection ~include_dirs ~stdlib_dir =
-  (* A project may supply its own persistent unit with this name. Leave the
-     ordinary call intact whenever a competing interface is on the load path. *)
+let stdlib_value_slots ~unit_name ~include_dirs ~stdlib_dir lookup =
+  let cmi_in dir =
+    List.find_map
+      (fun name ->
+        let path = Filename.concat dir (name ^ ".cmi") in
+        if Sys.file_exists path then Some path else None)
+      [String.uncapitalize_ascii unit_name; String.lowercase_ascii unit_name; unit_name]
+  in
+  (* A competing persistent unit with the same name can have different
+     semantics. Only trust the interface from the selected stdlib. *)
   let dirs = "" :: List.map (Misc.expand_directory Config.standard_library) include_dirs in
   let competing =
-    List.exists (fun dir -> dir <> stdlib_dir && Option.is_some (int_cmi dir)) dirs
+    List.exists (fun dir -> dir <> stdlib_dir && Option.is_some (cmi_in dir)) dirs
   in
-  match int_cmi stdlib_dir with
+  match cmi_in stdlib_dir with
   | Some path when not competing -> (
       try
         let cmi = Cmi_format.read_cmi path in
-        if cmi.cmi_name = "Stdlib__Int" then
-          value_slots
-            (function "min" -> Some Min | "max" -> Some Max | _ -> None)
-            cmi.cmi_sign
-        else []
+        if cmi.cmi_name = unit_name then value_slots lookup cmi.cmi_sign else []
       with Cmi_format.Error _ | Sys_error _ | End_of_file -> [])
   | _ -> []
+
+let load_int_selection ~include_dirs ~stdlib_dir =
+  stdlib_value_slots ~unit_name:"Stdlib__Int" ~include_dirs ~stdlib_dir
+    (function "min" -> Some Min | "max" -> Some Max | _ -> None)
 
 let resolve_int_selection table func =
   Option.bind (slot_of_callee "Stdlib__Int" func) (fun pos ->
       List.assoc_opt pos (Lazy.force table))
+
+
+let array_initializer ~include_dirs ~stdlib_dir =
+  let slots =
+    lazy (stdlib_value_slots ~unit_name:"Stdlib__Array" ~include_dirs ~stdlib_dir
+            (function "init" -> Some () | _ -> None))
+  in
+  fun callee ->
+    match slot_of_callee "Stdlib__Array" callee with
+    | Some index -> List.mem_assoc index (Lazy.force slots)
+    | None -> false
