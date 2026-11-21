@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Skip ARC destruction, cycle candidacy, and bulk tag scans on word arrays known to contain only immediates. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-21 (codex/1) — Fuse a mutable field projection with its immediate read-only consumer. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-21 (codex/1) — Preserve borrowed parameters across non-suspending calls when those calls do not take ownership of the parameter. See [Perceus ARC](/concepts/perceus-arc.md).

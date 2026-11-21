@@ -117,3 +117,18 @@ A mutable field can lend its value to the immediately following projection
 or other supported local reader. This removes ownership traffic for chains
 such as `state.cursor.row`. A snapshot that survives an intervening call or
 store keeps its own reference.
+
+## Immediate-only word arrays
+
+An array allocated from immediate elements starts with a zero scan count.
+The first pointer store enables scanning before publishing the element. The
+mark is sticky and preserves the weak-target bit. Marked arrays scan their
+full payload, including indexes beyond 65,535. Generic and address-array
+stores, bulk writes, and Obj and atomic field writers maintain the mark.
+ARC can skip destruction scans and cycle-root buffering for unmarked
+arrays. Raw C allocation keeps conservative scans because callers can
+initialize its payload directly.
+
+Recompile objects and stdlib archives built before this store protocol
+when using them with this runtime. Earlier generated address-array
+stores wrote pointers directly and could miss the scan mark.

@@ -809,21 +809,18 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
                    args = [ (Long, Int (Int64.of_int n)); (Long, buf) ] } ));
           mark_heap b arr
       | Lambda.Pintarray | Paddrarray | Pgenarray ->
-          let scan =
-            match kind with
-            | Lambda.Pintarray -> 0
-            | Pgenarray | Paddrarray | Pfloatarray -> min n 0xffff
+          let bytes = Long, Int (Int64.of_int (8 * n)) in
+          let allocator =
+            if kind = Lambda.Pintarray then
+              { fn = Global "ocamlcc_alloc_immediate_array";
+                args = [Word, Int (Int64.of_int (8 * n))] }
+            else
+              { fn = Global "arc_alloc";
+                args = [Long, Int (Int64.of_int arc_tag_array);
+                        Long, Int (Int64.of_int (min n 0xffff)); bytes] }
           in
           let arr = fresh_temp b "arr" in
-          emit b
-            (Call
-               ( Long,
-                 arr,
-                 { fn = Global "arc_alloc";
-                   args =
-                     [ (Long, Int (Int64.of_int arc_tag_array));
-                       (Long, Int (Int64.of_int scan));
-                       (Long, Int (Int64.of_int (8 * n))) ] } ));
+          emit b (Call (Long, arr, allocator));
           List.iteri
             (fun i v ->
               let addr = ptr_offset b arr (8 * i) "arrp" in
@@ -1077,15 +1074,12 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       | Lambda.Pintarray | Paddrarray ->
           let ui = untag b iv in
           let do_write () =
-            let eaddr = array_address b av ui in
-            (match kind with
-            | Lambda.Pintarray | Lambda.Pfloatarray ->
-                emit b (Store (Storel, vv, eaddr))
-            | Pgenarray | Paddrarray ->
-                let old_v = fresh_temp b "olda" in
-                emit b (Load (Loadl, Long, old_v, eaddr));
-                emit b (Store (Storel, vv, eaddr));
-                emit_arc_if_heap b `Release old_v);
+            if kind = Lambda.Pintarray then begin
+              let eaddr = array_address b av ui in
+              emit b (Store (Storel, vv, eaddr))
+            end else
+              emit b (Call_void { fn = Global "ocamlcc_addr_array_set";
+                args = [Long, av; Long, iv; Long, vv] });
             unit_const
           in
           if safe then

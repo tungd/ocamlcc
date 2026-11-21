@@ -323,6 +323,19 @@ static inline int is_unscanned_leaf_tag(uint16_t tag)
            tag == (uint16_t)ARC_TAG_CUSTOM;
 }
 
+/* Word arrays use scan_fields as a presence bit. Arrays with pointers
+ * always traverse their full length, which can exceed UINT16_MAX. */
+static inline uint32_t array_pointer_slots(const ArcHeader *hdr)
+{
+    return arc_scan_count(hdr) == 0u ? 0u : hdr->byte_size / 8u;
+}
+
+static inline void array_enable_scan(ArcHeader *hdr)
+{
+    if (arc_scan_count(hdr) == 0u)
+        atomic_fetch_or_explicit(&hdr->scan_fields, 1u, memory_order_relaxed);
+}
+
 static inline int is_cycle_candidate_obj(const ArcHeader *hdr)
 {
     if (atomic_load_explicit(&hdr->refcount, memory_order_relaxed) == ARC_IMMORTAL)
@@ -334,8 +347,6 @@ static inline int is_cycle_candidate_obj(const ArcHeader *hdr)
         return 1; /* the shadow stack holds owning references (see
                      cc_visit_children); queued fibers keep the scheduler's
                      +1 from spawn and survive every trial */
-    if (tag == (uint16_t)ARC_TAG_ARRAY)
-        return hdr->byte_size >= 8u;
     if (tag == (uint16_t)ARC_TAG_PAP)
         return 1;
     return arc_scan_count(hdr) > 0u;
@@ -770,7 +781,7 @@ int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
             arc_release_val((int64_t)dc->env[i]);
     } else if (dhdr->tag == (uint16_t)ARC_TAG_ARRAY) {
         int64_t *da = (int64_t *)(uintptr_t)dummy_val;
-        uint32_t n = dhdr->byte_size / 8u;
+        uint32_t n = array_pointer_slots(dhdr);
         for (uint32_t i = 0; i < n; i++)
             arc_release_val(da[i]);
     } else if (!is_unscanned_leaf_tag(dhdr->tag)) {
@@ -806,9 +817,11 @@ int64_t caml_update_dummy(int64_t dummy_val, int64_t new_val)
             arc_retain_val((int64_t)dc->env[i]);
     } else if (dhdr->tag == (uint16_t)ARC_TAG_ARRAY) {
         int64_t *da = (int64_t *)(uintptr_t)dummy_val;
-        uint32_t n = nhdr->byte_size / 8u;
+        uint32_t n = array_pointer_slots(nhdr);
         for (uint32_t i = 0; i < n; i++)
             arc_retain_val(da[i]);
+        for (uint32_t i = nhdr->byte_size / 8u; i < dhdr->byte_size / 8u; i++)
+            da[i] = 1;
     } else if (!is_unscanned_leaf_tag(dhdr->tag)) {
         int64_t *df = (int64_t *)(uintptr_t)dummy_val;
         for (uint16_t i = 0; i < new_count; i++)
@@ -1086,7 +1099,7 @@ static void slab_free(ArcHeader *hdr)
     }
 }
 
-void *arc_alloc(uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
+static inline void *alloc_object(uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
 {
     if ((uint64_t)sizeof(ArcHeader) + (uint64_t)byte_size > (uint64_t)UINT32_MAX)
         pal_abort();
@@ -1099,6 +1112,22 @@ void *arc_alloc(uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
     account_objects(&g_live_objects, 1);
     account_words((uint64_t)(byte_size / 8u) + 2u);
     return hdr + 1;
+}
+
+static inline uint16_t raw_scan_fields(uint16_t tag, uint16_t scan, uint32_t size)
+{
+    /* A C caller can populate raw array storage with pointers. */
+    return tag == ARC_TAG_ARRAY && size >= 8u && scan == 0u ? 1u : scan;
+}
+
+void *arc_alloc(uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
+{
+    return alloc_object(tag, raw_scan_fields(tag, scan_fields, byte_size), byte_size);
+}
+
+void *ocamlcc_alloc_immediate_array(uint32_t byte_size)
+{
+    return alloc_object(ARC_TAG_ARRAY, 0u, byte_size);
 }
 
 extern const void *ocamlcc_global_Invalid_argument;
@@ -1229,8 +1258,8 @@ void *arc_alloc_array(uint64_t len, int64_t init)
             return farr;
         }
     }
-    uint16_t scan = (len > 0xffffu) ? 0xffffu : (uint16_t)len;
-    int64_t *arr = arc_alloc((uint16_t)ARC_TAG_ARRAY, scan, (uint32_t)(len * 8u));
+    uint16_t scan = len != 0 && is_heap_ptr(init) ? 1u : 0u;
+    int64_t *arr = alloc_object(ARC_TAG_ARRAY, scan, (uint32_t)(len * 8u));
     if (len == 0) {
         arc_release_val(init);
         return arr;
@@ -1366,7 +1395,7 @@ static void release_subtree(ArcHeader *root, int free_root)
                 drop_child_val(&w, p->args[i], &tail);
         } else if (tag == ARC_TAG_ARRAY) {
             int64_t *arr = (int64_t *)(cur + 1);
-            uint32_t n = cur->byte_size / 8u;
+            uint32_t n = array_pointer_slots(cur);
             for (uint32_t i = 0; i < n; i++)
                 drop_child_val(&w, arr[i], &tail);
         } else if (tag == ARC_TAG_WEAK) {
@@ -1486,7 +1515,7 @@ void *arc_alloc_reuse(void *reuse_tok, uint16_t tag, uint16_t scan_fields, uint3
     if (reuse_fits(hdr, byte_size)) {
         atomic_init(&hdr->refcount, 1u);
         hdr->tag = tag;
-        atomic_init(&hdr->scan_fields, scan_fields);
+        atomic_init(&hdr->scan_fields, raw_scan_fields(tag, scan_fields, byte_size));
         hdr->byte_size = byte_size;
         hdr->reserved = 0;
         account_objects(&g_live_objects, 1);
@@ -1570,7 +1599,7 @@ static void cc_visit_children(ArcHeader *hdr, CcChildFn fn, void *ctx)
             fn(p->args[i], ctx);
     } else if (tag == (uint16_t)ARC_TAG_ARRAY) {
         int64_t *arr = (int64_t *)(hdr + 1);
-        uint32_t n = hdr->byte_size / 8u;
+        uint32_t n = array_pointer_slots(hdr);
         for (uint32_t i = 0; i < n; i++)
             fn(arr[i], ctx);
     } else if (tag == (uint16_t)ARC_TAG_FIBER) {
@@ -2288,11 +2317,14 @@ int64_t ocamlcc_gen_makearray(int64_t n, const int64_t *elems)
             return (int64_t)(uintptr_t)farr;
         }
     }
-    uint16_t scan = (n > 0xffff) ? 0xffffu : (uint16_t)n;
-    int64_t *arr = (int64_t *)arc_alloc(
-        (uint16_t)ARC_TAG_ARRAY, scan, (uint32_t)((uint64_t)n * 8u));
-    for (int64_t i = 0; i < n; i++)
+    int64_t *arr = ocamlcc_alloc_immediate_array((uint32_t)((uint64_t)n * 8u));
+    int has_pointer = 0;
+    for (int64_t i = 0; i < n; i++) {
         arr[i] = elems[i];
+        has_pointer |= is_heap_ptr(elems[i]);
+    }
+    if (has_pointer)
+        array_enable_scan((ArcHeader *)arr - 1);
     return (int64_t)(uintptr_t)arr;
 }
 
@@ -2315,6 +2347,22 @@ int64_t ocamlcc_gen_array_get(int64_t safe, int64_t arr, int64_t idx_val)
     return v;
 }
 
+static inline void array_replace_owned(ArcHeader *hdr, int64_t *slot, int64_t value)
+{
+    if (is_heap_ptr(value))
+        array_enable_scan(hdr);
+    int64_t old = *slot;
+    *slot = value;
+    arc_release_val(old);
+}
+
+void ocamlcc_addr_array_set(int64_t arr, int64_t idx_val, int64_t value)
+{
+    ArcHeader *hdr = (ArcHeader *)(uintptr_t)arr - 1;
+    int64_t *slot = (int64_t *)(uintptr_t)arr + (idx_val >> 1);
+    array_replace_owned(hdr, slot, value);
+}
+
 int64_t ocamlcc_gen_array_set(int64_t safe, int64_t arr, int64_t idx_val, int64_t v)
 {
     uint64_t idx = (uint64_t)(idx_val >> 1);
@@ -2331,10 +2379,7 @@ int64_t ocamlcc_gen_array_set(int64_t safe, int64_t arr, int64_t idx_val, int64_
         arc_release_val(v);
         return 1;
     }
-    int64_t *elems = (int64_t *)(uintptr_t)arr;
-    int64_t old_v = elems[idx];
-    elems[idx] = v;
-    arc_release_val(old_v);
+    ocamlcc_addr_array_set(arr, idx_val, v);
     return 1;
 }
 
@@ -2343,10 +2388,11 @@ static int array_is_flat_float(int64_t value)
     return ((const ArcHeader *)(uintptr_t)value - 1)->tag == ARC_TAG_FLOAT_ARRAY;
 }
 
-/* An array's header scan count is not a type proof. AND the tags across
-   the affected slice so the native compiler can vectorize the check. */
-static int array_words_are_immediate(const int64_t *words, size_t count)
+/* A marked array can still have immediate-only ranges. */
+static int array_words_are_immediate(int64_t arr, const int64_t *words, size_t count)
 {
+    if (arc_scan_count((const ArcHeader *)(uintptr_t)arr - 1) == 0u)
+        return 1;
     uint64_t tags = 1u;
     for (size_t i = 0; i < count; i++)
         tags &= (uint64_t)words[i];
@@ -2369,11 +2415,10 @@ int64_t ocamlcc_bulk_array_sub(int64_t src, int64_t off, int64_t len)
     size_t start = (size_t)(off >> 1);
     int flat_float = array_is_flat_float(src);
     const void *from = (const char *)(uintptr_t)src + start * sizeof(int64_t);
-    int needs_retain = !flat_float && !array_words_are_immediate(from, count);
+    int needs_retain = !flat_float && !array_words_are_immediate(src, from, count);
     uint16_t tag = flat_float ? ARC_TAG_FLOAT_ARRAY : ARC_TAG_ARRAY;
-    uint16_t scan = !needs_retain ? 0u :
-        (count > UINT16_MAX ? UINT16_MAX : (uint16_t)count);
-    int64_t *copy = arc_alloc(tag, scan, (uint32_t)(count * sizeof(*copy)));
+    int64_t *copy = alloc_object(tag, (uint16_t)needs_retain,
+                                 (uint32_t)(count * sizeof(*copy)));
     pal_memcpy(copy, from, count * sizeof(*copy));
     if (needs_retain)
         for (size_t i = 0; i < count; i++)
@@ -2404,10 +2449,14 @@ int64_t ocamlcc_bulk_array_blit(int64_t src, int64_t src_off, int64_t dst,
     void *dst_slice = (char *)(uintptr_t)dst + (dst_off >> 1) * 8;
     const int64_t *from = src_slice;
     int64_t *to = dst_slice;
-    if (src_float || (array_words_are_immediate(from, count) &&
-                      array_words_are_immediate(to, count))) {
+    int immediate = src_float || array_words_are_immediate(src, from, count);
+    if (immediate && (src_float || array_words_are_immediate(dst, to, count))) {
         pal_memmove(dst_slice, src_slice, count * sizeof(*to));
-    } else if (src == dst && dst_off > src_off) {
+        return 1;
+    }
+    if (!immediate)
+        array_enable_scan((ArcHeader *)(uintptr_t)dst - 1);
+    if (src == dst && dst_off > src_off) {
         for (size_t i = count; i > 0; i--)
             array_replace_borrowed(&to[i - 1], from[i - 1]);
     } else {
@@ -2430,10 +2479,12 @@ int64_t ocamlcc_bulk_array_fill(int64_t dst, int64_t off, int64_t len, int64_t v
             to[i] = unboxed;
     } else {
         int64_t *to = (int64_t *)(uintptr_t)dst + (off >> 1);
-        if ((value & 1) && array_words_are_immediate(to, count)) {
+        if ((value & 1) && array_words_are_immediate(dst, to, count)) {
             for (size_t i = 0; i < count; i++)
                 to[i] = value;
         } else {
+            if (is_heap_ptr(value))
+                array_enable_scan((ArcHeader *)(uintptr_t)dst - 1);
             for (size_t i = 0; i < count; i++)
                 array_replace_borrowed(&to[i], value);
         }
@@ -3140,6 +3191,13 @@ void caml_sys_exit(int64_t code_val)
     ocamlcc_exit_val(code_val);
 }
 
+static inline void mark_obj_array_store(int64_t obj_val, int64_t new_val)
+{
+    ArcHeader *hdr = (ArcHeader *)(uintptr_t)obj_val - 1;
+    if (is_heap_ptr(new_val) && hdr->tag == ARC_TAG_ARRAY)
+        array_enable_scan(hdr);
+}
+
 /* ---- Atomics ---- */
 
 /* Readers must retain a heap value before any writer can detach it.
@@ -3165,6 +3223,8 @@ int64_t caml_atomic_cas_field(int64_t obj_val, int64_t idx_val,
     arc_retain_val(desired_val);
     int64_t cur = expected_val;
     arc_lock(&atomic_field_lock);
+    /* Publish the scan bit before any successful pointer store. */
+    mark_obj_array_store(obj_val, desired_val);
     int changed = atomic_compare_exchange_strong_explicit(
         slot, &cur, desired_val, memory_order_acq_rel, memory_order_acquire);
     arc_unlock(&atomic_field_lock);
@@ -3179,6 +3239,7 @@ int64_t caml_atomic_exchange_field(int64_t obj_val, int64_t idx_val,
     _Atomic int64_t *slot = ((_Atomic int64_t *)(uintptr_t)obj_val) + idx;
     arc_retain_val(desired_val);
     arc_lock(&atomic_field_lock);
+    mark_obj_array_store(obj_val, desired_val);
     int64_t old = atomic_exchange_explicit(slot, desired_val, memory_order_acq_rel);
     arc_unlock(&atomic_field_lock);
     return old;
@@ -3802,6 +3863,7 @@ int64_t caml_obj_set_field(int64_t obj_val, int64_t idx_val, int64_t new_val)
     int64_t *fields = (int64_t *)(uintptr_t)obj_val;
     int64_t old_v = fields[idx];
     arc_retain_val(new_val);
+    mark_obj_array_store(obj_val, new_val);
     fields[idx] = new_val;
     arc_release_val(old_v);
     return 1;
@@ -3886,7 +3948,7 @@ int64_t caml_obj_block(int64_t tag_val, int64_t size_val)
     uint16_t scan = (atag == (uint16_t)ARC_TAG_ARRAY || is_unscanned_leaf_tag(atag))
                         ? 0u
                         : (uint16_t)sz;
-    int64_t *p = (int64_t *)arc_alloc(atag, scan, (uint32_t)((uint64_t)sz * 8u));
+    int64_t *p = alloc_object(atag, scan, (uint32_t)((uint64_t)sz * 8u));
     for (int64_t i = 0; i < sz; i++)
         p[i] = 1;
     return (int64_t)(uintptr_t)p;
@@ -3966,13 +4028,13 @@ static int64_t dup_with_tag(int64_t v, int override_tag, uint16_t new_atag)
     uint32_t nf = (src_tag == (uint16_t)ARC_TAG_ARRAY)
                       ? (hdr->byte_size / 8u)
                       : (uint32_t)arc_scan_count(hdr);
-    uint16_t scan = (tag == (uint16_t)ARC_TAG_ARRAY)
-                        ? 0u
-                        : (nf > UINT16_MAX ? (uint16_t)UINT16_MAX : (uint16_t)nf);
-    int64_t *dst = (int64_t *)arc_alloc(tag, scan, hdr->byte_size);
+    uint32_t pointers = src_tag == ARC_TAG_ARRAY ? array_pointer_slots(hdr) : nf;
+    uint16_t scan = tag == ARC_TAG_ARRAY ? (uint16_t)(pointers != 0u)
+        : (nf > UINT16_MAX ? UINT16_MAX : (uint16_t)nf);
+    int64_t *dst = alloc_object(tag, scan, hdr->byte_size);
     if (hdr->byte_size > 0u)
         pal_memcpy(dst, (const void *)(uintptr_t)v, hdr->byte_size);
-    for (uint32_t i = 0u; i < nf; i++)
+    for (uint32_t i = 0u; i < pointers; i++)
         arc_retain_val(dst[i]);
     return (int64_t)(uintptr_t)dst;
 }
@@ -4082,7 +4144,7 @@ int64_t caml_obj_reachable_words(int64_t v)
                 rw_push_val(&work, &tab, &cap, &alloc_bytes, &used, p->args[i]);
         } else if (tag == (uint16_t)ARC_TAG_ARRAY) {
             int64_t *arr = (int64_t *)(cur + 1);
-            uint32_t n = cur->byte_size / 8u;
+            uint32_t n = array_pointer_slots(cur);
             for (uint32_t i = 0; i < n; i++)
                 rw_push_val(&work, &tab, &cap, &alloc_bytes, &used, arr[i]);
         } else if (tag == (uint16_t)ARC_TAG_CUSTOM &&

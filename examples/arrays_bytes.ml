@@ -72,3 +72,22 @@ let check_cursor_snapshots state replacement =
 
 let () =
   check_cursor_snapshots { cursor = { row = 1; col = 2 } } { row = 3; col = 4 }
+
+external live_objects : unit -> int = "ocamlcc_arc_live"
+
+let check_option_array () =
+  let store (options : bytes option array) =
+    options.(0) <- Some (Bytes.make 2 'x')
+  in
+  let before = live_objects () in
+  let check () =
+    let options = Array.make 2 None in
+    store options;
+    match options.(0) with
+    | Some buffer -> assert (Bytes.unsafe_get buffer 1 = 'x')
+    | None -> assert false
+  in
+  check ();
+  assert (live_objects () = before)
+
+let () = check_option_array ()

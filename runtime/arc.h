@@ -87,7 +87,11 @@ typedef struct ArcPap {
 
 void *arc_alloc(uint16_t tag, uint16_t scan_fields, uint32_t byte_size);
 void *arc_alloc_bytes(uint64_t len);
+/* Raw arc_alloc arrays can contain pointers; these generated-array
+ * entry points use the immediate-only fast path until a pointer store. */
 void *arc_alloc_array(uint64_t len, int64_t init);
+void *ocamlcc_alloc_immediate_array(uint32_t byte_size);
+void ocamlcc_addr_array_set(int64_t arr, int64_t idx_val, int64_t value);
 void  arc_retain(void *obj);
 void  arc_release(void *obj);
 void  arc_retain_val(int64_t val);

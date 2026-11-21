@@ -334,7 +334,10 @@ static void test_weak_target_header_and_reuse(void)
     arc_release(replacement);
 
     /* A scan count using the high bit keeps its original meaning. */
-    int64_t *large = arc_alloc_array(ARC_FLAG_WEAK_TARGET, tagged(0));
+    int64_t *large = arc_alloc(ARC_TAG_ARRAY, ARC_FLAG_WEAK_TARGET,
+                               ARC_FLAG_WEAK_TARGET * sizeof(*large));
+    for (uint32_t i = 0; i < ARC_FLAG_WEAK_TARGET; i++)
+        large[i] = tagged(0);
     ArcHeader *large_hdr = (ArcHeader *)large - 1;
     assert(arc_scan_count(large_hdr) == ARC_FLAG_WEAK_TARGET);
     some = arc_alloc(0, 1, sizeof(*some));
@@ -1121,6 +1124,31 @@ static void test_bulk_array_ownership(void)
     assert(arc_live_objects() == before);
 }
 
+static void test_array_scan_promotion(void)
+{
+    int64_t live = arc_live_objects();
+    enum { length = 66000 };
+    int64_t *array = arc_alloc_array(length, tagged(0));
+    ArcHeader *header = (ArcHeader *)array - 1;
+    int64_t value = (int64_t)(uintptr_t)array;
+    assert(arc_scan_count(header) == 0);
+    arc_retain(array);
+    arc_release(array);
+    assert(atomic_load_explicit(&header->reserved, memory_order_relaxed) == 0);
+
+    int64_t *other = arc_alloc_array(1, tagged(3));
+    arc_retain(array);
+    ocamlcc_gen_array_set(0, (int64_t)(uintptr_t)other, tagged(0), value);
+    assert(arc_scan_count((ArcHeader *)other - 1) != 0);
+    ocamlcc_bulk_array_blit((int64_t)(uintptr_t)other, tagged(0), value,
+                           tagged(length - 1), tagged(1));
+    assert(arc_scan_count(header) != 0 && array[length - 1] == value);
+    arc_release(other);
+    arc_release(array);
+    ocamlcc_arc_collect(1);
+    assert(arc_live_objects() == live);
+}
+
 static void *aligned_slab_worker(void *arg)
 {
     (void)arg;
@@ -1184,6 +1212,7 @@ int main(void)
     test_aligned_slab_reclamation();
     test_main_shadow_stack();
     test_bulk_array_ownership();
+    test_array_scan_promotion();
     test_float_format();
     test_buffered_dummy_update();
     test_cycle_loses_external_owner_at_immutable_member();
