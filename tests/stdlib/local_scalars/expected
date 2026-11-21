@@ -2,3 +2,4 @@ local scalars: ok
 numeric loops: ok
 boxed seeds: ok
 boxed loop values: ok
+mutable numeric slots: ok

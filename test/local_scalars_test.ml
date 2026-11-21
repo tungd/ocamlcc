@@ -49,7 +49,32 @@ let () =
         if n <= 0 then acc else integer_loop (n - 1) (Int64.add acc 2L)
       let rec word_loop n (acc : int32) =
         if n <= 0 then acc else word_loop (n - 1) (Int32.add acc 2l)
+      let rec array_loop (a : float array) i (acc : float) =
+        if i = 0 then acc else array_loop a (i - 1) (acc +. a.(i - 1))
+      let float_slot (a : float array) =
+        let sum = ref 0. in
+        for i = 0 to Array.length a - 1 do sum := !sum +. a.(i) done;
+        !sum
+      let word_slot n =
+        let sum = ref 0l in
+        for i = 0 to n - 1 do sum := Int32.add !sum (Int32.of_int i) done;
+        !sum
+      let long_slot n =
+        let sum = ref 0L in
+        for i = 0 to n - 1 do sum := Int64.add !sum (Int64.of_int i) done;
+        !sum
+      let native_slot n =
+        let sum = ref 0n in
+        for i = 0 to n - 1 do sum := Nativeint.add !sum (Nativeint.of_int i) done;
+        !sum
       external observe_box : float -> unit = "numeric_observe_box"
+      let boxed_slot n =
+        let sum = ref 0. in
+        for _i = 1 to n do
+          sum := !sum +. 2.;
+          observe_box !sum
+        done;
+        !sum
       let rec boxed_loop n (acc : float) =
         observe_box acc;
         if n <= 0 then acc else boxed_loop (n - 1) (acc +. 2.)
@@ -79,4 +104,10 @@ let () =
   check "float_loop" " =d phi " "ocamlcc_alloc_float" 1;
   check "integer_loop" " =l add " "ocamlcc_alloc_custom" 1;
   check "word_loop" " =w phi " "ocamlcc_alloc_custom" 1;
+  check "array_loop" " =d phi " "ocamlcc_alloc_float" 1;
+  check "float_slot" "stored " "ocamlcc_alloc_float" 1;
+  check "word_slot" "storew " "ocamlcc_alloc_custom" 1;
+  check "long_slot" "storel " "ocamlcc_alloc_custom" 1;
+  check "native_slot" "storel " "ocamlcc_alloc_custom" 1;
+  check "boxed_slot" "call extern $numeric_observe_box(" "ocamlcc_alloc_float" 1;
   check "boxed_loop" "call extern $numeric_observe_box(" "ocamlcc_alloc_float" 1

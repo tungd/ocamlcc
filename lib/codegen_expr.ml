@@ -679,6 +679,11 @@ let scalar_type = function
   | Anf.Double_scalar -> Double
   | Integer_scalar kind -> let ty, _, _ = bint_spec kind in ty
 
+let scalar_store = function
+  | Double -> Stored
+  | Word -> Storew
+  | Long -> Storel
+
 let compile_native_ccall hooks b (prim : Primitive.description) args =
   let arg rep value =
     match Anf.native_scalar rep with
@@ -1205,6 +1210,16 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       close_block b (Jmp b.cur_fn.entry_label);
       unit_const
   | Fun _ -> failwith "codegen: Fun must be bound by Let"
+  | ReadScalarSlot (rep, id) ->
+      let slot = Hashtbl.find b.mut_vars id in
+      (match rep with
+      | Double_scalar -> load_double b slot
+      | Integer_scalar kind -> unbox_bint b kind slot)
+  | AssignScalar (id, rep, value) ->
+      let slot = Hashtbl.find b.mut_vars id in
+      let value = compile_scalar_operand hooks b rep value in
+      emit b (Store (scalar_store (scalar_type rep), value, slot));
+      unit_const
   | Assign (id, rhs) | AssignImm (id, rhs) -> (
       let v = compile_atom hooks b rhs in
       match Hashtbl.find_opt b.mut_vars id with
@@ -1270,7 +1285,10 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       let v = compile_cexpr hooks b ~tail:false ce in
       let slot = fresh_temp b "mslot" in
       emit_start_alloc b slot 8;
-      emit b (Store (Storel, v, slot));
+      let store = match ce with
+        | ScalarValue (rep, _) -> scalar_store (scalar_type rep)
+        | _ -> Storel in
+      emit b (Store (store, v, slot));
       Hashtbl.replace b.mut_vars id slot;
       let res = compile_aexpr hooks b tail body in
       Hashtbl.remove b.mut_vars id;

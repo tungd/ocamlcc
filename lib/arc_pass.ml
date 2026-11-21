@@ -99,7 +99,8 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | Unop (op, _) -> is_imm_unop op
   | IntSelect _ | Field (_, Immediate_field, _) | ArrayGet (_, Lambda.Pintarray, _, _)
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
-  | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ | AssignImm _ ->
+  | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ | AssignImm _
+  | ReadScalarSlot _ | AssignScalar _ ->
       true
   | BytesGetN (_, 2, _, _) -> true
   | BytesGetN _ | BswapBint _ -> false
@@ -348,6 +349,9 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | BigarrayAccess (_, args) | Ccall (_, args) | NativeCcall (_, args) -> (atoms_vars args, [])
   | GetGlobal _ -> (Ident.Set.empty, [])
   | Assign (_, rhs) | AssignImm (_, rhs) -> (Ident.Set.empty, [ rhs ])
+  | ReadScalarSlot (_, slot) -> (Ident.Set.singleton slot, [])
+  | AssignScalar (slot, _, value) ->
+      (Anf.scalar_operand_vars (Ident.Set.singleton slot) value, [])
   | Fun _ -> (Ident.Set.empty, [])
 
 let pointer_parameters (lf : Anf.lfunction) =
@@ -753,6 +757,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
              | FloatOfInt _ | IntOfFloat _ | BoxScalar _
              | ScalarLoad _ | ScalarStore _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
              | Builtin _ | BigarrayAccess _ | Ccall _ | NativeCcall _ | GetGlobal _ | Assign _ | AssignImm _
+             | ReadScalarSlot _ | AssignScalar _
              | MakeBlock (_, [])) as ce), body) -> (
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (Let (x, ce, body'))

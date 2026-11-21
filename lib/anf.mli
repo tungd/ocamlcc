@@ -159,6 +159,8 @@ type cexpr =
   | Fun of lfunction
   | Assign of Ident.t * atom
   | AssignImm of Ident.t * atom
+  | ReadScalarSlot of scalar_rep * Ident.t
+  | AssignScalar of Ident.t * scalar_rep * scalar_operand
 
 and imported_function = {
   unit_name : string;

@@ -101,3 +101,60 @@ let () =
   let result = publish_then_return sink 2 in
   assert (result = 2.25 && result == Option.get !sink);
   print_endline "boxed loop values: ok"
+
+let[@inline never] float_slot (a : float array) n =
+  let sum = ref 0. in
+  for i = 0 to n - 1 do sum := !sum +. a.(i) done;
+  !sum
+
+let[@inline never] while_slot n =
+  let i = ref 0 in
+  let sum = ref (-0.) in
+  while !i < n do
+    sum := (if !i mod 2 = 0 then !sum +. 2. else !sum -. 1.);
+    incr i
+  done;
+  !sum
+
+let[@inline never] int64_slot n =
+  let sum = ref 9223372036854775806L in
+  for _i = 1 to n do sum := Int64.add !sum 2L done;
+  !sum
+
+let[@inline never] int32_slot n =
+  let sum = ref 2147483646l in
+  for _i = 1 to n do sum := Int32.add !sum 2l done;
+  !sum
+
+let[@inline never] nativeint_slot n =
+  let sum = ref 9223372036854775806n in
+  for _i = 1 to n do sum := Nativeint.add !sum 2n done;
+  !sum
+
+let[@inline never] borrowed_seed seed n =
+  let sum = ref seed in
+  for _i = 1 to n do sum := !sum +. 2. done;
+  !sum
+
+let[@inline never] last_published sink n =
+  let sum = ref 0. in
+  for _i = 1 to n do
+    sum := !sum +. 2.;
+    sink := Some !sum
+  done;
+  !sum
+
+let () =
+  assert (float_slot [|1.; 2.; 3.|] 3 = 6.);
+  assert (float_slot [||] 0 = 0.);
+  assert (out_of_bounds (fun () -> float_slot [|1.|] 2));
+  assert (while_slot 5 = 4. && 1. /. while_slot 0 = neg_infinity);
+  assert (int64_slot 1 = Int64.min_int && int64_slot 0 = 9223372036854775806L);
+  assert (int32_slot 1 = Int32.min_int);
+  assert (nativeint_slot 1 = Nativeint.min_int);
+  let seed = seed_float 11 in
+  assert (borrowed_seed seed 0 == seed);
+  let sink = ref None in
+  let result = last_published sink 2 in
+  assert (result == Option.get !sink);
+  print_endline "mutable numeric slots: ok"

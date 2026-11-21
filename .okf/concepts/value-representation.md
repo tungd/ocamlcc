@@ -6,7 +6,7 @@ tags: [value-representation, codegen, arc]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-20
+  at: 2026-11-21
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -115,6 +115,16 @@ width through arithmetic, shifts, and conversions. A chain boxes its result
 where an ordinary OCaml value is required. Checked array operations preserve
 bounds exceptions, and boxed-integer division preserves zero-divisor and
 signed overflow behavior.
+
+## Mutable numeric slots
+
+Local refs promoted to `MutLet` can use raw QBE stack storage for floats,
+int32, int64, and nativeint. The initializer and all writes must produce
+private values of the same representation. Reads can feed scalar operations
+or produce a boxed result on scope exit. A zero-write exit from a literal
+initializer still returns a static constant. Slots that observe a boxed value
+inside the scope, capture it, or receive an externally owned box keep ordinary
+boxing and ownership. Raw slots stay out of ARC and fiber shadow roots.
 
 ## Numeric self-tail loops
 

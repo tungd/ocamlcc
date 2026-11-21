@@ -151,6 +151,8 @@ type cexpr =
   | Fun of lfunction
   | Assign of Ident.t * atom
   | AssignImm of Ident.t * atom
+  | ReadScalarSlot of scalar_rep * Ident.t
+  | AssignScalar of Ident.t * scalar_rep * scalar_operand
 
 and imported_function = {
   unit_name : string;
@@ -283,6 +285,8 @@ let conv_const (c : Lambda.structured_constant) : atom =
   | Const_float_array sl -> ConstFloatArray (List.map parse_const_float sl)
   | Const_block (tag, items) -> ConstBlock (tag, List.map conv_const_item items)
 
+let mutable_scalars : scalar_rep Ident.Map.t ref = ref Ident.Map.empty
+
 let unit_imports : (string -> exports option) ref = ref (fun _ -> None)
 
 let imported_callee callee =
@@ -319,6 +323,7 @@ let with_finalizer_poll body =
    or a checked operation that constructs an exception needs the usual poll. *)
 let is_local_operation = function
   | Atom _ | Field _ | SetField (_, Immediate, _, _) | IntSelect _ | Assign _ | AssignImm _
+  | ReadScalarSlot _ | AssignScalar _
   | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr
            | Cmp _ | Compare_ints | Isout), _, _)
   | Unop ((Neg | Not | Offset _ | Isint | String_length | Array_length), _)
@@ -438,10 +443,10 @@ and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
       conv_expr a (fun _ -> conv_bind id b k)
   | Lconst c -> Let (id, Atom (conv_const c), k ())
   | Lvar v -> Let (id, Atom (Var v), k ())
-  | Lmutvar v -> Let (id, Atom (MutVar v), k ())
+  | Lmutvar v -> conv_mut_read v id k
   | Lfunction lf -> Let (id, Fun (conv_fun lf), k ())
   | Lassign (v, arg) ->
-      conv_expr arg (fun a -> Let (id, Assign (v, a), k ()))
+      conv_expr arg (fun a -> Let (id, mut_assignment v a, k ()))
   | Lapply _ | Lprim _ -> (
       match rhs with
       | Lprim (Psequand, _, _)
@@ -464,7 +469,25 @@ and conv_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
 and conv_mut_bind (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) :
     aexpr =
   let t = Ident.create_local (Ident.name id ^ "_init") in
-  conv_bind t rhs (fun () -> MutLet (id, Atom (Var t), k ()))
+  conv_bind t rhs (fun () ->
+    let init = match Ident.Map.find_opt id !mutable_scalars with
+      | None -> Atom (Var t)
+      | Some rep -> ScalarValue (rep, Boxed_scalar (Var t))
+    in
+    MutLet (id, init, k ()))
+
+and conv_mut_read slot id k =
+  match Ident.Map.find_opt slot !mutable_scalars with
+  | None -> Let (id, Atom (MutVar slot), k ())
+  | Some rep ->
+      let raw = Ident.create_local "slot_value" in
+      Let (raw, ReadScalarSlot (rep, slot),
+        Let (id, BoxScalar (rep, Raw_scalar raw), k ()))
+
+and mut_assignment slot value =
+  match Ident.Map.find_opt slot !mutable_scalars with
+  | None -> Assign (slot, value)
+  | Some rep -> AssignScalar (slot, rep, Boxed_scalar value)
 
 and conv_simple (id : Ident.t) (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   let emit_cexpr ce = Let (id, ce, k ()) in
@@ -823,7 +846,12 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
   match lam with
   | Lconst c -> k (conv_const c)
   | Lvar id -> k (Var id)
-  | Lmutvar id -> k (MutVar id)
+  | Lmutvar slot ->
+      (match Ident.Map.find_opt slot !mutable_scalars with
+      | None -> k (MutVar slot)
+      | Some _ ->
+          let id = Ident.create_local "slot_read" in
+          conv_mut_read slot id (fun () -> k (Var id)))
   | Levent (l, _) | Lifused (_, l) ->
       conv_expr l k
   | Lprim (Psetglobal _, [ body ], _) -> conv_expr body k
@@ -845,7 +873,7 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
       Let (id, Fun (conv_fun lf), k (Var id))
   | Lassign (id, rhs) ->
       let t = Ident.create_local "assign" in
-      conv_expr rhs (fun a -> Let (t, Assign (id, a), k (Var t)))
+      conv_expr rhs (fun a -> Let (t, mut_assignment id a, k (Var t)))
   | Lprim (Psequand, [ a; b ], _) ->
       let e =
         conv_expr a (fun ca -> If (ca, conv_tail b, Halt (Int 0)))
@@ -978,6 +1006,8 @@ let cexpr_vars ?(include_raw = true) free_aexpr acc ce =
       List.fold_left atom_vars acc args
   | GetGlobal _ -> acc
   | Assign (id, a) | AssignImm (id, a) -> Ident.Set.add id (atom_vars acc a)
+  | ReadScalarSlot (_, slot) -> Ident.Set.add slot acc
+  | AssignScalar (slot, _, value) -> scalar_operand_vars (Ident.Set.add slot acc) value
   | Fun lf ->
       let body_free = free_aexpr lf.body in
       let body_free =
@@ -1186,6 +1216,8 @@ let rec specialize_scalar_chain bindings tail =
     let boxed = Ident.Set.remove id boxed and scalar = Ident.Map.remove id scalar in
     let boxed, scalar =
       match binding with
+      | Value (AssignScalar (slot, rep, value)) ->
+          Ident.Set.add slot boxed, demand rep scalar value
       | Value (ScalarStore (access, arr, index, v)) ->
           let rep = Option.get (scalar_rep access.kind) in
           atom_vars (atom_vars boxed arr) index, demand rep scalar v
@@ -1220,6 +1252,8 @@ let rec specialize_scalar_chain bindings tail =
   List.fold_right (fun (id, binding) body ->
     let binding =
       match binding with
+      | Value (AssignScalar (slot, rep, value)) ->
+          Value (AssignScalar (slot, rep, operand value))
       | Value (ScalarStore (access, arr, index, v)) ->
           Value (ScalarStore (access, arr, index, operand v))
       | Value (FloatBinop (op, lhs, rhs)) -> Value (FloatBinop (op, operand lhs, operand rhs))
@@ -1373,6 +1407,8 @@ let scalarize_loop specialize (rb : rec_binding) =
       let ce =
         match ce with
         | ScalarValue (rep, value) -> ScalarValue (rep, scalar_operand rep value)
+        | AssignScalar (slot, rep, value) ->
+            AssignScalar (slot, rep, scalar_operand rep value)
         | BoxScalar (rep, value) -> BoxScalar (rep, scalar_operand rep value)
         | FloatBinop (op, lhs, rhs) -> FloatBinop (op, float lhs, float rhs)
         | FloatCompare (op, lhs, rhs) -> FloatCompare (op, float lhs, float rhs)
@@ -1500,7 +1536,7 @@ and specialize_let_chain bindings = function
   | tail ->
       let tail = specialize_scalar_bindings tail in
       if List.exists (function
-        | _, Value (BoxScalar _ | ScalarStore _ | FloatBinop _ | IntegerBinop _
+        | _, Value (BoxScalar _ | AssignScalar _ | ScalarStore _ | FloatBinop _ | IntegerBinop _
                    | ScalarValue _ | IntegerCompare _ | IntOfInteger _
                    | FloatCompare _ | IntOfFloat _ | FloatArraySet _) -> true
         | _ -> false) bindings
@@ -2286,10 +2322,142 @@ let exported_functions code =
   in
   gather [] [] (scan Ident.Map.empty code)
 
+(* Only private numeric values can lose their boxes. The slot initializer and
+   writes must produce their own values, and a read that needs an OCaml value
+   must leave the slot's scope. References that escape have already been
+   excluded by [promote_local_refs]. *)
+let specialize_mutable_slots code =
+  let open Lambda in
+  let exception Boxed_use in
+  let slots = ref Ident.Map.empty in
+  let produced_by = function
+    | Paddfloat | Psubfloat | Pmulfloat | Pdivfloat
+    | Pfloatofint | Pnegfloat | Pabsfloat | Pfloatfield _
+    | Parrayrefu Pfloatarray | Parrayrefs Pfloatarray -> Some Double_scalar
+    | Pbintofint k | Pcvtbint (_, k) | Pnegbint k
+    | Paddbint k | Psubbint k | Pmulbint k | Pandbint k | Porbint k | Pxorbint k
+    | Plslbint k | Plsrbint k | Pasrbint k
+    | Pdivbint { size = k; _ } | Pmodbint { size = k; _ } -> Some (Integer_scalar k)
+    | _ -> None
+  in
+  let rec producer = function
+    | Lconst c ->
+        let rep = match c with
+          | Const_float _ -> Some Double_scalar
+          | Const_int32 _ -> Some (Integer_scalar Pint32)
+          | Const_int64 _ -> Some (Integer_scalar Pint64)
+          | Const_nativeint _ -> Some (Integer_scalar Pnativeint)
+          | _ -> None in
+        Option.map (fun kind -> kind, Some c) rep
+    | Lprim (p, _, _) -> Option.map (fun rep -> rep, None) (produced_by p)
+    | Llet (_, _, _, _, tail) | Lsequence (_, tail) | Levent (tail, _) -> producer tail
+    | Lifthenelse (_, yes, no) ->
+        (match producer yes, producer no with
+        | Some (rep, None), Some (other, None) when rep = other -> Some (rep, None)
+        | _ -> None)
+    | _ -> None
+  in
+  let consumes rep prim index =
+    let expected = match prim with
+      | Paddfloat | Psubfloat | Pmulfloat | Pdivfloat | Pfloatcomp _
+      | Pnegfloat | Pabsfloat | Pintoffloat -> Some Double_scalar
+      | Parraysets Pfloatarray | Parraysetu Pfloatarray when index = 2 -> Some Double_scalar
+      | Paddbint k | Psubbint k | Pmulbint k | Pandbint k | Porbint k | Pxorbint k
+      | Pdivbint { size = k; _ } | Pmodbint { size = k; _ }
+      | Pbintcomp (k, _) | Pcompare_bints k
+      | Pnegbint k | Pintofbint k | Pcvtbint (k, _) -> Some (Integer_scalar k)
+      | (Plslbint k | Plsrbint k | Pasrbint k) when index = 0 -> Some (Integer_scalar k)
+      | _ -> None in
+    expected = Some rep
+  in
+  let prepare slot rep initial body =
+    let assigns = ref false and boxed_exit = ref false and writes_literal = ref false in
+    let rec visit flag ~exit expr =
+      let check = visit flag ~exit:false in
+      let tail = visit flag ~exit in
+      match expr with
+      | Lmutvar id when Ident.same id slot ->
+          if not exit then raise Boxed_use;
+          boxed_exit := true;
+          (match flag with
+          | None -> expr
+          | Some (written, constant) ->
+              Lifthenelse (Lmutvar written, expr, Lconst constant))
+      | Lassign (id, rhs) when Ident.same id slot ->
+          (match producer rhs with
+          | Some (actual, literal) when actual = rep ->
+              assigns := true;
+              if Option.is_some literal then writes_literal := true
+          | _ -> raise Boxed_use);
+          let assignment = Lassign (id, check rhs) in
+          (match flag with
+          | None -> assignment
+          | Some (written, _) ->
+              Lsequence (assignment, Lassign (written, Lconst (Const_int 1))))
+      | Lprim (prim, args, loc) ->
+          let args = List.mapi (fun index value ->
+            match value with
+            | Lmutvar id when Ident.same id slot && consumes rep prim index -> value
+            | _ -> check value) args in
+          Lprim (prim, args, loc)
+      | Llet (mode, kind, id, rhs, body) -> Llet (mode, kind, id, check rhs, tail body)
+      | Lmutlet (kind, id, rhs, body) -> Lmutlet (kind, id, check rhs, tail body)
+      | Lsequence (first, body) -> Lsequence (check first, tail body)
+      | Lifthenelse (cond, yes, no) -> Lifthenelse (check cond, tail yes, tail no)
+      | Lswitch (value, cases, loc) ->
+          let arm (tag, body) = tag, tail body in
+          Lswitch (check value,
+            { cases with sw_consts = List.map arm cases.sw_consts;
+                         sw_blocks = List.map arm cases.sw_blocks;
+                         sw_failaction = Option.map tail cases.sw_failaction }, loc)
+      | Lstringswitch (value, cases, fail, loc) ->
+          Lstringswitch (check value, List.map (fun (tag, body) -> tag, tail body) cases,
+                         Option.map tail fail, loc)
+      | Lstaticcatch (body, binders, handler) ->
+          Lstaticcatch (tail body, binders, tail handler)
+      | Ltrywith (body, id, handler) -> Ltrywith (tail body, id, tail handler)
+      | Levent (body, event) -> Levent (tail body, event)
+      | Lfunction _ ->
+          if Ident.Set.mem slot (free_variables expr) then raise Boxed_use;
+          expr
+      | Lletrec (defs, body) ->
+          List.iter (fun def ->
+            if Ident.Set.mem slot (free_variables (Lfunction def.def)) then raise Boxed_use) defs;
+          Lletrec (defs, tail body)
+      | _ -> shallow_map check expr
+    in
+    ignore (visit None ~exit:true body);
+    if not !assigns || (!boxed_exit && !writes_literal) then raise Boxed_use;
+    match initial with
+    | Some constant when !boxed_exit ->
+        (* A zero-write exit still returns a static constant. *)
+        let written = Ident.create_local "slot_written" in
+        Lmutlet (Pintval, written, Lconst (Const_int 0),
+                 visit (Some (written, constant)) ~exit:true body)
+    | _ -> body
+  in
+  let rec visit = function
+    | Lmutlet (kind, id, init, body) ->
+        let init = visit init in
+        let body = visit body in
+        let body =
+          match producer init with
+          | Some (rep, literal) ->
+              (match prepare id rep literal body with
+              | prepared -> slots := Ident.Map.add id rep !slots; prepared
+              | exception Boxed_use -> body)
+          | None -> body in
+        Lmutlet (kind, id, init, body)
+    | expr -> shallow_map visit expr
+  in
+  let code = visit code in
+  code, !slots
+
 let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = [])
     ?(load_exports = fun _ -> None) ?on_export_ids (program : Lambda.program) : (program, string) result =
   let saved = !builtin_tables in
   let saved_imports = !unit_imports in
+  let saved_scalars = !mutable_scalars in
   let printing = if use_builtins then Some (Builtins.load ~include_dirs ()) else None in
   let stdlib_dir =
     match stdlib_dir with
@@ -2307,7 +2475,10 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
     | Some _ as known -> known
     | None -> load_exports name);
   Fun.protect
-    ~finally:(fun () -> builtin_tables := saved; unit_imports := saved_imports)
+    ~finally:(fun () ->
+      builtin_tables := saved;
+      unit_imports := saved_imports;
+      mutable_scalars := saved_scalars)
     (fun () ->
       try
         let code =
@@ -2320,6 +2491,8 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
           |> drop_unused_alias_lets |> promote_local_refs
           |> replace_local_aggregates |> lift_recursive_calls
         in
+        let cleaned, scalars = specialize_mutable_slots cleaned in
+        mutable_scalars := scalars;
         Option.iter (fun save -> save (exported_functions cleaned)) on_export_ids;
         let code = conv_tail cleaned |> specialize_scalar_bindings in
         Ok { module_ident = program.module_ident; code }
