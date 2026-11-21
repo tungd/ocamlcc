@@ -264,5 +264,15 @@ when transferring ownership. The slot preserves the identity of the value
 created at initialization. Locals with per-invocation captures keep their
 closure environments.
 
+## Inlining imported aggregate producers
+
+Units compiled together can share bounded Lambda bodies for functions that
+return small immutable blocks. The copied code can include acyclic helper
+functions with no module-local value captures. The caller keeps the provider's
+initialization dependency. Lambda inlining runs before local aggregate
+replacement, so a caller that only projects the result can receive the fields
+at a static join without constructing the block. Persisted export summaries
+continue to carry direct-entry facts.
+
 [^design-doc]: Stage structure, goals, and the exception/fiber lowering
   plans are specified in `docs/design.md` §3–§4.

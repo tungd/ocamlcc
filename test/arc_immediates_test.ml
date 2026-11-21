@@ -6,7 +6,8 @@ let collect_then_return value =
   Let (id "collected", Ccall ("caml_gc_major", [Unit]), Halt value)
 
 let qbe code =
-  { module_ident = id "Immediate_edges"; code; value_kinds = Ident.Map.empty }
+  { module_ident = id "Immediate_edges"; code; value_kinds = Ident.Map.empty;
+    inline_bodies = Ident.Map.empty }
   |> Arc_pass.run
   |> Codegen.compile_program
   |> Qbe_il.to_string

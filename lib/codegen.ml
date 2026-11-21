@@ -159,7 +159,9 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
         in
         let yields, returns_immediate = effects id in
         let inline_leaf = inline_leaf id in
-        Some (path, { Anf.unit_name; symbol; arity; yields; returns_immediate; inline_leaf }))
+        let inline_lambda = Ident.Map.find_opt id program.inline_bodies in
+        Some (path, { Anf.unit_name; symbol; arity; yields; returns_immediate;
+                      inline_leaf; inline_lambda }))
     exported
   in
   if b.cur_fn.term = None then begin

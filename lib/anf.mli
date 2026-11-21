@@ -157,6 +157,7 @@ type cexpr =
   | Ccall of string * atom list
   | NativeCcall of Primitive.description * atom list
   | GetGlobal of string
+  | ImportDependency of string
   | StoreModuleSlot of Ident.t * atom
   | Fun of lfunction
   | Assign of Ident.t * atom
@@ -171,6 +172,7 @@ and imported_function = {
   yields : bool;
   returns_immediate : bool;
   inline_leaf : lfunction option;
+  inline_lambda : Lambda.lfunction option;
 }
 
 and lfunction = {
@@ -228,6 +230,7 @@ type program = {
   module_ident : Ident.t;
   code : aexpr;
   value_kinds : Lambda.value_kind Ident.Map.t;
+  inline_bodies : Lambda.lfunction Ident.Map.t;
 }
 
 val of_lambda :

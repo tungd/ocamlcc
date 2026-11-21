@@ -102,7 +102,7 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | IntSelect _ | Field (_, Immediate_field, _) | ArrayGet (_, Lambda.Pintarray, _, _)
   | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
   | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ | AssignImm _
-  | ReadScalarSlot _ | AssignScalar _ | StoreModuleSlot _ ->
+  | ReadScalarSlot _ | AssignScalar _ | StoreModuleSlot _ | ImportDependency _ ->
       true
   | BytesGetN (_, 2, _, _) -> true
   | BytesGetN _ | BswapBint _ -> false
@@ -355,7 +355,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | FloatArraySet (_, a, i, v) | ScalarStore (_, a, i, v) -> (Anf.scalar_operand_vars (atoms_vars [a; i]) v, [])
   | FloatBinop (_, a, b) | FloatCompare (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> (Anf.scalar_operand_vars (Anf.scalar_operand_vars Ident.Set.empty a) b, [])
   | BigarrayAccess (_, args) | Ccall (_, args) | NativeCcall (_, args) -> (atoms_vars args, [])
-  | GetGlobal _ -> (Ident.Set.empty, [])
+  | GetGlobal _ | ImportDependency _ -> (Ident.Set.empty, [])
   | StoreModuleSlot (_, a) -> (Ident.Set.empty, [ a ])
   | Assign (_, rhs) | AssignImm (_, rhs) -> (Ident.Set.empty, [ rhs ])
   | ReadScalarSlot (_, slot) -> (Ident.Set.singleton slot, [])

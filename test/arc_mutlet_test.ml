@@ -187,7 +187,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.ScalarLoad _ | Anf.ScalarStore _ | Anf.FloatBinop _ | Anf.IntegerBinop _ | Anf.IntegerCompare _ | Anf.IntegerNeg _ | Anf.IntegerShift _ | Anf.ScalarValue _ | Anf.GetGlobal _ -> acc
     | Anf.Fun lf -> count_release_mut id lf.Anf.body
     | Anf.Assign (_, a) | Anf.AssignImm (_, a) | Anf.StoreModuleSlot (_, a) -> count_atom acc a
-    | Anf.ReadScalarSlot _ | Anf.AssignScalar _ -> acc
+    | Anf.ReadScalarSlot _ | Anf.AssignScalar _ | Anf.ImportDependency _ -> acc
   in
   match e with
   | Anf.Release (_rel, cont) -> count_release_mut id cont

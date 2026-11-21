@@ -149,6 +149,7 @@ type cexpr =
   | Ccall of string * atom list
   | NativeCcall of Primitive.description * atom list
   | GetGlobal of string
+  | ImportDependency of string
   | StoreModuleSlot of Ident.t * atom
   | Fun of lfunction
   | Assign of Ident.t * atom
@@ -163,6 +164,7 @@ and imported_function = {
   yields : bool;
   returns_immediate : bool;
   inline_leaf : lfunction option;
+  inline_lambda : Lambda.lfunction option;
 }
 
 and lfunction = {
@@ -218,6 +220,7 @@ type program = {
   module_ident : Ident.t;
   code : aexpr;
   value_kinds : Lambda.value_kind Ident.Map.t;
+  inline_bodies : Lambda.lfunction Ident.Map.t;
 }
 
 exception Unsupported of string
@@ -299,17 +302,19 @@ let variable id =
   | Some kind -> ModuleSlot (id, kind)
   | None -> Var id
 
-let imported_callee callee =
+let imported_callee_and_unit callee =
   let open Lambda in
   let rec resolve path = function
     | Lprim (Pfield (slot, Pointer, Immutable), [owner], _) ->
         resolve (slot :: path) owner
     | Lprim (Pgetglobal id, [], _) ->
         Option.bind (!unit_imports (Ident.name id))
-          (List.assoc_opt path)
+          (fun exports -> Option.map (fun fn -> fn, id) (List.assoc_opt path exports))
     | _ -> None
   in
   resolve [] callee
+
+let imported_callee callee = Option.map fst (imported_callee_and_unit callee)
 
 let check_array_kind (_k : Lambda.array_kind) = ()
 
@@ -333,6 +338,7 @@ let with_finalizer_poll body =
    or a checked operation that constructs an exception needs the usual poll. *)
 let is_local_operation = function
   | Atom _ | Field _ | SetField (_, Immediate, _, _) | IntSelect _ | Assign _ | AssignImm _
+  | ImportDependency _
   | ReadScalarSlot _ | AssignScalar _
   | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr
            | Cmp _ | Compare_ints | Isout), _, _)
@@ -454,7 +460,7 @@ and conv_bind vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexp
       in
       LetRec (rbs, conv_bind vk id body1 k)
   | Lsequence (a, b) ->
-      conv_expr a (fun _ -> conv_bind vk id b k)
+      conv_sequence a (fun () -> conv_bind vk id b k)
   | Lconst c -> Let (id, Atom (conv_const c), k ())
   | Lvar v -> Let (id, Atom (variable v), k ())
   | Lmutvar v -> conv_mut_read v id k
@@ -485,6 +491,12 @@ and conv_let vk id rhs k =
     if Ident.Map.mem id !module_slots then
       Let (Ident.create_local "publish", StoreModuleSlot (id, Var id), k ())
     else k ())
+
+and conv_sequence action k =
+  match action with
+  | Lambda.Lprim (Pgetglobal id, [], _) ->
+      Let (Ident.create_local "import", ImportDependency (Ident.name id), k ())
+  | _ -> conv_expr action (fun _ -> k ())
 
 and conv_mut_bind vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) :
     aexpr =
@@ -888,7 +900,7 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
           bindings
       in
       LetRec (rbs, conv_expr body k)
-  | Lsequence (a, b) -> conv_expr a (fun _ -> conv_expr b k)
+  | Lsequence (a, b) -> conv_sequence a (fun () -> conv_expr b k)
   | Lfunction lf ->
       let id = Ident.create_local "anon" in
       Let (id, Fun (conv_fun lf), k (Var id))
@@ -1026,7 +1038,7 @@ let cexpr_vars ?(include_raw = true) free_aexpr acc ce =
   | BigarrayAccess (_, args) | Ccall (_, args) | NativeCcall (_, args)
   | DirectApp (_, args) | Recur args | KeepAlive args ->
       List.fold_left atom_vars acc args
-  | GetGlobal _ -> acc
+  | GetGlobal _ | ImportDependency _ -> acc
   | Assign (id, a) | AssignImm (id, a) -> Ident.Set.add id (atom_vars acc a)
   | ReadScalarSlot (_, slot) -> Ident.Set.add slot acc
   | AssignScalar (slot, _, value) -> scalar_operand_vars (Ident.Set.add slot acc) value
@@ -1812,7 +1824,10 @@ let inline_local_calls code =
     | expr -> iter_head_constructor (record_uses skip) expr
   in
   record_uses Ident.Set.empty code;
-  let budget = ref (2 * size code) in
+  let nodes = size code in
+  let local_budget = ref (2 * nodes) in
+  let import_budget = ref (min 2048 (nodes + 192)) in
+  let budget = function None -> local_budget | Some _ -> import_budget in
   let rec fresh_exits labels = function
     | Lstaticcatch (body, (id, binders), handler) ->
         incr next_label;
@@ -1857,6 +1872,17 @@ let inline_local_calls code =
           && (def.attr.is_a_functor
               || List.exists2 (known_callback defs) def.params call.ap_args))
   in
+  let callee defs call =
+    match known defs call.ap_func with
+    | Some (def, cost) when List.compare_lengths def.params call.ap_args = 0
+                             && should_inline defs def cost call ->
+        Some (def, cost, None)
+    | Some _ -> None
+    | None when call.ap_inlined = Never_inline -> None
+    | None ->
+        Option.bind (imported_callee_and_unit call.ap_func) (fun (target, unit_id) ->
+          Option.map (fun def -> def, size def.body, Some unit_id) target.inline_lambda)
+  in
   let rec visit depth defs = function
     | Llet (mode, kind, id, rhs, body) ->
         let def = known defs rhs in
@@ -1868,11 +1894,12 @@ let inline_local_calls code =
         let mode = if Option.is_some def then Alias else mode in
         Llet (mode, kind, id, visit depth defs rhs, body)
     | Lapply call ->
-        (match known defs call.ap_func with
-        | Some (def, cost) when def.kind = Curried
+        (match callee defs call with
+        | Some (def, cost, imported) when def.kind = Curried
             && List.compare_lengths def.params call.ap_args = 0
-            && should_inline defs def cost call && depth < 12 && cost <= !budget ->
-            budget := !budget - cost;
+            && depth < 12 && cost <= !(budget imported) ->
+            let remaining = budget imported in
+            remaining := !remaining - cost;
             let def = duplicate_function def in
             let body = fresh_exits Labels.empty def.body in
             record_uses (free_variables (Lfunction def)) body;
@@ -1884,7 +1911,11 @@ let inline_local_calls code =
                strict bindings so effects are preserved even for unused formals. *)
             let body = List.fold_right2 (fun (id, kind) arg body ->
               Llet (Strict, kind, id, arg, body)) def.params call.ap_args body in
-            visit (depth + 1) defs body
+            let body = visit (depth + 1) defs body in
+            (match imported with
+             | None -> body
+             | Some unit_id ->
+                 Lsequence (Lprim (Pgetglobal unit_id, [], call.ap_loc), body))
         | _ -> shallow_map (visit depth defs) (Lapply call))
     | expr -> shallow_map (visit depth defs) expr
   in
@@ -2362,10 +2393,7 @@ let propagate_immediate_constants code =
   in
   visit Ident.Map.empty code
 
-(* Make a module slot only for values already rooted by a published closure.
-   Local functions and values that die in the initializer retain their normal
-   lifetimes. Follow private direct helpers from the published definitions. *)
-let module_captures code exported =
+let module_bindings code =
   let open Lambda in
   let rec bindings defs = function
     | Llet (_, kind, id, rhs, body) ->
@@ -2379,20 +2407,103 @@ let module_captures code exported =
     | Lprim (Psetglobal _, [body], _) -> bindings defs body
     | _ -> defs
   in
-  let defs = bindings Ident.Map.empty code in
+  bindings Ident.Map.empty code
+
+(* Make a module slot only for values already rooted by a published closure.
+   Local functions and values that die in the initializer retain their normal
+   lifetimes. Follow private direct helpers from the published definitions. *)
+let module_captures defs exported =
   let rec follow (seen, slots) id =
     if Ident.Set.mem id seen then seen, slots
     else
       let seen = Ident.Set.add id seen in
       match Ident.Map.find_opt id defs with
-      | Some (_, (Lfunction _ as fn)) ->
+      | Some (_, (Lambda.Lfunction _ as fn)) ->
           Ident.Set.fold (fun capture state -> follow state capture)
-            (free_variables fn) (seen, slots)
+            (Lambda.free_variables fn) (seen, slots)
       | Some (kind, _) -> seen, Ident.Map.add id kind slots
       | None -> seen, slots
   in
   snd (List.fold_left (fun state (_, id) -> follow state id)
          (Ident.Set.empty, Ident.Map.empty) exported)
+
+(* Publish allocation-producing small bodies before ANF consumes their field
+   shapes. An acyclic helper can travel with the body, provided it has no
+   module-local value captures and the complete copy still fits the budget. *)
+let inline_export_bodies defs exported =
+  let open Lambda in
+  let exception Ineligible in
+  let rec returns_product = function
+    | Lprim (Pmakeblock (_, Immutable, _), fields, _) ->
+        List.compare_length_with fields 2 >= 0 && List.compare_length_with fields 4 <= 0
+    | Llet (_, _, _, _, tail) | Lsequence (_, tail) | Lmutlet (_, _, _, tail) ->
+        returns_product tail
+    | Lifthenelse (_, yes, no) | Lstaticcatch (yes, _, no) ->
+        returns_product yes || returns_product no
+    | Lswitch (_, sw, _) ->
+        List.exists (fun (_, arm) -> returns_product arm) (sw.sw_consts @ sw.sw_blocks)
+        || Option.exists returns_product sw.sw_failaction
+    | Lstringswitch (_, cases, fail, _) ->
+        List.exists (fun (_, arm) -> returns_product arm) cases
+        || Option.exists returns_product fail
+    | _ -> false
+  in
+  let function_at id =
+    match Ident.Map.find_opt id defs with
+    | Some (_, Lfunction def) when def.kind = Curried
+        && def.attr.inline <> Never_inline && not def.attr.is_a_functor -> def
+    | _ -> raise Ineligible
+  in
+  let called_helpers def =
+    let captures = free_variables (Lfunction def) in
+    let rec check = function
+      | Lapply { ap_func = Lvar id; ap_args; _ } when Ident.Set.mem id captures ->
+          let helper = function_at id in
+          if List.compare_lengths ap_args helper.params <> 0 then raise Ineligible;
+          List.iter check ap_args
+      | Lvar id when Ident.Set.mem id captures -> raise Ineligible
+      | expr -> iter_head_constructor check expr
+    in
+    check def.body;
+    captures
+  in
+  let copy id =
+    let def = function_at id in
+    if not (returns_product def.body) then raise Ineligible;
+    let remaining = ref 192 in
+    let rec measure expr =
+      decr remaining;
+      if !remaining < 0 then raise Ineligible;
+      iter_head_constructor measure expr
+    in
+    measure def.body;
+    let rec close active (seen, helpers) id =
+      if Ident.Set.mem id active then raise Ineligible;
+      if Ident.Set.mem id seen then seen, helpers
+      else
+        let helper = function_at id in
+        measure helper.body;
+        let active = Ident.Set.add id active in
+        let seen, helpers =
+          Ident.Set.fold (fun id state -> close active state id)
+            (called_helpers helper) (seen, helpers)
+        in
+        Ident.Set.add id seen, (id, helper) :: helpers
+    in
+    let _, helpers =
+      Ident.Set.fold (fun capture state -> close (Ident.Set.singleton id) state capture)
+        (called_helpers def) (Ident.Set.empty, [])
+    in
+    map_lfunction (fun body ->
+      List.fold_left (fun body (id, helper) ->
+        Llet (Alias, Pgenval, id, Lfunction helper, body))
+        body helpers) def
+  in
+  List.fold_left (fun bodies (_, id) ->
+    if Ident.Map.mem id bodies then bodies
+    else match copy id with
+      | def -> Ident.Map.add id def bodies
+      | exception Ineligible -> bodies) Ident.Map.empty exported
 
 (* Only private numeric values can lose their boxes. The slot initializer and
    writes must produce their own values, and a read that needs an OCaml value
@@ -2585,10 +2696,16 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
         let cleaned, scalars = specialize_mutable_slots cleaned in
         mutable_scalars := scalars;
         let exports = exported_functions cleaned in
-        module_slots := module_captures cleaned exports;
+        let bindings = module_bindings cleaned in
+        module_slots := module_captures bindings exports;
+        let inline_bodies =
+          if Option.is_some on_export_ids then inline_export_bodies bindings exports
+          else Ident.Map.empty
+        in
         Option.iter (fun save -> save exports) on_export_ids;
         let code = conv_tail cleaned |> specialize_scalar_bindings in
-        Ok { module_ident = program.module_ident; code; value_kinds = binding_kinds cleaned }
+        Ok { module_ident = program.module_ident; code;
+             value_kinds = binding_kinds cleaned; inline_bodies }
       with Unsupported what -> Error what)
 
 (* A small closed expression over tagged scalar parameters can be copied into

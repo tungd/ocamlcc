@@ -1203,6 +1203,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
   | Ccall (sym, args) -> compile_ccall hooks b sym args
   | NativeCcall (prim, args) -> compile_native_ccall hooks b prim args
   | DirectApp (target, args) -> compile_ccall hooks b target.symbol args
+  | ImportDependency _ -> unit_const
   | GetGlobal mod_name ->
       let gsym = "ocamlcc_global_" ^ sanitize mod_name in
       let gv = fresh_temp b "glob" in

@@ -93,7 +93,8 @@ let parse_rows lines =
         let fn : Anf.imported_function =
           { unit_name; symbol = entry; arity = nonnegative arity;
             yields = bool_of_string yields;
-            returns_immediate = bool_of_string immediate; inline_leaf = None }
+            returns_immediate = bool_of_string immediate;
+            inline_leaf = None; inline_lambda = None }
         in
         let exports = match Hashtbl.find_opt units unit_name with
           | None -> []

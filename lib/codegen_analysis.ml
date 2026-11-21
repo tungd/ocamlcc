@@ -159,7 +159,7 @@ let collect_globals self_sym (e : Anf.aexpr) : string list =
         scan_aexpr body
   and scan_cexpr (ce : Anf.cexpr) =
     match ce with
-    | GetGlobal name -> add name
+    | GetGlobal name | ImportDependency name -> add name
     | DirectApp (target, _) -> add target.unit_name
     | Ccall (("ocamlcc_effect_perform" | "ocamlcc_effect_runstack"
              | "ocamlcc_effect_resume" | "ocamlcc_effect_reperform"), _) ->

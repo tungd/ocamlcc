@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Inline small imported Lambda aggregate producers before local scalar replacement in multi-unit builds. Keep the provider's initialization dependency. See [compiler pipeline](/concepts/compiler-pipeline.md#inlining-imported-aggregate-producers).
+
 - 2026-11-21 (codex/1) — Propagate tagged literals and store captures rooted by published module functions in private module slots. See [compiler pipeline](/concepts/compiler-pipeline.md#captures-rooted-by-a-module).
 
 - 2026-11-21 (codex/1) — Carry tagged-immediate value kinds through ANF bindings, mutable slots, static catches, and saturated function returns. See [value representation](/concepts/value-representation.md#tagged-immediate-binders).
