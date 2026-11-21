@@ -80,3 +80,56 @@ let () =
     check name "arc_retain_val" false;
     check name "call extern $arc_retain(" true)
     ["item"; "get_pointer"]
+
+let () =
+  let source = {|
+    external observe : 'a -> unit = "probe_observe"
+    external create : int -> bytes = "caml_create_bytes"
+    external make : int -> int -> int array = "caml_array_make"
+    external to_float : int -> float = "%floatofint"
+    external (+) : int -> int -> int = "%addint"
+    type 'a choice = Empty | Filled of 'a
+
+    let unknown v = observe v
+    let fresh (v : int) = let live = (v, v) in observe live
+    let duplicate_fresh (v : int) = let live = (v, v) in observe (live, live)
+    let phi cond (a : int) (b : int) =
+      let live = if cond then (a, a) else (b, b) in observe live
+    let mixed cond v =
+      let live = if cond then Filled v else Empty in observe live
+    let allocated_bytes size = observe (create size)
+    let allocated_array size = observe (make size 1)
+    let boxed n = observe (to_float n)
+    let captured n = let f x = x + n in observe f
+  |} in
+  let il =
+    match Pipeline.compile_source ~nopervasives:true ~nostdlib:true ~filename:"heap_guards.ml"
+      ~modname:"Heap_guards" source with
+    | Ok il -> il
+    | Error error -> failwith error
+  in
+  let body name =
+    let find text pos = Str.search_forward (Str.regexp_string text) il pos in
+    let start = find ("function l $ocamlcc_Heap_guards_" ^ name ^ "(") 0 in
+    String.sub il start (find "\n}" start - start)
+  in
+  let contains text fragment =
+    try ignore (Str.search_forward (Str.regexp_string fragment) text 0); true
+    with Not_found -> false
+  in
+  List.iter (fun name ->
+    if contains (body name) "@rc_check." then failwith (name ^ ": split tag and null guard");
+    if not (contains (body name) " =l or %rc_tag.") then failwith (name ^ ": missing merged guard"))
+    ["unknown"; "mixed"];
+  List.iter (fun (name, prefix) ->
+    let text = body name in
+    if not (contains text ("call extern $arc_release(l %" ^ prefix)) then
+      failwith (name ^ ": missing release of allocated value");
+    if contains text ("%rc_tag.") then
+      failwith (name ^ ": redundant heap guard"))
+    [ "fresh", "blk."; "phi", "if."; "allocated_bytes", "bytes.";
+      "allocated_array", "arr."; "boxed", "fbox."; "captured", "clos." ];
+  let duplicate = body "duplicate_fresh" in
+  if not (contains duplicate "call extern $arc_retain(l %blk.") then
+    failwith "duplicate_fresh: missing retain of allocated value";
+  if contains duplicate "%rc_tag." then failwith "duplicate_fresh: redundant heap guard"

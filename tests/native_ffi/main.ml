@@ -7,6 +7,11 @@ external mixed : (int [@untagged]) -> (float [@unboxed]) ->
 
 external step : int -> int = "ffi_step_boxed" "ffi_step" [@@untagged] [@@noalloc]
 
+external null_value : unit -> int option = "ffi_null_value" [@@noalloc]
+external observe : 'a -> unit = "ffi_observe" [@@noalloc]
+
+let[@inline never] release_unknown value = observe value
+
 type magnitude = Magnitude of float [@@unboxed]
 
 let[@inline never] opaque x = x
@@ -18,4 +23,7 @@ let () =
   assert (step (-40) = -43);
   let partial = opaque (mixed (-12) 2.0 (-300l)) in
   assert (partial 4000000000L (-500n) = 3999999194L);
+  release_unknown (null_value ());
+  release_unknown (-17);
+  release_unknown (Some 17);
   print_endline "native FFI: PASS"

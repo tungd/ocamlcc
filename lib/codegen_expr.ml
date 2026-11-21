@@ -25,7 +25,7 @@ type fn_hooks = {
 let static_payload_ptr b base_name sym =
   let dst = fresh_temp b base_name in
   emit b (Binop (Add, Long, dst, Global sym, Int 16L));
-  dst
+  mark_heap b dst
 
 let load_field b obj index =
   let addr = ptr_offset b obj (8 * index) "fldp" in
@@ -132,7 +132,7 @@ let box_double b (d : t) : t =
   let dst = fresh_temp b "fbox" in
   emit b
     (Call (Long, dst, { fn = Global "ocamlcc_alloc_float"; args = [ (Double, d) ] }));
-  dst
+  mark_heap b dst
 
 let bint_spec : Lambda.boxed_integer -> ty * int32 * int64 = function
   | Pint32 -> (Word, custom_kind_int32, 31L)
@@ -163,7 +163,7 @@ let box_bint b bi (raw : t) : t =
          dst,
          { fn = Global "ocamlcc_alloc_custom";
            args = [ (Long, Int (Int64.of_int32 kind)); (Long, bits) ] } ));
-  dst
+  mark_heap b dst
 
 let compile_bint_div_mod b ~boxed bi qop ua uc : t =
   let ty, _, _ = bint_spec bi in
@@ -759,7 +759,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
               emit b (Store (Stored, d, addr));
               emit b (Call_void { fn = Global "arc_release_val"; args = [ (Long, v) ] }))
             vs;
-          arr
+          mark_heap b arr
       | Lambda.Pgenarray when n > 0 ->
           let buf = fresh_temp b "gbuf" in
           emit_start_alloc b buf (8 * n);
@@ -775,7 +775,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
                  arr,
                  { fn = Global "ocamlcc_gen_makearray";
                    args = [ (Long, Int (Int64.of_int n)); (Long, buf) ] } ));
-          arr
+          mark_heap b arr
       | Lambda.Pintarray | Paddrarray | Pgenarray ->
           let scan =
             match kind with
@@ -797,7 +797,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
               let addr = ptr_offset b arr (8 * i) "arrp" in
               emit b (Store (Storel, v, addr)))
             vs;
-          arr)
+          mark_heap b arr)
   | Field (i, kind, arg) ->
       let obj = compile_atom hooks b arg in
       let dst = load_field b obj i in
@@ -1277,7 +1277,13 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       if b.cur_fn.term <> None then unit_const
       else begin
         Hashtbl.replace b.vars id v;
-        let res = compile_aexpr hooks b tail body in
+        let res =
+          match ce, body with
+          | (CreateBytes _ | MakeArrayInit _), CheckExn (on_err, on_ok) ->
+              (* Checked allocators return a tagged failure value on error. *)
+              compile_check_exn hooks b on_err (fun () ->
+                  with_known_heap b v (fun () -> compile_aexpr hooks b tail on_ok))
+          | _ -> compile_aexpr hooks b tail body in
         Hashtbl.remove b.vars id;
         res
       end
@@ -1433,18 +1439,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       emit b (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, v) ] });
       emit_unwind b
   | CheckExn (on_err, on_ok) ->
-      let ex = fresh_temp b "exchk" in
-      emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
-      let lerr = fresh_label b "exn_err" in
-      let lok = fresh_label b "exn_ok" in
-      let has_ex = fresh_temp b "hasex" in
-      emit b (Cmp (Ne, Long, has_ex, ex, Int 0L));
-      close_block b (Br (has_ex, lerr, lok));
-      start_block b lerr;
-      ignore (compile_aexpr hooks b false on_err);
-      if b.cur_fn.term = None then ignore (emit_unwind b);
-      start_block b lok;
-      compile_aexpr hooks b tail on_ok
+      compile_check_exn hooks b on_err (fun () -> compile_aexpr hooks b tail on_ok)
   | TryWith (body, exn_id, handler) ->
       let lcatch = fresh_label b "catch" in
       let ljoin = fresh_label b (if tail then "ret" else "tryj") in
@@ -1489,6 +1484,20 @@ and inline_leaf hooks b (lf : Anf.lfunction) args =
   with_shadowed_vars b (bindings params lf.body) (fun () ->
     List.iter2 (Hashtbl.replace b.vars) params args;
     compile_aexpr hooks b false lf.body)
+
+and compile_check_exn hooks b on_err on_ok =
+  let ex = fresh_temp b "exchk" in
+  emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
+  let lerr = fresh_label b "exn_err" in
+  let lok = fresh_label b "exn_ok" in
+  let has_ex = fresh_temp b "hasex" in
+  emit b (Cmp (Ne, Long, has_ex, ex, Int 0L));
+  close_block b (Br (has_ex, lerr, lok));
+  start_block b lerr;
+  ignore (compile_aexpr hooks b false on_err);
+  if b.cur_fn.term = None then ignore (emit_unwind b);
+  start_block b lok;
+  on_ok ()
 
 and compile_if hooks b tail result_ty (cond : Anf.atom) th el =
   let v = compile_atom hooks b cond in

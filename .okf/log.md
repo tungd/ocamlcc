@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Remove ARC guards on proven heap values and combine the tag and null tests for unknown values. Keep checked allocation proofs on the success path. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-21 (codex/1) — Keep eligible mutable numeric accumulators in typed raw stack slots and box at scope exit. Verify typed flat-float array accumulators in both imperative and self-tail loops. See [value representation](/concepts/value-representation.md#mutable-numeric-slots).
 
 - 2026-11-21 (codex/1) — Publish .exports for loose stdlib objects and separate -c builds. Resolve metadata from the selected interface and bind direct entries to the implementation. See [build pipeline](/concepts/build-pipeline.md#persisted-export-summaries).

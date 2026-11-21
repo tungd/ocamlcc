@@ -39,6 +39,7 @@ type fn_state = {
   mutable blocks : block list; (* reversed, closed blocks *)
   mutable fn_params : (ty * string) list;
   handlers : (int, handler) Hashtbl.t;
+  known_heap : (string, unit) Hashtbl.t;
   entry_label : string;
   self : Ident.t option;
   cur_group : string option;
@@ -76,6 +77,7 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
     blocks = [];
     fn_params = [];
     handlers = Hashtbl.create 8;
+    known_heap = Hashtbl.create 16;
     entry_label;
     self;
     cur_group;
@@ -162,8 +164,32 @@ let fresh_label b base =
   b.label_counter <- b.label_counter + 1;
   l
 
+let is_known_heap b = function
+  | Temp name -> Hashtbl.mem b.cur_fn.known_heap name
+  | _ -> false
+
+let mark_heap b value =
+  (match value with
+  | Temp name -> Hashtbl.replace b.cur_fn.known_heap name ()
+  | _ -> ());
+  value
+
+let with_known_heap b value f =
+  match value with
+  | Temp name when not (is_known_heap b value) ->
+      let facts = b.cur_fn.known_heap in
+      Hashtbl.replace facts name ();
+      Fun.protect ~finally:(fun () -> Hashtbl.remove facts name) f
+  | _ -> f ()
+
 let emit b inst =
   if b.cur_fn.term <> None then invalid_arg "codegen: instruction after terminator";
+  (match inst with
+  | Copy (Long, dst, source) when is_known_heap b source -> ignore (mark_heap b dst)
+  | Phi (Long, dst, (_ :: _ as incoming))
+    when List.for_all (fun (_, value) -> is_known_heap b value) incoming ->
+      ignore (mark_heap b dst)
+  | _ -> ());
   b.cur_fn.insts <- inst :: b.cur_fn.insts
 
 (* Hoist fixed-size alloc8 slots to @start so QBE treats them as static frame
@@ -612,25 +638,36 @@ let emit_single_thread_rc b operation value done_ =
       close_block b (Jmp done_)
 
 let emit_arc_if_heap b operation value =
-  let odd = fresh_temp b "rc_tag" in
-  let is_null = fresh_temp b "rc_null" in
-  let check = fresh_label b "rc_check" in
-  let heap = fresh_label b "rc_heap" in
-  let done_ = fresh_label b "rc_done" in
-  emit b (Binop (And, Long, odd, value, Int 1L));
-  close_block b (Br (odd, done_, check));
-  start_block b check;
-  emit b (Cmp (Eq, Long, is_null, value, Int 0L));
-  close_block b (Br (is_null, done_, heap));
-  start_block b heap;
-  if b.inline_single_thread_rc then
-    emit_single_thread_rc b operation value done_
-  else begin
+  let call () =
     let fn = match operation with `Retain -> "arc_retain" | `Release -> "arc_release" in
-    emit b (Call_void { fn = Global fn; args = [ (Long, value) ] });
-    close_block b (Jmp done_)
-  end;
-  start_block b done_
+    emit b (Call_void { fn = Global fn; args = [ (Long, value) ] })
+  in
+  match value with
+  | Int n when n = 0L || Int64.logand n 1L = 1L -> ()
+  | _ ->
+      let guarded = not (is_known_heap b value) in
+      if not guarded && not b.inline_single_thread_rc then call ()
+      else begin
+        let done_ = fresh_label b "rc_done" in
+        if guarded then begin
+          let odd = fresh_temp b "rc_tag" in
+          let is_null = fresh_temp b "rc_null" in
+          let skip = fresh_temp b "rc_skip" in
+          let heap = fresh_label b "rc_heap" in
+          emit b (Binop (And, Long, odd, value, Int 1L));
+          emit b (Cmp (Eq, Long, is_null, value, Int 0L));
+          emit b (Binop (Or, Long, skip, odd, is_null));
+          close_block b (Br (skip, done_, heap));
+          start_block b heap
+        end;
+        if b.inline_single_thread_rc then
+          emit_single_thread_rc b operation value done_
+        else begin
+          call ();
+          close_block b (Jmp done_)
+        end;
+        start_block b done_
+      end
 
 let compile_bounds_guarded b ?drop_on_oob ?(result_type = Long) idx_untagged len_val
     (on_ok : unit -> Qbe_il.t) : Qbe_il.t =
@@ -736,4 +773,4 @@ let emit_block_alloc b ?reuse (tag : int) (vs : Qbe_il.t list) : Qbe_il.t =
           let addr = ptr_offset b obj (8 * i) "fldp" in
           emit b (Store (Storel, v, addr)))
         vs;
-      obj
+      mark_heap b obj

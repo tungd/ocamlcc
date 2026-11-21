@@ -87,7 +87,7 @@ let rec closure_value_of b id : t =
   in
   let dst = fresh_temp b "pclos" in
   emit b (Binop (Add, Long, dst, Global data_sym, Int 16L));
-  dst
+  mark_heap b dst
 
 and alloc_closure b code_sym arity (env : Ident.t list) : t =
   let n_env = List.length env in
@@ -121,7 +121,7 @@ and alloc_closure b code_sym arity (env : Ident.t list) : t =
       let addr = ptr_offset b obj (16 + (8 * i)) "envp" in
       emit b (Store (Storel, v, addr)))
     env;
-  obj
+  mark_heap b obj
 
 let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
     ~(env : Ident.t list) : string =
@@ -410,7 +410,7 @@ let compile_letrec compile_aexpr b tail (bindings : Anf.rec_binding list) body =
             emit b (Store (Storel, Global g, obj));
             let arity_addr = ptr_offset b obj 8 "arityp" in
             emit b (Store (Storel, Int (Int64.of_int arity), arity_addr));
-            Hashtbl.replace b.vars rb.id obj;
+            Hashtbl.replace b.vars rb.id (mark_heap b obj);
             (rb, g, env, obj))
           bindings
       in
