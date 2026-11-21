@@ -70,6 +70,17 @@ arrays with pointers, empty slices, and the preservation of floating-point
 bits. Scalar comparisons, hashing, append, and concat use the OCaml
 module.[^bulk-ops]
 
+The compatibility builder makes the stamped CamlinternalBulkOps entries
+available before compiling Array, Bytes, and String. Explicitly applied
+shims use direct calls and can select the borrowed entries under the normal
+ARC liveness rule. The final archive includes the same provider object.
+The Uchar interface exposes `to_int` as the tagged identity already used by
+its implementation, so Bytes UTF-8 writers need no closure call to convert it.
+
+In five paired tterm trials, plain and Unicode replay went from 31.73 to
+31.09 ms and from 150.83 to 147.85 ms on default ARC. On single-thread ARC
+they went from 29.33 to 28.94 ms and from 130.33 to 126.00 ms.
+
 The Effect overlay uses [stackful fibers](/concepts/wren-fibers.md#ocaml-5-effect-handlers)
 for `Effect.Deep`, `Effect.Shallow`, and the OCaml effect-pattern syntax. The standard library
 regression runs the same fixture on ocamlcc and stock OCaml and covers

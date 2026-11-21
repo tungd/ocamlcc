@@ -187,7 +187,8 @@ let compile opts =
       in
       let archive = Option.bind opts.stdlib_dir Export_summary.find_archive in
       let load_exports =
-        if opts.emit_opt then None else Some (Export_summary.loader ?archive ()) in
+        if opts.emit_opt && Option.is_none opts.stdlib_dir then None
+        else Some (Export_summary.loader ?archive ()) in
       let exports = ref [] in
       let on_exports =
         if opts.emit_opt then Some (fun entries -> exports := entries) else None

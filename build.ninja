@@ -601,7 +601,7 @@ build asan_stdlib_runtime: run_asan_test | $builddir/asan/stdlib_runtime tests/s
 build asan_test: phony asan_stdlib_runtime asan_adt asan_closures asan_arrays_bytes asan_arc_test asan_exn asan_weak_cycle asan_cycle_collect asan_mod_main asan_stdlib_test asan_fiber_test asan_fiber_io asan_mt_ffi asan_tupled_letrec asan_primitives_test asan_bindgen
 
 rule run_stdlib_compat
-  command = python3 tools/stdlib_compat.py && python3 tools/stdlib_regressions.py && sh tests/bigarray_bindgen/run.sh
+  command = python3 tools/stdlib_compat.py && sh tests/stdlib_compat_opt.sh && python3 tools/stdlib_regressions.py && sh tests/bigarray_bindgen/run.sh
   description = TEST upstream stdlib compatibility
   pool = console
 

@@ -568,15 +568,15 @@ _COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
         (
             'external unsafe_fill : bytes -> int -> int -> char -> unit\n'
             '                     = "caml_fill_bytes" [@@noalloc]',
-            "let unsafe_fill = CamlinternalBulkOps.fill_bytes",
+            "let unsafe_fill dst off len ch = CamlinternalBulkOps.fill_bytes dst off len ch",
         ),
         (
             'external unsafe_blit : bytes -> int -> bytes -> int -> int -> unit\n'
             '                     = "caml_blit_bytes" [@@noalloc]\n'
             'external unsafe_blit_string : string -> int -> bytes -> int -> int -> unit\n'
             '                     = "caml_blit_string" [@@noalloc]',
-            "let unsafe_blit = CamlinternalBulkOps.blit_bytes\n"
-            "let unsafe_blit_string = CamlinternalBulkOps.blit_string",
+            "let unsafe_blit src soff dst doff len = CamlinternalBulkOps.blit_bytes src soff dst doff len\n"
+            "let unsafe_blit_string src soff dst doff len = CamlinternalBulkOps.blit_string src soff dst doff len",
         ),
         (
             'external equal : t -> t -> bool = "caml_bytes_equal" [@@noalloc]',
@@ -587,7 +587,7 @@ _COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
         (
             'external unsafe_blit : string -> int ->  bytes -> int -> int -> unit\n'
             '                     = "caml_blit_string" [@@noalloc]',
-            "let unsafe_blit = CamlinternalBulkOps.blit_string",
+            "let unsafe_blit src soff dst doff len = CamlinternalBulkOps.blit_string src soff dst doff len",
         ),
         (
             'external seeded_hash : int -> string -> int = "caml_string_hash" [@@noalloc]',
@@ -610,11 +610,11 @@ _COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
             'external create_float: int -> float array = "caml_array_create_float"\n\n'
             'module Floatarray = struct\n'
             '  external create : int -> floatarray = "caml_floatarray_create"',
-            "let unsafe_sub = CamlinternalBulkOps.array_sub\n"
+            "let unsafe_sub src off len = CamlinternalBulkOps.array_sub src off len\n"
             "let append_prim = CamlinternalBulkOps.array_append\n"
             "let concat = CamlinternalBulkOps.array_concat\n"
-            "let unsafe_blit = CamlinternalBulkOps.array_blit\n"
-            "let unsafe_fill = CamlinternalBulkOps.array_fill\n"
+            "let unsafe_blit src soff dst doff len = CamlinternalBulkOps.array_blit src soff dst doff len\n"
+            "let unsafe_fill dst off len value = CamlinternalBulkOps.array_fill dst off len value\n"
             "let create_float = CamlinternalBulkOps.array_create_float\n\n"
             "module Floatarray = struct\n"
             "  let create = CamlinternalBulkOps.floatarray_create",
@@ -695,6 +695,9 @@ _COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
             'external of_string: string -> nativeint = "caml_nativeint_of_string"',
             "let of_string = CamlinternalIntFmt.parse_nativeint",
         ),
+    ],
+    "uchar.mli": [
+        ("val to_int : t -> int", 'external to_int : t -> int = "%identity"'),
     ],
     "uchar.ml": [
         (
@@ -950,6 +953,18 @@ def compile_stdlib(
         else:
             mli_status[base] = (True, "")
 
+    archive = out_dir / "libocamlstdlib_compat.a"
+
+    def publish_archive(objects: list[Path]) -> None:
+        archive.unlink(missing_ok=True)
+        archived = run_cmd(["ar", "rcs", str(archive), *map(str, objects)])
+        if archived.returncode != 0:
+            raise RuntimeError(extract_first_error(archived.stderr, archived.stdout))
+        summary = run_cmd([str(ocamlcc), "archive-opt", str(archive),
+                           *[str(obj.with_suffix(".opt")) for obj in objects]])
+        if summary.returncode != 0:
+            raise RuntimeError(extract_first_error(summary.stderr, summary.stdout))
+
     results: list[ModuleResult] = []
     built_objs: list[Path] = []
 
@@ -976,6 +991,7 @@ def compile_stdlib(
                 str(out_dir),
                 "--mod",
                 "--emit-opt",
+                *(["--stdlib-dir", str(out_dir)] if base in ("array", "bytes", "string") else []),
                 *([] if mli_path is not None else ["--emit-cmi"]),
                 "--cmi-prefix",
                 str(cmi_prefix),
@@ -1006,6 +1022,10 @@ def compile_stdlib(
                     else:
                         as_ok = True
                         built_objs.append(obj_path)
+                        if base == "camlinternalBulkOps":
+                            # The three bulk clients can bind to this object
+                            # before the complete archive is assembled.
+                            publish_archive([obj_path])
 
         results.append(
             ModuleResult(
@@ -1021,17 +1041,8 @@ def compile_stdlib(
             )
         )
 
-    archive = out_dir / "libocamlstdlib_compat.a"
     if built_objs:
-        if archive.exists():
-            archive.unlink()
-        archived = run_cmd(["ar", "rcs", str(archive), *[str(o) for o in built_objs]])
-        if archived.returncode != 0:
-            raise RuntimeError(extract_first_error(archived.stderr, archived.stdout))
-        summary = run_cmd([str(ocamlcc), "archive-opt", str(archive),
-                           *[str(obj.with_suffix(".opt")) for obj in built_objs]])
-        if summary.returncode != 0:
-            raise RuntimeError(extract_first_error(summary.stderr, summary.stdout))
+        publish_archive(built_objs)
 
     return results, built_objs
 
