@@ -159,11 +159,16 @@ let () =
     ~filename:"borrow_params.ml" ~modname:"Borrow_params" {|
       external length : bytes -> int = "%bytes_length"
       let use buffer index = Provider.write buffer index; length buffer
+      external create : int -> bytes = "caml_create_bytes"
+      let dying length = Provider.write (create length) 0
   |}) in
   require provider "export function l $ocamlcc_Provider_write_borrowed__";
   let use = function_body consumer "use" in
   require use "call extern $ocamlcc_Provider_write_borrowed__";
-  forbid use "arc_retain"
+  forbid use "arc_retain";
+  let dying = function_body consumer "dying" in
+  require dying "call extern $ocamlcc_Provider_write__";
+  forbid dying "call extern $ocamlcc_Provider_write_borrowed__"
 
 let () =
   let il = compile {|

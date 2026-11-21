@@ -146,7 +146,17 @@ conservatively excludes other pointer parameters at a pointer overwrite.
 Object and archive summaries carry the alternate entry symbol and a mask in
 parameter order. The implementation stamp covers both entry points and the
 mask. This keeps independently compiled callers tied to the same ownership
-contract. Older summaries still select the owning entry.
+contract. An imported call uses the borrowed entry when each borrowed
+argument is immediate, already borrowed, or kept alive by the caller. A
+dying owned argument selects the owning entry and can be reused by the
+callee. Older summaries also select the owning entry.
+
+On the frozen tterm parser workload, restoring the owning calls reduced
+CSI allocation from 45.06 to 31.06 words/event and colon allocation from
+52.56 to 46.56 words/event on both ARC profiles. Across five paired macOS
+ARM64 trials, replay medians in milliseconds per payload went from 31.80 to
+33.11 for plain and 164.98 to 168.98 for Unicode on the default runtime,
+and from 29.19 to 31.04 and 145.20 to 145.82 on single-thread ARC.
 
 Subtree retirement batches foreign Bigarray owners in traversal-local storage.
 Ordinary releases touch no foreign-release TLS. Fiber destruction enters a

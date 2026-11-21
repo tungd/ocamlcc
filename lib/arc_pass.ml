@@ -706,21 +706,30 @@ let mutable_slot_result body =
   in
   scan Ident.Map.empty body
 
+let can_borrow_arguments env live flags args =
+  let valid borrow a =
+    not borrow || is_imm_atom env a
+    || match a with
+       | Anf.Var id ->
+           is_borrowed env id || Ident.Set.mem id live
+           || Ident.Map.mem id env.view_owners
+       | _ -> false
+  in
+  List.compare_lengths flags args = 0 && List.for_all2 valid flags args
+
 let borrowed_call env live = function
   | Anf.App (Var fn, args) -> (
       match Ident.Map.find_opt fn env.borrowed_entries with
-      | Some entry when List.length args = List.length entry.borrow ->
-          let pairs = List.combine entry.borrow args in
-          let valid = function
-            | false, _ -> true
-            | true, Anf.Var id ->
-                is_borrowed env id || Ident.Set.mem id live
-                || Ident.Map.mem id env.view_owners
-            | true, a -> is_imm_atom env a
-          in
-          if List.for_all valid pairs then Some (entry.worker, pairs) else None
+      | Some entry when can_borrow_arguments env live entry.borrow args ->
+          Some (entry.worker, List.combine entry.borrow args)
       | _ -> None)
   | _ -> None
+
+let select_imported_entry env live = function
+  | Anf.DirectApp (({ borrowed_entry = Some (_, flags); _ } as target), args)
+    when not (can_borrow_arguments env live flags args) ->
+      Anf.DirectApp ({ target with borrowed_entry = None }, args)
+  | ce -> ce
 
 let rec restore_borrowed pairs consumed =
   match pairs, consumed with
@@ -1241,9 +1250,10 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let immediate = mutlet_is_imm env id ce body in
       let ce = specialize_assignment env ce in
       let ce_may_raise = ce_may_raise env ce in
+      let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
+      let ce = select_imported_entry env base_live_body ce in
       let borrowed_in_ce, consumed_in_ce = atom_operands ce in
       let borrowed_in_ce = keep_view_owners env borrowed_in_ce in
-      let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
       let live_before_ce =
         Ident.Set.union base_live_body
           (if ce_may_raise || can_raise env body then env.try_owned
@@ -1522,6 +1532,7 @@ and transform_let env id ce body =
   let ce = specialize_assignment env ce in
   let ce_may_raise = ce_may_raise env ce in
   let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
+  let ce = select_imported_entry env base_live_body ce in
   let borrowed_in_ce, consumed_in_ce, rebuild =
     match borrowed_call env base_live_body ce with
     | None ->
