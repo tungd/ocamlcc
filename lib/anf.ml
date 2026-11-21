@@ -166,6 +166,7 @@ and imported_function = {
   yields : bool;
   raises : exception_effect;
   returns_immediate : bool;
+  borrowed_entry : (string * bool list) option;
   inline_leaf : lfunction option;
   inline_lambda : Lambda.lfunction option;
 }

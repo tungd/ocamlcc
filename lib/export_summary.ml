@@ -1,5 +1,5 @@
-let archive_version = "ocamlcc-opt-v3"
-let object_version = "ocamlcc-exports-v3"
+let archive_version = "ocamlcc-opt-v4"
+let object_version = "ocamlcc-exports-v4"
 let digest path = Digest.to_hex (Digest.file path)
 
 let read path = In_channel.with_open_bin path In_channel.input_all
@@ -23,8 +23,13 @@ let rows ~cmi_digest exports =
       | No_raise -> "false"
       | Finalizer_raise -> "finalizer"
       | May_raise -> "true" in
-    Printf.bprintf buffer "%s %s %s %s %d %b %b %s\n"
-      fn.unit_name cmi_digest path fn.symbol fn.arity fn.yields fn.returns_immediate raises)
+    Printf.bprintf buffer "%s %s %s %s %d %b %b %s"
+      fn.unit_name cmi_digest path fn.symbol fn.arity fn.yields fn.returns_immediate raises;
+    Option.iter (fun (symbol, flags) ->
+      Printf.bprintf buffer " %s " symbol;
+      List.iter (fun flag -> Buffer.add_char buffer (if flag then '1' else '0')) flags)
+      fn.borrowed_entry;
+    Buffer.add_char buffer '\n')
     exports;
   Buffer.contents buffer
 
@@ -37,10 +42,14 @@ let seal il exports =
   | _ ->
       let stamp = Digest.to_hex (Digest.string (ssa ^ rows ~cmi_digest:"-" exports)) in
       let names = Hashtbl.create (List.length exports) in
+      let rename symbol =
+        let stamped = symbol ^ "__" ^ stamp in
+        Hashtbl.replace names symbol stamped;
+        stamped in
       let exports = List.map (fun (path, (fn : Anf.imported_function)) ->
-        let symbol = fn.symbol ^ "__" ^ stamp in
-        Hashtbl.replace names fn.symbol symbol;
-        path, { fn with symbol }) exports in
+        let symbol = rename fn.symbol in
+        let borrowed_entry = Option.map (fun (worker, flags) -> rename worker, flags) fn.borrowed_entry in
+        path, { fn with symbol; borrowed_entry }) exports in
       let name symbol = Option.value ~default:symbol (Hashtbl.find_opt names symbol) in
       Qbe_il.to_string ~name il, exports
 
@@ -90,15 +99,26 @@ let parse_rows lines =
   let units = Hashtbl.create 32 in
   let add row =
     let fields = String.split_on_char ' ' row in
-    let fields = if List.compare_length_with fields 7 = 0 then fields @ ["true"] else fields in
+    let fields, worker = match fields with
+      | [unit_name; digest; path; entry; arity; yields; immediate; raises; worker; mask] ->
+          [unit_name; digest; path; entry; arity; yields; immediate; raises], Some (worker, mask)
+      | fields when List.compare_length_with fields 7 = 0 -> fields @ ["true"], None
+      | fields -> fields, None in
     match fields with
     | [""] -> ()
     | [unit_name; cmi_digest; path; entry; arity; yields; immediate; raises]
       when unit_name_valid unit_name && entry_valid entry ->
         let path = List.map nonnegative (String.split_on_char '.' path) in
+        let arity = nonnegative arity and yields = bool_of_string yields in
+        let borrowed_entry = Option.map (fun (symbol, mask) ->
+          if yields || not (entry_valid symbol) || symbol = entry
+             || String.length mask <> arity || not (String.contains mask '1')
+          then invalid_arg "invalid borrowed entry";
+          let flags = List.init arity (fun i -> match mask.[i] with
+            | '0' -> false | '1' -> true | _ -> invalid_arg "invalid borrow mask") in
+          symbol, flags) worker in
         let fn : Anf.imported_function =
-          { unit_name; symbol = entry; arity = nonnegative arity;
-            yields = bool_of_string yields;
+          { unit_name; symbol = entry; arity; yields; borrowed_entry;
             raises = (match raises with
               | "false" -> No_raise | "finalizer" -> Finalizer_raise | "true" -> May_raise
               | _ -> invalid_arg "invalid exception effect");
@@ -122,7 +142,7 @@ let read_archive archive =
   | header :: lines
     when let suffix = " " ^ digest archive in
          List.exists (fun version -> header = version ^ suffix)
-           [archive_version; "ocamlcc-opt-v2"; "ocamlcc-opt-v1"] ->
+           [archive_version; "ocamlcc-opt-v3"; "ocamlcc-opt-v2"; "ocamlcc-opt-v1"] ->
       Some (parse_rows lines)
   | _ -> None
 
@@ -133,7 +153,7 @@ let read_object cmi =
     when obj <> "" && obj <> "." && obj <> ".." && Filename.basename obj = obj
       && (let suffix = " " ^ digest (Filename.concat (Filename.dirname cmi) obj) in
           List.exists (fun version -> header = version ^ suffix)
-            [object_version; "ocamlcc-exports-v2"; "ocamlcc-exports-v1"]) ->
+            [object_version; "ocamlcc-exports-v3"; "ocamlcc-exports-v2"; "ocamlcc-exports-v1"]) ->
       Some (parse_rows lines)
   | _ -> None
 

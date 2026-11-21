@@ -43,6 +43,8 @@ type state = {
   ordinary_raising_funs : Ident.Set.t;
   imm_funs : int Ident.Map.t;
   borrowed_entries : borrowed_entry Ident.Map.t;
+  exported : Ident.Set.t;
+  exported_workers : (Ident.t, borrowed_entry) Hashtbl.t;
   muts : Ident.Set.t;
   (* Mutable slots that stay in scope after the current join point or loop
      exit ([LetJoin] rhs, [While]/[For] condition and body). Their single
@@ -319,6 +321,10 @@ let rec atom_vars (a : Anf.atom) : Ident.Set.t =
 let atoms_vars (xs : Anf.atom list) : Ident.Set.t =
   List.fold_left (fun s a -> Ident.Set.union s (atom_vars a)) Ident.Set.empty xs
 
+let split_borrowed flags args =
+  List.combine flags args
+  |> List.partition_map (function true, a -> Either.Left a | false, a -> Either.Right a)
+
 let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   match ce with
   | Atom a -> (Ident.Set.empty, [ a ])
@@ -343,6 +349,9 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
       (Ident.Set.union (atom_vars arr) (atom_vars idx), [ v ])
   | MakeArrayInit (len, init) -> (atom_vars len, [ init ])
   | App (fn, args) -> (atom_vars fn, args)
+  | DirectApp ({ borrowed_entry = Some (_, flags); _ }, args) ->
+      let borrowed, consumed = split_borrowed flags args in
+      (atoms_vars borrowed, consumed)
   | DirectApp (_, args) | Recur args -> (Ident.Set.empty, args)
   | KeepAlive args -> (atoms_vars args, [])
   | Builtin (_, _, a) -> (atom_vars a, [])
@@ -394,7 +403,6 @@ let read_only_parameters ~borrowed (lf : Anf.lfunction) =
                params flags args
          | _ -> remove_uses params args)
     | App (fn, args) -> remove_uses params (fn :: args)
-    | DirectApp (_, args) -> remove_uses params args
     | Ccall _ | NativeCcall _ -> params
     | Fun _ -> Ident.Set.empty
     | (SetField (_, Lambda.Pointer, target, _)
@@ -451,6 +459,8 @@ let recursive_borrows env (bindings : Anf.rec_binding list) =
 
 let add_borrowed_entry env id borrow =
   let worker = Ident.create_local (Ident.name id ^ "_borrowed") in
+  let entry = { worker; borrow } in
+  if Ident.Set.mem id env.exported then Hashtbl.replace env.exported_workers id entry;
   let imm_funs =
     match Ident.Map.find_opt id env.imm_funs with
     | Some arity -> Ident.Map.add worker arity env.imm_funs
@@ -466,7 +476,7 @@ let add_borrowed_entry env id borrow =
     known_funs = Ident.Map.add worker (List.length borrow) env.known_funs;
     pure = Ident.Set.add worker env.pure;
     imm_funs;
-    borrowed_entries = Ident.Map.add id { worker; borrow } env.borrowed_entries }
+    borrowed_entries = Ident.Map.add id entry env.borrowed_entries }
 
 (* Fuse a field into local borrowed operands, keeping its receiver live.
    A mutable projection only fuses with its immediate, final consumer so
@@ -675,12 +685,21 @@ let borrowed_call env live = function
           let pairs = List.combine entry.borrow args in
           let valid = function
             | false, _ -> true
-            | true, Anf.Var id -> is_borrowed env id || Ident.Set.mem id live
+            | true, Anf.Var id ->
+                is_borrowed env id || Ident.Set.mem id live
+                || Ident.Map.mem id env.view_owners
             | true, a -> is_imm_atom env a
           in
           if List.for_all valid pairs then Some (entry.worker, pairs) else None
       | _ -> None)
   | _ -> None
+
+let rec restore_borrowed pairs consumed =
+  match pairs, consumed with
+  | [], [] -> []
+  | (true, a) :: rest, _ -> a :: restore_borrowed rest consumed
+  | (false, _) :: rest, a :: remaining -> a :: restore_borrowed rest remaining
+  | _ -> assert false
 
 let is_yielding_ccall name = (Ccalls.find name).Ccalls.yields
 
@@ -1144,10 +1163,11 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           else
             let worker, env_body = add_borrowed_entry env id (borrow_flags lf read_only) in
             let body' = transform_aexpr env_body body in
-            if Ident.Set.mem worker (Anf.free_vars body') then
+            let exported = Ident.Set.mem id env.exported in
+            if exported || Ident.Set.mem worker (Anf.free_vars body') then
               let worker_def =
                 transform_fun env ~self_id:None ~has_closure:false
-                  ~borrowed_params:read_only { lf with private_entry = true }
+                  ~borrowed_params:read_only { lf with private_entry = not exported }
               in
               Let (worker, Fun worker_def, body')
             else body'
@@ -1479,14 +1499,7 @@ and transform_let env id ce body =
     | Some (worker, pairs) ->
         let borrowed, consumed = List.partition_map
             (function true, a -> Either.Left a | false, a -> Either.Right a) pairs in
-        let rec restore pairs consumed =
-          match pairs, consumed with
-          | [], [] -> []
-          | (true, a) :: rest, _ -> a :: restore rest consumed
-          | (false, _) :: rest, a :: remaining -> a :: restore rest remaining
-          | _ -> assert false
-        in
-        let rebuild consumed = Anf.App (Var worker, restore pairs consumed) in
+        let rebuild consumed = Anf.App (Var worker, restore_borrowed pairs consumed) in
         atoms_vars borrowed, consumed, rebuild
   in
   let borrowed_in_ce = keep_view_owners env borrowed_in_ce in
@@ -1566,7 +1579,7 @@ and transform_pure_group env (bindings : Anf.rec_binding list) body =
                 if borrow then Ident.Set.add param acc else acc)
               Ident.Set.empty rb.def.params flags
           in
-          env, (worker, params, rb.def) :: workers)
+          env, (worker, params, { rb.def with private_entry = not (Ident.Set.mem rb.id env.exported) }) :: workers)
       (env, []) bindings
   in
   let bindings =
@@ -1579,7 +1592,7 @@ and transform_pure_group env (bindings : Anf.rec_binding list) body =
     List.rev_map (fun (id, borrowed_params, def) ->
       let def =
         transform_fun env ~self_id:(Some id) ~has_closure:false
-          ~borrowed_params { def with private_entry = true }
+          ~borrowed_params def
       in
       { Anf.id; def }) workers
   in
@@ -1592,7 +1605,10 @@ and transform_pure_group env (bindings : Anf.rec_binding list) body =
     in
     if Ident.Set.equal used next then used else reachable next
   in
-  let used = reachable (List.fold_left include_body (Anf.free_vars body) bindings) in
+  let exported_workers = List.fold_left (fun roots (rb : Anf.rec_binding) ->
+    if rb.def.private_entry then roots else Ident.Set.add rb.id roots)
+    (Anf.free_vars body) workers in
+  let used = reachable (List.fold_left include_body exported_workers bindings) in
   LetRec (bindings @ List.filter (fun (rb : Anf.rec_binding) -> Ident.Set.mem rb.id used) workers, body)
 
 and transform_fun (env : state) ~self_id ~has_closure
@@ -1653,6 +1669,8 @@ and rebuild_cexpr (ce : Anf.cexpr) (atoms' : Anf.atom list) : Anf.cexpr =
   | ArraySet (s, k, arr, idx, _), [ v ] -> ArraySet (s, k, arr, idx, v)
   | MakeArrayInit (len, _), [ init ] -> MakeArrayInit (len, init)
   | App (fn, _), args -> App (fn, args)
+  | DirectApp (({ borrowed_entry = Some (_, flags); _ } as target), original), args ->
+      DirectApp (target, restore_borrowed (List.combine flags original) args)
   | DirectApp (target, _), args -> DirectApp (target, args)
   | Recur _, args -> Recur args
   | Assign (id, _), [ rhs ] -> Assign (id, rhs)
@@ -1660,7 +1678,7 @@ and rebuild_cexpr (ce : Anf.cexpr) (atoms' : Anf.atom list) : Anf.cexpr =
   | StoreModuleSlot (id, _), [ value ] -> StoreModuleSlot (id, value)
   | _ -> ce
 
-let run_with_effects (prog : Anf.program) =
+let run_with_effects ?(exported = []) (prog : Anf.program) =
   let pure =
     Anf.pure_defs prog.code |> List.map fst |> Ident.Set.of_list
   in
@@ -1686,6 +1704,8 @@ let run_with_effects (prog : Anf.program) =
       ordinary_raising_funs;
       imm_funs;
       borrowed_entries = Ident.Map.empty;
+      exported = List.fold_left (fun ids (_, id) -> Ident.Set.add id ids) Ident.Set.empty exported;
+      exported_workers = Hashtbl.create 16;
       muts = Ident.Set.empty;
       no_release_muts = Ident.Set.empty;
       handlers = Hashtbl.create 8;
@@ -1701,6 +1721,9 @@ let run_with_effects (prog : Anf.program) =
       else No_raise in
     Ident.Set.mem id yielding_funs, Ident.Map.mem id imm_funs, raises
   in
-  { prog with code = transform_aexpr init_env prog.code }, effects
+  let code = transform_aexpr init_env prog.code in
+  let workers id = Option.map (fun entry -> entry.worker, entry.borrow)
+      (Hashtbl.find_opt init_env.exported_workers id) in
+  { prog with code }, effects, workers
 
-let run prog = fst (run_with_effects prog)
+let run prog = let prog, _, _ = run_with_effects prog in prog

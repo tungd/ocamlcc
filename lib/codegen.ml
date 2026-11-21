@@ -44,7 +44,8 @@ let export_captured b mod_value path target arity =
                    blocks = finish_blocks b } :: b.funcs);
   name
 
-let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false) ~exported ~effects ~inline_leaf
+let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
+    ~exported ~effects ~inline_leaf ~borrowed
     (program : Anf.program) =
   let mod_sym = sanitize (Ident.name program.Anf.module_ident) in
   let b = create ~inline_single_thread_rc mod_sym in
@@ -160,8 +161,12 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
         let yields, returns_immediate, raises = effects id in
         let inline_leaf = inline_leaf id in
         let inline_lambda = Ident.Map.find_opt id program.inline_bodies in
+        let borrowed_entry = Option.bind (borrowed id) (fun (worker, flags) ->
+          match Hashtbl.find_opt b.emitted_funs worker with
+          | Some (symbol, false, worker_arity) when arity = worker_arity -> Some (symbol, flags)
+          | _ -> None) in
         Some (path, { Anf.unit_name; symbol; arity; yields; raises; returns_immediate;
-                      inline_leaf; inline_lambda }))
+                      borrowed_entry; inline_leaf; inline_lambda }))
     exported
   in
   if b.cur_fn.term = None then begin
@@ -202,4 +207,4 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
 
 let compile_program ?emit_entry program =
   fst (compile_with_exports ?emit_entry ~exported:[] ~effects:(fun _ -> true, false, Anf.May_raise)
-         ~inline_leaf:(fun _ -> None) program)
+         ~inline_leaf:(fun _ -> None) ~borrowed:(fun _ -> None) program)

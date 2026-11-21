@@ -12,4 +12,5 @@ val compile_with_exports :
   exported:(int list * Ident.t) list ->
   effects:(Ident.t -> bool * bool * Anf.exception_effect) ->
   inline_leaf:(Ident.t -> Anf.lfunction option) ->
+  borrowed:(Ident.t -> (Ident.t * bool list) option) ->
   Anf.program -> Qbe_il.module_ * Anf.exports

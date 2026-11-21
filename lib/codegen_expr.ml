@@ -1216,7 +1216,9 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
   | Ccall ("ocamlcc_finalizers_due", []) -> finalizers_due b
   | Ccall (sym, args) -> compile_ccall hooks b sym args
   | NativeCcall (prim, args) -> compile_native_ccall hooks b prim args
-  | DirectApp (target, args) -> compile_ccall hooks b target.symbol args
+  | DirectApp (target, args) ->
+      let symbol = Option.fold ~none:target.symbol ~some:fst target.borrowed_entry in
+      compile_ccall hooks b symbol args
   | ImportDependency _ -> unit_const
   | GetGlobal mod_name ->
       let gsym = "ocamlcc_global_" ^ sanitize mod_name in

@@ -49,9 +49,9 @@ let compile_source ?(include_dirs = []) ?stdlib_dir ?output_prefix ?(emit_cmi = 
             | [] -> (fun _ -> None)
             | _ -> Anf.inline_export_leaves program.code anf.code
           in
-          let anf, effects = Arc_pass.run_with_effects anf in
+          let anf, effects, borrowed = Arc_pass.run_with_effects ~exported:!exported anf in
           let il, exports = Codegen.compile_with_exports ~emit_entry ~inline_single_thread_rc
-              ~exported:!exported ~effects ~inline_leaf anf in
+              ~exported:!exported ~effects ~inline_leaf ~borrowed anf in
           let ssa, exports =
             if seal_exports then Export_summary.seal il exports
             else Qbe_il.to_string il, exports in

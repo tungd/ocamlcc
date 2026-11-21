@@ -139,3 +139,28 @@ let () =
   require (function_body il "replace_then_read")
     "call $ocamlcc_Borrow_params_replace_borrowed(";
   forbid (function_body il "replace_borrowed") "arc_retain"
+
+let () =
+  let dir = Filename.temp_dir "ocamlcc_borrow_import" "" in
+  let prefix = Filename.concat dir "provider" in
+  let exports = ref [] in
+  let compile = function Ok il -> il | Error message -> failwith message in
+  let provider = compile (Pipeline.compile_source ~nostdlib:true ~nopervasives:true
+    ~filename:(prefix ^ ".ml") ~modname:"Provider" ~output_prefix:prefix
+    ~emit_cmi:true ~seal_exports:true ~on_exports:(fun values -> exports := values) {|
+      external put : bytes -> int -> char -> unit = "%bytes_unsafe_set"
+      let[@inline never] write buffer index = put buffer index 'a'
+  |}) in
+  let obj = prefix ^ ".o" in
+  Out_channel.with_open_bin obj (fun out -> output_string out provider);
+  Export_summary.publish_object ~unit_name:"Provider" ~cmi:(prefix ^ ".cmi") ~obj !exports;
+  let consumer = compile (Pipeline.compile_source ~nostdlib:true ~nopervasives:true
+    ~include_dirs:[dir] ~load_exports:(Export_summary.loader ())
+    ~filename:"borrow_params.ml" ~modname:"Borrow_params" {|
+      external length : bytes -> int = "%bytes_length"
+      let use buffer index = Provider.write buffer index; length buffer
+  |}) in
+  require provider "export function l $ocamlcc_Provider_write_borrowed__";
+  let use = function_body consumer "use" in
+  require use "call extern $ocamlcc_Provider_write_borrowed__";
+  forbid use "arc_retain"
