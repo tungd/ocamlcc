@@ -44,9 +44,9 @@ Phase 2 replaces libc `malloc`/`free` with a freestanding slab allocator and sta
 
 The single-thread runtime uses one static magazine per size class under
 the existing mutator ownership rule. It accesses cached slots without
-pthread TLS or allocator locking. In both profiles, a full magazine returns
-its older half in one batch so retired slabs can be reclaimed as frees
-continue.
+pthread TLS or allocator locking. A full process-owned magazine returns
+its older half in one batch so old cached slots age out as frees continue.
+Thread-local magazines retain their existing spill order and drain at thread exit.
 
 ## Middle-End ARC Pass (`lib/arc_pass.ml`)
 - **Ownership**: `Let`-bindings and function parameters start owned (`+1` rc); `Pure` global functions and static literals/immediates omit refcount traffic; closure captures (`env`), self-refs, and `LetJoin`/`While`/`For` outer references are **borrowed** (with `frame_borrowed` distinguished so exceptional unwinding cleans them up cleanly).

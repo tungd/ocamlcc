@@ -1058,11 +1058,15 @@ static inline void slab_cache_slot(SlabMagazine *m, ArcHeader *hdr)
 {
     if (m->count == SLAB_MAGAZINE_CAPACITY) {
         m->count /= 2u;
-        /* Return the older slots so a short burst cannot pin an old slab
-         * indefinitely as newer slots move through the magazine. */
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+        /* No thread teardown will drain these slots. Age them out as
+         * newer slots move through the process-owned magazine. */
         slab_return_slots(m->slots, m->count);
         pal_memmove(m->slots, m->slots + m->count,
                     m->count * sizeof(*m->slots));
+#else
+        slab_return_slots(m->slots + m->count, m->count);
+#endif
     }
     m->slots[m->count++] = hdr;
 }
