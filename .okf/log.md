@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Elide redundant bounds checks before inferring escaping exceptions. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-22 (codex/1) — Keep foreign release bookkeeping off ordinary ARC subtree drops. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-22 (codex/1) — Publish borrowed parameter masks for direct cross-unit calls. See [Perceus ARC](/concepts/perceus-arc.md).

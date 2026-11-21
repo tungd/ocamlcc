@@ -164,3 +164,36 @@ let () =
   let use = function_body consumer "use" in
   require use "call extern $ocamlcc_Provider_write_borrowed__";
   forbid use "arc_retain"
+
+let () =
+  let il = compile {|
+    external ( || ) : bool -> bool -> bool = "%sequor"
+    external ( && ) : bool -> bool -> bool = "%sequand"
+    external ( + ) : int -> int -> int = "%addint"
+    external raise : exn -> 'a = "%raise"
+    external get : int array -> int -> int = "%array_safe_get"
+    external length : int array -> int = "%array_length"
+    external ( < ) : int -> int -> bool = "%lessthan"
+    external ( >= ) : int -> int -> bool = "%greaterequal"
+    let[@inline never] guarded a i =
+      if i < 0 || i >= length a then -1 else get a i
+    let other_array a b i =
+      if i >= 0 && i < length a then get b i else -1
+    let guarded_call a i = guarded a i + 1
+    type holder = { mutable data : int array }
+    let reload r i =
+      if i >= 0 && i < length r.data then get r.data i else -1
+    let[@inline never] handled a i =
+      try get a i with _ -> -1
+    let handled_call a i = handled a i + 1
+    let[@inline never] rethrow a i =
+      try get a i with e -> raise e
+    let rethrow_call a i = rethrow a i + 1
+  |} in
+  forbid (function_body il "guarded") "@bnd_oob";
+  forbid (function_body il "guarded_call") "$ocamlcc_automatic_finalizer_raised";
+  require (function_body il "other_array") "@bnd_oob";
+  require (function_body il "reload") "@bnd_oob";
+  require (function_body il "handled_call") "$ocamlcc_automatic_finalizer_raised";
+  forbid (function_body il "rethrow_call") "$ocamlcc_automatic_finalizer_raised";
+  require (function_body il "rethrow_call") "call extern $ocamlcc_get_exn("

@@ -2694,7 +2694,7 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
           code |> propagate_immediate_constants |> inline_local_calls
           |> flatten_let_rhs |> resolve_module_projections
           |> drop_unused_alias_lets |> promote_local_refs
-          |> replace_local_aggregates |> lift_recursive_calls
+          |> replace_local_aggregates |> Bounds.remove_redundant_checks |> lift_recursive_calls
         in
         let cleaned, scalars = specialize_mutable_slots cleaned in
         mutable_scalars := scalars;

@@ -6,7 +6,7 @@ tags: [arc, finalizers, weak-references, cycle-collector]
 status: draft
 generated:
   by: codex/1
-  at: 2026-11-21
+  at: 2026-11-22
 sources:
   - id: gc-api
     resource: https://ocaml.org/manual/5.5/api/Gc.html
@@ -140,3 +140,10 @@ The upstream Marshal `intern_final` test now completes. Its final output does no
 [^contract]: `tests/finalizer_lifecycle.ml` uses the public Gc and Weak APIs.
 [^compiler]: The ANF conversion inserts the check before ARC computes liveness.
 [^abi]: The primitive table distinguishes the cheap eligibility check from the raising and yielding dispatcher.
+
+The Lambda bounds pass requires nonnegative and exclusive-upper-bound
+proofs for the same stable index and receiver. It follows ordinary
+short-circuit guards and immutable projections. Mutable field reloads and
+unproved arithmetic keep their checked path. The ARC effect scan already
+attributes escaping exceptions from a try expression to its handler.
+Regression cases distinguish a total handler from a rethrow.
