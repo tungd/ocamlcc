@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Batch small-slot transfers through bounded per-thread magazines in the default ARC runtime. Drain cached slots at thread exit so fully retired slabs can be unmapped. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-21 (codex/1) — Remove slab locking and atomic counter read-modify-write operations from the single-thread ARC profile. Enforce the same owner at standalone collector entry. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-21 (codex/1) — Remove ARC guards on proven heap values and combine the tag and null tests for unknown values. Keep checked allocation proofs on the success path. See [Perceus ARC](/concepts/perceus-arc.md).

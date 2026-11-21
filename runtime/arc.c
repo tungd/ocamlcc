@@ -8,6 +8,10 @@
 #include "fiber.h"
 #include "pal.h"
 
+#ifndef OCAMLCC_SINGLE_THREAD_RC
+#include <pthread.h>
+#endif
+
 #define SLAB_SIZE        (64u * 1024u)
 #define LARGE_PAGE_ALIGN (16u * 1024u)
 #define NUM_SIZE_CLASSES 12
@@ -854,47 +858,186 @@ static void slab_list_remove(SlabPage **head, SlabPage *s)
     s->next = NULL;
 }
 
+static inline SlabPage *slab_owner(const ArcHeader *hdr)
+{
+    return (SlabPage *)((uintptr_t)hdr & ~((uintptr_t)SLAB_SIZE - 1u));
+}
+
+static inline int slab_has_space(const SlabPage *s, uint32_t step)
+{
+    return s->free_list != NULL || s->bump_off + step <= SLAB_SIZE;
+}
+
+static inline ArcHeader *slab_take_slot(SlabPage *s, uint32_t step)
+{
+    ArcHeader *hdr;
+    if (s->free_list != NULL) {
+        FreeSlot *slot = s->free_list;
+        s->free_list = slot->next;
+        hdr = (ArcHeader *)slot;
+    } else {
+        hdr = (ArcHeader *)((uint8_t *)s + s->bump_off);
+        s->bump_off += step;
+    }
+    s->used_slots++;
+    return hdr;
+}
+
+#define SLAB_MAGAZINE_CAPACITY 16u
+
+static ArcHeader *slab_alloc_shared(int cls, ArcHeader **extra, uint32_t *count)
+{
+    slab_lock();
+    uint32_t step = k_class_sizes[cls];
+    SlabPage *s = g_partial_slabs[cls];
+    if (s == NULL) {
+        s = pal_page_alloc_aligned(SLAB_SIZE, SLAB_SIZE);
+        if (s == NULL) {
+            slab_unlock();
+            pal_abort();
+        }
+        s->prev = NULL;
+        s->next = NULL;
+        s->free_list = NULL;
+        s->cls = (uint32_t)cls;
+        s->used_slots = 0u;
+        s->bump_off = (uint32_t)sizeof(SlabPage);
+        s->is_full = 0u;
+        slab_list_push(&g_partial_slabs[cls], s);
+        g_class_slab_count[cls]++;
+        account_objects(&g_active_slabs, 1);
+    }
+    ArcHeader *hdr = slab_take_slot(s, step);
+    if (extra != NULL) {
+        while (*count < SLAB_MAGAZINE_CAPACITY - 1u && slab_has_space(s, step)) {
+            extra[*count] = slab_take_slot(s, step);
+            (*count)++;
+        }
+    }
+    if (!slab_has_space(s, step)) {
+        slab_list_remove(&g_partial_slabs[cls], s);
+        slab_list_push(&g_full_slabs[cls], s);
+        s->is_full = 1u;
+    }
+    slab_unlock();
+    return hdr;
+}
+
+/* Cached slots count as used until returned here. A cached or live slot
+ * therefore pins its slab even if another thread frees its last live block. */
+static void slab_return_slots(SlabPage *s, ArcHeader *const *slots, uint32_t count)
+{
+    slab_lock();
+    uint32_t cls = s->cls;
+    FreeSlot *head = s->free_list;
+    for (uint32_t i = 0; i < count; i++) {
+        FreeSlot *slot = (FreeSlot *)slots[i];
+        slot->next = head;
+        head = slot;
+    }
+    s->free_list = head;
+    s->used_slots -= count;
+    if (s->used_slots == 0u && g_class_slab_count[cls] > 1u) {
+        if (s->is_full)
+            slab_list_remove(&g_full_slabs[cls], s);
+        else
+            slab_list_remove(&g_partial_slabs[cls], s);
+        g_class_slab_count[cls]--;
+        account_objects(&g_active_slabs, -1);
+        slab_unlock();
+        pal_page_free(s, SLAB_SIZE);
+        return;
+    }
+    if (s->is_full) {
+        slab_list_remove(&g_full_slabs[cls], s);
+        slab_list_push(&g_partial_slabs[cls], s);
+        s->is_full = 0u;
+    }
+    slab_unlock();
+}
+
+#ifndef OCAMLCC_SINGLE_THREAD_RC
+typedef struct {
+    ArcHeader *slots[SLAB_MAGAZINE_CAPACITY];
+    uint32_t count;
+} SlabMagazine;
+
+typedef struct {
+    SlabMagazine magazines[NUM_SIZE_CLASSES];
+} SlabThreadCache;
+
+static pthread_once_t g_slab_cache_once = PTHREAD_ONCE_INIT;
+static pthread_key_t g_slab_cache_key;
+/* 0 before key creation, 1 for a valid key, -1 if caching is unavailable. */
+static _Atomic int g_slab_cache_ready;
+
+static void slab_cache_destroy(void *arg)
+{
+    SlabThreadCache *cache = arg;
+    for (int cls = 0; cls < NUM_SIZE_CLASSES; cls++) {
+        SlabMagazine *m = &cache->magazines[cls];
+        if (m->count != 0)
+            slab_return_slots(slab_owner(m->slots[0]), m->slots, m->count);
+    }
+    pal_page_free(cache, sizeof(*cache));
+}
+
+static void slab_cache_create_key(void)
+{
+    int rc = pthread_key_create(&g_slab_cache_key, slab_cache_destroy);
+    atomic_store_explicit(&g_slab_cache_ready, rc == 0 ? 1 : -1, memory_order_release);
+}
+
+static inline SlabMagazine *slab_magazine(int cls)
+{
+    int ready = atomic_load_explicit(&g_slab_cache_ready, memory_order_acquire);
+    if (ready == 0) {
+        pthread_once(&g_slab_cache_once, slab_cache_create_key);
+        ready = atomic_load_explicit(&g_slab_cache_ready, memory_order_acquire);
+    }
+    if (ready != 1)
+        return NULL;
+
+    SlabThreadCache *cache = pthread_getspecific(g_slab_cache_key);
+    if (cache == NULL) {
+        cache = pal_page_alloc(sizeof(*cache));
+        if (cache == NULL)
+            return NULL;
+        if (pthread_setspecific(g_slab_cache_key, cache) != 0) {
+            pal_page_free(cache, sizeof(*cache));
+            return NULL;
+        }
+    }
+    return &cache->magazines[cls];
+}
+
+static inline int slab_cache_slot(SlabMagazine *m, SlabPage *s, ArcHeader *hdr)
+{
+    /* At most one slab per class is pinned by a thread's magazine. */
+    if (m->count != 0 && slab_owner(m->slots[0]) != s)
+        return 0;
+    if (m->count == SLAB_MAGAZINE_CAPACITY) {
+        m->count /= 2u;
+        slab_return_slots(s, m->slots + m->count, m->count);
+    }
+    m->slots[m->count++] = hdr;
+    return 1;
+}
+#endif
+
 static ArcHeader *slab_alloc(uint32_t total_bytes)
 {
     int cls = size_class_for(total_bytes);
     if (cls >= 0) {
-        slab_lock();
-        uint32_t step = k_class_sizes[cls];
-        SlabPage *s = g_partial_slabs[cls];
-        if (s == NULL) {
-            s = pal_page_alloc_aligned(SLAB_SIZE, SLAB_SIZE);
-            if (s == NULL) {
-                slab_unlock();
-                pal_abort();
-            }
-            s->prev = NULL;
-            s->next = NULL;
-            s->free_list = NULL;
-            s->cls = (uint32_t)cls;
-            s->used_slots = 0u;
-            s->bump_off = (uint32_t)sizeof(SlabPage);
-            s->is_full = 0u;
-            slab_list_push(&g_partial_slabs[cls], s);
-            g_class_slab_count[cls]++;
-            account_objects(&g_active_slabs, 1);
+#ifndef OCAMLCC_SINGLE_THREAD_RC
+        SlabMagazine *m = slab_magazine(cls);
+        if (m != NULL) {
+            if (m->count != 0)
+                return m->slots[--m->count];
+            return slab_alloc_shared(cls, m->slots, &m->count);
         }
-        ArcHeader *hdr;
-        if (s->free_list != NULL) {
-            FreeSlot *slot = s->free_list;
-            s->free_list = slot->next;
-            hdr = (ArcHeader *)slot;
-        } else {
-            hdr = (ArcHeader *)((uint8_t *)s + s->bump_off);
-            s->bump_off += step;
-        }
-        s->used_slots++;
-        if (s->free_list == NULL && s->bump_off + step > SLAB_SIZE) {
-            slab_list_remove(&g_partial_slabs[cls], s);
-            slab_list_push(&g_full_slabs[cls], s);
-            s->is_full = 1u;
-        }
-        slab_unlock();
-        return hdr;
+#endif
+        return slab_alloc_shared(cls, NULL, NULL);
     }
 
     size_t page_sz = align_up_large(total_bytes);
@@ -909,33 +1052,15 @@ static void slab_free(ArcHeader *hdr)
     uint32_t total_bytes = (uint32_t)sizeof(ArcHeader) + hdr->byte_size;
     int cls = size_class_for(total_bytes);
     if (cls >= 0) {
-        slab_lock();
-        SlabPage *s = (SlabPage *)((uintptr_t)hdr & ~((uintptr_t)SLAB_SIZE - 1u));
-        if (s->cls != (uint32_t)cls) {
-            slab_unlock();
+        SlabPage *s = slab_owner(hdr);
+        if (s->cls != (uint32_t)cls)
             pal_abort();
-        }
-        FreeSlot *slot = (FreeSlot *)hdr;
-        slot->next = s->free_list;
-        s->free_list = slot;
-        s->used_slots--;
-        if (s->used_slots == 0u && g_class_slab_count[cls] > 1u) {
-            if (s->is_full)
-                slab_list_remove(&g_full_slabs[cls], s);
-            else
-                slab_list_remove(&g_partial_slabs[cls], s);
-            g_class_slab_count[cls]--;
-            account_objects(&g_active_slabs, -1);
-            slab_unlock();
-            pal_page_free(s, SLAB_SIZE);
+#ifndef OCAMLCC_SINGLE_THREAD_RC
+        SlabMagazine *m = slab_magazine(cls);
+        if (m != NULL && slab_cache_slot(m, s, hdr))
             return;
-        }
-        if (s->is_full) {
-            slab_list_remove(&g_full_slabs[cls], s);
-            slab_list_push(&g_partial_slabs[cls], s);
-            s->is_full = 0u;
-        }
-        slab_unlock();
+#endif
+        slab_return_slots(s, &hdr, 1u);
     } else {
         pal_page_free(hdr, align_up_large(total_bytes));
     }

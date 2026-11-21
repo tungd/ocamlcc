@@ -390,8 +390,84 @@ static int test_thread_exit_tls_cleanup(void)
     return after_fd < base_fd + 8;
 }
 
+typedef struct {
+    _Atomic int phase;
+    uintptr_t first;
+    uintptr_t reused;
+} SlotHandoff;
+
+static void *recycle_worker_slot(void *arg)
+{
+    SlotHandoff *slots = arg;
+    void *value = arc_alloc(0, 0, 1008);
+    slots->first = (uintptr_t)value;
+    arc_release(value);
+    atomic_store(&slots->phase, 1);
+    while (atomic_load(&slots->phase) == 1)
+        sched_yield();
+    value = arc_alloc(0, 0, 1008);
+    slots->reused = (uintptr_t)value;
+    arc_release(value);
+    return NULL;
+}
+
+static void test_thread_local_slot_reuse(void)
+{
+    int64_t live = arc_live_objects();
+    SlotHandoff slots = {0};
+    pthread_t thread;
+    assert(pthread_create(&thread, NULL, recycle_worker_slot, &slots) == 0);
+    while (atomic_load(&slots.phase) == 0)
+        sched_yield();
+    void *other = arc_alloc(0, 0, 1008);
+    atomic_store(&slots.phase, 2);
+    assert(pthread_join(thread, NULL) == 0);
+    assert(slots.reused == slots.first);
+    assert((uintptr_t)other != slots.first);
+    arc_release(other);
+    assert(arc_live_objects() == live);
+}
+
+typedef struct {
+    int64_t slabs_before;
+    uint64_t *survivor;
+} SlabHandoff;
+
+static void *retire_slabs_before_exit(void *arg)
+{
+    SlabHandoff *handoff = arg;
+    /* Each 64 KiB slab holds 31 slots of 2048 bytes plus its metadata. */
+    enum { count = 31 * 4, payload = 2048 - sizeof(ArcHeader) };
+    void *values[count];
+    for (int i = 0; i < count; i++)
+        values[i] = arc_alloc(0, 0, payload);
+    handoff->survivor = values[count - 1];
+    *handoff->survivor = 123456u;
+    for (int i = 0; i < count - 1; i++)
+        arc_release(values[i]);
+    /* The local cache pins one slab, and the survivor pins a different one. */
+    assert((ocamlcc_arc_slab_count(1) >> 1) == handoff->slabs_before + 2);
+    return NULL;
+}
+
+static void test_thread_exit_reclaims_slabs(void)
+{
+    int64_t live = arc_live_objects();
+    SlabHandoff handoff = { .slabs_before = ocamlcc_arc_slab_count(1) >> 1 };
+    pthread_t thread;
+    assert(pthread_create(&thread, NULL, retire_slabs_before_exit, &handoff) == 0);
+    assert(pthread_join(thread, NULL) == 0);
+    assert((ocamlcc_arc_slab_count(1) >> 1) == handoff.slabs_before + 1);
+    assert(arc_live_objects() == live + 1);
+    assert(*handoff.survivor == 123456u);
+    arc_release(handoff.survivor);
+    assert(arc_live_objects() == live);
+}
+
 int main(void)
 {
+    test_thread_local_slot_reuse();
+    test_thread_exit_reclaims_slabs();
     ocamlcc_init_Stdlib();
     ocamlcc_init_Mt_ffi_lib();
     int64_t *mod = (int64_t *)(uintptr_t)ocamlcc_global_Mt_ffi_lib;
