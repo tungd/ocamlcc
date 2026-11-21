@@ -6,7 +6,7 @@ tags: [arc, memory, allocator, perceus, phase-2]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-21
+  at: 2026-11-22
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -138,3 +138,7 @@ initialize its payload directly.
 Recompile objects and stdlib archives built before this store protocol
 when using them with this runtime. Earlier generated address-array
 stores wrote pointers directly and could miss the scan mark.
+
+A borrowed parameter can receive a byte, scalar, or immediate store. Pointer
+stores transfer the new value but borrow the receiver. Worker inference
+conservatively excludes other pointer parameters at a pointer overwrite.

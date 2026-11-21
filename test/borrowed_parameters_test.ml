@@ -122,3 +122,20 @@ let () =
   forbid (function_body il "read") "arc_retain";
   forbid (function_body il "read_and_allocate") "arc_retain";
   require (function_body il "save") "call extern $arc_retain("
+
+let () =
+  let il = compile {|
+    external put : bytes -> int -> char -> unit = "%bytes_unsafe_set"
+    external length : bytes -> int = "%bytes_length"
+    type row = { mutable content : bytes option }
+    let[@inline never] write buffer = put buffer 0 'a'
+    let[@inline never] replace row next = row.content <- next
+    let write_then_length buffer = write buffer; length buffer
+    let replace_then_read row next = replace row next; row.content
+  |} in
+  require (function_body il "write_then_length")
+    "call $ocamlcc_Borrow_params_write_borrowed(";
+  forbid (function_body il "write_borrowed") "arc_release";
+  require (function_body il "replace_then_read")
+    "call $ocamlcc_Borrow_params_replace_borrowed(";
+  forbid (function_body il "replace_borrowed") "arc_retain"

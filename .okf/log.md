@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Keep mutating receivers eligible for borrowed ARC parameters. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-21 (codex/1) — Preserve thread-local slab spill order and age out old slots only in the process-owned magazines. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-21 (codex/1) — Exercise mutable snapshots and array scan promotion using the standalone smoke-test primitives. See [Perceus ARC](/concepts/perceus-arc.md).

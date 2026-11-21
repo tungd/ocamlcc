@@ -397,10 +397,11 @@ let read_only_parameters ~borrowed (lf : Anf.lfunction) =
     | DirectApp (_, args) -> remove_uses params args
     | Ccall _ | NativeCcall _ -> params
     | Fun _ -> Ident.Set.empty
-    | (SetField _ | SetFloatField _ | OffsetRef _ | BytesSet _ | BytesSetN _
-      | ArraySet _ | FloatArraySet _ | ScalarStore _ | BigarrayAccess _) as ce ->
-        let uses, consumed = atom_operands ce in
-        Ident.Set.diff (remove_uses params consumed) uses
+    | (SetField (_, Lambda.Pointer, target, _)
+      | ArraySet (_, (Lambda.Paddrarray | Lambda.Pgenarray), target, _, _)) as ce ->
+        (* A pointer overwrite can retire the old child. Keep the
+           receiver eligible while conservatively excluding its siblings. *)
+        Ident.Set.inter (remove_uses params (snd (atom_operands ce))) (atom_vars target)
     | ce -> remove_uses params (snd (atom_operands ce))
   in
   let rec scan params expr =
