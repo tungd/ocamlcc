@@ -93,7 +93,24 @@ static inline int arc_trylock(ArcSpinLock *l)
     return atomic_exchange_explicit(&l->locked, 1u, memory_order_acquire) == 0u;
 }
 
+#ifndef OCAMLCC_SINGLE_THREAD_RC
 static ArcSpinLock g_alloc_lock = { 0u };
+#endif
+
+static inline void slab_lock(void)
+{
+#ifndef OCAMLCC_SINGLE_THREAD_RC
+    arc_lock(&g_alloc_lock);
+#endif
+}
+
+static inline void slab_unlock(void)
+{
+#ifndef OCAMLCC_SINGLE_THREAD_RC
+    arc_unlock(&g_alloc_lock);
+#endif
+}
+
 static ArcSpinLock g_weak_lock = { 0u };
 static ArcSpinLock g_cc_lock = { 0u };
 static ArcSpinLock g_cc_collect_lock = { 0u };
@@ -567,6 +584,28 @@ static _Atomic int64_t g_active_slabs = 0;
 static _Atomic uint64_t g_alloc_words = 0;
 static _Atomic int64_t g_gc_collections = 0;
 
+/* Keep atomic snapshots for C readers. The single-thread profile has only
+ * one writer, so its counter updates need no atomic read-modify-write. */
+static inline void account_objects(_Atomic int64_t *counter, int64_t delta)
+{
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+    int64_t count = atomic_load_explicit(counter, memory_order_relaxed);
+    atomic_store_explicit(counter, count + delta, memory_order_relaxed);
+#else
+    atomic_fetch_add_explicit(counter, delta, memory_order_relaxed);
+#endif
+}
+
+static inline void account_words(uint64_t words)
+{
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+    uint64_t count = atomic_load_explicit(&g_alloc_words, memory_order_relaxed);
+    atomic_store_explicit(&g_alloc_words, count + words, memory_order_relaxed);
+#else
+    atomic_fetch_add_explicit(&g_alloc_words, words, memory_order_relaxed);
+#endif
+}
+
 static _Thread_local int64_t tls_exn_slot = 0;
 static _Atomic int64_t g_next_oo_id = 0;
 
@@ -819,13 +858,13 @@ static ArcHeader *slab_alloc(uint32_t total_bytes)
 {
     int cls = size_class_for(total_bytes);
     if (cls >= 0) {
-        arc_lock(&g_alloc_lock);
+        slab_lock();
         uint32_t step = k_class_sizes[cls];
         SlabPage *s = g_partial_slabs[cls];
         if (s == NULL) {
             s = pal_page_alloc_aligned(SLAB_SIZE, SLAB_SIZE);
             if (s == NULL) {
-                arc_unlock(&g_alloc_lock);
+                slab_unlock();
                 pal_abort();
             }
             s->prev = NULL;
@@ -837,7 +876,7 @@ static ArcHeader *slab_alloc(uint32_t total_bytes)
             s->is_full = 0u;
             slab_list_push(&g_partial_slabs[cls], s);
             g_class_slab_count[cls]++;
-            atomic_fetch_add_explicit(&g_active_slabs, 1, memory_order_relaxed);
+            account_objects(&g_active_slabs, 1);
         }
         ArcHeader *hdr;
         if (s->free_list != NULL) {
@@ -854,7 +893,7 @@ static ArcHeader *slab_alloc(uint32_t total_bytes)
             slab_list_push(&g_full_slabs[cls], s);
             s->is_full = 1u;
         }
-        arc_unlock(&g_alloc_lock);
+        slab_unlock();
         return hdr;
     }
 
@@ -870,10 +909,10 @@ static void slab_free(ArcHeader *hdr)
     uint32_t total_bytes = (uint32_t)sizeof(ArcHeader) + hdr->byte_size;
     int cls = size_class_for(total_bytes);
     if (cls >= 0) {
-        arc_lock(&g_alloc_lock);
+        slab_lock();
         SlabPage *s = (SlabPage *)((uintptr_t)hdr & ~((uintptr_t)SLAB_SIZE - 1u));
         if (s->cls != (uint32_t)cls) {
-            arc_unlock(&g_alloc_lock);
+            slab_unlock();
             pal_abort();
         }
         FreeSlot *slot = (FreeSlot *)hdr;
@@ -886,8 +925,8 @@ static void slab_free(ArcHeader *hdr)
             else
                 slab_list_remove(&g_partial_slabs[cls], s);
             g_class_slab_count[cls]--;
-            atomic_fetch_sub_explicit(&g_active_slabs, 1, memory_order_relaxed);
-            arc_unlock(&g_alloc_lock);
+            account_objects(&g_active_slabs, -1);
+            slab_unlock();
             pal_page_free(s, SLAB_SIZE);
             return;
         }
@@ -896,7 +935,7 @@ static void slab_free(ArcHeader *hdr)
             slab_list_push(&g_partial_slabs[cls], s);
             s->is_full = 0u;
         }
-        arc_unlock(&g_alloc_lock);
+        slab_unlock();
     } else {
         pal_page_free(hdr, align_up_large(total_bytes));
     }
@@ -912,10 +951,8 @@ void *arc_alloc(uint16_t tag, uint16_t scan_fields, uint32_t byte_size)
     atomic_init(&hdr->scan_fields, scan_fields);
     hdr->byte_size = byte_size;
     hdr->reserved = 0;
-    atomic_fetch_add_explicit(&g_live_objects, 1, memory_order_relaxed);
-    atomic_fetch_add_explicit(&g_alloc_words,
-                              (uint64_t)(byte_size / 8u) + 2u,
-                              memory_order_relaxed);
+    account_objects(&g_live_objects, 1);
+    account_words((uint64_t)(byte_size / 8u) + 2u);
     return hdr + 1;
 }
 
@@ -1226,7 +1263,7 @@ static void release_subtree(ArcHeader *root, int free_root)
             arc_unlock(&g_cc_lock);
         }
 
-        atomic_fetch_sub_explicit(&g_live_objects, 1, memory_order_relaxed);
+        account_objects(&g_live_objects, -1);
         if (cur != root || free_root)
             slab_free(cur);
 
@@ -1307,8 +1344,8 @@ void *arc_alloc_reuse(void *reuse_tok, uint16_t tag, uint16_t scan_fields, uint3
         atomic_init(&hdr->scan_fields, scan_fields);
         hdr->byte_size = byte_size;
         hdr->reserved = 0;
-        atomic_fetch_add_explicit(&g_live_objects, 1, memory_order_relaxed);
-        atomic_fetch_add_explicit(&g_reuse_hits, 1, memory_order_relaxed);
+        account_objects(&g_live_objects, 1);
+        account_objects(&g_reuse_hits, 1);
         return hdr + 1;
     }
 
@@ -1727,6 +1764,7 @@ static void cc_collect_outgoing_cb(int64_t val, void *ctx)
 /* Number reclaimed, or -1 when another mutator prevents a trial. */
 static int64_t collect_cycles(int discover_finalizers)
 {
+    check_rc_thread();
     if (tls_os_mutator_active != 0) {
         /* Inside an active FFI mutator call: never block on g_cc_collect_lock
            (an external collector may hold it waiting for us to exit), and
@@ -1849,7 +1887,7 @@ static int64_t collect_cycles(int discover_finalizers)
     for (size_t i = 0; i < leaves.len; i++)
         arc_release((void *)leaves.data[i]);
     for (size_t i = 0; i < dead.len; i++) {
-        atomic_fetch_sub_explicit(&g_live_objects, 1, memory_order_relaxed);
+        account_objects(&g_live_objects, -1);
         slab_free(dead.data[i]);
     }
 
