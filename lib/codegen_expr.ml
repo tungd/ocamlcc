@@ -126,28 +126,34 @@ let rec compile_atom hooks b (a : Anf.atom) : t =
 let compile_div_mod b qop (av : t) (cv : t) : t =
   let ua = untag b av in
   let uc = untag b cv in
-  let lok = fresh_label b "div_ok" in
-  let lzero = fresh_label b "div_zero" in
-  let ldone = fresh_label b "div_done" in
-  let nz = fresh_temp b "div_nz" in
-  emit b (Cmp (Ne, Long, nz, uc, Int 0L));
-  close_block b (Br (nz, lok, lzero));
-  start_block b lok;
-  let raw = fresh_temp b "divr" in
-  emit b (Binop (qop, Long, raw, ua, uc));
-  let res = retag b raw in
-  let lok_end = b.cur_fn.open_label in
-  close_block b (Jmp ldone);
-  start_block b lzero;
-  let ex = fresh_temp b "divex" in
-  emit b (Load (Loadl, Long, ex, Global "ocamlcc_global_Division_by_zero"));
-  emit b (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, ex) ] });
-  let lzero_end = b.cur_fn.open_label in
-  close_block b (Jmp ldone);
-  start_block b ldone;
-  let dst = fresh_temp b "divv" in
-  emit b (Phi (Long, dst, [ (lok_end, res); (lzero_end, unit_const) ]));
-  dst
+  let divide () =
+    let raw = fresh_temp b "divr" in
+    emit b (Binop (qop, Long, raw, ua, uc));
+    retag b raw
+  in
+  match cv with
+  | Int n when n <> 1L -> divide ()
+  | _ ->
+      let lok = fresh_label b "div_ok" in
+      let lzero = fresh_label b "div_zero" in
+      let ldone = fresh_label b "div_done" in
+      let nz = fresh_temp b "div_nz" in
+      emit b (Cmp (Ne, Long, nz, uc, Int 0L));
+      close_block b (Br (nz, lok, lzero));
+      start_block b lok;
+      let res = divide () in
+      let lok_end = b.cur_fn.open_label in
+      close_block b (Jmp ldone);
+      start_block b lzero;
+      let ex = fresh_temp b "divex" in
+      emit b (Load (Loadl, Long, ex, Global "ocamlcc_global_Division_by_zero"));
+      emit b (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, ex) ] });
+      let lzero_end = b.cur_fn.open_label in
+      close_block b (Jmp ldone);
+      start_block b ldone;
+      let dst = fresh_temp b "divv" in
+      emit b (Phi (Long, dst, [ (lok_end, res); (lzero_end, unit_const) ]));
+      dst
 
 let load_double b (v : t) : t =
   let d = fresh_temp b "fval" in
@@ -1300,7 +1306,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
             | BytesGetN (true, _, _, _) | BytesSetN (true, _, _, _, _)
             | ArrayGet (true, _, _, _) | ArraySet (true, _, _, _, _)
             | FloatArrayGet (true, _, _) | FloatArraySet (true, _, _, _) as ce),
-      CheckExn (on_err, on_ok)) ->
+      CheckExn (_, on_err, on_ok)) ->
       let on_oob () = ignore (compile_aexpr hooks b tail on_err) in
       let value = compile_cexpr ~on_oob hooks b ~tail:false ce in
       Hashtbl.replace b.vars id value;
@@ -1318,9 +1324,9 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
         Hashtbl.replace b.vars id v;
         let res =
           match ce, body with
-          | (CreateBytes _ | MakeArrayInit _), CheckExn (on_err, on_ok) ->
+          | (CreateBytes _ | MakeArrayInit _), CheckExn (_, on_err, on_ok) ->
               (* Checked allocators return a tagged failure value on error. *)
-              compile_check_exn hooks b on_err (fun () ->
+              compile_check_exn hooks b Anf.May_raise on_err (fun () ->
                   with_known_heap b v (fun () -> compile_aexpr hooks b tail on_ok))
           | _ -> compile_aexpr hooks b tail body in
         Hashtbl.remove b.vars id;
@@ -1477,8 +1483,8 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       let v = compile_atom hooks b a in
       emit b (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, v) ] });
       emit_unwind b
-  | CheckExn (on_err, on_ok) ->
-      compile_check_exn hooks b on_err (fun () -> compile_aexpr hooks b tail on_ok)
+  | CheckExn (exception_kind, on_err, on_ok) ->
+      compile_check_exn hooks b exception_kind on_err (fun () -> compile_aexpr hooks b tail on_ok)
   | TryWith (body, exn_id, handler) ->
       let lcatch = fresh_label b "catch" in
       let ljoin = fresh_label b (if tail then "ret" else "tryj") in
@@ -1524,11 +1530,18 @@ and inline_leaf hooks b (lf : Anf.lfunction) args =
     List.iter2 (Hashtbl.replace b.vars) params args;
     compile_aexpr hooks b false lf.body)
 
-and compile_check_exn hooks b on_err on_ok =
-  let ex = fresh_temp b "exchk" in
-  emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
+and compile_check_exn hooks b exception_kind on_err on_ok =
   let lerr = fresh_label b "exn_err" in
   let lok = fresh_label b "exn_ok" in
+  if exception_kind = Anf.Finalizer_raise then begin
+    let raised = fresh_temp b "finalizer_raised" in
+    let lcheck = fresh_label b "exn_check" in
+    emit b (Load (Loadw, Word, raised, Global "ocamlcc_automatic_finalizer_raised"));
+    close_block b (Br (raised, lcheck, lok));
+    start_block b lcheck
+  end;
+  let ex = fresh_temp b "exchk" in
+  emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
   let has_ex = fresh_temp b "hasex" in
   emit b (Cmp (Ne, Long, has_ex, ex, Int 0L));
   close_block b (Br (has_ex, lerr, lok));

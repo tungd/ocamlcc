@@ -11,6 +11,8 @@ type const_item =
   | C_float_array of float list
   | C_block of int * const_item list
 
+type exception_effect = No_raise | Finalizer_raise | May_raise
+
 type atom =
   | Var of Ident.t
   | MutVar of Ident.t
@@ -162,7 +164,7 @@ and imported_function = {
   symbol : string;
   arity : int;
   yields : bool;
-  raises : bool;
+  raises : exception_effect;
   returns_immediate : bool;
   inline_leaf : lfunction option;
   inline_lambda : Lambda.lfunction option;
@@ -198,7 +200,7 @@ and aexpr =
   | For of Ident.t * atom * atom * Asttypes.direction_flag * aexpr
   | TryWith of aexpr * Ident.t * aexpr
   | Raise of atom
-  | CheckExn of aexpr * aexpr
+  | CheckExn of exception_effect * aexpr * aexpr
   | Unwind
   | Retain of Ident.t * aexpr
   | Release of Ident.t * aexpr
@@ -338,7 +340,8 @@ let with_finalizer_poll body =
 (* Only local, bounded operations can defer polling. A call, an allocation,
    or a checked operation that constructs an exception needs the usual poll. *)
 let is_local_operation = function
-  | Atom _ | Field _ | SetField (_, Immediate, _, _) | IntSelect _ | Assign _ | AssignImm _
+  | Binop ((Div | Mod), _, Int n) -> n <> 0
+  | Atom _ | Field _ | SetField _ | StoreModuleSlot _ | IntSelect _ | Assign _ | AssignImm _
   | ImportDependency _
   | ReadScalarSlot _ | AssignScalar _
   | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr
@@ -380,11 +383,9 @@ let with_periodic_finalizer_poll distance body =
       LetJoin (ignored, If (Var due, with_finalizer_poll (Halt Unit), Halt Unit), body)))
 
 let with_counted_loop_poll index start body =
-  if is_bounded_local body then
-    let distance = Ident.create_local "poll_distance" in
-    Let (distance, Binop (Sub, Var index, start),
-      with_periodic_finalizer_poll (Var distance) body)
-  else with_finalizer_poll body
+  let distance = Ident.create_local "poll_distance" in
+  Let (distance, Binop (Sub, Var index, start),
+    with_periodic_finalizer_poll (Var distance) body)
 
 let while_with_poll cond body =
   if is_bounded_local cond && is_bounded_local body then
@@ -1129,7 +1130,7 @@ let rec free_vars (e : aexpr) : Ident.Set.t =
       let f_h = Ident.Set.remove exn_id (free_vars handler) in
       Ident.Set.union (free_vars body) f_h
   | Raise a -> atom_vars Ident.Set.empty a
-  | CheckExn (on_err, on_ok) ->
+  | CheckExn (_, on_err, on_ok) ->
       Ident.Set.union (free_vars on_err) (free_vars on_ok)
   | Unwind -> Ident.Set.empty
   | Retain (id, body) | Release (id, body) | ReleaseMut (id, body)
@@ -1668,7 +1669,7 @@ let pure_defs (e : aexpr) : (Ident.t * lfunction) list =
     | StaticCatch (body, _, _, handler, _) ->
         go known (go known acc body) handler
     | TryWith (body, _, handler) -> go known (go known acc body) handler
-    | While (cond, body) | CheckExn (cond, body) ->
+    | While (cond, body) | CheckExn (_, cond, body) ->
         go known (go known acc cond) body
     | For (_, _, _, _, body) -> go known acc body
     | Halt _ | HaltScalar _ | Raise _ | Unwind | StaticRaise _ -> acc

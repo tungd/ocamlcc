@@ -41,7 +41,7 @@ let count_release id (e : Anf.aexpr) : int =
           (match fail with Some f -> go f | None -> 0) cases
     | Anf.StaticCatch (body, _, _, handler, _) -> go body + go handler
     | Anf.StaticRaise (_, _) -> 0
-    | Anf.While (cond, body) | Anf.CheckExn (cond, body) -> go cond + go body
+    | Anf.While (cond, body) | Anf.CheckExn (_, cond, body) -> go cond + go body
     | Anf.For (_, _, _, _, body) -> go body
     | Anf.TryWith (body, _, handler) -> go body + go handler
     | Anf.DropReuse (_, _, cont) | Anf.FreeReuse (_, cont)
@@ -115,7 +115,7 @@ let static_fun_ids (e : Anf.aexpr) : Ident.Set.t =
         (match fail with Some f -> go extra acc f | None -> acc)
     | Anf.StaticCatch (body, _, _, handler, _) ->
         go extra (go extra acc body) handler
-    | Anf.While (cond, b) | Anf.CheckExn (cond, b) ->
+    | Anf.While (cond, b) | Anf.CheckExn (_, cond, b) ->
         go extra (go extra acc cond) b
     | Anf.For (_, _, _, _, body) -> go extra acc body
     | Anf.TryWith (body, _, handler) -> go extra (go extra acc body) handler

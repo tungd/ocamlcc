@@ -107,6 +107,23 @@ let check_allocation_exception () =
   in
   check caught "allocation did not propagate the last finalizer exception with live roots"
 
+let check_poll_only_exception () =
+  let live = Bytes.make 1 'x' in
+  let install () =
+    let target = ref 42 in
+    Gc.finalise_last (fun () -> raise From_finalizer) target;
+    ignore (Sys.opaque_identity target)
+  in
+  let[@inline never] allocate out =
+    for n = 0 to 200_000 do out := [n; n + 1] done
+  in
+  let out = ref [] in
+  let caught =
+    try install (); allocate out; false
+    with From_finalizer -> Bytes.get live 0 = 'x'
+  in
+  check caught "a poll-only callee did not propagate its finalizer exception"
+
 let check_exception () =
   let calls = ref 0 in
   let install () =
@@ -156,6 +173,7 @@ let check_many () =
 
 let () =
   try
+    check_poll_only_exception ();
     check_allocation_delivery ();
     check_allocation_exception ();
     check_lifetime false;

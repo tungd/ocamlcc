@@ -1,5 +1,5 @@
-let archive_version = "ocamlcc-opt-v2"
-let object_version = "ocamlcc-exports-v2"
+let archive_version = "ocamlcc-opt-v3"
+let object_version = "ocamlcc-exports-v3"
 let digest path = Digest.to_hex (Digest.file path)
 
 let read path = In_channel.with_open_bin path In_channel.input_all
@@ -19,8 +19,12 @@ let rows ~cmi_digest exports =
   let buffer = Buffer.create 256 in
   List.iter (fun (path, (fn : Anf.imported_function)) ->
     let path = String.concat "." (List.map string_of_int path) in
-    Printf.bprintf buffer "%s %s %s %s %d %b %b %b\n"
-      fn.unit_name cmi_digest path fn.symbol fn.arity fn.yields fn.returns_immediate fn.raises)
+    let raises = match fn.raises with
+      | No_raise -> "false"
+      | Finalizer_raise -> "finalizer"
+      | May_raise -> "true" in
+    Printf.bprintf buffer "%s %s %s %s %d %b %b %s\n"
+      fn.unit_name cmi_digest path fn.symbol fn.arity fn.yields fn.returns_immediate raises)
     exports;
   Buffer.contents buffer
 
@@ -95,7 +99,9 @@ let parse_rows lines =
         let fn : Anf.imported_function =
           { unit_name; symbol = entry; arity = nonnegative arity;
             yields = bool_of_string yields;
-            raises = bool_of_string raises;
+            raises = (match raises with
+              | "false" -> No_raise | "finalizer" -> Finalizer_raise | "true" -> May_raise
+              | _ -> invalid_arg "invalid exception effect");
             returns_immediate = bool_of_string immediate;
             inline_leaf = None; inline_lambda = None }
         in
@@ -115,7 +121,8 @@ let read_archive archive =
   match String.split_on_char '\n' (read (archive ^ ".opt")) with
   | header :: lines
     when let suffix = " " ^ digest archive in
-         header = archive_version ^ suffix || header = "ocamlcc-opt-v1" ^ suffix ->
+         List.exists (fun version -> header = version ^ suffix)
+           [archive_version; "ocamlcc-opt-v2"; "ocamlcc-opt-v1"] ->
       Some (parse_rows lines)
   | _ -> None
 
@@ -125,7 +132,8 @@ let read_object cmi =
   | header :: obj :: lines
     when obj <> "" && obj <> "." && obj <> ".." && Filename.basename obj = obj
       && (let suffix = " " ^ digest (Filename.concat (Filename.dirname cmi) obj) in
-          header = object_version ^ suffix || header = "ocamlcc-exports-v1" ^ suffix) ->
+          List.exists (fun version -> header = version ^ suffix)
+            [object_version; "ocamlcc-exports-v2"; "ocamlcc-exports-v1"]) ->
       Some (parse_rows lines)
   | _ -> None
 

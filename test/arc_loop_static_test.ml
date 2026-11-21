@@ -12,7 +12,7 @@ let count_release_mut (e : Anf.aexpr) : int =
     | ShadowPush (_, _, _, b) | ShadowPop (_, _, b) | For (_, _, _, _, b) ->
         go b
     | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b)
-    | CheckExn (a, b) | While (a, b) | StaticCatch (a, _, _, b, _)
+    | CheckExn (_, a, b) | While (a, b) | StaticCatch (a, _, _, b, _)
     | TryWith (a, _, b) ->
         go a + go b
     | Switch (_, sw) ->
@@ -37,7 +37,7 @@ let count_release_of id (e : Anf.aexpr) : int =
     | For (_, _, _, _, b) ->
         go b
     | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b)
-    | CheckExn (a, b) | While (a, b) | StaticCatch (a, _, _, b, _)
+    | CheckExn (_, a, b) | While (a, b) | StaticCatch (a, _, _, b, _)
     | TryWith (a, _, b) ->
         go a + go b
     | Switch (_, sw) ->

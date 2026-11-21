@@ -40,6 +40,7 @@ type state = {
   known_funs : int Ident.Map.t;
   yielding_funs : Ident.Set.t;
   raising_funs : Ident.Set.t;
+  ordinary_raising_funs : Ident.Set.t;
   imm_funs : int Ident.Map.t;
   borrowed_entries : borrowed_entry Ident.Map.t;
   muts : Ident.Set.t;
@@ -193,7 +194,7 @@ let scan_immediates ~typed_imm ~pure ~imm_funs ?(exits = []) ?mutable_slot imm e
     | LetJoin (id, rhs, body) ->
         let immediate = scan exits imm rhs in
         scan exits (bind imm id immediate) body
-    | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) ->
+    | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (_, a, b) ->
         let immediate = scan exits imm a in
         scan exits imm b && immediate
     | TryWith (a, exn, b) ->
@@ -274,7 +275,7 @@ let compute_imm_funs ~typed_imm ~pure (e : Anf.aexpr) : int Ident.Map.t =
           rbs;
         collect body
     | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b)
-    | CheckExn (a, b) | While (a, b) | StaticCatch (a, _, _, b, _)
+    | CheckExn (_, a, b) | While (a, b) | StaticCatch (a, _, _, b, _)
     | TryWith (a, _, b) ->
         collect a;
         collect b
@@ -453,8 +454,13 @@ let add_borrowed_entry env id borrow =
     | Some arity -> Ident.Map.add worker arity env.imm_funs
     | None -> env.imm_funs
   in
+  let inherit_effect set =
+    if Ident.Set.mem id set then Ident.Set.add worker set else set
+  in
   worker,
   { env with
+    raising_funs = inherit_effect env.raising_funs;
+    ordinary_raising_funs = inherit_effect env.ordinary_raising_funs;
     known_funs = Ident.Map.add worker (List.length borrow) env.known_funs;
     pure = Ident.Set.add worker env.pure;
     imm_funs;
@@ -603,13 +609,15 @@ let borrowed_call env live = function
 
 let is_yielding_ccall name = (Ccalls.find name).Ccalls.yields
 
-let operation_can_raise known raising = function
+let operation_can_raise ~finalizers known raising = function
   | Anf.App (Var fn, args) ->
       (match Ident.Map.find_opt fn known with
        | Some arity when List.compare_length_with args arity = 0 -> Ident.Set.mem fn raising
        | _ -> true)
   | App _ -> true
-  | DirectApp (target, _) -> target.raises
+  | DirectApp (target, _) ->
+      target.raises = May_raise || (finalizers && target.raises = Finalizer_raise)
+  | Binop ((Div | Mod), _, Int n) when n <> 0 -> false
   | Binop ((Div | Mod | Bint_div _ | Bint_mod _), _, _)
   | IntegerBinop (_, (Div_int | Rem_int), _, _) -> true
   | StringGet (true, _, _)
@@ -623,6 +631,7 @@ let operation_can_raise known raising = function
       true
   (* The current Bigarray helpers check bounds even for unsafe accesses. *)
   | BigarrayAccess _ | ScalarLoad _ | ScalarStore _ -> true
+  | Ccall ("ocamlcc_poll_finalizers", []) -> finalizers
   | Ccall (name, _) -> (Ccalls.find name).Ccalls.raises
   | NativeCcall (prim, _) -> prim.prim_alloc
   | _ -> false
@@ -656,7 +665,7 @@ let can_raise_with operation =
     | ShadowPush (_, _, _, body)
     | ShadowPop (_, _, body) ->
         scan body
-    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) | While (a, b) ->
+    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (_, a, b) | While (a, b) ->
         scan a || scan b
     | For (_, _, _, _, body) -> scan body
     | Switch (_, sw) ->
@@ -691,7 +700,7 @@ let compute_call_info (e : Anf.aexpr) =
             collect rb.def.body)
           bindings;
         collect body
-    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) | While (a, b)
+    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (_, a, b) | While (a, b)
     | StaticCatch (a, _, _, b, _) | TryWith (a, _, b) ->
         collect a;
         collect b
@@ -718,7 +727,7 @@ let compute_call_info (e : Anf.aexpr) =
     | DropReuse (_, _, body) | FreeReuse (_, body)
     | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
         body_yields yielding body
-    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) | While (a, b)
+    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (_, a, b) | While (a, b)
     | StaticCatch (a, _, _, b, _) | TryWith (a, _, b) ->
         body_yields yielding a || body_yields yielding b
     | Switch (_, sw) ->
@@ -740,10 +749,23 @@ let compute_call_info (e : Anf.aexpr) =
     in
     fix Ident.Set.empty
   in
-  let body_raises raising = can_raise_with (operation_can_raise known raising) in
-  known, solve body_yields, solve body_raises
+  let body_raises ~finalizers raising =
+    can_raise_with (operation_can_raise ~finalizers known raising) in
+  known, solve body_yields, solve (body_raises ~finalizers:true),
+  solve (body_raises ~finalizers:false)
 
-let ce_may_raise env = operation_can_raise env.known_funs env.raising_funs
+let ce_may_raise env =
+  operation_can_raise ~finalizers:true env.known_funs env.raising_funs
+
+let exception_check env ce =
+  (* Dispatch itself already sits behind the due check. The sticky guard
+     saves a TLS read at callers of functions whose only exception source
+     is an automatic poll, including one that drained the registry. *)
+  match ce with
+  | Anf.Ccall ("ocamlcc_poll_finalizers", []) -> Anf.May_raise
+  | _ when operation_can_raise ~finalizers:false env.known_funs env.ordinary_raising_funs ce ->
+      May_raise
+  | _ -> Finalizer_raise
 let can_raise env = can_raise_with (ce_may_raise env)
 
 let rec reachable_raises (e : Anf.aexpr) : IntSet.t =
@@ -757,7 +779,7 @@ let rec reachable_raises (e : Anf.aexpr) : IntSet.t =
   | DropReuse (_, _, body) | FreeReuse (_, body)
   | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
       reachable_raises body
-  | LetJoin (_, rhs, body) | CheckExn (rhs, body) | TryWith (rhs, _, body) ->
+  | LetJoin (_, rhs, body) | CheckExn (_, rhs, body) | TryWith (rhs, _, body) ->
       IntSet.union (reachable_raises rhs) (reachable_raises body)
   | If (_, th, el) | ScalarIf (_, _, th, el) ->
       IntSet.union (reachable_raises th) (reachable_raises el)
@@ -841,11 +863,11 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (Let (x, ce, body'))
       | None -> None)
-  | CheckExn (on_err, on_ok) ->
+  | CheckExn (exception_kind, on_err, on_ok) ->
       let on_err = if in_shadow then add_reuse_to_pop on_err else Some on_err in
       Option.bind on_err (fun on_err ->
           Option.map
-            (fun on_ok -> Anf.CheckExn (FreeReuse (tok, on_err), on_ok))
+            (fun on_ok -> Anf.CheckExn (exception_kind, FreeReuse (tok, on_err), on_ok))
             (inject_reuse ~in_shadow tok on_ok))
   | LetJoin (id, rhs, body) when not in_shadow ->
       Option.map (fun rhs -> Anf.LetJoin (id, rhs, body)) (inject_reuse tok rhs)
@@ -995,7 +1017,7 @@ let emit_shadowed_call (env : state) ~(ce : Anf.cexpr) ~(ce_may_raise : bool)
   let after_ce =
     if ce_may_raise && not is_pure_tail then
       let on_err = unwind_cleanup env rem_after_before env.muts in
-      Anf.CheckExn (wrap_pop on_err, wrap_pop body_cont)
+      Anf.CheckExn (exception_check env ce, wrap_pop on_err, wrap_pop body_cont)
     else wrap_pop body_cont
   in
   let inner = make_let after_ce in
@@ -1551,7 +1573,8 @@ let run_with_effects (prog : Anf.program) =
   let pure =
     Anf.pure_defs prog.code |> List.map fst |> Ident.Set.of_list
   in
-  let known_funs, yielding_funs, raising_funs = compute_call_info prog.code in
+  let known_funs, yielding_funs, raising_funs, ordinary_raising_funs =
+    compute_call_info prog.code in
   let typed_imm =
     Ident.Map.fold
       (fun id kind acc -> if kind = Lambda.Pintval then Ident.Set.add id acc else acc)
@@ -1569,6 +1592,7 @@ let run_with_effects (prog : Anf.program) =
       known_funs;
       yielding_funs;
       raising_funs;
+      ordinary_raising_funs;
       imm_funs;
       borrowed_entries = Ident.Map.empty;
       muts = Ident.Set.empty;
@@ -1580,7 +1604,11 @@ let run_with_effects (prog : Anf.program) =
       in_tail = true }
   in
   let effects id =
-    Ident.Set.mem id yielding_funs, Ident.Map.mem id imm_funs, Ident.Set.mem id raising_funs
+    let raises =
+      if Ident.Set.mem id ordinary_raising_funs then Anf.May_raise
+      else if Ident.Set.mem id raising_funs then Finalizer_raise
+      else No_raise in
+    Ident.Set.mem id yielding_funs, Ident.Map.mem id imm_funs, raises
   in
   { prog with code = transform_aexpr init_env prog.code }, effects
 

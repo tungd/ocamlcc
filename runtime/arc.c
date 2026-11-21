@@ -1838,6 +1838,7 @@ static _Atomic enum DispatchState finalizer_dispatch;
 /* Includes registrations already claimed by a dispatcher. */
 /* Generated code reads this count to bypass automatic polls on idle paths. */
 _Atomic uint64_t ocamlcc_finalizer_count;
+_Atomic uint32_t ocamlcc_automatic_finalizer_raised;
 static _Atomic uint64_t last_finalizer_poll;
 
 static ArcHeader *finalizer_target(Finalizer *f)
@@ -4334,6 +4335,11 @@ static int64_t run_finalizers(int automatic)
         arc_release_val(f->callback);
         arc_release(f);
         atomic_fetch_sub_explicit(&ocamlcc_finalizer_count, 1, memory_order_relaxed);
+        int raised = ocamlcc_get_exn() != 0;
+        /* A caller can skip its TLS check until an automatic callback
+         * propagates an exception, even if that callback was the last one. */
+        if (automatic && raised)
+            atomic_store_explicit(&ocamlcc_automatic_finalizer_raised, 1, memory_order_relaxed);
         /* A released callback still owns its local registration. Only the
          * dispatcher that holds the queue may read it or clear its gate. */
         if (!fiber->owns_finalizer_dispatch &&
@@ -4343,7 +4349,7 @@ static int64_t run_finalizers(int automatic)
             return 1;
         }
         fiber->owns_finalizer_dispatch = 0;
-        if (ocamlcc_get_exn() != 0)
+        if (raised)
             break;
     }
     if (collected)

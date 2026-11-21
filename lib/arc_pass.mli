@@ -6,5 +6,5 @@
 
 val run : Anf.program -> Anf.program
 
-val run_with_effects : Anf.program -> Anf.program * (Ident.t -> bool * bool * bool)
+val run_with_effects : Anf.program -> Anf.program * (Ident.t -> bool * bool * Anf.exception_effect)
 (** The returned lookup reports suspension, immediate result, and raising, in that order. *)

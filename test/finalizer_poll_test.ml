@@ -2,6 +2,8 @@ let il =
   match Pipeline.compile_source ~nostdlib:true ~nopervasives:true
     ~filename:"finalizer_poll.ml" ~modname:"Finalizer_poll" {|
       external ( + ) : int -> int -> int = "%addint"
+      external ( / ) : int -> int -> int = "%divint"
+      external ( mod ) : int -> int -> int = "%modint"
       external ( - ) : int -> int -> int = "%subint"
       external ( = ) : int -> int -> bool = "%equal"
       external ( < ) : int -> int -> bool = "%lessthan"
@@ -19,7 +21,13 @@ let il =
         | Empty | Fixed -> ()
         | Left n | Right n -> side_effect n
       let generic_get a = unsafe_get a 0
+      type links = { mutable next : links option }
+      let store cell value = cell.next <- value
+      let constant_div n = n / 2 + n mod (-8)
+      let dynamic_div n d = n / d
       let allocate x = (x, x)
+      let after_allocate x = let _ = allocate x in x + 1
+      let after_dynamic n d = dynamic_div n d + 1
       let foreign x = side_effect x
       let rec recurse n = if n = 0 then n else recurse (n - 1)
       let loop n = for i = 0 to n do () done
@@ -56,7 +64,7 @@ let check ?(literal = true) name text expected =
 let () =
   let poll = "call extern $ocamlcc_finalizers_due(" in
   List.iter (fun name -> check name poll false)
-    ["width"; "select"; "classify"; "join"; "mutate"];
+    ["width"; "select"; "classify"; "join"; "mutate"; "store"; "constant_div"];
   List.iter (fun name -> check name poll true)
     ["allocate"; "foreign"; "recurse"; "loop"; "reverse"; "loop_with_call";
      "while_local"; "while_field"; "while_call"; "match_with_call"; "generic_get"];
@@ -65,6 +73,11 @@ let () =
   check "generic_get" "call extern $ocamlcc_gen_array_get(" true;
   let phase_mask = " =l and [^,\n]+, 127\n" in
   List.iter (fun name -> check ~literal:false name phase_mask true)
-    ["loop"; "reverse"; "while_local"; "while_field"];
+    ["loop"; "reverse"; "loop_with_call"; "while_local"; "while_field"];
   List.iter (fun name -> check ~literal:false name phase_mask false)
-    ["loop_with_call"; "while_call"]
+    ["while_call"];
+  check "constant_div" "ocamlcc_global_Division_by_zero" false;
+  check "dynamic_div" "ocamlcc_global_Division_by_zero" true;
+  let guard = "loadw extern $ocamlcc_automatic_finalizer_raised" in
+  check "after_allocate" guard true;
+  check "after_dynamic" guard false

@@ -17,6 +17,8 @@ type const_item =
   | C_float_array of float list
   | C_block of int * const_item list
 
+type exception_effect = No_raise | Finalizer_raise | May_raise
+
 type atom =
   | Var of Ident.t
   | MutVar of Ident.t
@@ -170,7 +172,7 @@ and imported_function = {
   symbol : string;
   arity : int;
   yields : bool;
-  raises : bool;
+  raises : exception_effect;
   returns_immediate : bool;
   inline_leaf : lfunction option;
   inline_lambda : Lambda.lfunction option;
@@ -206,7 +208,7 @@ and aexpr =
   | For of Ident.t * atom * atom * Asttypes.direction_flag * aexpr
   | TryWith of aexpr * Ident.t * aexpr
   | Raise of atom
-  | CheckExn of aexpr * aexpr
+  | CheckExn of exception_effect * aexpr * aexpr
   | Unwind
   | Retain of Ident.t * aexpr
   | Release of Ident.t * aexpr

@@ -16,7 +16,7 @@ let rec accesses = function
        | BigarrayAccess (access, _) | ScalarLoad (access, _, _)
        | ScalarStore (access, _, _, _) -> access :: accesses rest
        | _ -> accesses rest)
-  | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) ->
+  | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (_, a, b) ->
       accesses a @ accesses b
   | For (_, _, _, _, b) | Retain (_, b) | Release (_, b)
   | ShadowPush (_, _, _, b) | ShadowPop (_, _, b) -> accesses b

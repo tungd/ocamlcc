@@ -65,7 +65,7 @@ let tail_callees ?(arities : (Ident.t * int) list option) (e : Anf.aexpr) :
     | StaticCatch (body, _, _, handler, _)
     | TryWith (body, _, handler) ->
         Ident.Set.union (go body) (go handler)
-    | CheckExn (_, on_ok) -> go on_ok
+    | CheckExn (_, _, on_ok) -> go on_ok
     | Halt _ | HaltScalar _ | StaticRaise _ | While _ | For _ | Raise _
     | Unwind ->
         Ident.Set.empty
@@ -132,7 +132,7 @@ let collect_globals self_sym (e : Anf.aexpr) : string list =
         scan_aexpr body
     | LetJoin (_, rhs, body)
     | StaticCatch (rhs, _, _, body, _)
-    | While (rhs, body) | CheckExn (rhs, body) | TryWith (rhs, _, body) ->
+    | While (rhs, body) | CheckExn (_, rhs, body) | TryWith (rhs, _, body) ->
         scan_aexpr rhs;
         scan_aexpr body
     | LetRec (bindings, body) ->

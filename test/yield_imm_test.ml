@@ -45,7 +45,7 @@ let count_ops (e : Anf.aexpr) =
         List.iter (fun rb -> go rb.Anf.def.Anf.body) bindings;
         go body
     | Anf.If (_, th, el) | Anf.ScalarIf (_, _, th, el) | Anf.While (th, el)
-    | Anf.CheckExn (th, el) ->
+    | Anf.CheckExn (_, th, el) ->
         go th;
         go el
     | Anf.Switch (_, sw) ->

@@ -49,7 +49,7 @@ let rec aexpr_has_field idx = function
       || Option.fold ~none:false ~some:(aexpr_has_field idx) fail
   | Anf.StaticCatch (b, _, _, h, _) | Anf.TryWith (b, _, h) ->
       aexpr_has_field idx b || aexpr_has_field idx h
-  | Anf.While (c, b) | Anf.CheckExn (c, b) ->
+  | Anf.While (c, b) | Anf.CheckExn (_, c, b) ->
       aexpr_has_field idx c || aexpr_has_field idx b
   | Anf.For (_, _, _, _, b)
   | Anf.Retain (_, b)

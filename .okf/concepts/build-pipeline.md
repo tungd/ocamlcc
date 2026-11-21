@@ -94,7 +94,8 @@ consume the prebuilt stdlib archive summary. Loose object packs use the
 per-unit companions.
 
 Saturated calls can use the resolved entry, suspension, immediate-result,
-and raising facts. Version 2 summaries record the raising flag. Version 1
+and exception effects. Version 3 distinguishes calls that can propagate only
+automatic finalizer exceptions. Version 2 records a boolean raising flag. Version 1
 summaries are still readable and keep the conservative exception check.
 Suspending callbacks retain shadow-stack protection. Partial
 applications and calls without matching metadata use closure dispatch.

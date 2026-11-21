@@ -35,7 +35,7 @@ let rec dump (e : Anf.aexpr) : string =
   | Anf.For (i, s, e2, _, body) ->
       Printf.sprintf "(for %s %s %s %s)" (dump_ident i) (dump_atom s) (dump_atom e2)
         (dump body)
-  | Anf.CheckExn (a, b) -> Printf.sprintf "(checkexn %s %s)" (dump a) (dump b)
+  | Anf.CheckExn (_, a, b) -> Printf.sprintf "(checkexn %s %s)" (dump a) (dump b)
   | Anf.TryWith (body, x, h) ->
       Printf.sprintf "(try %s %s %s)" (dump body) (dump_ident x) (dump h)
   | Anf.StaticCatch (body, hid, _, h, _) ->
@@ -218,7 +218,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
   | Anf.StaticCatch (body, _, _, handler, _) ->
       count_release_mut id body + count_release_mut id handler
   | Anf.StaticRaise (_, args) -> List.fold_left count_atom 0 args
-  | Anf.CheckExn (unwind, ok) ->
+  | Anf.CheckExn (_, unwind, ok) ->
       (* A poll may leave the function early. Check that exit independently
          of the normal path, where the slot remains live past the loop. *)
       let releases = count_release_mut id unwind in

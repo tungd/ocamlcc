@@ -201,5 +201,5 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
   { funcs; datas = List.rev b.datas }, exports
 
 let compile_program ?emit_entry program =
-  fst (compile_with_exports ?emit_entry ~exported:[] ~effects:(fun _ -> true, false, true)
+  fst (compile_with_exports ?emit_entry ~exported:[] ~effects:(fun _ -> true, false, Anf.May_raise)
          ~inline_leaf:(fun _ -> None) program)

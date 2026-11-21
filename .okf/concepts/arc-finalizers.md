@@ -6,7 +6,7 @@ tags: [arc, finalizers, weak-references, cycle-collector]
 status: draft
 generated:
   by: codex/1
-  at: 2026-11-18
+  at: 2026-11-21
 sources:
   - id: gc-api
     resource: https://ocaml.org/manual/5.5/api/Gc.html
@@ -80,23 +80,28 @@ Generated polls read the aligned registration count before calling
 count still follows the existing dispatch and allocation budget.
 
 Generated code omits entry polls in bounded leaf functions. The analysis
-follows switch arms, local static exits and mutable slots. Calls,
-allocations, checked operations and generic array reads that can box floats
-keep the conservative path. Scalar cross-unit expressions expanded in the
+follows switch arms, local static exits and mutable slots. Calls, allocations, checked operations and generic array reads that can box
+floats keep the conservative path. Local field stores and integer division
+or remainder by a known nonzero divisor can omit the entry poll. Scalar cross-unit expressions expanded in the
 caller qualify as local operations. Self-tail-call backedges and explicit
 Lambda polls still check.
 
-A bounded `for` body checks on the first iteration and every 64 iterations
+A `for` body checks on the first iteration and every 64 iterations
 in either direction. A `while` with a bounded condition and body checks on
 the first condition evaluation and every 64 evaluations thereafter. The
-compiler keeps an immediate local counter for that cadence. Other loops
-check each iteration or condition as before. A due poll enters the
+compiler keeps an immediate local counter for that cadence. Other `while` loops check each condition evaluation. A due poll enters the
 dispatcher with live owners available for exception unwinding. With an empty
 registry, the check returns after a single relaxed load of the registration
 count. That count includes pending callbacks through dispatch. A nonempty
 registry checks for handed-off work or an exhausted allocation budget.
 Cycles without registrations await explicit collection. Straight-line
 allocations can cross the budget before execution reaches a poll.[^compiler][^abi][^runtime]
+
+A known call that can propagate only an automatic finalizer exception
+checks a process-wide flag before reading the fiber’s exception slot. The
+dispatcher sets this flag when an automatic callback raises, and it stays
+set even after the final registration is removed. Potential ordinary
+exceptions still check the slot directly.
 
 ### Releasing dispatch
 
