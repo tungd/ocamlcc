@@ -147,3 +147,12 @@ Object and archive summaries carry the alternate entry symbol and a mask in
 parameter order. The implementation stamp covers both entry points and the
 mask. This keeps independently compiled callers tied to the same ownership
 contract. Older summaries still select the owning entry.
+
+Subtree retirement batches foreign Bigarray owners in traversal-local storage.
+Ordinary releases touch no foreign-release TLS. Fiber destruction enters a
+deferred scope before dropping nested roots, and callbacks wait until the
+traversal and mutator or collector gate have finished. The single-thread
+profile keeps its queue in ordinary static storage. Weak lookup starts only
+after the inline header test, with the existing fallback for oversized
+headers. Single-thread live-object accounting uses atomic snapshots and
+load/store updates without atomic read-modify-write.

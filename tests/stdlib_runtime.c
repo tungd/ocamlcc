@@ -294,6 +294,29 @@ static void test_import_contract(void)
     assert(arc_live_objects() == before);
 }
 
+static void test_subtree_foreign_releases(void)
+{
+    int64_t before = arc_live_objects();
+    double storage[] = {0.0, 1.0};
+    int released = 0;
+    int entered = arc_mutator_enter();
+    int64_t *pair = arc_alloc(0, 2, 2 * sizeof(*pair));
+    for (int i = 0; i < 2; i++) {
+        OcamlccBigarrayInfo src = {
+            &storage[i], sizeof(storage[i]), NULL, 0,
+            OCAMLCC_BA_FLOAT64, OCAMLCC_BA_C_LAYOUT
+        };
+        OcamlccBigarrayView *view = ocamlcc_bigarray_view_import(&src, count_release, &released);
+        assert(view);
+        pair[i] = (int64_t)(uintptr_t)view;
+    }
+    arc_release(pair);
+    assert(released == 0);
+    arc_mutator_leave(entered);
+    assert(released == 2);
+    assert(arc_live_objects() == before);
+}
+
 static int64_t dummy_closure_code(int64_t clos, int64_t a, int64_t b)
 {
     (void)clos;
@@ -1228,6 +1251,7 @@ int main(void)
     test_retained_c_subview();
     test_c_view_shapes();
     test_import_contract();
+    test_subtree_foreign_releases();
     test_bigarray_channel_io();
     test_finalizer_no_suspend();
     test_poller_unwatch_waiter();

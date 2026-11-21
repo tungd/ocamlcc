@@ -122,8 +122,19 @@ static _Atomic int g_cc_active = 0;
 static _Atomic int g_cc_waiting = 0;
 static _Atomic int g_active_mutators = 0;
 static _Thread_local int tls_os_mutator_active = 0;
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+static ForeignRelease *pending_foreign_releases;
+static unsigned foreign_release_depth;
+#else
 static _Thread_local ForeignRelease *pending_foreign_releases;
 static _Thread_local unsigned foreign_release_depth;
+#endif
+
+static void enqueue_foreign_batch(ForeignRelease *head, ForeignRelease *tail)
+{
+    tail->next = pending_foreign_releases;
+    pending_foreign_releases = head;
+}
 
 /* A callback may call a generated binding, collect, or release another view.
  * Finish the outer ARC traversal and leave the collector and FFI gates first. */
@@ -561,18 +572,19 @@ static void weak_clear_target_locked(int64_t dead_obj)
     weak_targets_remove(dead_obj);
 }
 
-static inline void maybe_clear_weak_target(ArcHeader *hdr)
+static inline int might_be_weak_target(ArcHeader *hdr)
 {
     /* Registration has an owning reference. The final decrement or the
      * collector's mutator handoff makes its mark visible before retirement.
      * Oversized payloads keep the original scan-count representation. */
-    if (arc_has_spare_scan_bit(hdr)) {
-        if ((atomic_load_explicit(&hdr->scan_fields, memory_order_relaxed) &
-             ARC_FLAG_WEAK_TARGET) == 0u)
-            return;
-    } else if (atomic_load_explicit(&g_weak_count, memory_order_acquire) == 0u) {
-        return;
-    }
+    if (arc_has_spare_scan_bit(hdr))
+        return (atomic_load_explicit(&hdr->scan_fields, memory_order_relaxed) &
+                ARC_FLAG_WEAK_TARGET) != 0u;
+    return atomic_load_explicit(&g_weak_count, memory_order_acquire) != 0u;
+}
+
+static __attribute__((noinline)) void clear_weak_target(ArcHeader *hdr)
+{
     arc_lock(&g_weak_lock);
     weak_clear_target_locked((int64_t)(uintptr_t)(hdr + 1));
     arc_unlock(&g_weak_lock);
@@ -1383,7 +1395,8 @@ static inline void drop_child_val(DropWorklist *w, int64_t val, ArcHeader **tail
  * Frees every dead descendant; frees [root] iff [free_root] is non-zero. */
 static void release_subtree(ArcHeader *root, int free_root)
 {
-    foreign_release_depth++;
+    ForeignRelease *foreign_head = NULL, *foreign_tail = NULL;
+    int defer_nested_releases = 0;
     DropWorklist w;
     w.local_len = 0;
     w.overflow = NULL;
@@ -1412,6 +1425,16 @@ static void release_subtree(ArcHeader *root, int free_root)
         } else if (tag == ARC_TAG_WEAK) {
             weak_unlink((ArcWeakArray *)(cur + 1));
         } else if (tag == ARC_TAG_FIBER) {
+            /* Destroying a fiber can recursively drop its shadow roots. */
+            if (!defer_nested_releases) {
+                foreign_release_depth++;
+                defer_nested_releases = 1;
+            }
+            if (foreign_head != NULL) {
+                enqueue_foreign_batch(foreign_head, foreign_tail);
+                foreign_head = NULL;
+                foreign_tail = NULL;
+            }
             fiber_destroy((Fiber *)(cur + 1));
         } else if (tag == ARC_TAG_CUSTOM) {
             void *p = (void *)(uintptr_t)(*(uint64_t *)(cur + 1));
@@ -1425,8 +1448,10 @@ static void release_subtree(ArcHeader *root, int free_root)
             } else if (cur->reserved == ARC_CUSTOM_BIGARRAY_BUFFER) {
                 ArcBigarrayBuffer *b = (void *)(cur + 1);
                 if (b->owner) {
-                    b->owner->next = pending_foreign_releases;
-                    pending_foreign_releases = b->owner;
+                    if (foreign_head == NULL)
+                        foreign_tail = b->owner;
+                    b->owner->next = foreign_head;
+                    foreign_head = b->owner;
                 } else {
                     pal_page_free(b->data, b->bytes);
                 }
@@ -1438,7 +1463,8 @@ static void release_subtree(ArcHeader *root, int free_root)
                 drop_child_val(&w, fields[i], &tail);
         }
 
-        maybe_clear_weak_target(cur);
+        if (might_be_weak_target(cur))
+            clear_weak_target(cur);
 
         if (((atomic_load_explicit(&cur->reserved, memory_order_relaxed) &
               CC_BUFFERED) != 0u && is_cycle_candidate_obj(cur)) ||
@@ -1454,8 +1480,12 @@ static void release_subtree(ArcHeader *root, int free_root)
 
         cur = (tail != NULL) ? tail : work_pop(&w);
     }
-    foreign_release_depth--;
-    if (pending_foreign_releases) drain_foreign_releases();
+    if (foreign_head != NULL)
+        enqueue_foreign_batch(foreign_head, foreign_tail);
+    if (defer_nested_releases)
+        foreign_release_depth--;
+    if ((foreign_head != NULL || defer_nested_releases) && pending_foreign_releases)
+        drain_foreign_releases();
 }
 
 void arc_release(void *obj)
@@ -2035,7 +2065,8 @@ static int64_t collect_cycles(int discover_finalizers)
                 arc_free_reuse(*f->reuse_sp);
             }
         }
-        maybe_clear_weak_target(w);
+        if (might_be_weak_target(w))
+            clear_weak_target(w);
         cc_visit_children(w, cc_collect_outgoing_cb, &outgoing);
         if (is_fiber) {
             f->entry_closure = 0;
