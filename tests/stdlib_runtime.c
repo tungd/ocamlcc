@@ -1121,11 +1121,11 @@ static void test_bulk_array_ownership(void)
     assert(arc_live_objects() == before);
 }
 
-static void test_aligned_slab_reclamation(void)
+static void *aligned_slab_worker(void *arg)
 {
+    (void)arg;
     enum { slab_bytes = 64 * 1024, slot_bytes = 2048, count = 96 };
     uintptr_t mask = (uintptr_t)slab_bytes - 1;
-    int64_t objects = arc_live_objects();
     int64_t slabs = ocamlcc_arc_slab_count(1) >> 1;
     void *slots[count];
     uintptr_t owner = 0;
@@ -1146,6 +1146,18 @@ static void test_aligned_slab_reclamation(void)
     assert(distinct == 4);
     assert((ocamlcc_arc_slab_count(1) >> 1) == slabs + distinct);
 
+    /* Local frees from different slabs are both available to this worker. */
+    assert((((uintptr_t)slots[0] - sizeof(ArcHeader)) & ~mask) !=
+           (((uintptr_t)slots[31] - sizeof(ArcHeader)) & ~mask));
+    arc_release(slots[0]);
+    arc_release(slots[31]);
+    void *from_second = arc_alloc(0, 0, slot_bytes - sizeof(ArcHeader));
+    void *from_first = arc_alloc(0, 0, slot_bytes - sizeof(ArcHeader));
+    assert(from_second == slots[31]);
+    assert(from_first == slots[0]);
+    slots[31] = from_second;
+    slots[0] = from_first;
+
     /* The large-object mapping has its own retirement path. */
     void *large = arc_alloc(0, 0, slot_bytes);
     assert((ocamlcc_arc_slab_count(1) >> 1) == slabs + distinct);
@@ -1153,6 +1165,16 @@ static void test_aligned_slab_reclamation(void)
     for (int parity = 0; parity < 2; parity++)
         for (int i = parity; i < count; i += 2)
             arc_release(slots[i]);
+    return NULL;
+}
+
+static void test_aligned_slab_reclamation(void)
+{
+    int64_t objects = arc_live_objects();
+    int64_t slabs = ocamlcc_arc_slab_count(1) >> 1;
+    pthread_t worker;
+    assert(pthread_create(&worker, NULL, aligned_slab_worker, NULL) == 0);
+    assert(pthread_join(worker, NULL) == 0);
     assert(arc_live_objects() == objects);
     assert((ocamlcc_arc_slab_count(1) >> 1) == slabs + 1);
 }

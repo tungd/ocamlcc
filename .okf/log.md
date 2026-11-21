@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Read slab magazines from thread-local storage, batch mixed-slab frees, and skip the automatic finalizer poll call when the registration count is zero. See [Perceus ARC](/concepts/perceus-arc.md) and [ARC finalizers](/concepts/arc-finalizers.md).
+
 - 2026-11-21 (codex/1) — Route checked indexing errors directly to ARC cleanup and infer whether saturated calls can raise. Persist the raising flag in export summaries. See [Perceus ARC](/concepts/perceus-arc.md) and [build pipeline](/concepts/build-pipeline.md#persisted-export-summaries).
 
 - 2026-11-21 (codex/1) — Apply extended field-view borrowing only when a loop uses the view, preserving early reuse in ordinary list matches. See [Perceus ARC](/concepts/perceus-arc.md).

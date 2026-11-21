@@ -53,6 +53,25 @@ let shadow_call b fn value =
 let shadow_pop b fn count =
   if count > 0 then shadow_call b fn (Int (Int64.of_int count))
 
+let finalizers_due b =
+  let count = fresh_temp b "finalizer_count" in
+  let active = fresh_temp b "finalizers_active" in
+  let check = fresh_label b "finalizers_check" in
+  let done_ = fresh_label b "finalizers_done" in
+  let idle = b.cur_fn.open_label in
+  (* An aligned load is a relaxed atomic read on the supported targets. *)
+  emit b (Load (Loadl, Long, count, Global "ocamlcc_finalizer_count"));
+  emit b (Cmp (Ne, Long, active, count, Int 0L));
+  close_block b (Br (active, check, done_));
+  start_block b check;
+  let polled = fresh_temp b "polled" in
+  emit b (Call (Long, polled, { fn = Global "ocamlcc_finalizers_due"; args = [] }));
+  close_block b (Jmp done_);
+  start_block b done_;
+  let due = fresh_temp b "finalizers_due" in
+  emit b (Phi (Long, due, [idle, unit_const; check, polled]));
+  due
+
 let module_slot b id =
   "ocamlcc_modvar_" ^ b.prefix ^ "_" ^ sanitize (Ident.unique_name id)
 
@@ -1194,6 +1213,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
   | BigarrayAccess (access, args) ->
       let op = match access.operation with `Get -> "get" | `Set -> "set" in
       compile_ccall hooks b (Printf.sprintf "caml_ba_%s_%d" op access.rank) args
+  | Ccall ("ocamlcc_finalizers_due", []) -> finalizers_due b
   | Ccall (sym, args) -> compile_ccall hooks b sym args
   | NativeCcall (prim, args) -> compile_native_ccall hooks b prim args
   | DirectApp (target, args) -> compile_ccall hooks b target.symbol args

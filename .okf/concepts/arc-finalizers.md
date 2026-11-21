@@ -75,6 +75,10 @@ One dispatcher enters the mutator context and removes each pending registration 
 
 When registrations exist, the runtime compares allocation progress since the last completed dispatch with the minor-heap size from `Gc.get ()`. Each newly allocated word and each successful in-place reuse advance the counter. Reuse leaves the public allocation statistics unchanged. Finishing a dispatch also accounts for work done inside callbacks. A skipped collection leaves the allocation budget due.[^runtime]
 
+Generated polls read the aligned registration count before calling
+`ocamlcc_finalizers_due`. A zero count bypasses the runtime call. A nonzero
+count still follows the existing dispatch and allocation budget.
+
 Generated code omits entry polls in bounded leaf functions. The analysis
 follows switch arms, local static exits and mutable slots. Calls,
 allocations, checked operations and generic array reads that can box floats

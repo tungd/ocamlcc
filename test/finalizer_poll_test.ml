@@ -60,6 +60,8 @@ let () =
   List.iter (fun name -> check name poll true)
     ["allocate"; "foreign"; "recurse"; "loop"; "reverse"; "loop_with_call";
      "while_local"; "while_field"; "while_call"; "match_with_call"; "generic_get"];
+  check "loop_with_call" "loadl extern $ocamlcc_finalizer_count" true;
+  check "width" "loadl extern $ocamlcc_finalizer_count" false;
   check "generic_get" "call extern $ocamlcc_gen_array_get(" true;
   let phase_mask = " =l and [^,\n]+, 127\n" in
   List.iter (fun name -> check ~literal:false name phase_mask true)

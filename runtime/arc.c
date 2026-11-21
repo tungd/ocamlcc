@@ -925,18 +925,14 @@ static ArcHeader *slab_alloc_shared(int cls, ArcHeader **extra, uint32_t *count)
 
 /* Cached slots count as used until returned here. A cached or live slot
  * therefore pins its slab even if another thread frees its last live block. */
-static void slab_return_slots(SlabPage *s, ArcHeader *const *slots, uint32_t count)
+static SlabPage *slab_return_slot_locked(ArcHeader *hdr)
 {
-    slab_lock();
+    SlabPage *s = slab_owner(hdr);
     uint32_t cls = s->cls;
-    FreeSlot *head = s->free_list;
-    for (uint32_t i = 0; i < count; i++) {
-        FreeSlot *slot = (FreeSlot *)slots[i];
-        slot->next = head;
-        head = slot;
-    }
-    s->free_list = head;
-    s->used_slots -= count;
+    FreeSlot *slot = (FreeSlot *)hdr;
+    slot->next = s->free_list;
+    s->free_list = slot;
+    s->used_slots--;
     if (s->used_slots == 0u && g_class_slab_count[cls] > 1u) {
         if (s->is_full)
             slab_list_remove(&g_full_slabs[cls], s);
@@ -944,16 +940,29 @@ static void slab_return_slots(SlabPage *s, ArcHeader *const *slots, uint32_t cou
             slab_list_remove(&g_partial_slabs[cls], s);
         g_class_slab_count[cls]--;
         account_objects(&g_active_slabs, -1);
-        slab_unlock();
-        pal_page_free(s, SLAB_SIZE);
-        return;
+        return s;
     }
     if (s->is_full) {
         slab_list_remove(&g_full_slabs[cls], s);
         slab_list_push(&g_partial_slabs[cls], s);
         s->is_full = 0u;
     }
+    return NULL;
+}
+
+static void slab_return_slots(ArcHeader *const *slots, uint32_t count)
+{
+    SlabPage *retired[SLAB_MAGAZINE_CAPACITY];
+    uint32_t retired_count = 0;
+    slab_lock();
+    for (uint32_t i = 0; i < count; i++) {
+        SlabPage *s = slab_return_slot_locked(slots[i]);
+        if (s != NULL)
+            retired[retired_count++] = s;
+    }
     slab_unlock();
+    for (uint32_t i = 0; i < retired_count; i++)
+        pal_page_free(retired[i], SLAB_SIZE);
 }
 
 #ifndef OCAMLCC_SINGLE_THREAD_RC
@@ -970,14 +979,18 @@ static pthread_once_t g_slab_cache_once = PTHREAD_ONCE_INIT;
 static pthread_key_t g_slab_cache_key;
 /* 0 before key creation, 1 for a valid key, -1 if caching is unavailable. */
 static _Atomic int g_slab_cache_ready;
+static _Thread_local SlabThreadCache *tls_slab_cache;
+static _Thread_local int tls_slab_cache_ended;
 
 static void slab_cache_destroy(void *arg)
 {
     SlabThreadCache *cache = arg;
+    tls_slab_cache = NULL;
+    tls_slab_cache_ended = 1;
     for (int cls = 0; cls < NUM_SIZE_CLASSES; cls++) {
         SlabMagazine *m = &cache->magazines[cls];
         if (m->count != 0)
-            slab_return_slots(slab_owner(m->slots[0]), m->slots, m->count);
+            slab_return_slots(m->slots, m->count);
     }
     pal_page_free(cache, sizeof(*cache));
 }
@@ -988,8 +1001,11 @@ static void slab_cache_create_key(void)
     atomic_store_explicit(&g_slab_cache_ready, rc == 0 ? 1 : -1, memory_order_release);
 }
 
-static inline SlabMagazine *slab_magazine(int cls)
+static SlabThreadCache *slab_cache_init(void)
 {
+    /* Other pthread destructors can still release objects after ours. */
+    if (tls_slab_cache_ended)
+        return NULL;
     int ready = atomic_load_explicit(&g_slab_cache_ready, memory_order_acquire);
     if (ready == 0) {
         pthread_once(&g_slab_cache_once, slab_cache_create_key);
@@ -998,30 +1014,32 @@ static inline SlabMagazine *slab_magazine(int cls)
     if (ready != 1)
         return NULL;
 
-    SlabThreadCache *cache = pthread_getspecific(g_slab_cache_key);
-    if (cache == NULL) {
-        cache = pal_page_alloc(sizeof(*cache));
-        if (cache == NULL)
-            return NULL;
-        if (pthread_setspecific(g_slab_cache_key, cache) != 0) {
-            pal_page_free(cache, sizeof(*cache));
-            return NULL;
-        }
+    SlabThreadCache *cache = pal_page_alloc(sizeof(*cache));
+    if (cache == NULL)
+        return NULL;
+    if (pthread_setspecific(g_slab_cache_key, cache) != 0) {
+        pal_page_free(cache, sizeof(*cache));
+        return NULL;
     }
-    return &cache->magazines[cls];
+    tls_slab_cache = cache;
+    return cache;
 }
 
-static inline int slab_cache_slot(SlabMagazine *m, SlabPage *s, ArcHeader *hdr)
+static inline SlabMagazine *slab_magazine(int cls)
 {
-    /* At most one slab per class is pinned by a thread's magazine. */
-    if (m->count != 0 && slab_owner(m->slots[0]) != s)
-        return 0;
+    SlabThreadCache *cache = tls_slab_cache;
+    if (cache == NULL)
+        cache = slab_cache_init();
+    return cache == NULL ? NULL : &cache->magazines[cls];
+}
+
+static inline void slab_cache_slot(SlabMagazine *m, ArcHeader *hdr)
+{
     if (m->count == SLAB_MAGAZINE_CAPACITY) {
         m->count /= 2u;
-        slab_return_slots(s, m->slots + m->count, m->count);
+        slab_return_slots(m->slots + m->count, m->count);
     }
     m->slots[m->count++] = hdr;
-    return 1;
 }
 #endif
 
@@ -1057,10 +1075,12 @@ static void slab_free(ArcHeader *hdr)
             pal_abort();
 #ifndef OCAMLCC_SINGLE_THREAD_RC
         SlabMagazine *m = slab_magazine(cls);
-        if (m != NULL && slab_cache_slot(m, s, hdr))
+        if (m != NULL) {
+            slab_cache_slot(m, hdr);
             return;
+        }
 #endif
-        slab_return_slots(s, &hdr, 1u);
+        slab_return_slots(&hdr, 1u);
     } else {
         pal_page_free(hdr, align_up_large(total_bytes));
     }
@@ -1816,7 +1836,8 @@ static Finalizer *pending_finalizers; /* owned by the active dispatcher */
 enum DispatchState { DISPATCH_IDLE, DISPATCH_ACTIVE, DISPATCH_READY };
 static _Atomic enum DispatchState finalizer_dispatch;
 /* Includes registrations already claimed by a dispatcher. */
-static _Atomic uint64_t finalizer_count;
+/* Generated code reads this count to bypass automatic polls on idle paths. */
+_Atomic uint64_t ocamlcc_finalizer_count;
 static _Atomic uint64_t last_finalizer_poll;
 
 static ArcHeader *finalizer_target(Finalizer *f)
@@ -4253,7 +4274,7 @@ static uint64_t allocation_progress(void)
 
 static inline int has_finalizers(void)
 {
-    return atomic_load_explicit(&finalizer_count, memory_order_relaxed) != 0;
+    return atomic_load_explicit(&ocamlcc_finalizer_count, memory_order_relaxed) != 0;
 }
 
 static int finalizer_budget_due(void)
@@ -4312,7 +4333,7 @@ static int64_t run_finalizers(int automatic)
         arc_release_val(result);
         arc_release_val(f->callback);
         arc_release(f);
-        atomic_fetch_sub_explicit(&finalizer_count, 1, memory_order_relaxed);
+        atomic_fetch_sub_explicit(&ocamlcc_finalizer_count, 1, memory_order_relaxed);
         /* A released callback still owns its local registration. Only the
          * dispatcher that holds the queue may read it or clear its gate. */
         if (!fiber->owns_finalizer_dispatch &&
@@ -4374,7 +4395,7 @@ static int64_t register_finalizer(int64_t fn, int64_t v, int last)
     arc_retain_val(fn);
     f->callback = fn;
     f->last = last;
-    atomic_fetch_add_explicit(&finalizer_count, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&ocamlcc_finalizer_count, 1, memory_order_relaxed);
     if (last) {
         f->value = ocamlcc_weak_create(tag_int(1));
         ArcWeakArray *weak = (ArcWeakArray *)(uintptr_t)f->value;
