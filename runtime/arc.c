@@ -2314,6 +2314,23 @@ int64_t ocamlcc_alloc_float(double d)
     return (int64_t)(uintptr_t)p;
 }
 
+void ocamlcc_store_boxed_float(int64_t *slot, double value)
+{
+    int64_t old = *slot;
+    if (is_heap_ptr(old)) {
+        ArcHeader *hdr = (ArcHeader *)(uintptr_t)old - 1;
+        /* A strong alias or a possible Weak.get must still see the old box. */
+        if (hdr->tag == ARC_TAG_FLOAT &&
+            atomic_load_explicit(&hdr->refcount, memory_order_acquire) == 1u &&
+            !might_be_weak_target(hdr)) {
+            *(double *)(uintptr_t)old = value;
+            return;
+        }
+    }
+    *slot = ocamlcc_alloc_float(value);
+    arc_release_val(old);
+}
+
 int64_t ocamlcc_alloc_custom(uint32_t kind, uint64_t bits)
 {
     uint64_t *p = (uint64_t *)arc_alloc((uint16_t)ARC_TAG_CUSTOM, 0u, 8u);

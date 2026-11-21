@@ -6,7 +6,7 @@ tags: [value-representation, codegen, arc]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-21
+  at: 2026-11-22
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -147,3 +147,9 @@ when the input is forwarded or returned, including zero-iteration calls.
 A loop that needs a selected input as a boxed value, or whose self calls
 leave the tail position, uses ordinary boxed calls. Loop returns keep the
 ordinary OCaml ABI and numeric checks preserve their exception paths.
+
+Float-only record fields pass raw doubles through a load, arithmetic, and
+store. A fresh float result consumed only by an adjacent boxed field store
+can update the old box when it is uniquely owned, mortal, and unmarked by
+weak references. Otherwise the runtime allocates a distinct box and releases
+the displaced field. A result that escapes still materializes an ordinary box.

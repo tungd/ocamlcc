@@ -847,13 +847,19 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
   | FloatField (i, arg) ->
       let obj = compile_atom hooks b arg in
       let addr = ptr_offset b obj (8 * i) "ffldp" in
-      box_double b (load_double b addr)
+      load_double b addr
   | SetFloatField (i, arg, rhs) ->
       let obj = compile_atom hooks b arg in
-      let v = compile_atom hooks b rhs in
-      let d = load_double b v in
+      let d = compile_scalar_operand hooks b Double_scalar rhs in
       let addr = ptr_offset b obj (8 * i) "ffldp" in
       emit b (Store (Stored, d, addr));
+      unit_const
+  | SetBoxedFloatField (i, arg, rhs) ->
+      let obj = compile_atom hooks b arg in
+      let d = compile_scalar_operand hooks b Double_scalar rhs in
+      let addr = ptr_offset b obj (8 * i) "ffldp" in
+      emit b (Call_void { fn = Global "ocamlcc_store_boxed_float";
+                          args = [Long, addr; Double, d] });
       unit_const
   | OffsetRef (k, arg) ->
       let obj = compile_atom hooks b arg in

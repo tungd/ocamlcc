@@ -165,7 +165,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.Field (_, _, a) | Anf.FloatField (_, a) | Anf.OffsetRef (_, a)
     | Anf.CreateBytes a | Anf.Bswap16 a | Anf.BswapBint (_, a) ->
         count_atom acc a
-    | Anf.SetField (_, _, a, b) | Anf.SetFloatField (_, a, b) ->
+    | Anf.SetField (_, _, a, b) ->
         count_atom (count_atom acc a) b
     | Anf.StringGet (_, a, b) | Anf.BytesGetN (_, _, a, b)
     | Anf.ArrayGet (_, _, a, b) ->
@@ -182,6 +182,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.Recur args | Anf.KeepAlive args ->
         List.fold_left count_atom acc args
     | Anf.IntegerOfInt _ | Anf.IntOfInteger _ | Anf.IntegerConvert _ -> acc
+    | Anf.SetFloatField _ | Anf.SetBoxedFloatField _
     | Anf.FloatArrayGet _ | Anf.FloatArraySet _ | Anf.FloatSign _ | Anf.FloatCompare _
     | Anf.FloatOfInt _ | Anf.IntOfFloat _ | Anf.BoxScalar _
     | Anf.ScalarLoad _ | Anf.ScalarStore _ | Anf.FloatBinop _ | Anf.IntegerBinop _ | Anf.IntegerCompare _ | Anf.IntegerNeg _ | Anf.IntegerShift _ | Anf.ScalarValue _ | Anf.GetGlobal _ -> acc

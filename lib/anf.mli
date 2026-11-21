@@ -120,7 +120,8 @@ type cexpr =
   | Field of int * field_kind * atom
   | SetField of int * Lambda.immediate_or_pointer * atom * atom
   | FloatField of int * atom
-  | SetFloatField of int * atom * atom
+  | SetFloatField of int * atom * scalar_operand
+  | SetBoxedFloatField of int * atom * scalar_operand
   | OffsetRef of int * atom
   | StringGet of bool * atom * atom
   | BytesSet of bool * atom * atom * atom

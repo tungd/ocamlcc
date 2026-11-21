@@ -112,7 +112,8 @@ type cexpr =
   | Field of int * field_kind * atom
   | SetField of int * Lambda.immediate_or_pointer * atom * atom
   | FloatField of int * atom
-  | SetFloatField of int * atom * atom
+  | SetFloatField of int * atom * scalar_operand
+  | SetBoxedFloatField of int * atom * scalar_operand
   | OffsetRef of int * atom
   | StringGet of bool * atom * atom
   | BytesSet of bool * atom * atom * atom
@@ -620,10 +621,12 @@ and conv_simple ?(result_kind = Lambda.Pgenval) (id : Ident.t)
       conv_expr arg (fun a ->
           emit_cexpr (Ccall ("caml_ba_dim", [ a; Int (d - 1) ])))
   | Lprim (Pfloatfield i, [ arg ], _) ->
-      conv_expr arg (fun a -> emit_cexpr (FloatField (i, a)))
+      conv_expr arg (fun a ->
+          let raw = Ident.create_local "float_field" in
+          Let (raw, FloatField (i, a), emit_cexpr (BoxScalar (Double_scalar, Raw_scalar raw))))
   | Lprim (Psetfloatfield (i, _), [ arg; rhs ], _) ->
       conv_expr arg (fun a ->
-          conv_expr rhs (fun v -> emit_cexpr (SetFloatField (i, a, v))))
+          conv_float_operand rhs (fun v -> emit_cexpr (SetFloatField (i, a, v))))
   | Lprim (Poffsetref n, [ arg ], _) ->
       conv_expr arg (fun a -> emit_cexpr (OffsetRef (n, a)))
   | Lprim ((Pstringlength | Pbyteslength), [ arg ], _) ->
@@ -1025,8 +1028,9 @@ let cexpr_vars ?(include_raw = true) free_aexpr acc ce =
   | Field (_, _, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
   | Bswap16 a | BswapBint (_, a) ->
       atom_vars acc a
+  | SetFloatField (_, a, v) | SetBoxedFloatField (_, a, v) ->
+      scalar_operand_vars (atom_vars acc a) v
   | SetField (_, _, a, b)
-  | SetFloatField (_, a, b)
   | StringGet (_, a, b)
   | BytesGetN (_, _, a, b)
   | ArrayGet (_, _, a, b)
@@ -1161,6 +1165,13 @@ let rec returns_scalar = function
 
 let bind_scalar_chain id binding body =
   match binding with
+  | Value (BoxScalar (Double_scalar, value)) ->
+      (match body with
+       | Let (store, SetField (index, Lambda.Pointer, owner, Var rhs), next)
+         when Ident.same id rhs && not (Ident.Set.mem id (atom_vars Ident.Set.empty owner))
+              && not (Ident.Set.mem id (free_vars next)) ->
+           Let (store, SetBoxedFloatField (index, owner, value), next)
+       | _ -> Let (id, BoxScalar (Double_scalar, value), body))
   | Value ce -> Let (id, ce, body)
   | Join rhs -> LetJoin (id, rhs, body)
 
@@ -1260,6 +1271,8 @@ let rec specialize_scalar_chain bindings tail =
           atom_vars (atom_vars boxed arr) index, demand rep scalar v
       | Value (FloatArraySet (_, arr, index, v)) ->
           atom_vars (atom_vars boxed arr) index, demand Double_scalar scalar v
+      | Value (SetFloatField (_, owner, v) | SetBoxedFloatField (_, owner, v)) ->
+          atom_vars boxed owner, demand Double_scalar scalar v
       | Value (FloatBinop (_, lhs, rhs) | FloatCompare (_, lhs, rhs)) ->
           boxed, demand Double_scalar (demand Double_scalar scalar lhs) rhs
       | Value (IntOfFloat value | FloatSign (_, value)) ->
@@ -1452,6 +1465,8 @@ let scalarize_loop specialize (rb : rec_binding) =
         | FloatSign (op, value) -> FloatSign (op, float value)
         | IntOfFloat value -> IntOfFloat (float value)
         | FloatArraySet (safe, arr, index, value) -> FloatArraySet (safe, arr, index, float value)
+        | SetFloatField (index, owner, v) -> SetFloatField (index, owner, float v)
+        | SetBoxedFloatField (index, owner, v) -> SetBoxedFloatField (index, owner, float v)
         | ScalarStore (access, arr, index, value) ->
             let rep = Option.get (scalar_rep access.kind) in
             ScalarStore (access, arr, index, scalar_operand rep value)
@@ -1575,7 +1590,7 @@ and specialize_let_chain bindings = function
       if List.exists (function
         | _, Value (BoxScalar _ | AssignScalar _ | ScalarStore _ | FloatBinop _ | IntegerBinop _
                    | ScalarValue _ | IntegerCompare _ | IntOfInteger _
-                   | FloatCompare _ | IntOfFloat _ | FloatArraySet _) -> true
+                   | FloatCompare _ | IntOfFloat _ | FloatArraySet _ | SetFloatField _ | SetBoxedFloatField _) -> true
         | _ -> false) bindings
       then specialize_scalar_chain bindings tail
       else List.fold_left (fun body (id, binding) -> bind_scalar_chain id binding body) tail bindings

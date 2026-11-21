@@ -323,6 +323,33 @@ static int64_t dummy_closure_code(int64_t clos, int64_t a, int64_t b)
     return a + b;
 }
 
+static void test_boxed_float_update(void)
+{
+    int64_t before = arc_live_objects();
+    int64_t slot = ocamlcc_alloc_float(1.0);
+    int64_t original = slot;
+    ocamlcc_store_boxed_float(&slot, 2.0);
+    assert(slot == original && *(double *)(uintptr_t)slot == 2.0);
+
+    arc_retain_val(original);
+    ocamlcc_store_boxed_float(&slot, 3.0);
+    assert(slot != original && *(double *)(uintptr_t)original == 2.0);
+    arc_release_val(original);
+
+    int64_t weak = ocamlcc_weak_create(tagged(1));
+    int64_t *some = arc_alloc(0, 1, sizeof(*some));
+    *some = slot;
+    arc_retain_val(slot);
+    ocamlcc_weak_set(weak, tagged(0), (int64_t)(uintptr_t)some);
+    arc_release(some);
+    ocamlcc_store_boxed_float(&slot, 4.0);
+    assert(ocamlcc_weak_get(weak, tagged(0)) == tagged(0));
+    assert(*(double *)(uintptr_t)slot == 4.0);
+    arc_release_val(slot);
+    arc_release_val(weak);
+    assert(arc_live_objects() == before);
+}
+
 static void test_weak_target_header_and_reuse(void)
 {
     int64_t live_before = arc_live_objects();
@@ -1237,6 +1264,7 @@ int main(void)
     test_bulk_array_ownership();
     test_array_scan_promotion();
     test_float_format();
+    test_boxed_float_update();
     test_buffered_dummy_update();
     test_cycle_loses_external_owner_at_immutable_member();
     test_weak_target_header_and_reuse();

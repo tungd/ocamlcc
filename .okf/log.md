@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Store fresh float results directly into mutable fields and reuse uniquely owned boxes. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-22 (codex/1) — Borrow payloads from lazy option slot joins. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-22 (codex/1) — Elide redundant bounds checks before inferring escaping exceptions. See [Perceus ARC](/concepts/perceus-arc.md).

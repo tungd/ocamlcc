@@ -143,6 +143,7 @@ int64_t ocamlcc_print_endline_val(int64_t val);
 void    ocamlcc_exit_val(int64_t val) __attribute__((noreturn));
 
 int64_t ocamlcc_alloc_float(double d);
+void ocamlcc_store_boxed_float(int64_t *slot, double value);
 int64_t ocamlcc_alloc_custom(uint32_t kind, uint64_t bits);
 int64_t ocamlcc_gen_makearray(int64_t n, const int64_t *elems);
 int64_t ocamlcc_gen_array_get(int64_t safe, int64_t arr, int64_t idx_val);

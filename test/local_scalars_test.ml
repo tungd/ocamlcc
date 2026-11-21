@@ -13,6 +13,15 @@ let () =
         int_of_float (abs_float (-.x *. 2.))
       let compare (x : float) =
         let y = x +. 2. in y < 0.
+      type mixed = { mutable total : float; count : int }
+      type flat = { mutable total : float; time : float }
+      let update_ref (r : float ref) delta = r := !r +. delta
+      let update_mixed (r : mixed) delta = r.total <- r.total +. delta
+      let update_flat (r : flat) delta = r.total <- r.total +. delta
+      let update_and_observe (r : mixed) delta =
+        let result = r.total +. delta in
+        r.total <- result;
+        result
       let boxed_int x =
         let y = Int32.of_int x in
         let z = Int32.add y 1l in
@@ -38,7 +47,14 @@ let () =
   count "arithmetic" "ocamlcc_alloc_float" 1;
   count "to_int" "ocamlcc_alloc_float" 0;
   count "compare" "ocamlcc_alloc_float" 0;
-  count "boxed_int" "ocamlcc_alloc_custom" 1
+  count "boxed_int" "ocamlcc_alloc_custom" 1;
+  count "update_ref" "ocamlcc_store_boxed_float" 1;
+  count "update_ref" "ocamlcc_alloc_float" 0;
+  count "update_mixed" "ocamlcc_store_boxed_float" 1;
+  count "update_mixed" "ocamlcc_alloc_float" 0;
+  count "update_flat" "ocamlcc_alloc_float" 0;
+  count "update_and_observe" "ocamlcc_store_boxed_float" 0;
+  count "update_and_observe" "ocamlcc_alloc_float" 1
 
 let () =
   let il =

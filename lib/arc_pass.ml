@@ -105,7 +105,7 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | Binop (op, _, _) -> is_imm_binop op
   | Unop (op, _) -> is_imm_unop op
   | IntSelect _ | Field (_, Immediate_field, _) | ArrayGet (_, Lambda.Pintarray, _, _)
-  | SetField _ | SetFloatField _ | OffsetRef _ | StringGet _
+  | SetField _ | FloatField _ | SetFloatField _ | SetBoxedFloatField _ | OffsetRef _ | StringGet _
   | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ | AssignImm _
   | ReadScalarSlot _ | AssignScalar _ | StoreModuleSlot _ | ImportDependency _ ->
       true
@@ -123,7 +123,7 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
       match Ident.Map.find_opt fn imm_funs with
       | Some arity -> List.length args = arity
       | None -> false)
-  | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | FloatField _ | BoxScalar _
+  | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | BoxScalar _
   | BigarrayAccess _ | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _
   | GetGlobal _ | Fun _ | Recur _ ->
       false
@@ -337,9 +337,9 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | Bswap16 a | BswapBint (_, a) ->
       (atom_vars a, [])
   | SetField (_, Lambda.Pointer, a, rhs) -> (atom_vars a, [ rhs ])
-  | SetField (_, Immediate, a, rhs)
-  | SetFloatField (_, a, rhs) ->
-      (Ident.Set.union (atom_vars a) (atom_vars rhs), [])
+  | SetField (_, Immediate, a, rhs) -> (Ident.Set.union (atom_vars a) (atom_vars rhs), [])
+  | SetFloatField (_, owner, v) | SetBoxedFloatField (_, owner, v) ->
+      (Anf.scalar_operand_vars (atom_vars owner) v, [])
   | StringGet (_, a, b) | BytesGetN (_, _, a, b) | ArrayGet (_, _, a, b) ->
       (Ident.Set.union (atom_vars a) (atom_vars b), [])
   | BytesSet (_, a, b, c) | BytesSetN (_, _, a, b, c) ->
@@ -406,6 +406,7 @@ let read_only_parameters ~borrowed (lf : Anf.lfunction) =
     | Ccall _ | NativeCcall _ -> params
     | Fun _ -> Ident.Set.empty
     | (SetField (_, Lambda.Pointer, target, _)
+      | SetBoxedFloatField (_, target, _)
       | ArraySet (_, (Lambda.Paddrarray | Lambda.Pgenarray), target, _, _)) as ce ->
         (* A pointer overwrite can retire the old child. Keep the
            receiver eligible while conservatively excluding its siblings. *)
@@ -490,7 +491,12 @@ let fuse_field_read ~stable id index owner body =
     | BorrowedField (i, base) -> BorrowedField (i, substitute base)
     | atom -> atom
   in
+  let scalar = function
+    | Boxed_scalar a -> Boxed_scalar (substitute a)
+    | Raw_scalar _ as v -> v in
   let reader = function
+    | FloatBinop (op, a, b) -> Some (FloatBinop (op, scalar a, scalar b))
+    | FloatCompare (op, a, b) -> Some (FloatCompare (op, scalar a, scalar b))
     | Field (i, kind, base) -> Some (Field (i, kind, substitute base))
     | FloatField (i, base) -> Some (FloatField (i, substitute base))
     | Unop (((String_length | Array_length | Isint | Int_of_float) as op), base) ->
@@ -966,7 +972,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
           Some (Let (res, AllocReuse ({ reuse with fallback = Some tok }, tag, args), next))
       | None -> None)
   | Let (x, ((Atom _ | Binop _ | IntSelect _ | Unop _ | Field _ | SetField _
-             | FloatField _ | SetFloatField _ | OffsetRef _
+             | FloatField _ | SetFloatField _ | SetBoxedFloatField _ | OffsetRef _
              | StringGet _ | BytesSet _ | BytesGetN _ | BytesSetN _ | Bswap16 _ | BswapBint _ | ArrayGet _ | ArraySet _
              | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _ | DirectApp _
              | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
