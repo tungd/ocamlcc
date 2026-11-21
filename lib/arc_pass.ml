@@ -39,6 +39,7 @@ type state = {
   pure : Ident.Set.t;
   known_funs : int Ident.Map.t;
   yielding_funs : Ident.Set.t;
+  raising_funs : Ident.Set.t;
   imm_funs : int Ident.Map.t;
   borrowed_entries : borrowed_entry Ident.Map.t;
   muts : Ident.Set.t;
@@ -602,9 +603,13 @@ let borrowed_call env live = function
 
 let is_yielding_ccall name = (Ccalls.find name).Ccalls.yields
 
-let ce_may_raise_fn = function
-  | Anf.App _ -> true
-  | DirectApp (target, _) -> Option.is_none target.inline_leaf
+let operation_can_raise known raising = function
+  | Anf.App (Var fn, args) ->
+      (match Ident.Map.find_opt fn known with
+       | Some arity when List.compare_length_with args arity = 0 -> Ident.Set.mem fn raising
+       | _ -> true)
+  | App _ -> true
+  | DirectApp (target, _) -> target.raises
   | Binop ((Div | Mod | Bint_div _ | Bint_mod _), _, _)
   | IntegerBinop (_, (Div_int | Rem_int), _, _) -> true
   | StringGet (true, _, _)
@@ -635,7 +640,39 @@ let call_can_suspend known yielding = function
 
 let is_yielding_ce env = call_can_suspend env.known_funs env.yielding_funs
 
-let compute_yield_info (e : Anf.aexpr) =
+let can_raise_with operation =
+  let rec scan (e : Anf.aexpr) =
+    match e with
+    | Halt _ | HaltScalar _ | Unwind | StaticRaise _ -> false
+    | Raise _ -> true
+    | Let (_, ce, body) | MutLet (_, ce, body) ->
+        operation ce || scan body
+    | LetRec (_, body)
+    | Retain (_, body)
+    | Release (_, body)
+    | ReleaseMut (_, body)
+    | DropReuse (_, _, body)
+    | FreeReuse (_, body)
+    | ShadowPush (_, _, _, body)
+    | ShadowPop (_, _, body) ->
+        scan body
+    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) | While (a, b) ->
+        scan a || scan b
+    | For (_, _, _, _, body) -> scan body
+    | Switch (_, sw) ->
+        List.exists (fun (_, arm) -> scan arm) sw.consts
+        || List.exists (fun (_, arm) -> scan arm) sw.blocks
+        || Option.fold ~none:false ~some:scan sw.fail
+    | StringSwitch (_, cases, fail) ->
+        List.exists (fun (_, arm) -> scan arm) cases
+        || Option.fold ~none:false ~some:scan fail
+    | StaticCatch (body, _, _, handler, _) ->
+        scan body || scan handler
+    | TryWith (_, _, handler) -> scan handler
+  in
+  scan
+
+let compute_call_info (e : Anf.aexpr) =
   let funs : (Ident.t * Anf.lfunction) list ref = ref [] in
   let rec collect = function
     | Anf.Let (id, Fun lf, body) ->
@@ -693,47 +730,21 @@ let compute_yield_info (e : Anf.aexpr) =
         || Option.fold ~none:false ~some:(body_yields yielding) fail
     | Halt _ | HaltScalar _ | StaticRaise _ | Raise _ | Unwind -> false
   in
-  let rec fix yielding =
-    let next, changed =
-      List.fold_left
-        (fun (acc, ch) (id, (lf : Anf.lfunction)) ->
-          if Ident.Set.mem id acc then (acc, ch)
-          else if body_yields acc lf.body then (Ident.Set.add id acc, true)
-          else (acc, ch))
-        (yielding, false) !funs
+  let solve body_has_effect =
+    let rec fix effects =
+      let next = List.fold_left (fun acc (id, (lf : Anf.lfunction)) ->
+        if Ident.Set.mem id acc || not (body_has_effect acc lf.body) then acc
+        else Ident.Set.add id acc) effects !funs
+      in
+      if Ident.Set.equal effects next then next else fix next
     in
-    if changed then fix next else next
+    fix Ident.Set.empty
   in
-  (known, fix Ident.Set.empty)
+  let body_raises raising = can_raise_with (operation_can_raise known raising) in
+  known, solve body_yields, solve body_raises
 
-let rec can_raise (e : Anf.aexpr) : bool =
-  match e with
-  | Halt _ | HaltScalar _ | Unwind | StaticRaise _ -> false
-  | Raise _ -> true
-  | Let (_, ce, body) | MutLet (_, ce, body) ->
-      ce_may_raise_fn ce || can_raise body
-  | LetRec (_, body)
-  | Retain (_, body)
-  | Release (_, body)
-  | ReleaseMut (_, body)
-  | DropReuse (_, _, body)
-  | FreeReuse (_, body)
-  | ShadowPush (_, _, _, body)
-  | ShadowPop (_, _, body) ->
-      can_raise body
-  | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (a, b) | While (a, b) ->
-      can_raise a || can_raise b
-  | For (_, _, _, _, body) -> can_raise body
-  | Switch (_, sw) ->
-      List.exists (fun (_, arm) -> can_raise arm) sw.consts
-      || List.exists (fun (_, arm) -> can_raise arm) sw.blocks
-      || Option.fold ~none:false ~some:can_raise sw.fail
-  | StringSwitch (_, cases, fail) ->
-      List.exists (fun (_, arm) -> can_raise arm) cases
-      || Option.fold ~none:false ~some:can_raise fail
-  | StaticCatch (body, _, _, handler, _) ->
-      can_raise body || can_raise handler
-  | TryWith (_, _, handler) -> can_raise handler
+let ce_may_raise env = operation_can_raise env.known_funs env.raising_funs
+let can_raise env = can_raise_with (ce_may_raise env)
 
 let rec reachable_raises (e : Anf.aexpr) : IntSet.t =
   match e with
@@ -1056,7 +1067,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
         let lf' = transform_fun env ~self_id:None ~has_closure:true lf in
         let base_live = Ident.Set.remove id (live_with_handlers env body) in
         let live_after =
-          if can_raise body then Ident.Set.union base_live env.try_owned
+          if can_raise env body then Ident.Set.union base_live env.try_owned
           else base_live
         in
         prepare_consumed env ~borrowed_also:Ident.Set.empty ~live_after
@@ -1076,7 +1087,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           let owners = keep_view_owners env (atom_vars owner) in
           let env = { env with view_owners = Ident.Map.add id owners env.view_owners } in
           let live = Ident.Set.union owners (live_with_handlers env body) in
-          let live = if can_raise body then Ident.Set.union live env.try_owned else live in
+          let live = if can_raise env body then Ident.Set.union live env.try_owned else live in
           let dead = Ident.Set.diff env.owned live in
           let body = transform_aexpr { env with owned = Ident.Set.diff env.owned dead } body in
           emit_drops env dead (Let (id, Atom (BorrowedField (index, owner)), body))
@@ -1085,13 +1096,13 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
   | MutLet (id, ce, body) ->
       let immediate = mutlet_is_imm env id ce body in
       let ce = specialize_assignment env ce in
-      let ce_may_raise = ce_may_raise_fn ce in
+      let ce_may_raise = ce_may_raise env ce in
       let borrowed_in_ce, consumed_in_ce = atom_operands ce in
       let borrowed_in_ce = keep_view_owners env borrowed_in_ce in
       let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
       let live_before_ce =
         Ident.Set.union base_live_body
-          (if ce_may_raise || can_raise body then env.try_owned
+          (if ce_may_raise || can_raise env body then env.try_owned
            else Ident.Set.empty)
       in
       let live_after = Ident.Set.union live_before_ce borrowed_in_ce in
@@ -1103,7 +1114,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           let rem_after_before = Ident.Set.diff remaining_owned dead_before in
           let live_for_after_ce =
             Ident.Set.union base_live_body
-              (if can_raise body then env.try_owned else Ident.Set.empty)
+              (if can_raise env body then env.try_owned else Ident.Set.empty)
           in
           let dead_after = Ident.Set.diff rem_after_before live_for_after_ce in
           let live_for_body = Ident.Set.diff rem_after_before dead_after in
@@ -1124,12 +1135,12 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
   | LetJoin (id, rhs, body) ->
       let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
       let live_body_only =
-        if can_raise body then Ident.Set.union base_live_body env.try_owned
+        if can_raise env body then Ident.Set.union base_live_body env.try_owned
         else base_live_body
       in
       let live_rhs =
         Ident.Set.union (live_with_handlers env rhs)
-          (if can_raise rhs then env.try_owned else Ident.Set.empty)
+          (if can_raise env rhs then env.try_owned else Ident.Set.empty)
       in
       let shared = Ident.Set.inter env.owned live_body_only in
       let owned_rhs_only = Ident.Set.diff env.owned live_body_only in
@@ -1202,7 +1213,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           Ident.Set.diff (live_with_handlers env body) rec_ids
         in
         let live_after =
-          if can_raise body then Ident.Set.union base_live env.try_owned
+          if can_raise env body then Ident.Set.union base_live env.try_owned
           else base_live
         in
         prepare_consumed env ~borrowed_also:Ident.Set.empty ~live_after
@@ -1242,7 +1253,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           binders
       in
       let fv_handler =
-        if can_raise handler then Ident.Set.union base_fh env.try_owned
+        if can_raise env handler then Ident.Set.union base_fh env.try_owned
         else base_fh
       in
       let handler_owned = Ident.Set.inter env.owned fv_handler in
@@ -1282,7 +1293,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
             (emit_mut_releases dead_muts (StaticRaise (hid, args'))))
   | TryWith (body, exn_id, handler) ->
       let outer_needed =
-        if can_raise handler then env.try_owned else Ident.Set.empty
+        if can_raise env handler then env.try_owned else Ident.Set.empty
       in
       let fv_handler =
         Ident.Set.remove exn_id
@@ -1345,7 +1356,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
 
 and transform_let env id ce body =
   let ce = specialize_assignment env ce in
-  let ce_may_raise = ce_may_raise_fn ce in
+  let ce_may_raise = ce_may_raise env ce in
   let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
   let borrowed_in_ce, consumed_in_ce, rebuild =
     match borrowed_call env base_live_body ce with
@@ -1368,7 +1379,7 @@ and transform_let env id ce body =
   let borrowed_in_ce = keep_view_owners env borrowed_in_ce in
   let live_before_ce =
     Ident.Set.union base_live_body
-      (if ce_may_raise || can_raise body then env.try_owned
+      (if ce_may_raise || can_raise env body then env.try_owned
        else Ident.Set.empty)
   in
   let live_after = Ident.Set.union live_before_ce borrowed_in_ce in
@@ -1382,7 +1393,7 @@ and transform_let env id ce body =
       let rem_after_before = Ident.Set.diff remaining_owned dead_before in
       let live_for_after_ce =
         Ident.Set.union base_live_body
-          (if can_raise body then env.try_owned else Ident.Set.empty)
+          (if can_raise env body then env.try_owned else Ident.Set.empty)
       in
       let dead_after = Ident.Set.diff rem_after_before live_for_after_ce in
       let live_for_body = Ident.Set.diff rem_after_before dead_after in
@@ -1420,7 +1431,7 @@ and transform_let env id ce body =
 and transform_branch (env : state) (arm : Anf.aexpr) : Anf.aexpr =
   let base_live = live_with_handlers env arm in
   let live =
-    if can_raise arm then Ident.Set.union base_live env.try_owned
+    if can_raise env arm then Ident.Set.union base_live env.try_owned
     else base_live
   in
   let dead = Ident.Set.diff env.owned live in
@@ -1540,7 +1551,7 @@ let run_with_effects (prog : Anf.program) =
   let pure =
     Anf.pure_defs prog.code |> List.map fst |> Ident.Set.of_list
   in
-  let known_funs, yielding_funs = compute_yield_info prog.code in
+  let known_funs, yielding_funs, raising_funs = compute_call_info prog.code in
   let typed_imm =
     Ident.Map.fold
       (fun id kind acc -> if kind = Lambda.Pintval then Ident.Set.add id acc else acc)
@@ -1557,6 +1568,7 @@ let run_with_effects (prog : Anf.program) =
       pure;
       known_funs;
       yielding_funs;
+      raising_funs;
       imm_funs;
       borrowed_entries = Ident.Map.empty;
       muts = Ident.Set.empty;
@@ -1567,7 +1579,9 @@ let run_with_effects (prog : Anf.program) =
       try_depth = 0;
       in_tail = true }
   in
-  let effects id = Ident.Set.mem id yielding_funs, Ident.Map.mem id imm_funs in
+  let effects id =
+    Ident.Set.mem id yielding_funs, Ident.Map.mem id imm_funs, Ident.Set.mem id raising_funs
+  in
   { prog with code = transform_aexpr init_env prog.code }, effects
 
 let run prog = fst (run_with_effects prog)

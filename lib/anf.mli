@@ -170,6 +170,7 @@ and imported_function = {
   symbol : string;
   arity : int;
   yields : bool;
+  raises : bool;
   returns_immediate : bool;
   inline_leaf : lfunction option;
   inline_lambda : Lambda.lfunction option;

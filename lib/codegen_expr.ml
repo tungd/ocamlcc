@@ -714,7 +714,7 @@ let array_address b arr index =
   emit b (Binop (Add, Long, addr, arr, offset));
   addr
 
-let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
+let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
   match ce with
   | Atom a -> compile_atom hooks b a
   | Binop (op, a, c) -> compile_binop hooks b op a c
@@ -854,7 +854,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       in
       if safe then
         let len = string_len_raw b sv in
-        compile_bounds_guarded b ui len do_read
+        compile_bounds_guarded b ?on_oob ui len do_read
       else do_read ()
   | BytesSet (safe, bs, idx, ch) ->
       let bsv = compile_atom hooks b bs in
@@ -870,7 +870,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       in
       if safe then
         let len = string_len_raw b bsv in
-        compile_bounds_guarded b ui len do_write
+        compile_bounds_guarded b ?on_oob ui len do_write
       else do_write ()
   | BytesGetN (safe, width, bs, idx) ->
       let bsv = compile_atom hooks b bs in
@@ -896,7 +896,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       in
       if safe then
         let len = string_len_raw b bsv in
-        compile_bytes_slice_bounds_guarded b ui len width do_read
+        compile_bytes_slice_bounds_guarded b ?on_oob ui len width do_read
       else do_read ()
   | BytesSetN (safe, width, bs, idx, v) ->
       let bsv = compile_atom hooks b bs in
@@ -921,7 +921,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       in
       if safe then
         let len = string_len_raw b bsv in
-        compile_bytes_slice_bounds_guarded b ui len width do_write
+        compile_bytes_slice_bounds_guarded b ?on_oob ui len width do_write
       else do_write ()
   | Bswap16 a ->
       let av = compile_atom hooks b a in
@@ -990,17 +990,14 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let iv = compile_atom hooks b idx in
       match kind with
       | Lambda.Pgenarray ->
-          let dst = fresh_temp b "gavel" in
-          emit b
-            (Call
-               ( Long,
-                 dst,
-                 { fn = Global "ocamlcc_gen_array_get";
-                   args =
-                     [ (Long, Int (if safe then 1L else 0L));
-                       (Long, av);
-                       (Long, iv) ] } ));
-          dst
+          let read () =
+            let dst = fresh_temp b "gavel" in
+            emit b (Call (Long, dst, { fn = Global "ocamlcc_gen_array_get";
+              args = [Long, Int 0L; Long, av; Long, iv] }));
+            dst
+          in
+          if safe then compile_bounds_guarded b ?on_oob (untag b iv) (array_len_raw b av) read
+          else read ()
       | Lambda.Pfloatarray ->
           let ui = untag b iv in
           let do_read () =
@@ -1009,7 +1006,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
           in
           if safe then
             let len = array_len_raw b av in
-            compile_bounds_guarded b ui len do_read
+            compile_bounds_guarded b ?on_oob ui len do_read
           else do_read ()
       | Lambda.Paddrarray | Pintarray ->
           let ui = untag b iv in
@@ -1022,7 +1019,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
           in
           if safe then
             let len = array_len_raw b av in
-            compile_bounds_guarded b ui len do_read
+            compile_bounds_guarded b ?on_oob ui len do_read
           else do_read ())
   | ArraySet (safe, kind, arr, idx, v) -> (
       let av = compile_atom hooks b arr in
@@ -1030,18 +1027,15 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let vv = compile_atom hooks b v in
       match kind with
       | Lambda.Pgenarray ->
-          let dst = fresh_temp b "gaset" in
-          emit b
-            (Call
-               ( Long,
-                 dst,
-                 { fn = Global "ocamlcc_gen_array_set";
-                   args =
-                     [ (Long, Int (if safe then 1L else 0L));
-                       (Long, av);
-                       (Long, iv);
-                       (Long, vv) ] } ));
-          unit_const
+          let write () =
+            let dst = fresh_temp b "gaset" in
+            emit b (Call (Long, dst, { fn = Global "ocamlcc_gen_array_set";
+              args = [Long, Int 0L; Long, av; Long, iv; Long, vv] }));
+            unit_const
+          in
+          if safe then compile_bounds_guarded b ?on_oob ~drop_on_oob:vv
+            (untag b iv) (array_len_raw b av) write
+          else write ()
       | Lambda.Pfloatarray ->
           let ui = untag b iv in
           let do_write () =
@@ -1053,7 +1047,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
           in
           if safe then
             let len = array_len_raw b av in
-            compile_bounds_guarded b ~drop_on_oob:vv ui len do_write
+            compile_bounds_guarded b ?on_oob ~drop_on_oob:vv ui len do_write
           else do_write ()
       | Lambda.Pintarray | Paddrarray ->
           let ui = untag b iv in
@@ -1072,7 +1066,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
           if safe then
             let len = array_len_raw b av in
             let drop_on_oob = if kind = Lambda.Pintarray then None else Some vv in
-            compile_bounds_guarded b ?drop_on_oob ui len do_write
+            compile_bounds_guarded b ?on_oob ?drop_on_oob ui len do_write
           else do_write ())
   | CreateBytes len ->
       let lv = compile_atom hooks b len in
@@ -1123,7 +1117,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
       let idx = untag b (compile_atom hooks b index) in
       let load () = load_double b (array_address b av idx) in
       if safe then
-        compile_bounds_guarded b ~result_type:Double idx (array_len_raw b av) load
+        compile_bounds_guarded b ?on_oob ~result_type:Double idx (array_len_raw b av) load
       else load ()
   | FloatArraySet (safe, arr, index, value) ->
       let av = compile_atom hooks b arr in
@@ -1133,7 +1127,7 @@ let compile_cexpr hooks b ~tail (ce : Anf.cexpr) : t =
         emit b (Store (Stored, v, array_address b av idx));
         unit_const
       in
-      if safe then compile_bounds_guarded b idx (array_len_raw b av) store
+      if safe then compile_bounds_guarded b ?on_oob idx (array_len_raw b av) store
       else store ()
   | FloatOfInt value -> float_of_int b (compile_atom hooks b value)
   | IntOfFloat value -> int_of_float b (compile_scalar_operand hooks b Double_scalar value)
@@ -1282,6 +1276,17 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       hooks.compile_fun_binding (compile_aexpr hooks) b tail id lf body
   | Let (id, (App _ as ce), Halt (Var v)) when tail && Ident.same id v ->
       compile_cexpr hooks b ~tail:true ce
+  | Let (id, (StringGet (true, _, _) | BytesSet (true, _, _, _)
+            | BytesGetN (true, _, _, _) | BytesSetN (true, _, _, _, _)
+            | ArrayGet (true, _, _, _) | ArraySet (true, _, _, _, _)
+            | FloatArrayGet (true, _, _) | FloatArraySet (true, _, _, _) as ce),
+      CheckExn (on_err, on_ok)) ->
+      let on_oob () = ignore (compile_aexpr hooks b tail on_err) in
+      let value = compile_cexpr ~on_oob hooks b ~tail:false ce in
+      Hashtbl.replace b.vars id value;
+      let res = compile_aexpr hooks b tail on_ok in
+      Hashtbl.remove b.vars id;
+      res
   | Let (id, ce, body) ->
       let v =
         match ce with

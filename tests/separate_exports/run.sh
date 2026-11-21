@@ -14,9 +14,23 @@ test -f "$work/units/provider.exports"
 "$compiler" build -c --stdlib-dir "$stdlib" -I "$work/units" --work-dir "$work/consumer" \
     "$src/consumer.ml" -o "$work/units/consumer.o"
 grep -Eq 'call extern \$ocamlcc_Provider_add__' "$work/consumer/consumer.ssa"
+exception_checks() {
+    awk '/function l \$ocamlcc_Consumer_calculate__/,/^}/' "$1" |
+        awk '/call extern \$ocamlcc_get_exn\(/ { n++ } END { print n + 0 }'
+}
+test "$(exception_checks "$work/consumer/consumer.ssa")" -eq 1
 "$compiler" build --stdlib-dir "$stdlib" -I "$work/units" "$src/entry.ml" \
     "$work/units/consumer.o" "$work/units/implementation.o" -o "$work/run"
 "$work/run"
+
+mkdir -p "$work/legacy"
+cp "$work/units/implementation.o" "$work/units/provider.cmi" "$work/legacy"
+awk 'NR == 1 { sub(/exports-v2/, "exports-v1") } NR > 2 && NF { NF-- } { print }' \
+    "$work/units/provider.exports" > "$work/legacy/provider.exports"
+"$compiler" build -c --stdlib-dir "$stdlib" -I "$work/legacy" --work-dir "$work/legacy-work" \
+    "$src/consumer.ml" -o "$work/legacy/consumer.o"
+grep -Eq 'call extern \$ocamlcc_Provider_add__' "$work/legacy-work/consumer.ssa"
+test "$(exception_checks "$work/legacy-work/consumer.ssa")" -eq 2
 
 sed 's/x + !bias/x + !bias + 1/' "$src/provider.ml" > "$work/replacement/provider.ml"
 cp "$src/provider.mli" "$work/replacement/provider.mli"

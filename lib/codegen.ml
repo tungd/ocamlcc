@@ -157,10 +157,10 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
         let symbol =
           if has_closure then export_captured b mod_val path target arity else target
         in
-        let yields, returns_immediate = effects id in
+        let yields, returns_immediate, raises = effects id in
         let inline_leaf = inline_leaf id in
         let inline_lambda = Ident.Map.find_opt id program.inline_bodies in
-        Some (path, { Anf.unit_name; symbol; arity; yields; returns_immediate;
+        Some (path, { Anf.unit_name; symbol; arity; yields; raises; returns_immediate;
                       inline_leaf; inline_lambda }))
     exported
   in
@@ -201,5 +201,5 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
   { funcs; datas = List.rev b.datas }, exports
 
 let compile_program ?emit_entry program =
-  fst (compile_with_exports ?emit_entry ~exported:[] ~effects:(fun _ -> true, false)
+  fst (compile_with_exports ?emit_entry ~exported:[] ~effects:(fun _ -> true, false, true)
          ~inline_leaf:(fun _ -> None) program)

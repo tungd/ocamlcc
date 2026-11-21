@@ -1,5 +1,5 @@
-let archive_version = "ocamlcc-opt-v1"
-let object_version = "ocamlcc-exports-v1"
+let archive_version = "ocamlcc-opt-v2"
+let object_version = "ocamlcc-exports-v2"
 let digest path = Digest.to_hex (Digest.file path)
 
 let read path = In_channel.with_open_bin path In_channel.input_all
@@ -19,8 +19,8 @@ let rows ~cmi_digest exports =
   let buffer = Buffer.create 256 in
   List.iter (fun (path, (fn : Anf.imported_function)) ->
     let path = String.concat "." (List.map string_of_int path) in
-    Printf.bprintf buffer "%s %s %s %s %d %b %b\n"
-      fn.unit_name cmi_digest path fn.symbol fn.arity fn.yields fn.returns_immediate)
+    Printf.bprintf buffer "%s %s %s %s %d %b %b %b\n"
+      fn.unit_name cmi_digest path fn.symbol fn.arity fn.yields fn.returns_immediate fn.raises)
     exports;
   Buffer.contents buffer
 
@@ -85,14 +85,17 @@ let nonnegative s =
 let parse_rows lines =
   let units = Hashtbl.create 32 in
   let add row =
-    match String.split_on_char ' ' row with
+    let fields = String.split_on_char ' ' row in
+    let fields = if List.compare_length_with fields 7 = 0 then fields @ ["true"] else fields in
+    match fields with
     | [""] -> ()
-    | [unit_name; cmi_digest; path; entry; arity; yields; immediate]
+    | [unit_name; cmi_digest; path; entry; arity; yields; immediate; raises]
       when unit_name_valid unit_name && entry_valid entry ->
         let path = List.map nonnegative (String.split_on_char '.' path) in
         let fn : Anf.imported_function =
           { unit_name; symbol = entry; arity = nonnegative arity;
             yields = bool_of_string yields;
+            raises = bool_of_string raises;
             returns_immediate = bool_of_string immediate;
             inline_leaf = None; inline_lambda = None }
         in
@@ -110,7 +113,9 @@ let parse_rows lines =
 
 let read_archive archive =
   match String.split_on_char '\n' (read (archive ^ ".opt")) with
-  | header :: lines when header = archive_version ^ " " ^ digest archive ->
+  | header :: lines
+    when let suffix = " " ^ digest archive in
+         header = archive_version ^ suffix || header = "ocamlcc-opt-v1" ^ suffix ->
       Some (parse_rows lines)
   | _ -> None
 
@@ -119,7 +124,8 @@ let read_object cmi =
   match String.split_on_char '\n' (read sidecar) with
   | header :: obj :: lines
     when obj <> "" && obj <> "." && obj <> ".." && Filename.basename obj = obj
-      && header = object_version ^ " " ^ digest (Filename.concat (Filename.dirname cmi) obj) ->
+      && (let suffix = " " ^ digest (Filename.concat (Filename.dirname cmi) obj) in
+          header = object_version ^ suffix || header = "ocamlcc-exports-v1" ^ suffix) ->
       Some (parse_rows lines)
   | _ -> None
 

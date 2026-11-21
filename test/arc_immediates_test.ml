@@ -104,7 +104,8 @@ let typed_edges () =
   check "typed handler parameter" 0 (fst (lambda_il catch));
   let fn, producer = wrap ~return:Pintval external_int in
   let _, effects = lambda_il producer in
-  if not (snd (effects fn)) then failwith "typed return missing from call facts";
+  let _, returns_immediate, _ = effects fn in
+  if not returns_immediate then failwith "typed return missing from call facts";
   let choice = id "choice" in
   let _, join =
     wrap (Llet (Strict, Pintval, choice,

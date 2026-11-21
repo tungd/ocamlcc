@@ -669,46 +669,57 @@ let emit_arc_if_heap b operation value =
         start_block b done_
       end
 
-let compile_bounds_guarded b ?drop_on_oob ?(result_type = Long) idx_untagged len_val
-    (on_ok : unit -> Qbe_il.t) : Qbe_il.t =
+let finish_bounds_guard b ?drop_on_oob ?on_oob ~result_type prefix lok loob on_ok =
+  let raise_oob () =
+    start_block b loob;
+    Option.iter (emit_arc_if_heap b `Release) drop_on_oob;
+    emit b (Call_void { fn = Global "ocamlcc_raise_invalid_arg_oob"; args = [] })
+  in
+  match on_oob with
+  | Some unwind ->
+      raise_oob ();
+      unwind ();
+      start_block b lok;
+      on_ok ()
+  | None ->
+      let ldone = fresh_label b (prefix ^ "_done") in
+      start_block b lok;
+      let ok_res = on_ok () in
+      let lok_end = b.cur_fn.open_label in
+      close_block b (Jmp ldone);
+      raise_oob ();
+      let failure =
+        if result_type = Double then begin
+          let zero = fresh_temp b "bnd_zero" in
+          emit b (Cast (Double, zero, Int 0L));
+          zero
+        end else unit_const
+      in
+      let loob_end = b.cur_fn.open_label in
+      close_block b (Jmp ldone);
+      start_block b ldone;
+      let dst = fresh_temp b (prefix ^ "v") in
+      emit b (Phi (result_type, dst, [ (lok_end, ok_res); (loob_end, failure) ]));
+      dst
+
+let compile_bounds_guarded b ?drop_on_oob ?on_oob ?(result_type = Long)
+    idx_untagged len_val on_ok =
   let ok = fresh_temp b "bnd" in
   emit b (Cmp (Ult, Long, ok, idx_untagged, len_val));
   let lok = fresh_label b "bnd_ok" in
   let loob = fresh_label b "bnd_oob" in
-  let ldone = fresh_label b "bnd_done" in
   close_block b (Br (ok, lok, loob));
-  start_block b lok;
-  let ok_res = on_ok () in
-  let lok_end = b.cur_fn.open_label in
-  close_block b (Jmp ldone);
-  start_block b loob;
-  Option.iter (emit_arc_if_heap b `Release) drop_on_oob;
-  emit b
-    (Call_void { fn = Global "ocamlcc_raise_invalid_arg_oob"; args = [] });
-  let failure =
-    if result_type = Double then begin
-      let zero = fresh_temp b "bnd_zero" in
-      emit b (Cast (Double, zero, Int 0L));
-      zero
-    end else unit_const
-  in
-  let loob_end = b.cur_fn.open_label in
-  close_block b (Jmp ldone);
-  start_block b ldone;
-  let dst = fresh_temp b "bndv" in
-  emit b (Phi (result_type, dst, [ (lok_end, ok_res); (loob_end, failure) ]));
-  dst
+  finish_bounds_guard b ?drop_on_oob ?on_oob ~result_type "bnd" lok loob on_ok
 
-let compile_bytes_slice_bounds_guarded b idx_untagged len_val (width : int)
+let compile_bytes_slice_bounds_guarded b ?on_oob idx_untagged len_val (width : int)
     (on_ok : unit -> Qbe_il.t) : Qbe_il.t =
-  if width <= 1 then compile_bounds_guarded b idx_untagged len_val on_ok
+  if width <= 1 then compile_bounds_guarded b ?on_oob idx_untagged len_val on_ok
   else
     let has_room = fresh_temp b "sroom" in
     emit b (Cmp (Sge, Long, has_room, len_val, Int (Int64.of_int width)));
     let lroom = fresh_label b "sroom_ok" in
     let lok = fresh_label b "sbnd_ok" in
     let loob = fresh_label b "sbnd_oob" in
-    let ldone = fresh_label b "sbnd_done" in
     close_block b (Br (has_room, lroom, loob));
     start_block b lroom;
     let limit = fresh_temp b "slim" in
@@ -717,19 +728,7 @@ let compile_bytes_slice_bounds_guarded b idx_untagged len_val (width : int)
     let ok = fresh_temp b "sbnd" in
     emit b (Cmp (Ult, Long, ok, idx_untagged, limit));
     close_block b (Br (ok, lok, loob));
-    start_block b lok;
-    let ok_res = on_ok () in
-    let lok_end = b.cur_fn.open_label in
-    close_block b (Jmp ldone);
-    start_block b loob;
-    emit b
-      (Call_void { fn = Global "ocamlcc_raise_invalid_arg_oob"; args = [] });
-    let loob_end = b.cur_fn.open_label in
-    close_block b (Jmp ldone);
-    start_block b ldone;
-    let dst = fresh_temp b "sbndv" in
-    emit b (Phi (Long, dst, [ (lok_end, ok_res); (loob_end, unit_const) ]));
-    dst
+    finish_bounds_guard b ?on_oob ~result_type:Long "sbnd" lok loob on_ok
 
 let string_len_raw b sv =
   let addr = fresh_temp b "slenp" in

@@ -43,6 +43,16 @@ let () =
         match blk with (a, _, _, _) -> a
 
       let true_tail x = may_raise x
+
+      external ( + ) : int -> int -> int = "%addint"
+      external get : 'a array -> int -> 'a = "%array_safe_get"
+      external set : 'a array -> int -> 'a -> unit = "%array_safe_set"
+
+      let[@inline never] increment x = x + 1
+      let known_pure x = increment x + 1
+      let index (a : int array) i = get a i + 1
+      let generic a i = get a i
+      let store a i v = set a i v; 3
     |}
   in
   match
@@ -57,4 +67,11 @@ let () =
       assert (count_substring ~sub:"$ocamlcc_get_exn()" fn_ssa = 2);
       let tail_ssa = extract_func ~name:"ocamlcc_Checkexn_join_true_tail" ssa in
       (* True tail call elides post-call CheckExn (only entry poll remains). *)
-      assert (count_substring ~sub:"$ocamlcc_get_exn()" tail_ssa = 1)
+      assert (count_substring ~sub:"$ocamlcc_get_exn()" tail_ssa = 1);
+      List.iter (fun name ->
+        let body = extract_func ~name:("ocamlcc_Checkexn_join_" ^ name) ssa in
+        let checks = count_substring ~sub:"$ocamlcc_get_exn()" body in
+        if checks <> 1 then failwith (Printf.sprintf "%s: expected only the poll check, got %d" name checks);
+        if name <> "known_pure" then
+          assert (count_substring ~sub:"$ocamlcc_raise_invalid_arg_oob()" body = 1))
+        ["index"; "generic"; "store"; "known_pure"]

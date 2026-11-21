@@ -93,8 +93,10 @@ from `-I` and `--stdlib-dir`. Executable, object, and assembly builds can
 consume the prebuilt stdlib archive summary. Loose object packs use the
 per-unit companions.
 
-Saturated calls can use the resolved entry, suspension, and immediate-result
-facts. Suspending callbacks retain shadow-stack protection. Partial
+Saturated calls can use the resolved entry, suspension, immediate-result,
+and raising facts. Version 2 summaries record the raising flag. Version 1
+summaries are still readable and keep the conservative exception check.
+Suspending callbacks retain shadow-stack protection. Partial
 applications and calls without matching metadata use closure dispatch.
 Persisted entry names identify the implementation and its call facts, so
 relinking a previously optimized caller against a changed implementation
