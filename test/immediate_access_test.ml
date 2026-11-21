@@ -39,7 +39,7 @@ let () =
     {|type t = { v : string }
       external length : string -> int = "%string_length"
       let f r = length r.v|};
-  check ~retains:1 "local_mutable_field"
+  check ~retains:0 "local_mutable_field"
     {|type t = { mutable v : string }
       external length : string -> int = "%string_length"
       let f r = length r.v|};
@@ -49,6 +49,10 @@ let () =
       let f r = use r.v|};
   check ~retains:1 "field_live_across_callback"
     {|type t = { v : string }
+      external length : string -> int = "%string_length"
+      let f r callback = let value = r.v in callback (); length value|};
+  check ~retains:1 "mutable_field_live_across_callback"
+    {|type t = { mutable v : string }
       external length : string -> int = "%string_length"
       let f r callback = let value = r.v in callback (); length value|};
   check ~retains:0 "nested_immutable_fields"
@@ -78,7 +82,7 @@ let () =
     {|type t = { data : int array }
       external set : 'a array -> int -> 'a -> unit = "%array_unsafe_set"
       let f r destination = set destination 0 r.data|};
-  check ~retains:1 "array_store_via_mutable_field"
+  check ~retains:0 "array_store_via_mutable_field"
     {|type t = { mutable data : int array }
       external set : 'a array -> int -> 'a -> unit = "%array_unsafe_set"
       let f r i v = set r.data i v|};
