@@ -1535,15 +1535,22 @@ and inline_leaf hooks b (lf : Anf.lfunction) args =
 and compile_check_exn hooks b exception_kind on_err on_ok =
   let lerr = fresh_label b "exn_err" in
   let lok = fresh_label b "exn_ok" in
-  if exception_kind = Anf.Finalizer_raise then begin
-    let raised = fresh_temp b "finalizer_raised" in
+  let guard symbol =
+    let active = fresh_temp b "exn_active" in
     let lcheck = fresh_label b "exn_check" in
-    emit b (Load (Loadw, Word, raised, Global "ocamlcc_automatic_finalizer_raised"));
-    close_block b (Br (raised, lcheck, lok));
+    emit b (Load (Loadw, Word, active, Global symbol));
+    close_block b (Br (active, lcheck, lok));
     start_block b lcheck
-  end;
+  in
+  if exception_kind = Anf.Finalizer_raise then
+    guard "ocamlcc_automatic_finalizer_raised"
+  else if not b.inline_single_thread_rc then
+    guard "ocamlcc_exn_active";
   let ex = fresh_temp b "exchk" in
-  emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
+  if b.inline_single_thread_rc then
+    emit b (Load (Loadl, Long, ex, Global "ocamlcc_exn_slot"))
+  else
+    emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
   let has_ex = fresh_temp b "hasex" in
   emit b (Cmp (Ne, Long, has_ex, ex, Int 0L));
   close_block b (Br (has_ex, lerr, lok));

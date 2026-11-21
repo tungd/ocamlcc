@@ -1307,8 +1307,35 @@ static void test_aligned_slab_reclamation(void)
     assert((ocamlcc_arc_slab_count(1) >> 1) == slabs + 1);
 }
 
+static void *exn_hint_worker(void *unused)
+{
+    (void)unused;
+    assert(ocamlcc_get_exn() == 0);
+    ocamlcc_set_exn(tagged(2));
+    assert(ocamlcc_get_exn() == tagged(2));
+    assert(atomic_load(&ocamlcc_exn_active) == 2u);
+    ocamlcc_set_exn(tagged(3));
+    assert(atomic_load(&ocamlcc_exn_active) == 2u);
+    return NULL;
+}
+
+static void test_exception_activity_hint(void)
+{
+    assert(atomic_load(&ocamlcc_exn_active) == 0u);
+    ocamlcc_set_exn(tagged(1));
+    pthread_t other;
+    assert(pthread_create(&other, NULL, exn_hint_worker, NULL) == 0);
+    assert(pthread_join(other, NULL) == 0);
+    assert(atomic_load(&ocamlcc_exn_active) == 1u);
+    assert(ocamlcc_get_exn() == tagged(1));
+    ocamlcc_set_exn(0);
+    assert(atomic_load(&ocamlcc_exn_active) == 0u);
+    assert(ocamlcc_get_exn() == 0);
+}
+
 int main(void)
 {
+    test_exception_activity_hint();
     test_aligned_slab_reclamation();
     test_main_shadow_stack();
     test_bulk_array_ownership();

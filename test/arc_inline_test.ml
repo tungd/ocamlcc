@@ -133,3 +133,36 @@ let () =
   if not (contains duplicate "call extern $arc_retain(l %blk.") then
     failwith "duplicate_fresh: missing retain of allocated value";
   if contains duplicate "%rc_tag." then failwith "duplicate_fresh: redundant heap guard"
+
+let () =
+  let source = {|
+    external risky : int -> int = "probe_risky"
+    external ( + ) : int -> int -> int = "%addint"
+    let use n = risky n + 1
+  |} in
+  let body ~inline_single_thread_rc =
+    let il =
+      match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
+        ~inline_single_thread_rc ~filename:"exn_fast.ml" ~modname:"Exn_fast" source with
+      | Ok il -> il
+      | Error error -> failwith error
+    in
+    let find text pos = Str.search_forward (Str.regexp_string text) il pos in
+    let start = find "function l $ocamlcc_Exn_fast_use(" 0 in
+    String.sub il start (find "\n}" start - start)
+  in
+  let contains text pattern =
+    match Str.search_forward (Str.regexp_string pattern) text 0 with
+    | _ -> true
+    | exception Not_found -> false
+  in
+  let shared = body ~inline_single_thread_rc:false in
+  if not (contains shared "loadw extern $ocamlcc_exn_active") then
+    failwith "shared exception check has no process-wide fast path";
+  if not (contains shared "call extern $ocamlcc_get_exn(") then
+    failwith "shared exception check lost its TLS slow path";
+  let single = body ~inline_single_thread_rc:true in
+  if not (contains single "loadl extern $ocamlcc_exn_slot") then
+    failwith "single-thread exception check does not load the slot";
+  if contains single "call extern $ocamlcc_get_exn(" then
+    failwith "single-thread exception check still calls the runtime"

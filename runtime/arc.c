@@ -7,6 +7,7 @@
 
 #include "fiber.h"
 #include "pal.h"
+#include <stdbool.h>
 
 #ifndef OCAMLCC_SINGLE_THREAD_RC
 #include <pthread.h>
@@ -653,11 +654,80 @@ static inline void account_words(uint64_t words)
 #endif
 }
 
-static _Thread_local int64_t tls_exn_slot = 0;
 static _Atomic int64_t g_next_oo_id = 0;
 
-int64_t ocamlcc_get_exn(void) { return tls_exn_slot; }
-void ocamlcc_set_exn(int64_t exn) { tls_exn_slot = exn; }
+/* The generated fast path can skip TLS while the current thread's slot
+ * is known to be empty. Threads publish a count before writing a nonzero
+ * slot and remove their count only after clearing it. */
+_Atomic uint32_t ocamlcc_exn_active;
+
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+int64_t ocamlcc_exn_slot;
+
+int64_t ocamlcc_get_exn(void) { return ocamlcc_exn_slot; }
+
+void ocamlcc_set_exn(int64_t exn)
+{
+    bool was_active = ocamlcc_exn_slot != 0;
+    ocamlcc_exn_slot = exn;
+    if (was_active != (exn != 0))
+        atomic_store_explicit(&ocamlcc_exn_active, exn != 0, memory_order_relaxed);
+}
+#else
+static _Thread_local int64_t tls_exn_slot;
+static pthread_once_t g_exn_cleanup_once = PTHREAD_ONCE_INIT;
+static pthread_key_t g_exn_cleanup_key;
+static bool g_exn_cleanup_ready;
+
+static void exn_thread_cleanup(void *unused)
+{
+    (void)unused;
+    /* A non-null key owns one count even if the platform has already
+     * destroyed the thread-local storage by the time this callback runs. */
+    tls_exn_slot = 0;
+    atomic_fetch_sub_explicit(&ocamlcc_exn_active, 1u, memory_order_release);
+}
+
+static void exn_create_cleanup_key(void)
+{
+    g_exn_cleanup_ready = pthread_key_create(&g_exn_cleanup_key, exn_thread_cleanup) == 0;
+}
+
+static __attribute__((noinline)) int64_t get_thread_exception(void)
+{
+    return tls_exn_slot;
+}
+
+int64_t ocamlcc_get_exn(void)
+{
+    if (atomic_load_explicit(&ocamlcc_exn_active, memory_order_relaxed) == 0u)
+        return 0;
+    return get_thread_exception();
+}
+
+static __attribute__((noinline)) void set_thread_exception(int64_t exn)
+{
+    bool was_active = tls_exn_slot != 0;
+    if (!was_active && exn != 0) {
+        pthread_once(&g_exn_cleanup_once, exn_create_cleanup_key);
+        if (g_exn_cleanup_ready)
+            pthread_setspecific(g_exn_cleanup_key, &g_exn_cleanup_once);
+        atomic_fetch_add_explicit(&ocamlcc_exn_active, 1u, memory_order_relaxed);
+    }
+    tls_exn_slot = exn;
+    if (was_active && exn == 0) {
+        if (g_exn_cleanup_ready)
+            pthread_setspecific(g_exn_cleanup_key, NULL);
+        atomic_fetch_sub_explicit(&ocamlcc_exn_active, 1u, memory_order_release);
+    }
+}
+
+void ocamlcc_set_exn(int64_t exn)
+{
+    if (exn != 0 || atomic_load_explicit(&ocamlcc_exn_active, memory_order_relaxed) != 0u)
+        set_thread_exception(exn);
+}
+#endif
 
 static size_t exn_append_bytes(char *buf, size_t cap, size_t pos,
                                const char *src, size_t len)

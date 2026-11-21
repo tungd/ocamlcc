@@ -109,6 +109,11 @@ int64_t ocamlcc_arc_collect(int64_t unit);
 int64_t ocamlcc_arc_slab_count(int64_t unit);
 int64_t ocamlcc_weak_table_cap(int64_t unit);
 
+/* Generated exception checks share the hint across both runtime profiles. */
+extern _Atomic uint32_t ocamlcc_exn_active;
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+extern int64_t ocamlcc_exn_slot;
+#endif
 int64_t ocamlcc_get_exn(void);
 void    ocamlcc_set_exn(int64_t exn);
 void    ocamlcc_format_exn(int64_t ex, char *buf, size_t cap);
