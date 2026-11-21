@@ -139,3 +139,30 @@ let () =
      || count "call extern $arc_release(" local <> 0
   then failwith ("immediate mutable initializer, assignment and read should need no ARC\n" ^ local);
   check "mutable slot with a heap write" 2 (qbe (mutable_slot ~mixed:true))
+
+
+let () =
+  let slot = id "buffer" and snapshot = id "snapshot" in
+  let write value =
+    Let (id "write", BytesSet (false, value, Int 0, Char 'a'), Halt Unit)
+  in
+  let grow =
+    let fresh = id "grown" in
+    Let (fresh, CreateBytes (Int 2),
+      Let (id "assign", Assign (slot, Var fresh), Halt (Var fresh)))
+  in
+  let delayed =
+    Let (snapshot, Atom (MutVar slot),
+      LetJoin (id "update", grow, write (Var snapshot)))
+  in
+  let direct = Let (snapshot, Atom (MutVar slot), write (Var snapshot)) in
+  let joined = LetJoin (snapshot, If (Int 0, grow, Halt (MutVar slot)),
+    write (Var snapshot)) in
+  let compile body =
+    qbe (MutLet (slot, CreateBytes (Int 1),
+      LetJoin (id "loop", For (id "i", Int 0, Int 79, Asttypes.Upto, body), Halt Unit)))
+  in
+  let retains body = count "call extern $arc_retain(" (compile body) in
+  if retains direct <> 0 then failwith "read-only slot snapshot retained its value";
+  if retains joined <> 0 then failwith "grow-or-read join retained its value";
+  if retains delayed = 0 then failwith "snapshot across a slot overwrite lost its owner"

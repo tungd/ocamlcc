@@ -41,3 +41,22 @@ let () =
   let empty = [||] in
   print_int (Array.length empty);
   print_endline ""
+
+let check_buffer_snapshots grow =
+  let slot = ref (Bytes.make 1 'a') in
+  let current =
+    if grow then begin
+      let fresh = Bytes.make 2 'b' in
+      slot := fresh;
+      fresh
+    end else !slot
+  in
+  Bytes.unsafe_set current 0 'x';
+  let previous = !slot in
+  slot := Bytes.make 1 'z';
+  assert (Bytes.unsafe_get previous 0 = 'x');
+  assert (Bytes.unsafe_get !slot 0 = 'z')
+
+let () =
+  check_buffer_snapshots false;
+  check_buffer_snapshots true

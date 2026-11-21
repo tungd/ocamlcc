@@ -96,3 +96,13 @@ alias behavior.
 # Ownership of atomic field values
 
 A load acquires its owned reference while replacement of that slot is excluded. Exchanges transfer slot ownership to their caller, and successful compare-and-set releases the displaced reference after unlocking.
+
+## Borrowed mutable-slot snapshots
+
+A local mutable slot can lend its value to consumers such as byte operations
+and pattern tests when the snapshot stays inside the frame and each read
+precedes any overwrite on its path. A snapshot across a possible overwrite
+keeps a reference to the original value. When both arms of a conditional
+leave their result owned by the same slot, the continuation can read the slot
+once after the join. This covers a buffer growth arm that stores the new
+buffer and a fast arm that keeps the existing buffer.

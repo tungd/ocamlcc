@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Borrow local mutable-slot snapshots through read-only uses and reload branch results from a common owning slot. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-21 (codex/1) — Guard exception checks at calls that only raise through automatic finalizers, poll counted loops every 64 iterations, and omit zero checks for literal nonzero divisors. See [ARC finalizers](/concepts/arc-finalizers.md).
 
 - 2026-11-21 (codex/1) — Read slab magazines from thread-local storage, batch mixed-slab frees, and skip the automatic finalizer poll call when the registration count is zero. See [Perceus ARC](/concepts/perceus-arc.md) and [ARC finalizers](/concepts/arc-finalizers.md).

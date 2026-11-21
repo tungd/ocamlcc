@@ -593,6 +593,79 @@ let field_is_read_only_in_loop id body =
   in
   scan false body && !read_in_loop
 
+(* A snapshot can share the slot's owner if every use precedes a possible
+   overwrite on its path. A loop may revisit a read after any of its writes. *)
+let read_only_slot_snapshot slot id body =
+  let open Anf in
+  let uses atom = Ident.Set.mem id (atom_vars atom) in
+  let no_access = Some (false, false) in
+  let merge ~ordered a b =
+    match a, b with
+    | Some (read_a, write_a), Some (read_b, write_b)
+      when not (ordered && write_a && read_b) ->
+        Some (read_a || read_b, write_a || write_b)
+    | _ -> None
+  in
+  let sequence = merge ~ordered:true and alternate = merge ~ordered:false in
+  let operation ce =
+    let borrowed, consumed = atom_operands ce in
+    if List.exists uses consumed then None
+    else
+      match ce with
+      | Fun lf when Ident.Set.mem id (Anf.free_vars lf.body) -> None
+      | Assign (target, _) | AssignImm (target, _) | AssignScalar (target, _, _) ->
+          Some (Ident.Set.mem id borrowed, Ident.same target slot)
+      | _ -> Some (Ident.Set.mem id borrowed, false)
+  in
+  let reads atom = Some (uses atom, false) in
+  let repeated = function Some (true, true) -> None | access -> access in
+  let rec scan = function
+    | Halt a | Raise a -> if uses a then None else no_access
+    | StaticRaise (_, args) -> if List.exists uses args then None else no_access
+    | HaltScalar _ | Unwind -> no_access
+    | Let (_, ce, body) | MutLet (_, ce, body) -> sequence (operation ce) (scan body)
+    | LetJoin (_, a, b) | TryWith (a, _, b) | StaticCatch (a, _, _, b, _) ->
+        sequence (scan a) (scan b)
+    | LetRec (defs, body) ->
+        if List.exists (fun (rb : rec_binding) -> Ident.Set.mem id (free_vars rb.def.body)) defs
+        then None else scan body
+    | If (cond, yes, no) | ScalarIf (_, cond, yes, no) ->
+        sequence (reads cond) (alternate (scan yes) (scan no))
+    | While (cond, body) -> repeated (sequence (scan cond) (scan body))
+    | For (_, lo, hi, _, body) ->
+        sequence (Some (uses lo || uses hi, false)) (repeated (scan body))
+    | Switch (scrutinee, sw) ->
+        sequence (reads scrutinee) (alternate (cases sw.consts sw.fail) (cases sw.blocks None))
+    | StringSwitch (scrutinee, arms, fail) ->
+        sequence (reads scrutinee) (cases arms fail)
+    | _ -> None
+  and cases : 'a. ('a * aexpr) list -> aexpr option -> (bool * bool) option =
+    fun arms fail ->
+      List.fold_left (fun acc (_, arm) -> alternate acc (scan arm))
+        (Option.fold ~none:no_access ~some:scan fail) arms
+  in
+  Option.is_some (scan body)
+
+(* Both arms of a grow-or-read join can return a unit token if the same
+   slot owns their selected value. Read that slot once at the join. *)
+let rec mutable_slot_result = function
+  | Anf.Halt (MutVar slot) -> Some (slot, Anf.Halt Unit)
+  | Let (id, (Assign (slot, Var value) as assign), Halt (Var result))
+    when Ident.same value result ->
+      Some (slot, Let (id, assign, Halt Unit))
+  | Let (id, ce, body) ->
+      Option.map (fun (slot, body) -> slot, Anf.Let (id, ce, body))
+        (mutable_slot_result body)
+  | LetJoin (id, rhs, body) ->
+      Option.map (fun (slot, body) -> slot, Anf.LetJoin (id, rhs, body))
+        (mutable_slot_result body)
+  | If (cond, yes, no) ->
+      (match mutable_slot_result yes, mutable_slot_result no with
+       | Some (slot, yes), Some (other, no) when Ident.same slot other ->
+           Some (slot, If (cond, yes, no))
+       | _ -> None)
+  | _ -> None
+
 let borrowed_call env live = function
   | Anf.App (Var fn, args) -> (
       match Ident.Map.find_opt fn env.borrowed_entries with
@@ -1106,14 +1179,11 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       match fuse_field_read id index owner body with
       | Some fused -> transform_aexpr env fused
       | None when field_is_read_only_in_loop id body ->
-          let owners = keep_view_owners env (atom_vars owner) in
-          let env = { env with view_owners = Ident.Map.add id owners env.view_owners } in
-          let live = Ident.Set.union owners (live_with_handlers env body) in
-          let live = if can_raise env body then Ident.Set.union live env.try_owned else live in
-          let dead = Ident.Set.diff env.owned live in
-          let body = transform_aexpr { env with owned = Ident.Set.diff env.owned dead } body in
-          emit_drops env dead (Let (id, Atom (BorrowedField (index, owner)), body))
+          transform_view env id (Anf.BorrowedField (index, owner)) body
       | None -> transform_let env id ce body)
+  | Let (id, Atom (MutVar slot), body)
+    when Ident.Set.mem slot env.muts && read_only_slot_snapshot slot id body ->
+      transform_view env id (Anf.MutVar slot) body
   | Let (id, ce, body) -> transform_let env id ce body
   | MutLet (id, ce, body) ->
       let immediate = mutlet_is_imm env id ce body in
@@ -1154,37 +1224,13 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
               ~rem_after_before ~body_cont:body_with_dead_after make_let
           in
           emit_drops env dead_before node)
-  | LetJoin (id, rhs, body) ->
-      let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
-      let live_body_only =
-        if can_raise env body then Ident.Set.union base_live_body env.try_owned
-        else base_live_body
-      in
-      let live_rhs =
-        Ident.Set.union (live_with_handlers env rhs)
-          (if can_raise env rhs then env.try_owned else Ident.Set.empty)
-      in
-      let shared = Ident.Set.inter env.owned live_body_only in
-      let owned_rhs_only = Ident.Set.diff env.owned live_body_only in
-      let dead_before = Ident.Set.diff owned_rhs_only live_rhs in
-      let owned_for_rhs = Ident.Set.diff owned_rhs_only dead_before in
-      let env_rhs =
-        { env with
-          owned = owned_for_rhs;
-          frame_borrowed = Ident.Set.union env.frame_borrowed shared;
-          no_release_muts = env.muts;
-          in_tail = false }
-      in
-      let rhs' = transform_aexpr env_rhs rhs in
-      let imm =
-        if Ident.Set.mem id env.typed_imm || Anf.returns_scalar rhs
-           || aexpr_returns_imm ~typed_imm:env.typed_imm ~pure:env.pure ~imm_funs:env.imm_funs env.imm rhs
-        then Ident.Set.add id env.imm
-        else Ident.Set.remove id env.imm
-      in
-      let env_body = { env with owned = Ident.Set.add id shared; imm } in
-      let body' = transform_aexpr env_body body in
-      emit_drops env dead_before (LetJoin (id, rhs', body'))
+  | LetJoin (id, rhs, body) -> (
+      match mutable_slot_result rhs with
+      | Some (slot, rhs)
+        when Ident.Set.mem slot env.muts && read_only_slot_snapshot slot id body ->
+          let ignored = Ident.create_local "slot_join" in
+          transform_join env ignored rhs (Anf.Let (id, Atom (MutVar slot), body))
+      | _ -> transform_join env id rhs body)
   | LetRec (bindings, body) ->
       let rec_ids =
         List.fold_left
@@ -1375,6 +1421,47 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
             (emit_mut_releases dead_muts (Halt (Var u)))
         in
         LetJoin (u, For (idx, s, e, dir, body'), cont)
+
+and transform_view env id source body =
+  let owners = keep_view_owners env (atom_vars source) in
+  let env = { env with view_owners = Ident.Map.add id owners env.view_owners } in
+  let live = Ident.Set.union owners (live_with_handlers env body) in
+  let live = if can_raise env body then Ident.Set.union live env.try_owned else live in
+  let dead = Ident.Set.diff env.owned live in
+  let body = transform_aexpr { env with owned = Ident.Set.diff env.owned dead } body in
+  emit_drops env dead (Let (id, Atom source, body))
+
+and transform_join env id rhs body : Anf.aexpr =
+  let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
+  let live_body_only =
+    if can_raise env body then Ident.Set.union base_live_body env.try_owned
+    else base_live_body
+  in
+  let live_rhs =
+    Ident.Set.union (live_with_handlers env rhs)
+      (if can_raise env rhs then env.try_owned else Ident.Set.empty)
+  in
+  let shared = Ident.Set.inter env.owned live_body_only in
+  let owned_rhs_only = Ident.Set.diff env.owned live_body_only in
+  let dead_before = Ident.Set.diff owned_rhs_only live_rhs in
+  let owned_for_rhs = Ident.Set.diff owned_rhs_only dead_before in
+  let env_rhs =
+    { env with
+      owned = owned_for_rhs;
+      frame_borrowed = Ident.Set.union env.frame_borrowed shared;
+      no_release_muts = env.muts;
+      in_tail = false }
+  in
+  let rhs' = transform_aexpr env_rhs rhs in
+  let imm =
+    if Ident.Set.mem id env.typed_imm || Anf.returns_scalar rhs
+       || aexpr_returns_imm ~typed_imm:env.typed_imm ~pure:env.pure ~imm_funs:env.imm_funs env.imm rhs
+    then Ident.Set.add id env.imm
+    else Ident.Set.remove id env.imm
+  in
+  let env_body = { env with owned = Ident.Set.add id shared; imm } in
+  let body' = transform_aexpr env_body body in
+  emit_drops env dead_before (LetJoin (id, rhs', body'))
 
 and transform_let env id ce body =
   let ce = specialize_assignment env ce in
