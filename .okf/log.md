@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Bypass ARC traversal for unmarked leaf releases and use direct slab size-class lookup. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-22 (codex/1) — Keep single-thread ARC compact on exception cleanup paths. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-22 (codex/1) — Bind compatibility Array, Bytes, and String kernels directly and expose the immediate Uchar conversion. See [stdlib compatibility](/concepts/stdlib-compatibility.md).

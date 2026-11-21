@@ -1307,6 +1307,48 @@ static void test_aligned_slab_reclamation(void)
     assert((ocamlcc_arc_slab_count(1) >> 1) == slabs + 1);
 }
 
+static void test_slab_class_boundaries(void)
+{
+    static const uint32_t limits[] = {
+        16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 1024, 2048
+    };
+    int64_t before = arc_live_objects();
+    uint32_t first = sizeof(ArcHeader);
+    for (size_t i = 0; i < sizeof(limits) / sizeof(limits[0]); i++) {
+        void *obj = arc_alloc(0, 0, first - sizeof(ArcHeader));
+        void *token = arc_drop_reuse((int64_t)(uintptr_t)obj);
+        assert(token);
+        void *reused = arc_alloc_reuse(token, 0, 0, limits[i] - sizeof(ArcHeader));
+        assert(reused == obj);
+        arc_release(reused);
+        first = limits[i] + 1;
+    }
+    assert(arc_live_objects() == before);
+}
+
+static void test_leaf_weak_retirement(void)
+{
+    int64_t before = arc_live_objects();
+    int64_t weak = ocamlcc_weak_create(tagged(1));
+    int64_t values[] = {
+        ocamlcc_alloc_float(1.5),
+        (int64_t)(uintptr_t)arc_alloc_bytes(8),
+        (int64_t)(uintptr_t)arc_alloc_bytes(4096)
+    };
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        int64_t *some = arc_alloc(0, 1, sizeof(*some));
+        arc_retain_val(values[i]);
+        *some = values[i];
+        ocamlcc_weak_set(weak, tagged(0), (int64_t)(uintptr_t)some);
+        arc_release(some);
+        assert(ocamlcc_weak_check(weak, tagged(0)) == tagged(1));
+        arc_release_val(values[i]);
+        assert(ocamlcc_weak_check(weak, tagged(0)) == tagged(0));
+    }
+    arc_release_val(weak);
+    assert(arc_live_objects() == before);
+}
+
 static void *exn_hint_worker(void *unused)
 {
     (void)unused;
@@ -1337,6 +1379,8 @@ int main(void)
 {
     test_exception_activity_hint();
     test_aligned_slab_reclamation();
+    test_slab_class_boundaries();
+    test_leaf_weak_retirement();
     test_main_shadow_stack();
     test_bulk_array_ownership();
     test_array_scan_promotion();

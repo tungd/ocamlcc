@@ -939,7 +939,13 @@ int64_t caml_update_dummy_lazy(int64_t dummy_val, int64_t new_val)
 
 static inline int size_class_for(uint32_t total_bytes)
 {
-    for (int i = 0; i < NUM_SIZE_CLASSES; i++) {
+    /* The first eight classes in k_class_sizes rounded up to 16 bytes. */
+    static const uint8_t small_class[] = {
+        0, 0, 1, 2, 3, 4, 4, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7
+    };
+    if (total_bytes <= 256u)
+        return small_class[(total_bytes + 15u) >> 4];
+    for (int i = 8; i < NUM_SIZE_CLASSES; i++) {
         if (total_bytes <= k_class_sizes[i])
             return i;
     }
@@ -1196,12 +1202,8 @@ static ArcHeader *slab_alloc(uint32_t total_bytes)
 static void slab_free(ArcHeader *hdr)
 {
     uint32_t total_bytes = (uint32_t)sizeof(ArcHeader) + hdr->byte_size;
-    int cls = size_class_for(total_bytes);
-    if (cls >= 0) {
-        SlabPage *s = slab_owner(hdr);
-        if (s->cls != (uint32_t)cls)
-            pal_abort();
-        SlabMagazine *m = slab_magazine(cls);
+    if (total_bytes <= k_class_sizes[NUM_SIZE_CLASSES - 1]) {
+        SlabMagazine *m = slab_magazine((int)slab_owner(hdr)->cls);
         if (m != NULL) {
             slab_cache_slot(m, hdr);
             return;
@@ -1483,7 +1485,8 @@ static inline void drop_child_val(DropWorklist *w, int64_t val, ArcHeader **tail
 
 /* Releases children of [root] with O(1) stack on right-spines / tail fields.
  * Frees every dead descendant; frees [root] iff [free_root] is non-zero. */
-static void release_subtree(ArcHeader *root, int free_root)
+static __attribute__((noinline)) void release_subtree_slow(ArcHeader *root,
+                                                           int free_root)
 {
     ForeignRelease *foreign_head = NULL, *foreign_tail = NULL;
     int defer_nested_releases = 0;
@@ -1567,6 +1570,21 @@ static void release_subtree(ArcHeader *root, int free_root)
     }
     if (foreign_head != NULL || defer_nested_releases)
         finish_subtree_foreign_releases(defer_nested_releases, foreign_head, foreign_tail);
+}
+
+static inline void release_subtree(ArcHeader *root, int free_root)
+{
+    /* These layouts own no children or custom resources and cannot have
+     * a buffered cycle root. A registered weak target still needs clearing. */
+    uint16_t tag = root->tag;
+    if (free_root &&
+        (tag == ARC_TAG_STRING || tag == ARC_TAG_FLOAT || tag == ARC_TAG_FLOAT_ARRAY) &&
+        !might_be_weak_target(root)) {
+        account_objects(&g_live_objects, -1);
+        slab_free(root);
+    } else {
+        release_subtree_slow(root, free_root);
+    }
 }
 
 void arc_release(void *obj)
