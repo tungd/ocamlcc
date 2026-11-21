@@ -1427,17 +1427,31 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       let v = compile_atom hooks b (Var id) in
       emit_arc_if_heap b `Retain v;
       compile_aexpr hooks b tail body
-  | Release (id, body) ->
-      let v = compile_atom hooks b (Var id) in
-      emit_arc_if_heap b `Release v;
-      compile_aexpr hooks b tail body
-  | ReleaseMut (id, body) ->
-      (match Hashtbl.find_opt b.mut_vars id with
-      | Some slot ->
-          let v = fresh_temp b "mrel" in
-          emit b (Load (Loadl, Long, v, slot));
-          emit_arc_if_heap b `Release v
-      | None -> ());
+  | (Release _ | ReleaseMut _) as cleanup ->
+      let rec ends_in_raise = function
+        | Anf.Release (_, body) | ReleaseMut (_, body) -> ends_in_raise body
+        | Raise _ | Unwind -> true
+        | _ -> false
+      in
+      let rec emit_releases = function
+        | Anf.Release (id, body) ->
+            emit_arc_if_heap b `Release (compile_atom hooks b (Var id));
+            emit_releases body
+        | ReleaseMut (id, body) ->
+            (match Hashtbl.find_opt b.mut_vars id with
+            | Some slot ->
+                let v = fresh_temp b "mrel" in
+                emit b (Load (Loadl, Long, v, slot));
+                emit_arc_if_heap b `Release v
+            | None -> ());
+            emit_releases body
+        | rest -> rest
+      in
+      let body =
+        if b.inline_single_thread_rc && not b.cur_fn.compact_arc && ends_in_raise cleanup
+        then with_compact_arc b (fun () -> emit_releases cleanup)
+        else emit_releases cleanup
+      in
       compile_aexpr hooks b tail body
   | DropReuse (v_id, tok_id, body) ->
       let v = compile_atom hooks b (Var v_id) in
@@ -1555,7 +1569,7 @@ and compile_check_exn hooks b exception_kind on_err on_ok =
   emit b (Cmp (Ne, Long, has_ex, ex, Int 0L));
   close_block b (Br (has_ex, lerr, lok));
   start_block b lerr;
-  ignore (compile_aexpr hooks b false on_err);
+  with_compact_arc b (fun () -> ignore (compile_aexpr hooks b false on_err));
   if b.cur_fn.term = None then ignore (emit_unwind b);
   start_block b lok;
   on_ok ()

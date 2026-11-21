@@ -166,3 +166,40 @@ let () =
     failwith "single-thread exception check does not load the slot";
   if contains single "call extern $ocamlcc_get_exn(" then
     failwith "single-thread exception check still calls the runtime"
+
+let () =
+  let source = {|
+    external risky : int -> int = "probe_risky"
+    external keep : string -> int = "probe_keep" [@@noalloc]
+    external raise : exn -> 'a = "%raise"
+    external ( + ) : int -> int -> int = "%addint"
+    let call text n = let result = risky n in result + keep text
+    let branch text e cond = if cond then raise e else keep text
+  |} in
+  let il =
+    match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
+      ~inline_single_thread_rc:true ~filename:"arc_cold.ml" ~modname:"Arc_cold" source with
+    | Ok il -> il
+    | Error error -> failwith error
+  in
+  let find text pos = Str.search_forward (Str.regexp_string text) il pos in
+  let contains text pattern =
+    match Str.search_forward (Str.regexp_string pattern) text 0 with
+    | _ -> true
+    | exception Not_found -> false
+  in
+  let check fn first next =
+    let start = find ("function l $ocamlcc_Arc_cold_" ^ fn ^ "(") 0 in
+    let error = find ("\n@" ^ first ^ ".") start in
+    let success = find ("\n@" ^ next ^ ".") error in
+    let cleanup = String.sub il error (success - error) in
+    if not (contains cleanup "call extern $arc_release_val(") then
+      failwith (fn ^ ": missing compact release in exception cleanup");
+    if contains cleanup "%rc_count." then
+      failwith (fn ^ ": inlined reference counts in exception cleanup");
+    let normal = String.sub il success (find "\n}" success - success) in
+    if not (contains normal "%rc_count.") then
+      failwith (fn ^ ": lost inline reference counts on the normal path")
+  in
+  check "call" "exn_err" "exn_ok";
+  check "branch" "then" "else"

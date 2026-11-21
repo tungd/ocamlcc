@@ -45,6 +45,7 @@ type fn_state = {
   cur_group : string option;
   mutable tail_sites : (string * t list) list;
   mutable try_stack : string list;
+  mutable compact_arc : bool;
   in_init : bool;
 }
 
@@ -83,6 +84,7 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
     cur_group;
     tail_sites = [];
     try_stack = [];
+    compact_arc = false;
     in_init }
 
 let create ?(inline_single_thread_rc = false) prefix =
@@ -637,16 +639,27 @@ let emit_single_thread_rc b operation value done_ =
       emit b (Call_void { fn = Global "arc_release"; args = [ (Long, value) ] });
       close_block b (Jmp done_)
 
+let with_compact_arc b f =
+  let state = b.cur_fn in
+  let saved = state.compact_arc in
+  state.compact_arc <- true;
+  Fun.protect ~finally:(fun () -> state.compact_arc <- saved) f
+
 let emit_arc_if_heap b operation value =
-  let call () =
-    let fn = match operation with `Retain -> "arc_retain" | `Release -> "arc_release" in
+  let call ~tagged =
+    let fn =
+      match operation with `Retain -> "arc_retain" | `Release -> "arc_release"
+    in
+    let fn = if tagged then fn ^ "_val" else fn in
     emit b (Call_void { fn = Global fn; args = [ (Long, value) ] })
   in
   match value with
   | Int n when n = 0L || Int64.logand n 1L = 1L -> ()
   | _ ->
       let guarded = not (is_known_heap b value) in
-      if not guarded && not b.inline_single_thread_rc then call ()
+      if b.inline_single_thread_rc && b.cur_fn.compact_arc then
+        call ~tagged:guarded
+      else if not guarded && not b.inline_single_thread_rc then call ~tagged:false
       else begin
         let done_ = fresh_label b "rc_done" in
         if guarded then begin
@@ -663,7 +676,7 @@ let emit_arc_if_heap b operation value =
         if b.inline_single_thread_rc then
           emit_single_thread_rc b operation value done_
         else begin
-          call ();
+          call ~tagged:false;
           close_block b (Jmp done_)
         end;
         start_block b done_
@@ -672,7 +685,7 @@ let emit_arc_if_heap b operation value =
 let finish_bounds_guard b ?drop_on_oob ?on_oob ~result_type prefix lok loob on_ok =
   let raise_oob () =
     start_block b loob;
-    Option.iter (emit_arc_if_heap b `Release) drop_on_oob;
+    with_compact_arc b (fun () -> Option.iter (emit_arc_if_heap b `Release) drop_on_oob);
     emit b (Call_void { fn = Global "ocamlcc_raise_invalid_arg_oob"; args = [] })
   in
   match on_oob with
