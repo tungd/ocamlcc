@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-21 (codex/1) — Apply extended field-view borrowing only when a loop uses the view, preserving early reuse in ordinary list matches. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-21 (codex/1) — Borrow immutable field views across loops and branches and track the receiver through each use. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-21 (codex/1) — Inline small imported Lambda aggregate producers before local scalar replacement in multi-unit builds. Keep the provider's initialization dependency. See [compiler pipeline](/concepts/compiler-pipeline.md#inlining-imported-aggregate-producers).

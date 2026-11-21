@@ -539,38 +539,52 @@ let fuse_field_read id index owner body =
 (* A view may read or update the object reached through an immutable
    projection. It cannot transfer the pointer or expose it to a closure or
    call with an unknown ownership convention. *)
-let field_is_read_only id body =
+let field_is_read_only_in_loop id body =
   let open Anf in
   let uses a = Ident.Set.mem id (atom_vars a) in
   let closure_uses lf = Ident.Set.mem id (Anf.free_vars lf.body) in
-  let safe_ce = function
-    | Fun lf -> not (closure_uses lf)
-    | (App _ | DirectApp _ | Ccall _ | NativeCcall _) as ce ->
-        let read, take = atom_operands ce in
-        not (Ident.Set.mem id read || List.exists uses take)
-    | ce -> not (List.exists uses (snd (atom_operands ce)))
+  let read_in_loop = ref false in
+  let note inside used = if inside && used then read_in_loop := true in
+  let safe_ce inside ce =
+    let read, take = atom_operands ce in
+    let reads_view = Ident.Set.mem id read in
+    note inside reads_view;
+    not (List.exists uses take)
+    && match ce with
+       | Fun lf -> not (closure_uses lf)
+       | App _ | DirectApp _ | Ccall _ | NativeCcall _ -> not reads_view
+       | _ -> true
   in
-  let rec scan = function
+  let rec scan inside = function
     | Halt a | Raise a -> not (uses a)
     | HaltScalar _ | Unwind -> true
     | StaticRaise (_, args) -> not (List.exists uses args)
-    | Let (_, ce, body) | MutLet (_, ce, body) -> safe_ce ce && scan body
+    | Let (_, ce, body) | MutLet (_, ce, body) -> safe_ce inside ce && scan inside body
     | LetRec (defs, body) ->
         List.for_all (fun (rb : Anf.rec_binding) -> not (closure_uses rb.def)) defs
-        && scan body
-    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b)
-    | While (a, b) | TryWith (a, _, b) | StaticCatch (a, _, _, b, _) ->
-        scan a && scan b
-    | For (_, _, _, _, body) -> scan body
-    | Switch (_, sw) -> cases sw.consts sw.fail && cases sw.blocks None
-    | StringSwitch (_, arms, fail) -> cases arms fail
+        && scan inside body
+    | LetJoin (_, a, b) | TryWith (a, _, b) | StaticCatch (a, _, _, b, _) ->
+        scan inside a && scan inside b
+    | If (cond, yes, no) | ScalarIf (_, cond, yes, no) ->
+        note inside (uses cond);
+        scan inside yes && scan inside no
+    | While (cond, body) -> scan true cond && scan true body
+    | For (_, lo, hi, _, body) ->
+        note inside (uses lo || uses hi);
+        scan true body
+    | Switch (scrut, sw) ->
+        note inside (uses scrut);
+        cases inside sw.consts sw.fail && cases inside sw.blocks None
+    | StringSwitch (scrut, arms, fail) ->
+        note inside (uses scrut);
+        cases inside arms fail
     | _ -> false
-  and cases : 'a. ('a * aexpr) list -> aexpr option -> bool =
-    fun arms fail ->
-      List.for_all (fun (_, arm) -> scan arm) arms
-      && Option.fold ~none:true ~some:scan fail
+  and cases : 'a. bool -> ('a * aexpr) list -> aexpr option -> bool =
+    fun inside arms fail ->
+      List.for_all (fun (_, arm) -> scan inside arm) arms
+      && Option.fold ~none:true ~some:(scan inside) fail
   in
-  scan body
+  scan false body && !read_in_loop
 
 let borrowed_call env live = function
   | Anf.App (Var fn, args) -> (
@@ -1058,7 +1072,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
   | Let (id, (Field (index, Immutable_field, ((Var _ | BorrowedField _) as owner)) as ce), body) -> (
       match fuse_field_read id index owner body with
       | Some fused -> transform_aexpr env fused
-      | None when field_is_read_only id body ->
+      | None when field_is_read_only_in_loop id body ->
           let owners = keep_view_owners env (atom_vars owner) in
           let env = { env with view_owners = Ident.Map.add id owners env.view_owners } in
           let live = Ident.Set.union owners (live_with_handlers env body) in

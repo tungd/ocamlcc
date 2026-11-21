@@ -47,7 +47,7 @@ let () =
     {|type t = { v : string }
       external use : string -> int = "foreign_use"
       let f r = use r.v|};
-  check ~owner_releases:None ~retains:0 "field_live_across_callback"
+  check ~retains:1 "field_live_across_callback"
     {|type t = { v : string }
       external length : string -> int = "%string_length"
       let f r callback = let value = r.v in callback (); length value|};
