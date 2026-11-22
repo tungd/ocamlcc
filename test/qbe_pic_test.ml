@@ -25,13 +25,14 @@ let () =
      let r = c_fn (make_adder 1 2)"
   in
   match
-    Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-      ~filename:"pic_sample.ml" ~modname:"Pic_sample" src
+    Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"pic_sample.ml" ~modname:"Pic_sample") with
+        nopervasives = true; nostdlib = true } src
   with
   | Error msg ->
       Printf.printf "compile error: %s\n" msg;
       exit 1
-  | Ok il ->
+  | Ok { Pipeline.Output.ssa = il; _ } ->
       let check name ok =
         Printf.printf "%s: %s\n" name (if ok then "PASS" else "FAIL");
         ok

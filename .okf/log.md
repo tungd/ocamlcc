@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Centralize filesystem and process operations in `Sys_util`. Return SSA, the CMI path, and export facts from the typed [compiler pipeline](/concepts/compiler-pipeline.md#compilation-requests).
+
 - 2026-11-22 (codex/1) — Compatibility Array.fill, Array.sub, Bytes.fill and Bytes.sub call native bulk kernels after upstream validation, preserving bounds errors and checked compatibility entry points.
 
 - 2026-11-22 (codex/1) — Lower counted loop poll phases from raw indices, tag indices on demand, and preserve proven stack-slot and option borrows through local reads.

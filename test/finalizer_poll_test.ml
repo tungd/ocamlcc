@@ -1,6 +1,7 @@
 let il =
-  match Pipeline.compile_source ~nostdlib:true ~nopervasives:true
-    ~filename:"finalizer_poll.ml" ~modname:"Finalizer_poll" {|
+  match Pipeline.compile_source
+    { (Pipeline.Request.create ~filename:"finalizer_poll.ml" ~modname:"Finalizer_poll") with
+      nostdlib = true; nopervasives = true } {|
       external ( + ) : int -> int -> int = "%addint"
       external ( / ) : int -> int -> int = "%divint"
       external ( mod ) : int -> int -> int = "%modint"
@@ -54,7 +55,7 @@ let il =
         v.index
     |}
   with
-  | Ok il -> il
+  | Ok { Pipeline.Output.ssa = il; _ } -> il
   | Error message -> failwith message
 
 let has_instruction name pattern =

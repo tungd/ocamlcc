@@ -1,9 +1,10 @@
 let compile source =
   match
-    Pipeline.compile_source ~nostdlib:true ~nopervasives:true
-      ~filename:"borrow_params.ml" ~modname:"Borrow_params" source
+    Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"borrow_params.ml" ~modname:"Borrow_params") with
+        nostdlib = true; nopervasives = true } source
   with
-  | Ok il -> il
+  | Ok { Pipeline.Output.ssa = il; _ } -> il
   | Error message -> failwith message
 
 let contains ~sub s =
@@ -217,20 +218,24 @@ let () =
 let () =
   let dir = Filename.temp_dir "ocamlcc_borrow_import" "" in
   let prefix = Filename.concat dir "provider" in
-  let exports = ref [] in
-  let compile = function Ok il -> il | Error message -> failwith message in
-  let provider = compile (Pipeline.compile_source ~nostdlib:true ~nopervasives:true
-    ~filename:(prefix ^ ".ml") ~modname:"Provider" ~output_prefix:prefix
-    ~emit_cmi:true ~seal_exports:true ~on_exports:(fun values -> exports := values) {|
+  let compile = function Ok output -> output | Error message -> failwith message in
+  let provider =
+    let request =
+      { (Pipeline.Request.create ~filename:(prefix ^ ".ml") ~modname:"Provider") with
+        nostdlib = true; nopervasives = true; output_prefix = Some prefix;
+        emit_cmi = true; export_policy = Seal }
+    in
+    compile (Pipeline.compile_source request {|
       external put : bytes -> int -> char -> unit = "%bytes_unsafe_set"
       let[@inline never] write buffer index = put buffer index 'a'
   |}) in
   let obj = prefix ^ ".o" in
-  Out_channel.with_open_bin obj (fun out -> output_string out provider);
-  Export_summary.publish_object ~unit_name:"Provider" ~cmi:(prefix ^ ".cmi") ~obj !exports;
-  let consumer = compile (Pipeline.compile_source ~nostdlib:true ~nopervasives:true
-    ~include_dirs:[dir] ~load_exports:(Export_summary.loader ())
-    ~filename:"borrow_params.ml" ~modname:"Borrow_params" {|
+  Out_channel.with_open_bin obj (fun out -> output_string out provider.ssa);
+  Export_summary.publish_object ~unit_name:"Provider" ~cmi:(Option.get provider.interface) ~obj provider.exports;
+  let consumer = compile (Pipeline.compile_source
+    { (Pipeline.Request.create ~filename:"borrow_params.ml" ~modname:"Borrow_params") with
+      nostdlib = true; nopervasives = true; include_dirs = [dir];
+      summaries = Some (Export_summary.Loader.create ()) } {|
       external length : bytes -> int = "%bytes_length"
       let use buffer index = Provider.write buffer index; length buffer
       external create : int -> bytes = "caml_create_bytes"
@@ -249,7 +254,8 @@ let () =
       type mutable_row = { mutable current : bytes }
       let mutable_projected row index = Provider.write row.current index
   |}) in
-  require provider "export function l $ocamlcc_Provider_write_borrowed__";
+  let consumer = consumer.ssa in
+  require provider.ssa "export function l $ocamlcc_Provider_write_borrowed__";
   let use = function_body consumer "use" in
   require use "call extern $ocamlcc_Provider_write_borrowed__";
   forbid use "arc_retain";
@@ -303,7 +309,7 @@ let () =
 
 let () =
   let il =
-    match Pipeline.compile_source ~filename:"borrow_params.ml" ~modname:"Borrow_params" {|
+    match Pipeline.compile_source (Pipeline.Request.create ~filename:"borrow_params.ml" ~modname:"Borrow_params") {|
       type entry = Entry of int
       let values = Array.init 256 (fun i -> Entry i)
       let short = Array.init 255 (fun i -> Entry i)
@@ -316,7 +322,7 @@ let () =
       let custom = Custom.init 256 (fun i -> Entry i)
       let custom_checked n = if n >= 0 && n < 256 then custom.(n) else Entry n
     |} with
-    | Ok il -> il
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error message -> failwith message
   in
   forbid (function_body il "safe") "@bnd_oob.";

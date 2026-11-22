@@ -15,8 +15,9 @@ let has_substr ~sub s =
 
 let check_unsupported name source expect_sub =
   match
-    Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-      ~filename:(name ^ ".ml") ~modname:"Test" source
+    Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:(name ^ ".ml") ~modname:"Test") with
+        nopervasives = true; nostdlib = true } source
   with
   | Ok _ ->
       Printf.printf "%s: FAIL expected Error\n" name;
@@ -34,8 +35,7 @@ let check_unsupported name source expect_sub =
 
 let check_missing_file () =
   match
-    Pipeline.compile_file ~filename:"/nonexistent/ocamlcc_missing.ml"
-      ~modname:"Missing" ()
+    Pipeline.compile_file (Pipeline.Request.create ~filename:"/nonexistent/ocamlcc_missing.ml" ~modname:"Missing")
   with
   | Ok _ ->
       Printf.printf "missing_file: FAIL expected Error\n";

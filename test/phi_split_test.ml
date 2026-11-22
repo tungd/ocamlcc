@@ -46,11 +46,12 @@ let () =
   let qbe_path = Sys.argv.(1) in
   let src = make_wide_match_source 90 in
   match
-    Pipeline.compile_source ~nostdlib:false ~nopervasives:false
-      ~emit_entry:false ~filename:"wide_match.ml" ~modname:"Wide_match" src
+    Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"wide_match.ml" ~modname:"Wide_match") with
+        emit_entry = false } src
   with
   | Error msg -> failwith ("compile_source failed: " ^ msg)
-  | Ok ssa ->
+  | Ok { Pipeline.Output.ssa = ssa; _ } ->
       let max_preds = count_max_phi_args ssa in
       if max_preds > 50 then
         failwith

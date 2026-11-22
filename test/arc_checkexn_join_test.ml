@@ -56,11 +56,12 @@ let () =
     |}
   in
   match
-    Pipeline.compile_source ~nostdlib:true ~nopervasives:true
-      ~filename:"checkexn_join.ml" ~modname:"Checkexn_join" source
+    Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"checkexn_join.ml" ~modname:"Checkexn_join") with
+        nostdlib = true; nopervasives = true } source
   with
   | Error msg -> failwith ("Pipeline failed: " ^ msg)
-  | Ok ssa ->
+  | Ok { Pipeline.Output.ssa = ssa; _ } ->
       let fn_ssa = extract_func ~name:"ocamlcc_Checkexn_join_join_else" ssa in
       assert (count_substring ~sub:"$ocamlcc_Checkexn_join_may_raise" fn_ssa = 1);
       (* One get_exn from entry finalizer poll + one from CheckExn on may_raise. *)

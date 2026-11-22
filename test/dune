@@ -435,3 +435,13 @@
  (name native_ffi_test)
  (modules native_ffi_test)
  (libraries ocamlcc str))
+
+(test
+ (name sys_util_test)
+ (modules sys_util_test)
+ (libraries ocamlcc unix))
+
+(test
+ (name pipeline_output_test)
+ (modules pipeline_output_test)
+ (libraries ocamlcc))

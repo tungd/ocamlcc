@@ -50,11 +50,12 @@ let () =
     |}
   in
   match
-    Pipeline.compile_source ~nostdlib:true ~nopervasives:true
-      ~filename:"mutrec_clos.ml" ~modname:"Mutrec_clos" source
+    Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"mutrec_clos.ml" ~modname:"Mutrec_clos") with
+        nostdlib = true; nopervasives = true } source
   with
   | Error msg -> failwith ("Pipeline failed: " ^ msg)
-  | Ok ssa ->
+  | Ok { Pipeline.Output.ssa = ssa; _ } ->
       let prefix = "function l $ocamlcc_Mutrec_clos_mutrec_dispatch(" in
       let header =
         match List.find_opt (String.starts_with ~prefix) (String.split_on_char '\n' ssa) with

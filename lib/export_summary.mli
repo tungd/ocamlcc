@@ -9,6 +9,12 @@ val write_unit_object : string -> unit
 val publish_object : unit_name:string -> cmi:string -> obj:string -> Anf.exports -> unit
 val find_archive : string -> string option
 
-(** Read on demand using the CMI selected by the frontend. Missing, malformed
-    or mismatched metadata leaves a call on the closure path. *)
-val loader : ?archive:string -> unit -> unit_name:string -> cmi:string -> Anf.exports option
+module Loader : sig
+  type t
+
+  val create : ?archive:string -> ?exclude_units:string list -> unit -> t
+
+  val lookup : t -> unit_name:string -> cmi:string -> Anf.exports option
+  (** Read on demand using the CMI selected by the frontend. Missing, malformed
+      or mismatched metadata leaves a call on the closure path. *)
+end

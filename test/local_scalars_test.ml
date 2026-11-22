@@ -1,6 +1,6 @@
 let () =
   let il =
-    match Pipeline.compile_source ~filename:"local_scalars.ml" ~modname:"Local_scalars" {|
+    match Pipeline.compile_source (Pipeline.Request.create ~filename:"local_scalars.ml" ~modname:"Local_scalars") {|
       let array (a : float array) i =
         let x = a.(i) in
         let y = x +. 2. in
@@ -27,7 +27,7 @@ let () =
         let z = Int32.add y 1l in
         Int32.mul z 2l
     |} with
-    | Ok il -> il
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error error -> failwith error
   in
   let count name symbol expected =
@@ -58,7 +58,7 @@ let () =
 
 let () =
   let il =
-    match Pipeline.compile_source ~filename:"numeric_loops.ml" ~modname:"Numeric_loops" {|
+    match Pipeline.compile_source (Pipeline.Request.create ~filename:"numeric_loops.ml" ~modname:"Numeric_loops") {|
       let rec float_loop n (acc : float) =
         if n <= 0 then acc else float_loop (n - 1) (acc +. 2.)
       let rec integer_loop n (acc : int64) =
@@ -95,7 +95,7 @@ let () =
         observe_box acc;
         if n <= 0 then acc else boxed_loop (n - 1) (acc +. 2.)
     |} with
-    | Ok il -> il
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error error -> failwith error
   in
   let body name =

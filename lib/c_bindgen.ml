@@ -99,10 +99,7 @@ let record_member_names labels =
   in
   snd (List.fold_left_map allocate used labels)
 
-let read_file filename =
-  let ic = open_in_bin filename in
-  Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () ->
-      really_input_string ic (in_channel_length ic))
+let read_file = Sys_util.read_file
 
 let bigarray_name = function
   | Fixed n -> "Array" ^ string_of_int n

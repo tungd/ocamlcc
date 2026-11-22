@@ -2,18 +2,8 @@ let archive_version = "ocamlcc-opt-v5"
 let object_version = "ocamlcc-exports-v5"
 let digest path = Digest.to_hex (Digest.file path)
 
-let read path = In_channel.with_open_bin path In_channel.input_all
-
-let write path data =
-  let tmp, out = Filename.open_temp_file ~temp_dir:(Filename.dirname path) ~perms:0o666 "exports-" ".tmp" in
-  Fun.protect
-    ~finally:(fun () ->
-      close_out_noerr out;
-      if Sys.file_exists tmp then Sys.remove tmp)
-    (fun () ->
-      output_string out data;
-      close_out out;
-      Sys.rename tmp path)
+let read = Sys_util.read_file
+let write = Sys_util.write_atomic
 
 let rows ~cmi_digest exports =
   let buffer = Buffer.create 256 in
@@ -176,22 +166,31 @@ let read_object cmi =
 let optional f =
   try f () with Sys_error _ | Invalid_argument _ | Failure _ -> None
 
-let loader ?archive () =
-  let archived = lazy (Option.bind archive (fun file -> optional (fun () -> read_archive file))) in
-  let cache = Hashtbl.create 32 in
-  fun ~unit_name ~cmi ->
-    let key = unit_name, cmi in
-    match Hashtbl.find_opt cache key with
-    | Some result -> result
-    | None ->
-        let result = optional (fun () ->
-          let matching units =
-            match Hashtbl.find_opt units unit_name with
-            | Some (cmi_digest, exports) when digest cmi = cmi_digest -> Some exports
-            | _ -> None
-          in
-          if Option.exists (fun file -> Filename.dirname file = Filename.dirname cmi) archive
-          then Option.bind (Lazy.force archived) matching
-          else Option.bind (read_object cmi) matching) in
-        Hashtbl.add cache key result;
-        result
+module Loader = struct
+  type t = unit_name:string -> cmi:string -> Anf.exports option
+
+  let create ?archive ?(exclude_units = []) () =
+    let archived = lazy (Option.bind archive (fun file -> optional (fun () -> read_archive file))) in
+    let cache = Hashtbl.create 32 in
+    let lookup ~unit_name ~cmi =
+      let key = unit_name, cmi in
+      match Hashtbl.find_opt cache key with
+      | Some result -> result
+      | None ->
+          let result = optional (fun () ->
+            let matching units =
+              match Hashtbl.find_opt units unit_name with
+              | Some (cmi_digest, exports) when digest cmi = cmi_digest -> Some exports
+              | _ -> None
+            in
+            if Option.exists (fun file -> Filename.dirname file = Filename.dirname cmi) archive
+            then Option.bind (Lazy.force archived) matching
+            else Option.bind (read_object cmi) matching) in
+          Hashtbl.add cache key result;
+          result
+    in
+    fun ~unit_name ~cmi ->
+      if List.mem unit_name exclude_units then None else lookup ~unit_name ~cmi
+
+  let lookup load = load
+end

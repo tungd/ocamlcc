@@ -1,7 +1,8 @@
 let compile source =
-  match Pipeline.compile_source ~emit_entry:false ~filename:"native_ffi.ml"
-          ~modname:"Native_ffi" source with
-  | Ok il -> il
+  match Pipeline.compile_source
+    { (Pipeline.Request.create ~filename:"native_ffi.ml" ~modname:"Native_ffi") with
+      emit_entry = false } source with
+  | Ok { Pipeline.Output.ssa = il; _ } -> il
   | Error error -> failwith error
 
 let contains il pattern =

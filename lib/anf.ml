@@ -2770,8 +2770,9 @@ let binding_kinds code =
   visit code;
   !kinds
 
-let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = [])
-    ?(load_exports = fun _ -> None) ?on_export_ids (program : Lambda.program) : (program, string) result =
+let lower ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = [])
+    ?(load_exports = fun _ -> None) ~collect_exports (program : Lambda.program) :
+    (program * (int list * Ident.t) list, string) result =
   let saved = !builtin_tables in
   let saved_imports = !unit_imports in
   let saved_scalars = !mutable_scalars in
@@ -2822,14 +2823,18 @@ let of_lambda ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports 
         let bindings = module_bindings cleaned in
         module_slots := module_captures bindings exports;
         let inline_bodies =
-          if Option.is_some on_export_ids then inline_export_bodies bindings exports
+          if collect_exports then inline_export_bodies bindings exports
           else Ident.Map.empty
         in
-        Option.iter (fun save -> save exports) on_export_ids;
         let code = conv_tail cleaned |> specialize_scalar_bindings in
-        Ok { module_ident = program.module_ident; code;
-             value_kinds = binding_kinds cleaned; inline_bodies }
+        Ok ({ module_ident = program.module_ident; code;
+              value_kinds = binding_kinds cleaned; inline_bodies },
+            if collect_exports then exports else [])
       with Unsupported what -> Error what)
+
+let of_lambda ?use_builtins ?include_dirs ?stdlib_dir program =
+  lower ?use_builtins ?include_dirs ?stdlib_dir ~collect_exports:false program
+  |> Result.map fst
 
 (* A small closed expression over tagged scalar parameters can be copied into
    the caller. Its body uses neither ownership operations nor exception state. *)

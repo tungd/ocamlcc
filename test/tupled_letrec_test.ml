@@ -76,13 +76,14 @@ let test_value_letrec () =
      let head = match ones with Nil -> 0 | Cons (x, _) -> x"
   in
   match
-    Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-      ~filename:"val_rec.ml" ~modname:"Val_rec" src
+    Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"val_rec.ml" ~modname:"Val_rec") with
+        nopervasives = true; nostdlib = true } src
   with
   | Error msg ->
       Printf.printf "value_letrec: FAIL (%s)\n" msg;
       false
-  | Ok il ->
+  | Ok { Pipeline.Output.ssa = il; _ } ->
       let ok =
         has_substr ~sub:"call extern $caml_alloc_dummy(" il
         && has_substr ~sub:"call extern $caml_update_dummy(" il

@@ -6,7 +6,7 @@ tags: [compiler, architecture, lambda, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-20
+  at: 2026-11-22
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -14,6 +14,9 @@ sources:
   - id: lib-codegen
     resource: ../lib/codegen.ml
     title: Modular ANF-to-QBE code generator (codegen_ctx, codegen_analysis, codegen_expr, codegen_fn, codegen)
+  - id: lib-pipeline
+    resource: ../lib/pipeline.ml
+    title: Typed per-unit compile request and output
   - id: lib-frontend
     resource: ../lib/frontend.ml
     title: compiler-libs frontend wrapper
@@ -59,6 +62,17 @@ The pipeline has four stages[^design-doc]:
    `build.ninja` archives `build/rt/libocamlrt.a` and
    `build/stdlib/libocamlstdlib.a`, and Phase 4 adds `.mli → .h` C ABI header
    generation and xcframework/AAR packaging.
+
+# Compilation requests
+
+`Pipeline.Request.t` holds the per-unit source, compiler options, and import
+inputs. `compile_source` and `compile_file` return `Pipeline.Output.t` with
+QBE SSA, the selected or emitted CMI path when available, and cross-unit
+export facts.[^lib-pipeline] The export policy chooses ordinary code generation,
+in-process export collection, or sealed link symbols for separately built
+objects. The CLI and driver pass export facts and CMI paths directly from the
+result into publication. An optional summary loader reads external metadata
+against the CMI selected by the frontend.
 
 # Implementation status
 
@@ -276,3 +290,6 @@ continue to carry direct-entry facts.
 
 [^design-doc]: Stage structure, goals, and the exception/fiber lowering
   plans are specified in `docs/design.md` §3–§4.
+
+[^lib-pipeline]: The compile entry points and their output contract live in
+  `lib/pipeline.mli`.

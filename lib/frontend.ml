@@ -55,10 +55,18 @@ let with_flags ~include_dirs ~emit_cmi ~nopervasives ~nostdlib
       Compmisc.init_path ();
       f ())
 
-let compile_implementation ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
+module Implementation = struct
+  type t = {
+    lambda : Lambda.program;
+    cmis : (string * string) list;
+    interface : string option;
+  }
+end
+
+let compile_unit ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
-    ?(nolabels = false) ?(open_modules = []) ?on_cmis ~filename ~modname source :
-    (Lambda.program, error) result =
+    ?(nolabels = false) ?(open_modules = []) ~resolve_imports
+    ~filename ~modname source : (Implementation.t, error) result =
   try
     with_flags ~include_dirs ~emit_cmi ~nopervasives ~nostdlib ~no_alias_deps
       ~nolabels ~open_modules (fun () ->
@@ -78,15 +86,35 @@ let compile_implementation ?(include_dirs = []) ?output_prefix ?(emit_cmi = fals
           Translmod.transl_implementation modname
             (impl.Typedtree.structure, impl.Typedtree.coercion)
         in
-        Option.iter (fun save ->
-          let names = modname :: List.map fst (Env.imports ()) in
-          let cmis = List.filter_map (fun name ->
-            match Load_path.find_normalized (name ^ ".cmi") with
-            | path -> Some (name, path)
-            | exception Not_found -> None) names in
-          save cmis) on_cmis;
-        Ok program)
+        let find_cmi name =
+          match Load_path.find_normalized (name ^ ".cmi") with
+          | path -> Some path
+          | exception Not_found -> None
+        in
+        let interface =
+          if Sys.file_exists (Filename.remove_extension filename ^ ".mli") then
+            find_cmi modname
+          else if emit_cmi then
+            let path = Unit_info.Artifact.filename (Unit_info.cmi unit_info) in
+            if Sys.file_exists path then Some path else None
+          else None
+        in
+        let cmis =
+          if resolve_imports then
+            Env.imports ()
+            |> List.filter_map (fun (name, _) ->
+                   Option.map (fun path -> name, path) (find_cmi name))
+          else []
+        in
+        Ok { Implementation.lambda = program; cmis; interface })
   with exn -> Error { msg = error_msg exn }
+
+let compile_implementation ?include_dirs ?output_prefix ?emit_cmi ?nopervasives
+    ?nostdlib ?no_alias_deps ?nolabels ?open_modules ~filename ~modname source =
+  compile_unit ?include_dirs ?output_prefix ?emit_cmi ?nopervasives ?nostdlib
+    ?no_alias_deps ?nolabels ?open_modules ~resolve_imports:false
+    ~filename ~modname source
+  |> Result.map (fun (unit : Implementation.t) -> unit.lambda)
 
 let compile_interface ?(include_dirs = []) ?output_prefix
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)

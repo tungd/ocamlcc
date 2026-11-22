@@ -46,14 +46,14 @@ let () =
       | Ok _cmi -> (
           let src = "let () = print_int 42; print_endline \"ok\"" in
           match
-            Pipeline.compile_source ~include_dirs:[ dir ] ~nopervasives:false
-              ~nostdlib:false ~filename:"custom_probe.ml"
-              ~modname:"Custom_probe" src
+            Pipeline.compile_source
+              { (Pipeline.Request.create ~filename:"custom_probe.ml" ~modname:"Custom_probe") with
+                include_dirs = [ dir ] } src
           with
           | Error msg ->
               Printf.printf "custom stdlib builtins: FAIL %s\n" msg;
               incr failures
-          | Ok il ->
+          | Ok { Pipeline.Output.ssa = il; _ } ->
               let ok =
                 has_substr ~sub:"call extern $ocamlcc_print_int(" il
                 && has_substr ~sub:"call extern $ocamlcc_print_endline(" il
@@ -64,13 +64,12 @@ let () =
               if not ok then incr failures));
   (let src = "let () = print_int 7; print_endline \"hi\"; exit 0" in
    match
-     Pipeline.compile_source ~nostdlib:false ~filename:"host_probe.ml"
-       ~modname:"Host_probe" src
+     Pipeline.compile_source (Pipeline.Request.create ~filename:"host_probe.ml" ~modname:"Host_probe") src
    with
    | Error msg ->
        Printf.printf "host stdlib builtins: FAIL %s\n" msg;
        incr failures
-   | Ok il ->
+   | Ok { Pipeline.Output.ssa = il; _ } ->
        let ok =
          has_substr ~sub:"call extern $ocamlcc_print_int(" il
          && has_substr ~sub:"call extern $ocamlcc_print_endline(" il

@@ -6,7 +6,7 @@ tags: [build, ninja, dune, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-21
+  at: 2026-11-22
 sources:
   - id: build-ninja
     resource: ../build.ninja
@@ -109,6 +109,13 @@ in-process summary.
 The executable initializes every explicitly linked implementation once, in dependency order. This includes units whose only effect is registration at startup.
 
 Each unit's generated `ocamlcc_init_<Mod>` first calls `ocamlcc_init_try_enter` on its `ocamlcc_global_<Mod>` slot (`0` uninitialized, `-2` claimed, other value published) and skips initialization if it does not win the claim. Units that mutually reference each other through their `.mli` interfaces recurse into each other's init functions; the runtime treats a same-thread re-entrant call as "already initializing here" (returns `0`, no spin), so the inner unit completes with whichever of its dependencies were initialized before the cycle re-entered. `ocamlcc_init_finish` publishes the unit value — or `0` when `ocamlcc_get_exn()` holds a raised exception, so the failure can be retried — and releases the claim.
+
+# Shared filesystem and process operations
+
+`Sys_util` owns binary file IO, temporary file publication, directory
+operations, and direct subprocess invocation for the compiler CLI and driver.
+`write_if_changed` keeps an identical file in place and uses a same-directory
+rename for new contents. Export summaries use the shared atomic writer.
 
 # Installed driver
 

@@ -14,15 +14,16 @@ let has_substr ~sub s =
     go 0
 
 let compile ?(emit_entry = true) name src =
-  Pipeline.compile_source ~nopervasives:true ~nostdlib:true ~emit_entry
-    ~filename:(name ^ ".ml") ~modname:(String.capitalize_ascii name) src
+  Pipeline.compile_source
+    { (Pipeline.Request.create ~filename:(name ^ ".ml") ~modname:(String.capitalize_ascii name)) with
+      nopervasives = true; nostdlib = true; emit_entry } src
 
 let check_il name ?emit_entry src needles =
   match compile ?emit_entry name src with
   | Error msg ->
       Printf.printf "%s: FAIL compile error: %s\n" name msg;
       false
-  | Ok il ->
+  | Ok { Pipeline.Output.ssa = il; _ } ->
       let missing = List.filter (fun n -> not (has_substr ~sub:n il)) needles in
       if missing = [] then begin
         Printf.printf "%s: PASS\n" name;
@@ -55,7 +56,7 @@ let () =
   in
   let ok2_no_main =
     match compile ~emit_entry:false "mod_no_entry2" "let id x = x" with
-    | Ok il when not (has_substr ~sub:"ocamlcc_module_init" il) ->
+    | Ok { Pipeline.Output.ssa = il; _ } when not (has_substr ~sub:"ocamlcc_module_init" il) ->
         Printf.printf "mod_no_entry_omits_init: PASS\n";
         true
     | _ ->
@@ -76,14 +77,15 @@ let () =
   in
   let ok4 =
     match
-      Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-        ~no_alias_deps:true ~nolabels:true ~emit_entry:false
-        ~filename:"alias_test.ml" ~modname:"Alias_test"
+      Pipeline.compile_source
+        { (Pipeline.Request.create ~filename:"alias_test.ml" ~modname:"Alias_test") with
+          nopervasives = true; nostdlib = true; no_alias_deps = true; nolabels = true;
+          emit_entry = false }
         "module Unresolved = Nonexistent_module\n\
          external ( + ) : int -> int -> int = \"%addint\"\n\
          let add x y = x + y"
     with
-    | Ok il when has_substr ~sub:"export function $ocamlcc_init_Alias_test()" il
+    | Ok { Pipeline.Output.ssa = il; _ } when has_substr ~sub:"export function $ocamlcc_init_Alias_test()" il
       ->
         Printf.printf "no_alias_deps_and_nolabels: PASS\n";
         true

@@ -1,3 +1,5 @@
+open Sys_util
+
 (* Single-binary build driver: dependency-ordered .mli/.ml compilation,
    QBE target assembly, C/NDK/xcrun toolchain invocation, optional C header +
    FFI shim generation, and runtime/stdlib linking. *)
@@ -80,78 +82,6 @@ let default_config () =
     extra_ldflags = [];
     verbose = false }
 
-let read_file path =
-  let ic = open_in_bin path in
-  Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () ->
-      really_input_string ic (in_channel_length ic))
-
-let write_file path data =
-  let oc = open_out_bin path in
-  Fun.protect ~finally:(fun () -> close_out_noerr oc) (fun () ->
-      output_string oc data)
-
-let rec mkdir_p dir =
-  if dir <> "" && dir <> "." && not (Sys.file_exists dir) then begin
-    mkdir_p (Filename.dirname dir);
-    try Sys.mkdir dir 0o755 with Sys_error _ -> ()
-  end
-
-let rec rm_rf path =
-  match Unix.lstat path with
-  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
-  | { Unix.st_kind = Unix.S_DIR; _ } ->
-      Array.iter (fun e -> rm_rf (Filename.concat path e)) (Sys.readdir path);
-      Unix.rmdir path
-  | _ -> Unix.unlink path
-
-let capture_process prog args stream =
-  let read_fd, write_fd = Unix.pipe ~cloexec:true () in
-  let stdout, stderr =
-    match stream with
-    | `Stdout -> (write_fd, Unix.stderr)
-    | `Stderr stdout_fd -> (stdout_fd, write_fd)
-  in
-  let channel = Unix.in_channel_of_descr read_fd in
-  Fun.protect ~finally:(fun () -> close_in_noerr channel) (fun () ->
-      match
-        Fun.protect ~finally:(fun () -> Unix.close write_fd) (fun () ->
-            Unix.create_process prog (Array.of_list (prog :: args))
-              Unix.stdin stdout stderr)
-      with
-      | exception Unix.Unix_error (err, _, _) ->
-          Error (Printf.sprintf "cannot start command `%s`: %s" prog (Unix.error_message err))
-      | pid ->
-          let output = In_channel.input_all channel in
-          let _, status = Unix.waitpid [] pid in
-          Ok (status, String.trim output))
-
-let run_cmd ~verbose ?stdout_file prog args =
-  if verbose then
-    Printf.eprintf "+ %s %s\n%!" prog (String.concat " " args);
-  let run stdout_fd = capture_process prog args (`Stderr stdout_fd) in
-  let result =
-    match stdout_file with
-    | None -> run Unix.stdout
-    | Some path ->
-        let fd = Unix.openfile path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o644 in
-        Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> run fd)
-  in
-  match result with
-  | Error _ as error -> error
-  | Ok (Unix.WEXITED 0, _) -> Ok ()
-  | Ok (Unix.WEXITED c, msg) ->
-      Error
-        (Printf.sprintf "command `%s` exited with %d%s" prog c
-           (if msg = "" then "" else ": " ^ msg))
-  | Ok ((Unix.WSIGNALED s | Unix.WSTOPPED s), _) ->
-      Error (Printf.sprintf "command `%s` terminated by signal %d" prog s)
-
-let capture_cmd prog args =
-  match capture_process prog args `Stdout with
-  | Error _ as error -> error
-  | Ok (Unix.WEXITED 0, output) -> Ok output
-  | Ok _ -> Error (Printf.sprintf "command `%s` failed" prog)
-
 let detect_host_target () : target_spec =
   let os_s = match capture_cmd "uname" [ "-s" ] with Ok s -> s | Error _ -> "Linux" in
   let arch_s = match capture_cmd "uname" [ "-m" ] with Ok s -> s | Error _ -> "x86_64" in
@@ -193,15 +123,6 @@ let resolve_target (s : string) : (target_spec, string) result =
   | "android-x86_64" ->
       Ok { name = s; qbe_target = "amd64_sysv"; os = Android; arch = "x86_64" }
   | other -> Error ("unsupported target: " ^ other)
-
-let find_in_path exe =
-  let path_var = try Sys.getenv "PATH" with Not_found -> "" in
-  let dirs = String.split_on_char ':' path_var in
-  List.find_map
-    (fun d ->
-      let p = Filename.concat d exe in
-      if Sys.file_exists p && not (Sys.is_directory p) then Some p else None)
-    dirs
 
 (* The private backend, target runtime and core library share one Dune
    package directory, relative to the installed executable. *)
@@ -783,14 +704,16 @@ let compile_stdlib_cmis_and_ssa stdlib_src_dir out_dir :
         let ssa = prefix ^ ".ssa" in
         let obj = prefix ^ ".o" in
         let modname = Pipeline.module_name_of_file ml in
-        match
-          Pipeline.compile_file ~include_dirs:[ out_dir ] ~output_prefix:prefix
-            ~emit_cmi:true ~nopervasives:true ~nostdlib:true ~emit_entry:false
-            ~filename:ml ~modname ()
-        with
+        let request =
+          { (Pipeline.Request.create ~filename:ml ~modname) with
+            include_dirs = [out_dir]; output_prefix = Some prefix;
+            emit_cmi = true; nopervasives = true; nostdlib = true;
+            emit_entry = false }
+        in
+        match Pipeline.compile_file request with
         | Error msg -> Error msg
-        | Ok ssa_txt ->
-            write_file ssa ssa_txt;
+        | Ok output ->
+            write_file ssa output.ssa;
             go ((ssa, obj) :: acc) rest)
   in
   go [] units
@@ -916,95 +839,68 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                 | s :: _ -> Some s.path
                 | [] -> None
               in
-              let asm_files = ref [] in
-              let imports = ref [] in
               let archive =
                 match stdlib_plan with
                 | Stdlib_prebuilt (_, [archive]) when Filename.check_suffix archive ".a" -> Some archive
                 | _ -> None in
-              let lookup = Export_summary.loader ?archive () in
               let local_units =
                 List.map (fun (step : build_step) -> step.modname) ml_steps in
-              let load_exports ~unit_name ~cmi =
-                if List.mem unit_name local_units then None
-                else lookup ~unit_name ~cmi in
-              let object_interface = ref None in
+              let summaries =
+                Some (Export_summary.Loader.create ?archive ~exclude_units:local_units ())
+              in
               let shim_c_files = ref [] in
               let shim_exported_syms = ref [] in
               let has_mli modname =
                 List.exists (fun (s : build_step) -> s.modname = modname) mli_steps
               in
-              let step_res =
-                List.fold_left
-                  (fun acc (s : build_step) ->
-                    match acc with
-                    | Error _ as e -> e
-                    | Ok () -> (
-                        let lower = String.uncapitalize_ascii s.modname in
-                        let prefix = Filename.concat cmi_dir lower in
-                        match s.kind with
-                        | `Mli -> (
-                            match
-                              Pipeline.compile_interface_file
-                                ~include_dirs:inc_dirs ~output_prefix:prefix
-                                ~nopervasives:cfg.nopervasives
-                                ~nostdlib:eff_nostdlib ~filename:s.path
-                                ~modname:s.modname ()
-                            with
-                            | Error msg -> Error msg
-                            | Ok _ ->
-                                Gc.full_major ();
-                                Ok ())
-                        | `Ml -> (
-                            let emit_cmi = not (has_mli s.modname) in
-                            let emit_entry =
-                              include_main
-                              && (match last_ml_path with
-                                 | Some p -> p = s.path
-                                 | None -> false)
-                            in
-                            let on_interface =
-                              if kind = Kind_obj then
-                                Some (fun cmi -> object_interface := Some (s.modname, cmi))
-                              else None in
-                            match
-                              Pipeline.compile_file ~include_dirs:inc_dirs ?stdlib_dir
-                                ~output_prefix:prefix ~emit_cmi
-                                ~imports:!imports ~load_exports ?on_interface
-                                ~seal_exports:(kind = Kind_obj)
-                                ~on_exports:(fun exports ->
-                                  imports := (s.modname, exports) :: !imports)
-                                ~nopervasives:cfg.nopervasives
-                                ~nostdlib:eff_nostdlib ~emit_entry:false
-                                ~inline_single_thread_rc:cfg.inline_single_thread_rc
-                                ~filename:s.path ~modname:s.modname ()
-                            with
-                            | Error msg -> Error msg
-                            | Ok ssa_txt -> (
-                                let ssa = Filename.concat work_dir (lower ^ ".ssa") in
-                                let asm = Filename.concat work_dir (lower ^ ".s") in
-                                let startup =
-                                  if emit_entry then
-                                    let names = List.map (fun step -> step.modname) ml_steps in
-                                    Qbe_il.to_string { funcs = [Codegen.entry_point names]; datas = [] }
-                                  else ""
-                                in
-                                write_file ssa (ssa_txt ^ startup);
-                                match
-                                  run_cmd ~verbose ~stdout_file:asm qbe
-                                    [ "-t"; target.qbe_target; ssa ]
-                                with
-                                | Error _ as e -> e
-                                | Ok () ->
-                                    asm_files := asm :: !asm_files;
-                                    Gc.full_major ();
-                                    Ok ()))))
-                  (Ok ()) steps
+              let rec compile_steps ~imports ~assemblies ~object_interface = function
+                | [] -> Ok (List.rev assemblies, object_interface)
+                | (step : build_step) :: rest ->
+                    let open Result_syntax in
+                    let lower = String.uncapitalize_ascii step.modname in
+                    let prefix = Filename.concat cmi_dir lower in
+                    let request =
+                      { (Pipeline.Request.create ~filename:step.path ~modname:step.modname) with
+                        include_dirs = inc_dirs; output_prefix = Some prefix;
+                        nopervasives = cfg.nopervasives; nostdlib = eff_nostdlib }
+                    in
+                    match step.kind with
+                    | `Mli ->
+                        let* _ = Pipeline.compile_interface_file request in
+                        Gc.full_major ();
+                        compile_steps ~imports ~assemblies ~object_interface rest
+                    | `Ml ->
+                        let request =
+                          { request with stdlib_dir; summaries; imports;
+                            emit_cmi = not (has_mli step.modname); emit_entry = false;
+                            export_policy = (if kind = Kind_obj then Seal else Collect);
+                            inline_single_thread_rc = cfg.inline_single_thread_rc }
+                        in
+                        let* output = Pipeline.compile_file request in
+                        let ssa = Filename.concat work_dir (lower ^ ".ssa") in
+                        let asm = Filename.concat work_dir (lower ^ ".s") in
+                        let startup =
+                          if include_main && last_ml_path = Some step.path then
+                            Qbe_il.to_string { funcs = [Codegen.entry_point local_units]; datas = [] }
+                          else ""
+                        in
+                        write_file ssa (output.ssa ^ startup);
+                        let* () =
+                          run_cmd ~verbose ~stdout_file:asm qbe
+                            [ "-t"; target.qbe_target; ssa ]
+                        in
+                        let object_interface =
+                          match kind, output.interface with
+                          | Kind_obj, Some cmi -> Some (step.modname, cmi, output.exports)
+                          | _ -> object_interface
+                        in
+                        Gc.full_major ();
+                        compile_steps ~imports:((step.modname, output.exports) :: imports)
+                          ~assemblies:(asm :: assemblies) ~object_interface rest
               in
-              match step_res with
+              match compile_steps ~imports:[] ~assemblies:[] ~object_interface:None steps with
               | Error _ as e -> e
-              | Ok () -> (
-                  let asm_files = List.rev !asm_files in
+              | Ok (asm_files, object_interface) -> (
                   (* Optional .mli -> .h + _shim.c generation *)
                   let bindgen_res =
                     match cfg.emit_header with
@@ -1140,10 +1036,9 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                   | Error _ as e -> e
                                   | Ok () ->
                                       (try
-                                         Option.iter (fun (unit_name, cmi) ->
-                                           let exports = List.assoc unit_name !imports in
+                                         Option.iter (fun (unit_name, cmi, exports) ->
                                            Export_summary.publish_object ~unit_name ~cmi ~obj:out_path exports)
-                                           !object_interface;
+                                           object_interface;
                                          Ok out_path
                                        with Sys_error msg -> Error msg))
                               | _ ->

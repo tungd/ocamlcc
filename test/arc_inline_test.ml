@@ -6,9 +6,10 @@ let source = {|
 
 let () =
   let il =
-    match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-      ~filename:"arc_inline.ml" ~modname:"Arc_inline" source with
-    | Ok il -> il
+    match Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"arc_inline.ml" ~modname:"Arc_inline") with
+        nopervasives = true; nostdlib = true } source with
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error error -> failwith error
   in
   let require fragment =
@@ -21,10 +22,10 @@ let () =
 
 let () =
   let il =
-    match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-      ~inline_single_thread_rc:true ~filename:"arc_inline.ml"
-      ~modname:"Arc_inline" source with
-    | Ok il -> il
+    match Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"arc_inline.ml" ~modname:"Arc_inline") with
+        nopervasives = true; nostdlib = true; inline_single_thread_rc = true } source with
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error error -> failwith error
   in
   let contains text =
@@ -42,8 +43,9 @@ let () =
 
 let () =
   let il =
-    match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-      ~filename:"arc_fields.ml" ~modname:"Arc_fields" {|
+    match Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"arc_fields.ml" ~modname:"Arc_fields") with
+        nopervasives = true; nostdlib = true } {|
       external get : 'a array -> int -> 'a = "%array_safe_get"
       external set : 'a array -> int -> 'a -> unit = "%array_safe_set"
       type t = { mutable count : int; mutable item : string option }
@@ -54,7 +56,7 @@ let () =
       let set_pointer (a : string option array) i value = set a i value
       let set_int (a : int array) i value = set a i value
     |} with
-    | Ok il -> il
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error error -> failwith error
   in
   let check name instruction expected =
@@ -108,9 +110,10 @@ let () =
     let loop a n = for i = 0 to n do observe (get a i) done
   |} in
   let il =
-    match Pipeline.compile_source ~nopervasives:true ~nostdlib:true ~filename:"heap_guards.ml"
-      ~modname:"Heap_guards" source with
-    | Ok il -> il
+    match Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"heap_guards.ml" ~modname:"Heap_guards") with
+        nopervasives = true; nostdlib = true } source with
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error error -> failwith error
   in
   let body name =
@@ -161,9 +164,10 @@ let () =
   |} in
   let body ~inline_single_thread_rc =
     let il =
-      match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-        ~inline_single_thread_rc ~filename:"exn_fast.ml" ~modname:"Exn_fast" source with
-      | Ok il -> il
+      match Pipeline.compile_source
+        { (Pipeline.Request.create ~filename:"exn_fast.ml" ~modname:"Exn_fast") with
+          nopervasives = true; nostdlib = true; inline_single_thread_rc } source with
+      | Ok { Pipeline.Output.ssa = il; _ } -> il
       | Error error -> failwith error
     in
     let find text pos = Str.search_forward (Str.regexp_string text) il pos in
@@ -196,9 +200,10 @@ let () =
     let branch text e cond = if cond then raise e else keep text
   |} in
   let il =
-    match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-      ~inline_single_thread_rc:true ~filename:"arc_cold.ml" ~modname:"Arc_cold" source with
-    | Ok il -> il
+    match Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"arc_cold.ml" ~modname:"Arc_cold") with
+        nopervasives = true; nostdlib = true; inline_single_thread_rc = true } source with
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error error -> failwith error
   in
   let find text pos = Str.search_forward (Str.regexp_string text) il pos in

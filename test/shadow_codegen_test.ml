@@ -1,11 +1,10 @@
 let () =
   let il =
     match
-      Pipeline.compile_source ~filename:"shadow_codegen.ml"
-        ~modname:"Shadow_codegen"
+      Pipeline.compile_source (Pipeline.Request.create ~filename:"shadow_codegen.ml" ~modname:"Shadow_codegen")
         "let invoke f s = let result = f s in (result, s)"
     with
-    | Ok il -> il
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error error -> failwith error
   in
   let contains pattern =

@@ -1,6 +1,5 @@
 let il =
-  match Pipeline.compile_source ~filename:"integer_codegen.ml"
-      ~modname:"Integer_codegen" {|
+  match Pipeline.compile_source (Pipeline.Request.create ~filename:"integer_codegen.ml" ~modname:"Integer_codegen") {|
     external observe : int -> unit = "probe_observe"
     let select (x : int) y = if x < y then 11 else 22
     let separated (x : int) y =
@@ -20,7 +19,7 @@ let il =
     let sub_left x = 0 - x
     let add_min x = x + (-4611686018427387904)
   |} with
-  | Ok il -> il
+  | Ok { Pipeline.Output.ssa = il; _ } -> il
   | Error error -> failwith error
 
 let function_body name =

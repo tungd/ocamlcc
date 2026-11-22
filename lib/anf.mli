@@ -245,15 +245,23 @@ type program = {
   inline_bodies : Lambda.lfunction Ident.Map.t;
 }
 
-val of_lambda :
+val lower :
   ?use_builtins:bool ->
   ?include_dirs:string list ->
   ?stdlib_dir:string ->
   ?imports:(string * exports) list ->
   ?load_exports:(string -> exports option) ->
-  ?on_export_ids:((int list * Ident.t) list -> unit) ->
+  collect_exports:bool ->
+  Lambda.program ->
+  (program * (int list * Ident.t) list, string) result
+
+val of_lambda :
+  ?use_builtins:bool ->
+  ?include_dirs:string list ->
+  ?stdlib_dir:string ->
   Lambda.program ->
   (program, string) result
+
 val scalar_rep : Lambda.bigarray_kind -> scalar_rep option
 val scalar_operand_vars : Ident.Set.t -> scalar_operand -> Ident.Set.t
 val returns_scalar : aexpr -> bool

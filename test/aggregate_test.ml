@@ -1,6 +1,6 @@
 let () =
   let il =
-    match Pipeline.compile_source ~filename:"aggregates.ml" ~modname:"Aggregates" {|
+    match Pipeline.compile_source (Pipeline.Request.create ~filename:"aggregates.ml" ~modname:"Aggregates") {|
       external observe : int -> int = "probe_observe"
       let tuple a b =
         let pair = (observe a, observe b) in
@@ -53,7 +53,7 @@ let () =
         let value = (observe a, observe 10) in
         fun () -> fst value + snd value
     |} with
-    | Ok il -> il
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error error -> failwith error
   in
   let check name allocates =

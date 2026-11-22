@@ -38,9 +38,8 @@ let contains text fragment =
 
 let () =
   let il =
-    match Pipeline.compile_source ~filename:"local_refs.ml"
-      ~modname:"Local_refs" source with
-    | Ok il -> il
+    match Pipeline.compile_source (Pipeline.Request.create ~filename:"local_refs.ml" ~modname:"Local_refs") source with
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error error -> failwith error
   in
   let alloc = "call extern $arc_alloc(l 0, l 1, l 8)" in

@@ -15,13 +15,14 @@ let has_substr ~sub s =
 
 let check name src needles =
   match
-    Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-      ~filename:(name ^ ".ml") ~modname:(String.capitalize_ascii name) src
+    Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:(name ^ ".ml") ~modname:(String.capitalize_ascii name)) with
+        nopervasives = true; nostdlib = true } src
   with
   | Error msg ->
       Printf.printf "%s: FAIL (%s)\n" name msg;
       false
-  | Ok il ->
+  | Ok { Pipeline.Output.ssa = il; _ } ->
       let missing = List.filter (fun n -> not (has_substr ~sub:n il)) needles in
       if missing = [] then begin
         Printf.printf "%s: PASS\n" name;

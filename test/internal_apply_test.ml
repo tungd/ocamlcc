@@ -7,8 +7,8 @@ let () =
     let a5 f a b c d e = f a b c d e
   |} in
   let il =
-    match Pipeline.compile_source ~filename:"apply.ml" ~modname:"Apply" source with
-    | Ok il -> il
+    match Pipeline.compile_source (Pipeline.Request.create ~filename:"apply.ml" ~modname:"Apply") source with
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error error -> failwith error
   in
   let contains s =

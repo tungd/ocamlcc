@@ -1,10 +1,11 @@
 let check ?(owner_releases = Some 1) ~retains name source =
   let il =
     match
-      Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-        ~filename:(name ^ ".ml") ~modname:(String.capitalize_ascii name) source
+      Pipeline.compile_source
+        { (Pipeline.Request.create ~filename:(name ^ ".ml") ~modname:(String.capitalize_ascii name)) with
+          nopervasives = true; nostdlib = true } source
     with
-    | Ok il -> il
+    | Ok { Pipeline.Output.ssa = il; _ } -> il
     | Error message -> failwith message
   in
   let count_calls name =
@@ -114,10 +115,11 @@ let () =
     let rect top bottom left right : rect = { top; bottom; left; right }
     let mutable_rect top bottom left right : mutable_rect = { top; bottom; left; right }
   |} in
-  match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-    ~filename:"immediate_blocks.ml" ~modname:"Immediate_blocks" source with
+  match Pipeline.compile_source
+    { (Pipeline.Request.create ~filename:"immediate_blocks.ml" ~modname:"Immediate_blocks") with
+      nopervasives = true; nostdlib = true } source with
   | Error message -> failwith message
-  | Ok il ->
+  | Ok { Pipeline.Output.ssa = il; _ } ->
       let require call =
         if not (try ignore (Str.search_forward (Str.regexp_string call) il 0); true
           with Not_found -> false)
@@ -156,10 +158,11 @@ let () =
         slot.bytes)
       else replacement
   |} in
-  match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-    ~filename:"heap_slots.ml" ~modname:"Heap_slots" source with
+  match Pipeline.compile_source
+    { (Pipeline.Request.create ~filename:"heap_slots.ml" ~modname:"Heap_slots") with
+      nopervasives = true; nostdlib = true } source with
   | Error message -> failwith message
-  | Ok il ->
+  | Ok { Pipeline.Output.ssa = il; _ } ->
       let has_slot_guard fn =
         let start = Str.search_forward (Str.regexp_string ("$ocamlcc_Heap_slots_" ^ fn ^ "(")) il 0 in
         let stop = Str.search_forward (Str.regexp_string "\n}") il start in

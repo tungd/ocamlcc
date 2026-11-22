@@ -146,17 +146,9 @@ let parse_opts args =
   in
   go default_opts args
 
-let read_file filename =
-  let ic = open_in_bin filename in
-  Fun.protect ~finally:(fun () -> close_in_noerr ic) (fun () ->
-      really_input_string ic (in_channel_length ic))
-
 let write_out out ssa =
   match out with
-  | Some path ->
-      let oc = open_out_bin path in
-      Fun.protect ~finally:(fun () -> close_out_noerr oc) (fun () ->
-          output_string oc ssa)
+  | Some path -> Sys_util.write_file path ssa
   | None -> print_string ssa
 
 let single_input opts =
@@ -187,27 +179,25 @@ let compile opts =
         | _ -> opts.include_dirs
       in
       let archive = Option.bind opts.stdlib_dir Export_summary.find_archive in
-      let load_exports =
+      let summaries =
         if opts.emit_opt && Option.is_none opts.stdlib_dir then None
-        else Some (Export_summary.loader ?archive ()) in
-      let exports = ref [] in
-      let on_exports =
-        if opts.emit_opt then Some (fun entries -> exports := entries) else None
+        else Some (Export_summary.Loader.create ?archive ()) in
+      let request =
+        { (Pipeline.Request.create ~filename:file ~modname) with
+          include_dirs; output_prefix; stdlib_dir = opts.stdlib_dir; summaries;
+          export_policy = (if opts.emit_opt then Seal else Omit);
+          emit_cmi = opts.emit_cmi; nopervasives = opts.nopervasives;
+          nostdlib = opts.nostdlib; no_alias_deps = opts.no_alias_deps;
+          nolabels = opts.nolabels; open_modules = opts.open_modules;
+          inline_single_thread_rc = opts.inline_single_thread_rc;
+          emit_entry = not opts.is_mod }
       in
-      match
-        Pipeline.compile_file ~include_dirs ?output_prefix
-          ?stdlib_dir:opts.stdlib_dir ?load_exports ?on_exports ~seal_exports:opts.emit_opt
-          ~emit_cmi:opts.emit_cmi ~nopervasives:opts.nopervasives
-          ~nostdlib:opts.nostdlib ~no_alias_deps:opts.no_alias_deps
-          ~nolabels:opts.nolabels ~open_modules:opts.open_modules
-          ~inline_single_thread_rc:opts.inline_single_thread_rc
-          ~emit_entry:(not opts.is_mod) ~filename:file ~modname ()
-      with
-      | Ok ssa ->
+      match Pipeline.compile_file request with
+      | Ok { ssa; exports; _ } ->
           (try
              if opts.emit_opt then begin
                let prefix = Option.value ~default:(Filename.remove_extension file) output_prefix in
-               Export_summary.write_unit ~prefix !exports
+               Export_summary.write_unit ~prefix exports
              end;
              write_out opts.out ssa;
              0
@@ -253,13 +243,14 @@ let compile_mli opts =
         | Some p -> Pipeline.module_name_of_file (p ^ ".mli")
         | None -> Pipeline.module_name_of_file file
       in
-      match
-        Pipeline.compile_interface_file ~include_dirs:opts.include_dirs
-          ?output_prefix ~nopervasives:opts.nopervasives
-          ~nostdlib:opts.nostdlib ~no_alias_deps:opts.no_alias_deps
-          ~nolabels:opts.nolabels ~open_modules:opts.open_modules
-          ~filename:file ~modname ()
-      with
+      let request =
+        { (Pipeline.Request.create ~filename:file ~modname) with
+          include_dirs = opts.include_dirs; output_prefix;
+          nopervasives = opts.nopervasives; nostdlib = opts.nostdlib;
+          no_alias_deps = opts.no_alias_deps; nolabels = opts.nolabels;
+          open_modules = opts.open_modules }
+      in
+      match Pipeline.compile_interface_file request with
       | Ok _ -> 0
       | Error msg ->
           prerr_endline ("ocamlcc: error: " ^ msg);
@@ -272,7 +263,7 @@ let dump_lambda opts =
       2
   | Some file -> (
       let modname = Pipeline.module_name_of_file file in
-      match read_file file with
+      match Sys_util.read_file file with
       | exception Sys_error msg ->
           prerr_endline ("ocamlcc: error: " ^ msg);
           2

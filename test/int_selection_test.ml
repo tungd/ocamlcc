@@ -1,7 +1,8 @@
 let compile ?(include_dirs = []) ?(nostdlib = false) ?stdlib_dir source =
-  match Pipeline.compile_source ~include_dirs ~nostdlib ?stdlib_dir
-    ~filename:"int_selection.ml" ~modname:"Int_selection" source with
-  | Ok il -> il
+  match Pipeline.compile_source
+    { (Pipeline.Request.create ~filename:"int_selection.ml" ~modname:"Int_selection") with
+      include_dirs; nostdlib; stdlib_dir } source with
+  | Ok { Pipeline.Output.ssa = il; _ } -> il
   | Error message -> failwith message
 
 let contains il text =
@@ -31,8 +32,9 @@ let test_competing_interface () =
       Out_channel.with_open_text ml (fun oc ->
           output_string oc "val min : int -> int -> int
 ");
-      (match Pipeline.compile_interface_file ~nostdlib:true ~nopervasives:true
-        ~output_prefix:prefix ~filename:ml ~modname:"Stdlib__Int" () with
+      (match Pipeline.compile_interface_file
+        { (Pipeline.Request.create ~filename:ml ~modname:"Stdlib__Int") with
+          nostdlib = true; nopervasives = true; output_prefix = Some prefix } with
       | Ok _ -> ()
       | Error message -> failwith message);
       let custom = compile ~include_dirs:[dir] "let f a b = Stdlib__Int.min a b" in

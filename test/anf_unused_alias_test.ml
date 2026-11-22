@@ -146,11 +146,12 @@ let () =
     |}
   in
   match
-    Pipeline.compile_source ~nostdlib:true ~nopervasives:true
-      ~filename:"shared_arm.ml" ~modname:"Shared_arm" source
+    Pipeline.compile_source
+      { (Pipeline.Request.create ~filename:"shared_arm.ml" ~modname:"Shared_arm") with
+        nostdlib = true; nopervasives = true } source
   with
   | Error msg -> failwith ("Pipeline failed: " ^ msg)
-  | Ok ssa ->
+  | Ok { Pipeline.Output.ssa = ssa; _ } ->
       let fn_ssa = extract_func ~name:"ocamlcc_Shared_arm_f" ssa in
       assert (not (contains_substring ~sub:", 32\n" fn_ssa));
       assert (not (contains_substring ~sub:", 24\n" fn_ssa));

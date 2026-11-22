@@ -1,5 +1,30 @@
 type error = { msg : string }
 
+module Implementation : sig
+  type t = {
+    lambda : Lambda.program;
+    cmis : (string * string) list;
+    interface : string option;
+  }
+end
+
+val compile_unit :
+  ?include_dirs:string list ->
+  ?output_prefix:string ->
+  ?emit_cmi:bool ->
+  ?nopervasives:bool ->
+  ?nostdlib:bool ->
+  ?no_alias_deps:bool ->
+  ?nolabels:bool ->
+  ?open_modules:string list ->
+  resolve_imports:bool ->
+  filename:string ->
+  modname:string ->
+  string ->
+  (Implementation.t, error) result
+(** Return Lambda and its interface. [resolve_imports] also records the
+    interfaces loaded by the typechecker. *)
+
 val compile_implementation :
   ?include_dirs:string list ->
   ?output_prefix:string ->
@@ -9,7 +34,6 @@ val compile_implementation :
   ?no_alias_deps:bool ->
   ?nolabels:bool ->
   ?open_modules:string list ->
-  ?on_cmis:((string * string) list -> unit) ->
   filename:string ->
   modname:string ->
   string ->

@@ -4,8 +4,8 @@ let function_body il name =
   String.sub il start (stop - start)
 
 let compile source =
-  match Pipeline.compile_source ~filename:"lambda_inline.ml" ~modname:"Lambda_inline" source with
-  | Ok il -> il
+  match Pipeline.compile_source (Pipeline.Request.create ~filename:"lambda_inline.ml" ~modname:"Lambda_inline") source with
+  | Ok { Pipeline.Output.ssa = il; _ } -> il
   | Error error -> failwith error
 
 let contains text fragment =
@@ -93,24 +93,28 @@ let () =
 let () =
   let dir = Filename.temp_dir "ocamlcc_inline_provider" "" in
   let prefix = Filename.concat dir "inline_provider" in
-  let exports = ref [] in
   let provider = {|
     external ( + ) : int -> int -> int = "%addint"
     let step x = x + 1
     let pair choose x carry = if choose then x, carry else step x, None
   |} in
-  let compile = function Ok il -> il | Error error -> failwith error in
-  ignore (compile (Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-    ~filename:(prefix ^ ".ml") ~modname:"Inline_provider" ~output_prefix:prefix
-    ~emit_cmi:true ~on_exports:(fun values -> exports := values) provider));
-  let il = compile (Pipeline.compile_source ~nopervasives:true ~nostdlib:true
-    ~include_dirs:[dir] ~imports:["Inline_provider", !exports]
-    ~filename:"lambda_inline.ml" ~modname:"Lambda_inline" {|
+  let compile = function Ok output -> output | Error error -> failwith error in
+  let request =
+    { (Pipeline.Request.create ~filename:(prefix ^ ".ml") ~modname:"Inline_provider") with
+      nopervasives = true; nostdlib = true; output_prefix = Some prefix;
+      emit_cmi = true; export_policy = Collect }
+  in
+  let exports = (compile (Pipeline.compile_source request provider)).exports in
+  let il = compile (Pipeline.compile_source
+    { (Pipeline.Request.create ~filename:"lambda_inline.ml" ~modname:"Lambda_inline") with
+      nopervasives = true; nostdlib = true; include_dirs = [dir];
+      imports = ["Inline_provider", exports] } {|
     let first choose x carry =
       let n, _ = Inline_provider.pair choose x carry in n
     let opaque choose x carry =
       let n, _ = (Inline_provider.pair [@inlined never]) choose x carry in n
   |}) in
+  let il = il.ssa in
   let first = function_body il "first" in
   forbid first "ocamlcc_Inline_provider_pair";
   forbid first "call extern $arc_alloc(";
