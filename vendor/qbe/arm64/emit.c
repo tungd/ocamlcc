@@ -514,6 +514,51 @@ framelayout(E *e)
 	e->frame = 4*f + 8*o;
 }
 
+enum {
+	CondReach = 1 << 18, /* words */
+	MaxBranch = 3,      /* conditional skip, far branch, other successor */
+};
+
+static uint64_t *
+blockbounds(Fn *fn)
+{
+	uint64_t *bounds, words;
+	int ret, *r;
+	Blk *b;
+
+	/* A return restores the saved registers (up to four words each)
+	 * and emits at most six words for the stack adjustment and ret. */
+	ret = 6;
+	for (r=arm64_rclob; *r>=0; r++)
+		if (fn->reg & BIT(*r))
+			ret += 4;
+
+	bounds = alloc((fn->nblk + 1) * sizeof bounds[0]);
+	for (words=0, b=fn->start; b; b=b->link) {
+		bounds[b->id] = words;
+		/* A spilled copy can load via a three-word address, then
+		 * move through V31 and store via another three-word
+		 * address. All other instructions are no larger. */
+		words += 9ull * b->nins;
+		words += b->jmp.type == Jret0 ? ret : MaxBranch;
+	}
+	bounds[fn->nblk] = words;
+	return bounds;
+}
+
+static int
+condfits(Blk *b, Fn *fn, uint64_t *bounds)
+{
+	uint64_t end, target;
+
+	end = bounds[b->link ? b->link->id : fn->nblk];
+	target = bounds[b->s2->id];
+	/* A forward edge starts at most MaxBranch words before the end.
+	 * A backward edge starts no later than the end. */
+	return target >= end ? target - end + MaxBranch < CondReach
+	                     : end - target < CondReach;
+}
+
 /*
 
   Stack-frame layout:
@@ -551,7 +596,7 @@ arm64_emitfn(Fn *fn, FILE *out)
 	};
 	static int id0;
 	int s, n, c, lbl, *r;
-	uint64_t o;
+	uint64_t o, *bounds;
 	Blk *b, *t;
 	Ins *i;
 	E *e;
@@ -562,6 +607,7 @@ arm64_emitfn(Fn *fn, FILE *out)
 	emitfnlnk(e->fn->name, &e->fn->lnk, e->f);
 	fputs("\thint\t#34\n", e->f);
 	framelayout(e);
+	bounds = blockbounds(fn);
 
 	if (e->fn->vararg && !T.apple) {
 		for (n=7; n>=0; n--)
@@ -679,10 +725,12 @@ arm64_emitfn(Fn *fn, FILE *out)
 				n = 0;
 			} else
 				n = 1;
-			fprintf(e->f,
-				"\tb%s\t%s%d\n",
-				ctoa[c][n], T.asloc, id0+b->s2->id
-			);
+			if (condfits(b, fn, bounds))
+				fprintf(e->f, "\tb%s\t%s%d\n",
+					ctoa[c][n], T.asloc, id0+b->s2->id);
+			else
+				fprintf(e->f, "\tb%s\t1f\n\tb\t%s%d\n1:\n",
+					ctoa[c][!n], T.asloc, id0+b->s2->id);
 			goto Jmp;
 		}
 	}

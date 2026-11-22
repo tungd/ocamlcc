@@ -5,8 +5,8 @@ description: QBE 1.3 as an out-of-tree vendored source drop under vendor/qbe, bu
 tags: [qbe, vendor, build, pic]
 status: stable
 generated:
-  by: autoagent/1
-  at: 2026-11-17
+  by: codex/1
+  at: 2026-11-23
 sources:
   - id: qbe-upstream
     resource: https://c9x.me/compile/release/qbe-1.3.tar.xz
@@ -38,6 +38,22 @@ and `extern $sym` PIC addressing (`:got:`/`:got_lo12:` on ELF arm64,
 `Qbe_il.optimize_blocks` rewrites local branch conditions and splits wide
 phi predecessor sets. The function takes blocks and a fresh-name supply
 and returns the rewritten blocks and the resulting supply.
+
+# ARM64 conditional branch reach
+
+Generated initializers such as Uucp 17.0.0's Unicode block tables can exceed
+the ARM64 conditional branch's signed 19-bit word displacement. The ARM64
+emitter computes conservative upper bounds on block offsets. It retains the
+direct conditional form when the bound proves the target is in range. For
+longer edges it inverts the condition to skip an unconditional branch to
+the target. The longer form uses the ordinary unconditional branch's
+signed 26-bit word displacement.
+
+`ninja -j1 test_qbe_arm64_long_branch` assembles and runs both forward and
+backward long edges on native ARM64. On macOS ARM64, the original emitter
+failed to assemble both edges. With the fix, the test passed and the
+unchanged four-unit Uucp reproducer built through `ocpkg` and printed `342`.
+[Package compatibility](/concepts/package-catalog.md#compatibility-evidence)
 
 # Implementation status
 

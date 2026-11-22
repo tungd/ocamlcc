@@ -435,7 +435,14 @@ rule run_separate_exports
 
 build test_separate_exports: run_separate_exports tests/separate_exports/run.sh tests/separate_exports/provider.ml tests/separate_exports/provider.mli tests/separate_exports/consumer.ml tests/separate_exports/entry.ml | $builddir/bin/occ $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a.opt
 
-build test: phony test_default_stdlib test_stdlib_opt test_separate_exports test_native_ffi test_single_thread_rc test_single_thread_driver test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
+rule run_qbe_arm64_long_branch
+  command = sh $in $builddir/qbe/qbe
+  description = TEST ARM64 conditional branch reach
+  pool = console
+
+build test_qbe_arm64_long_branch: run_qbe_arm64_long_branch tests/qbe_arm64_long_branch.sh | $builddir/qbe/qbe
+
+build test: phony test_qbe_arm64_long_branch test_default_stdlib test_stdlib_opt test_separate_exports test_native_ffi test_single_thread_rc test_single_thread_driver test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
 
 rule cc_rt_asan
   command = $cc $rt_cflags -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iruntime -c $in -o $out

@@ -143,8 +143,12 @@ and toolchain identities from their historical runs.
 `ninja -j1 ocpkg_catalog` vendors and tests the public APIs of Astring,
 Base64, Bytesrw, Fmt, Jsonm, Logs, Re, and Uutf. It passed on macOS ARM64
 and Ubuntu 24.04 ARM64. The Fmt and Logs recipes cover their core libraries.
-On macOS ARM64, the assembler rejected out-of-range branches in Uucp's
-generated Unicode tables, so Uucp stayed out of the snapshot.
+
+Uucp 17.0.0's generated Unicode block table initially hit the ARM64
+conditional branch range limit. With the QBE emitter fix, a custom snapshot
+with the unchanged four upstream units builds on macOS ARM64 and prints
+the same block count (`342`) as stock OCaml.
+[ARM64 conditional branch reach](/concepts/vendored-qbe.md#arm64-conditional-branch-reach)
 
 The local snapshot and recipes rely on repository review. The vendor
 and cache checks verify selected source and artifact bytes. Native
