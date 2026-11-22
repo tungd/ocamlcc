@@ -53,6 +53,9 @@ OCAMLCC_MODULES: list[tuple[str, bool, bool]] = [
     ("export_summary", True, True),
     ("pipeline", True, True),
     ("c_bindgen", True, True),
+    ("target", True, True),
+    ("linker", True, True),
+    ("dep_graph", True, True),
     ("driver", True, True),
     ("main", False, False),
 ]

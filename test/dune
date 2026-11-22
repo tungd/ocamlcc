@@ -465,3 +465,18 @@
  (name export_summary_version_test)
  (modules export_summary_version_test)
  (libraries ocamlcc))
+
+(test
+ (name dep_graph_test)
+ (modules dep_graph_test)
+ (libraries ocamlcc compiler-libs.common))
+
+(test
+ (name target_test)
+ (modules target_test)
+ (libraries ocamlcc))
+
+(test
+ (name linker_test)
+ (modules linker_test)
+ (libraries ocamlcc))

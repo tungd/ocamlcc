@@ -110,6 +110,15 @@ The executable initializes every explicitly linked implementation once, in depen
 
 Each unit's generated `ocamlcc_init_<Mod>` first calls `ocamlcc_init_try_enter` on its `ocamlcc_global_<Mod>` slot (`0` uninitialized, `-2` claimed, other value published) and skips initialization if it does not win the claim. Units that mutually reference each other through their `.mli` interfaces recurse into each other's init functions; the runtime treats a same-thread re-entrant call as "already initializing here" (returns `0`, no spin), so the inner unit completes with whichever of its dependencies were initialized before the cycle re-entered. `ocamlcc_init_finish` publishes the unit value — or `0` when `ocamlcc_get_exn()` holds a raised exception, so the failure can be retried — and releases the claim.
 
+# Driver modules
+
+`Target` resolves host and cross targets, toolchain commands, and resource
+paths. `Dep_graph` scans source dependencies and returns ordered interface
+and implementation steps. It restores the caller's compiler-libs dependency
+state after each scan. `Linker` owns native compilation commands, final
+archive and linker arguments, symbol visibility, and XCFramework packaging.
+`Driver` coordinates these operations with the compilation pipeline.
+
 # Runtime objects
 
 The default, single-thread, ASan and TSan archives include separate ARC,

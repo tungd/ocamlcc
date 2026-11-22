@@ -1,4 +1,4 @@
-type target_os =
+type target_os = Target.os =
   | Darwin
   | Linux
   | Ios
@@ -6,7 +6,7 @@ type target_os =
   | Android
   | Windows
 
-type target_spec = {
+type target_spec = Target.t = {
   name : string;
   qbe_target : string;
   os : target_os;
@@ -21,7 +21,7 @@ type output_kind =
   | Kind_asm
   | Kind_xcframework
 
-type build_step = {
+type build_step = Dep_graph.Step.t = {
   modname : string;
   kind : [ `Mli | `Ml ];
   path : string;
