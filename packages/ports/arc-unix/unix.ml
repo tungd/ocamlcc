@@ -5,6 +5,7 @@ module Error = struct
     | EADDRINUSE | EADDRNOTAVAIL | EAFNOSUPPORT | EALREADY | ECONNREFUSED
     | ECONNRESET | EINPROGRESS | EISCONN | ENAMETOOLONG | ENOTCONN | ENOTSOCK
     | EPROTONOSUPPORT
+    | EISDIR | ELOOP | ENOSPC | ENOTDIR | ENOTEMPTY | EOVERFLOW | EROFS | EXDEV
     | EWOULDBLOCK | EUNKNOWNERR of int
 
   external number : string -> int = "arc_unix_errno"
@@ -20,6 +21,8 @@ module Error = struct
         "EALREADY", EALREADY; "ECONNREFUSED", ECONNREFUSED; "ECONNRESET", ECONNRESET;
         "EINPROGRESS", EINPROGRESS; "EISCONN", EISCONN; "ENAMETOOLONG", ENAMETOOLONG;
         "ENOTCONN", ENOTCONN; "ENOTSOCK", ENOTSOCK; "EPROTONOSUPPORT", EPROTONOSUPPORT;
+        "EISDIR", EISDIR; "ELOOP", ELOOP; "ENOSPC", ENOSPC; "ENOTDIR", ENOTDIR;
+        "ENOTEMPTY", ENOTEMPTY; "EOVERFLOW", EOVERFLOW; "EROFS", EROFS; "EXDEV", EXDEV;
         "EWOULDBLOCK", EWOULDBLOCK ]
 
   let of_number code =
@@ -39,6 +42,7 @@ type error = Error.t =
   | EADDRINUSE | EADDRNOTAVAIL | EAFNOSUPPORT | EALREADY | ECONNREFUSED
   | ECONNRESET | EINPROGRESS | EISCONN | ENAMETOOLONG | ENOTCONN | ENOTSOCK
   | EPROTONOSUPPORT
+  | EISDIR | ELOOP | ENOSPC | ENOTDIR | ENOTEMPTY | EOVERFLOW | EROFS | EXDEV
   | EWOULDBLOCK | EUNKNOWNERR of int
 
 exception Unix_error of error * string * string
@@ -51,7 +55,12 @@ let raise_errno ?(argument = "") operation code =
 let check ?argument operation result =
   if result < 0 then raise_errno ?argument operation (-result) else result
 
-let get operation = function Ok value -> value | Error code -> raise_errno operation code
+let get ?argument operation = function
+  | Ok value -> value
+  | Error code -> raise_errno ?argument operation code
+
+let check_path operation path =
+  if String.contains path '\000' then raise (Unix_error (EINVAL, operation, path))
 
 module File_descr = struct
   type t = int
@@ -82,6 +91,54 @@ end
 type open_flag = Open_flag.t =
   | O_RDONLY | O_WRONLY | O_RDWR | O_NONBLOCK | O_APPEND | O_CREAT
   | O_TRUNC | O_EXCL | O_NOCTTY | O_CLOEXEC | O_KEEPEXEC
+
+module File_kind = struct
+  type t = S_REG | S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK
+end
+
+module Stats = struct
+  type t = {
+    st_dev : int;
+    st_ino : int;
+    st_kind : File_kind.t;
+    st_perm : int;
+    st_nlink : int;
+    st_uid : int;
+    st_gid : int;
+    st_rdev : int;
+    st_size : int;
+    st_atime : float;
+    st_mtime : float;
+    st_ctime : float;
+  }
+end
+
+type file_kind = File_kind.t = S_REG | S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK
+type stats = Stats.t = {
+  st_dev : int;
+  st_ino : int;
+  st_kind : file_kind;
+  st_perm : int;
+  st_nlink : int;
+  st_uid : int;
+  st_gid : int;
+  st_rdev : int;
+  st_size : int;
+  st_atime : float;
+  st_mtime : float;
+  st_ctime : float;
+}
+
+module Access_permission = struct
+  type t = R_OK | W_OK | X_OK | F_OK
+
+  let encode permissions =
+    List.fold_left (fun mask permission ->
+      let bit = match permission with R_OK -> 1 | W_OK -> 2 | X_OK -> 4 | F_OK -> 0 in
+      mask lor bit) 0 permissions
+end
+
+type access_permission = Access_permission.t = R_OK | W_OK | X_OK | F_OK
 
 module Socket_domain = struct
   type t = PF_UNIX | PF_INET
@@ -161,6 +218,16 @@ module Native = struct
   external pipe : bool -> (file_descr * file_descr, int) result = "arc_unix_pipe"
   external close : file_descr -> int = "arc_unix_close"
   external openfile : string -> int -> int -> int = "arc_unix_openfile"
+  external stat : string -> bool -> (Stats.t, int) result = "arc_unix_stat"
+  external fstat : file_descr -> (Stats.t, int) result = "arc_unix_fstat"
+  external chmod : string -> int -> int = "arc_unix_chmod"
+  external fchmod : file_descr -> int -> int = "arc_unix_fchmod"
+  external mkdir : string -> int -> int = "arc_unix_mkdir"
+  external rmdir : string -> int = "arc_unix_rmdir"
+  external unlink : string -> int = "arc_unix_unlink"
+  external rename : string -> string -> int = "arc_unix_rename"
+  external access : string -> int -> int = "arc_unix_access"
+  external realpath : string -> (string, int) result = "arc_unix_realpath"
   external dup : file_descr -> bool -> int = "arc_unix_dup"
   external set_cloexec : file_descr -> bool -> int = "arc_unix_set_cloexec"
   external set_nonblock : file_descr -> bool -> int = "arc_unix_set_nonblock"
@@ -200,8 +267,40 @@ let set_close_on_exec fd = ignore (check "set_close_on_exec" (Native.set_cloexec
 let clear_close_on_exec fd = ignore (check "clear_close_on_exec" (Native.set_cloexec fd false))
 
 let openfile path flags permissions =
-  if String.contains path '\000' then raise (Unix_error (EINVAL, "open", path));
+  check_path "open" path;
   check ~argument:path "open" (Native.openfile path (Open_flag.encode flags) permissions)
+
+let path_stat operation follow path =
+  check_path operation path;
+  get ~argument:path operation (Native.stat path follow)
+
+let stat = path_stat "stat" true
+let lstat = path_stat "lstat" false
+let fstat fd = get "fstat" (Native.fstat fd)
+
+let path_status operation call path =
+  check_path operation path;
+  ignore (check ~argument:path operation (call path))
+
+let chmod path permissions = path_status "chmod" (fun path -> Native.chmod path permissions) path
+let fchmod fd permissions = ignore (check "fchmod" (Native.fchmod fd permissions))
+let mkdir path permissions = path_status "mkdir" (fun path -> Native.mkdir path permissions) path
+let rmdir = path_status "rmdir" Native.rmdir
+let unlink = path_status "unlink" Native.unlink
+
+let rename source destination =
+  check_path "rename" destination;
+  path_status "rename" (fun path -> Native.rename path destination) source
+
+let access path permissions =
+  let mask = Access_permission.encode permissions in
+  path_status "access" (fun path -> Native.access path mask) path
+
+let realpath path =
+  check_path "realpath" path;
+  get ~argument:path "realpath" (Native.realpath path)
+
+external getuid : unit -> int = "arc_unix_getuid"
 
 let inet_addr_any = Inet_addr.any
 let inet_addr_loopback = Inet_addr.loopback

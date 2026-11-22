@@ -87,6 +87,12 @@ the daemon. `dup ~cloexec:true` duplicates the handle with close-on-exec set
 atomically. `set_close_on_exec` and `clear_close_on_exec` control inheritance
 on existing handles.
 
+`stat`, `lstat` and `fstat` expose file kind, permissions, owner, size,
+and timestamps through `Unix.Stats.t` with stock field names. The port also
+supports directory creation and removal, permission changes, renaming,
+unlinking, access checks, current UID, and canonical path resolution.
+Path errors keep the supplied path in `Unix.Unix_error`.
+
 The socket interface supports Unix-domain and IPv4 stream and datagram
 sockets. It exposes `Unix.Sockaddr.t` and keeps IPv4 addresses abstract in
 `Unix.Inet_addr`. It includes listener and client operations, socket pairs,

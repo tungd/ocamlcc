@@ -1,4 +1,4 @@
-(** POSIX descriptors, process status and clock operations for ARC. *)
+(** POSIX file, socket, process and clock operations for ARC. *)
 
 module File_descr : sig
   type t
@@ -17,6 +17,7 @@ type error =
   | EADDRINUSE | EADDRNOTAVAIL | EAFNOSUPPORT | EALREADY | ECONNREFUSED
   | ECONNRESET | EINPROGRESS | EISCONN | ENAMETOOLONG | ENOTCONN | ENOTSOCK
   | EPROTONOSUPPORT
+  | EISDIR | ELOOP | ENOSPC | ENOTDIR | ENOTEMPTY | EOVERFLOW | EROFS | EXDEV
   | EWOULDBLOCK | EUNKNOWNERR of int
 
 exception Unix_error of error * string * string
@@ -52,6 +53,62 @@ type open_flag = Open_flag.t =
   | O_TRUNC | O_EXCL | O_NOCTTY | O_CLOEXEC | O_KEEPEXEC
 
 val openfile : string -> Open_flag.t list -> int -> File_descr.t
+
+module File_kind : sig
+  type t = S_REG | S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK
+end
+
+module Stats : sig
+  type t = {
+    st_dev : int;
+    st_ino : int;
+    st_kind : File_kind.t;
+    st_perm : int;
+    st_nlink : int;
+    st_uid : int;
+    st_gid : int;
+    st_rdev : int;
+    st_size : int;
+    st_atime : float;
+    st_mtime : float;
+    st_ctime : float;
+  }
+end
+
+type file_kind = File_kind.t = S_REG | S_DIR | S_CHR | S_BLK | S_LNK | S_FIFO | S_SOCK
+type stats = Stats.t = {
+  st_dev : int;
+  st_ino : int;
+  st_kind : file_kind;
+  st_perm : int;
+  st_nlink : int;
+  st_uid : int;
+  st_gid : int;
+  st_rdev : int;
+  st_size : int;
+  st_atime : float;
+  st_mtime : float;
+  st_ctime : float;
+}
+
+module Access_permission : sig
+  type t = R_OK | W_OK | X_OK | F_OK
+end
+
+type access_permission = Access_permission.t = R_OK | W_OK | X_OK | F_OK
+
+val stat : string -> Stats.t
+val lstat : string -> Stats.t
+val fstat : File_descr.t -> Stats.t
+val chmod : string -> int -> unit
+val fchmod : File_descr.t -> int -> unit
+val mkdir : string -> int -> unit
+val rmdir : string -> unit
+val unlink : string -> unit
+val rename : string -> string -> unit
+val access : string -> Access_permission.t list -> unit
+val realpath : string -> string
+val getuid : unit -> int
 
 module Socket_domain : sig
   type t = PF_UNIX | PF_INET

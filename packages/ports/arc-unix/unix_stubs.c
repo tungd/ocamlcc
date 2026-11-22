@@ -6,8 +6,11 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -62,6 +65,8 @@ value arc_unix_errno(value name)
     CHECK(EADDRINUSE); CHECK(EADDRNOTAVAIL); CHECK(EAFNOSUPPORT); CHECK(EALREADY);
     CHECK(ECONNREFUSED); CHECK(ECONNRESET); CHECK(EINPROGRESS); CHECK(EISCONN);
     CHECK(ENAMETOOLONG); CHECK(ENOTCONN); CHECK(ENOTSOCK); CHECK(EPROTONOSUPPORT);
+    CHECK(EISDIR); CHECK(ELOOP); CHECK(ENOSPC); CHECK(ENOTDIR); CHECK(ENOTEMPTY);
+    CHECK(EOVERFLOW); CHECK(EROFS); CHECK(EXDEV);
 #undef CHECK
     return integer(-1);
 }
@@ -112,6 +117,131 @@ value arc_unix_openfile(value path, value flags, value permissions)
             native |= native_flags[i];
     int fd = open((const char *)(uintptr_t)path, native, (mode_t)number(permissions));
     return integer(fd < 0 ? -errno : fd);
+}
+
+static int stat_kind(mode_t mode)
+{
+    /* Match the constructors in Unix.File_kind. */
+    switch (mode & S_IFMT) {
+    case S_IFREG: return 0;
+    case S_IFDIR: return 1;
+    case S_IFCHR: return 2;
+    case S_IFBLK: return 3;
+    case S_IFLNK: return 4;
+    case S_IFIFO: return 5;
+    case S_IFSOCK: return 6;
+    default: return -1;
+    }
+}
+
+static int ocaml_int_fits(int64_t n)
+{
+    return n >= -(INT64_C(1) << 62) && n <= (INT64_MAX >> 1);
+}
+
+static value timestamp(struct timespec time)
+{
+    return ocamlcc_alloc_float((double)time.tv_sec + (double)time.tv_nsec / 1e9);
+}
+
+static value stat_result(const struct stat *info)
+{
+    int kind = stat_kind(info->st_mode);
+    if (kind < 0)
+        return boxed(1, integer(EINVAL));
+    if (!ocaml_int_fits(info->st_size))
+        return boxed(1, integer(EOVERFLOW));
+
+#ifdef __APPLE__
+    value access_time = timestamp(info->st_atimespec);
+    value modify_time = timestamp(info->st_mtimespec);
+    value change_time = timestamp(info->st_ctimespec);
+#else
+    value access_time = timestamp(info->st_atim);
+    value modify_time = timestamp(info->st_mtim);
+    value change_time = timestamp(info->st_ctim);
+#endif
+    /* Record layout of Unix.Stats.t. */
+    value fields[] = {
+        integer((int64_t)info->st_dev), integer((int64_t)info->st_ino), integer(kind),
+        integer(info->st_mode & 07777), integer(info->st_nlink),
+        integer(info->st_uid), integer(info->st_gid), integer((int64_t)info->st_rdev),
+        integer(info->st_size), access_time, modify_time, change_time
+    };
+    value *record = arc_alloc(0, sizeof fields / sizeof *fields, sizeof fields);
+    memcpy(record, fields, sizeof fields);
+    return boxed(0, (value)(uintptr_t)record);
+}
+
+value arc_unix_stat(value path, value follow)
+{
+    struct stat info;
+    const char *name = (const char *)(uintptr_t)path;
+    int result = number(follow) ? stat(name, &info) : lstat(name, &info);
+    return result < 0 ? boxed(1, integer(errno)) : stat_result(&info);
+}
+
+value arc_unix_fstat(value fd)
+{
+    struct stat info;
+    return fstat(number(fd), &info) < 0 ? boxed(1, integer(errno)) : stat_result(&info);
+}
+
+value arc_unix_chmod(value path, value permissions)
+{
+    int result = chmod((const char *)(uintptr_t)path, (mode_t)number(permissions));
+    return integer(result < 0 ? -errno : 0);
+}
+
+value arc_unix_fchmod(value fd, value permissions)
+{
+    return integer(fchmod(number(fd), (mode_t)number(permissions)) < 0 ? -errno : 0);
+}
+
+value arc_unix_mkdir(value path, value permissions)
+{
+    int result = mkdir((const char *)(uintptr_t)path, (mode_t)number(permissions));
+    return integer(result < 0 ? -errno : 0);
+}
+
+value arc_unix_rmdir(value path)
+{
+    return integer(rmdir((const char *)(uintptr_t)path) < 0 ? -errno : 0);
+}
+
+value arc_unix_unlink(value path)
+{
+    return integer(unlink((const char *)(uintptr_t)path) < 0 ? -errno : 0);
+}
+
+value arc_unix_rename(value source, value destination)
+{
+    int result = rename((const char *)(uintptr_t)source, (const char *)(uintptr_t)destination);
+    return integer(result < 0 ? -errno : 0);
+}
+
+value arc_unix_access(value path, value permission)
+{
+    /* Bits are defined by Unix.Access_permission.encode. */
+    unsigned mask = (unsigned)number(permission);
+    int mode = ((mask & 1u) ? R_OK : 0) | ((mask & 2u) ? W_OK : 0) | ((mask & 4u) ? X_OK : 0);
+    return integer(access((const char *)(uintptr_t)path, mode) < 0 ? -errno : 0);
+}
+
+value arc_unix_realpath(value path)
+{
+    char *resolved = realpath((const char *)(uintptr_t)path, NULL);
+    if (resolved == NULL)
+        return boxed(1, integer(errno));
+    value result = text(resolved);
+    free(resolved);
+    return boxed(0, result);
+}
+
+value arc_unix_getuid(value unit)
+{
+    (void)unit;
+    return integer(getuid());
 }
 
 value arc_unix_dup(value descriptor, value cloexec)

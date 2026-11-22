@@ -61,6 +61,12 @@ int64_t term_signals(int64_t unit) {
     (void)unit;
     return (int64_t)term_count * 2 + 1;
 }
+
+int64_t make_symlink(int64_t target, int64_t link) {
+    const char *name = (const char *)(uintptr_t)link;
+    const char *destination = (const char *)(uintptr_t)target;
+    return symlink(destination, name) == 0 ? 3 : 1;
+}
 C
 
 cat > src/main.ml <<'ML'
@@ -69,6 +75,7 @@ external start_child : Unix.file_descr -> Unix.file_descr -> int = "start_child"
 external clean_up_child : int -> unit = "clean_up_child"
 external install_term_handler : unit -> bool = "install_term_handler"
 external term_signals : unit -> int = "term_signals"
+external symlink : string -> string -> bool = "make_symlink"
 
 let test_files () =
   let path = "arc-unix-file" in
@@ -100,6 +107,38 @@ let test_files () =
   assert (Unix.read fd buffer 0 3 = 3 && Bytes.to_string buffer = "abc");
   Unix.close fd;
   Sys.remove path
+
+let test_metadata () =
+  let directory = "metadata-" ^ string_of_int (Unix.getpid ()) in
+  Unix.mkdir directory 0o700;
+  Unix.chmod directory 0o700;
+  let info = Unix.lstat directory in
+  assert (info.Unix.st_kind = Unix.S_DIR);
+  assert (info.st_uid = Unix.getuid () && info.st_perm = 0o700);
+  let first = Filename.concat directory "before" in
+  let second = Filename.concat directory "after" in
+  let link = Filename.concat directory "link" in
+  let fd = Unix.openfile first [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_CLOEXEC] 0o600 in
+  Unix.fchmod fd 0o600;
+  assert (Unix.write fd (Bytes.of_string "data") 0 4 = 4);
+  let opened = Unix.fstat fd in
+  Unix.close fd;
+  assert (opened.st_size = 4 && opened.st_mtime > 0.);
+  assert (opened.st_kind = Unix.S_REG && opened.st_perm = 0o600);
+  Unix.rename first second;
+  assert (symlink "after" link);
+  assert ((Unix.lstat link).st_kind = Unix.S_LNK);
+  let followed = Unix.stat link in
+  assert (followed.st_ino = opened.st_ino && followed.st_size = 4);
+  assert (Filename.basename (Unix.realpath link) = "after");
+  Unix.access second [Unix.R_OK; Unix.F_OK];
+  Unix.unlink link;
+  assert ((Unix.stat second).st_kind = Unix.S_REG);
+  Unix.unlink second;
+  assert (match Unix.stat second with
+    | exception Unix.Unix_error (Unix.ENOENT, "stat", path) -> path = second
+    | _ -> false);
+  Unix.rmdir directory
 
 let with_socket domain f =
   let fd = Unix.socket ~cloexec:true domain Unix.SOCK_STREAM 0 in
@@ -265,6 +304,8 @@ let () =
   print_endline "ARC Unix descriptors: PASS";
   test_files ();
   print_endline "ARC Unix file descriptors: PASS";
+  test_metadata ();
+  print_endline "ARC Unix file metadata: PASS";
   test_sockets ();
   print_endline "ARC Unix sockets: PASS";
   test_children ();
