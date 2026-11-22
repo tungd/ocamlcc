@@ -25,7 +25,7 @@ install -m 644 "$build_dir/stdlib/"*.cmi "$build_dir/stdlib/"*.o "$build_dir/std
   "$build_dir/stdlib/libocamlstdlib.a" "$build_dir/stdlib/libocamlstdlib.a.opt" "$lib/stdlib/"
 install -m 644 "$build_dir/stdlib.sources" "$lib/stdlib-src/stdlib.sources"
 install -m 644 packages/snapshots/default.snap "$lib/snapshots/default.snap"
-cp -R packages/ports/crunch-unix "$lib/ports/"
+cp -R packages/ports/arc-unix packages/ports/crunch-unix "$lib/ports/"
 mkdir -p "$prefix/share/doc/occ"
 install -m 644 vendor/qbe/LICENSE "$prefix/share/doc/occ/qbe-LICENSE"
 install -m 644 vendor/ocaml-stdlib/LICENSE "$prefix/share/doc/occ/ocaml-LICENSE"

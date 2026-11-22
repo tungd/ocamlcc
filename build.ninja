@@ -613,7 +613,7 @@ rule dist_bundle
   description = PACKAGE occ toolchain
   pool = console
 
-build dist: dist_bundle tools/dist.sh packages/snapshots/default.snap packages/ports/crunch-unix/unix.ml packages/ports/crunch-unix/unix.mli packages/ports/crunch-unix/unix_stubs.c vendor/qbe/LICENSE vendor/ocaml-stdlib/LICENSE | $builddir/bin/occ $builddir/bin/ocpkg $builddir/qbe/qbe $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a $stdlibdir/libocamlstdlib.a $stdlibdir/libocamlstdlib.a.opt $builddir/stdlib.sources
+build dist: dist_bundle tools/dist.sh packages/snapshots/default.snap packages/ports/arc-unix/unix.ml packages/ports/arc-unix/unix.mli packages/ports/arc-unix/unix_stubs.c packages/ports/crunch-unix/unix.ml packages/ports/crunch-unix/unix.mli packages/ports/crunch-unix/unix_stubs.c vendor/qbe/LICENSE vendor/ocaml-stdlib/LICENSE | $builddir/bin/occ $builddir/bin/ocpkg $builddir/qbe/qbe $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a $stdlibdir/libocamlstdlib.a $stdlibdir/libocamlstdlib.a.opt $builddir/stdlib.sources
 
 rule run_ocpkg_test
   command = sh $in $builddir/bin/ocpkg
@@ -624,7 +624,8 @@ build ocpkg_native_cli: run_ocpkg_test tests/ocpkg/native_cli.sh | $builddir/bin
 build ocpkg_workspace_incremental: run_ocpkg_test tests/ocpkg/workspace_incremental.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
 build ocpkg_wrapped_packages: run_ocpkg_test tests/ocpkg/wrapped_packages.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
 build ocpkg_native_library: run_ocpkg_test tests/ocpkg/native_library.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
-build ocpkg_test: phony ocpkg_native_cli ocpkg_workspace_incremental ocpkg_wrapped_packages ocpkg_native_library
+build ocpkg_arc_unix: run_ocpkg_test tests/ocpkg/arc_unix.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
+build ocpkg_test: phony ocpkg_native_cli ocpkg_workspace_incremental ocpkg_wrapped_packages ocpkg_native_library ocpkg_arc_unix
 
 build ocpkg_catalog: run_ocpkg_test tests/ocpkg/catalog_daily.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a packages/snapshots/default.snap
 

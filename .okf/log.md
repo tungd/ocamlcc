@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Add the ARC Unix package with POSIX descriptors, byte I/O, errors, and the wall clock. Verify a close-on-exec pipe through ocpkg. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
+
 - 2026-11-23 (codex/1) — Relax distant ARM64 conditional branches in QBE. Verify forward and backward edges and the upstream Uucp 17.0.0 block-table reproducer. See [ARM64 conditional branch reach](/concepts/vendored-qbe.md#arm64-conditional-branch-reach).
 
 - 2026-11-23 (codex/1) — Record warm ocpkg timings, lock compatibility across catalog updates, new CLI and C recipe support, and catalog and distribution verification on macOS ARM64 and Ubuntu ARM64. Document the release workflow for `tungd/ocamlcc`. See [package catalog](/concepts/package-catalog.md) and [build pipeline](/concepts/build-pipeline.md).

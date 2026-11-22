@@ -1,6 +1,15 @@
 # Curated package snapshot
 schema 1
 
+pkg arc-unix 0.1.0
+  local ports/arc-unix
+  tree a89501e11462f2b68aaf35a71a6a18af3a545520eaa1bfa969b38f6714ae315b
+  wrapped false
+  export Unix
+  file unix.ml <= unix.ml
+  file unix.mli <= unix.mli
+  file unix_stubs.c <= unix_stubs.c
+
 pkg astring 0.8.5
   url https://erratique.ch/software/astring/releases/astring-0.8.5.tbz
   sha256 865692630c07c3ab87c66cdfc2734c0fdfc9c34a57f8e89ffec7c7d15e7a70fa
