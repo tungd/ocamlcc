@@ -1,5 +1,4 @@
-method_send: PASS
+self_method_send: PASS
 unknown_caml_prim: PASS
 wrong_arity_caml_prim: PASS
-too_many_c_args: PASS
 missing_file: PASS

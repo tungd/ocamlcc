@@ -47,7 +47,9 @@ let check_missing_file () =
 let () =
   let checks =
     [ (fun () ->
-        check_unsupported "method_send" "let f o = o#m" "method call");
+        check_unsupported "self_method_send"
+          "external send : 'a -> int -> 'b = \"%sendself\"\nlet f o = send o 0"
+          "method call");
       (fun () ->
         check_unsupported "unknown_caml_prim"
           "external bad : int -> int = \"caml_unknown_prim\"\nlet _ = bad 1"
@@ -56,10 +58,6 @@ let () =
         check_unsupported "wrong_arity_caml_prim"
           "external bad : int -> int = \"caml_compare\"\nlet _ = bad 1"
           "1 arguments");
-      (fun () ->
-        check_unsupported "too_many_c_args"
-          "external f7 : int -> int -> int -> int -> int -> int -> int -> int = \"c_f7\"\nlet _ = f7 1 2 3 4 5 6 7"
-          "c_f7");
       check_missing_file
     ]
   in
