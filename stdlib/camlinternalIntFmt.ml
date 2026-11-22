@@ -67,7 +67,9 @@ let digit_char upper d =
   else if upper then char_of_int (65 + d - 10)
   else char_of_int (97 + d - 10)
 
-let format_u64 fmt (v : int64) (mask32 : bool) : string =
+type unsigned_width = Word | Bits32 | Bits64
+
+let format_u64 fmt (v : int64) unsigned_width : string =
   let len = string_length fmt in
   if len < 2 || string_unsafe_get fmt 0 <> '%' then ""
   else
@@ -140,8 +142,12 @@ let format_u64 fmt (v : int64) (mask32 : bool) : string =
               if is_signed then
                 if v < 0L then (true, i64_neg v) else (false, v)
               else
-                let mv = if mask32 then i64_and v 0xFFFFFFFFL else v in
-                (false, mv)
+                let magnitude = match unsigned_width with
+                  | Word -> i64_and v 0x7FFFFFFFFFFFFFFFL
+                  | Bits32 -> i64_and v 0xFFFFFFFFL
+                  | Bits64 -> v
+                in
+                (false, magnitude)
             in
             let digits_rev, ndigits =
               if mag = 0L then
@@ -214,10 +220,10 @@ let format_u64 fmt (v : int64) (mask32 : bool) : string =
             let _ = fill_char pos right_spaces ' ' in
             bytes_unsafe_to_string out
 
-let format_int fmt n = format_u64 fmt (i64_of_int n) false
-let format_int32 fmt n = format_u64 fmt (i64_of_int32 n) true
-let format_int64 fmt n = format_u64 fmt n false
-let format_nativeint fmt n = format_u64 fmt (i64_of_nativeint n) false
+let format_int fmt n = format_u64 fmt (i64_of_int n) Word
+let format_int32 fmt n = format_u64 fmt (i64_of_int32 n) Bits32
+let format_int64 fmt n = format_u64 fmt n Bits64
+let format_nativeint fmt n = format_u64 fmt (i64_of_nativeint n) Bits64
 
 let parse_digit c =
   let k = int_of_char c in

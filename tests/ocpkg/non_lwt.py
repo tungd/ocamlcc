@@ -80,7 +80,7 @@ def main():
     def arc_build(name, sources):
         binary = out / "arc" / name
         binary.parent.mkdir(exist_ok=True)
-        command = [ROOT / "build/bin/occ", "build", "--stdlib-dir", ROOT / "build/stdlib_compat/out",
+        command = [ROOT / "build/bin/occ", "build", "--stdlib-dir", ROOT / "build/stdlib",
                    "--runtime-dir", ROOT / "runtime", "--runtime-objects-dir", base / "no-prebuilt-runtime",
                    "--qbe", ROOT / "build/qbe/qbe", "--cflags", "-I" + str(ROOT / "runtime"),
                    "--work-dir", out / "work" / name, *sources, "-o", binary]

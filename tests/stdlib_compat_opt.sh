@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-stdlib=build/stdlib_compat/out
+stdlib=build/stdlib
 check_bulk_entry() {
     awk -v entry="$2" -v primitive="$3" '
         /function l / {
@@ -14,25 +14,25 @@ check_bulk_entry() {
         END { exit count != 2 || checked || missing }
     ' "$1"
 }
-check_bulk_entry "$stdlib/stdlib__array.ssa" ocamlcc_Stdlib__Array_fill ocamlcc_bulk_array_fill
-check_bulk_entry "$stdlib/stdlib__array.ssa" ocamlcc_Stdlib__Array_sub ocamlcc_bulk_array_sub
-check_bulk_entry "$stdlib/stdlib__bytes.ssa" ocamlcc_Stdlib__Bytes_fill ocamlcc_bulk_fill_bytes
-check_bulk_entry "$stdlib/stdlib__bytes.ssa" ocamlcc_Stdlib__Bytes_sub ocamlcc_bulk_blit_bytes
+check_bulk_entry "$stdlib/stdlib__Array.ssa" ocamlcc_Stdlib__Array_fill ocamlcc_bulk_array_fill
+check_bulk_entry "$stdlib/stdlib__Array.ssa" ocamlcc_Stdlib__Array_sub ocamlcc_bulk_array_sub
+check_bulk_entry "$stdlib/stdlib__Bytes.ssa" ocamlcc_Stdlib__Bytes_fill ocamlcc_bulk_fill_bytes
+check_bulk_entry "$stdlib/stdlib__Bytes.ssa" ocamlcc_Stdlib__Bytes_sub ocamlcc_bulk_blit_bytes
 
 # The public unsafe Bytes functions keep the compatibility runtime's checks.
 bulk='call extern \$ocamlcc_CamlinternalBulkOps_'
-grep -Eq "${bulk}fill_bytes(_borrowed)?__" "$stdlib/stdlib__bytes.ssa"
-grep -Eq "${bulk}blit_bytes(_borrowed)?__" "$stdlib/stdlib__bytes.ssa"
-grep -Eq "${bulk}blit_string(_borrowed)?__" "$stdlib/stdlib__string.ssa"
-grep -Eq 'ocamlcc_Stdlib__Bytes_set_uint8_borrowed__' "$stdlib/stdlib__bytes.exports"
+grep -Eq "${bulk}fill_bytes(_borrowed)?__" "$stdlib/stdlib__Bytes.ssa"
+grep -Eq "${bulk}blit_bytes(_borrowed)?__" "$stdlib/stdlib__Bytes.ssa"
+grep -Eq "${bulk}blit_string(_borrowed)?__" "$stdlib/stdlib__String.ssa"
+grep -Eq 'ocamlcc_Stdlib__Bytes_set_uint8_borrowed__' "$stdlib/stdlib__Bytes.exports"
 
 # Later units can import both the Stdlib raise helpers and earlier bulk
 # providers in the same build of the archive.
-for unit in array bytes; do
+for unit in Array Bytes; do
     grep -Eq 'call extern \$ocamlcc_Stdlib_invalid_arg__' "$stdlib/stdlib__$unit.ssa"
     grep -Eq '_fill__[^ ]+ 4 false [^ ]+ [^ ]+ [^ ]+ 100[01]$' "$stdlib/stdlib__$unit.opt"
 done
-grep -Eq '_set_utf_8_uchar__[^ ]+ 3 false [^ ]+ [^ ]+ [^ ]+ 10[01]$' "$stdlib/stdlib__bytes.opt"
+grep -Eq '_set_utf_8_uchar__[^ ]+ 3 false [^ ]+ [^ ]+ [^ ]+ 10[01]$' "$stdlib/stdlib__Bytes.opt"
 
 # Uchar.to_int is exposed as the immediate identity in the compatibility CMI.
 awk '
@@ -40,7 +40,7 @@ awk '
     /^}/ { body = 0 }
     body && /\$ocamlcc_global_Stdlib__Uchar|\$ocamlcc_apply1_raw/ { indirect = 1 }
     END { exit !found || indirect }
-' "$stdlib/stdlib__bytes.ssa"
+' "$stdlib/stdlib__Bytes.ssa"
 echo 'stdlib compatibility direct calls: PASS'
 
 probe=$(mktemp -d)

@@ -39,11 +39,11 @@ sources:
 ---
 
 
-The compatibility build publishes each loose object's `.exports` file after
+The canonical build publishes each loose object's `.exports` file after
 assembly so later units can import its digest-checked call and ownership facts.
 This lets the bulk clients call `Stdlib.invalid_arg` directly on their error
 paths and advertise their borrowed entries. The final archive publishes the
-same facts in `libocamlstdlib_compat.a.opt`.
+same facts in `build/stdlib/libocamlstdlib.a.opt`.
 See [persisted export summaries](/concepts/build-pipeline.md#persisted-export-summaries).
 
 The compiler verifies the scalar intervals in `Uchar.is_valid` and the
@@ -58,11 +58,15 @@ come from the same stdlib implementation.
 interfaces, licenses, and 48 upstream `lib-*` test directories. The pin is
 recorded in `vendor/ocaml-stdlib/UPSTREAM.txt`.[^upstream]
 
-After `ninja -j1`, run `python3 tools/stdlib_compat.py`. The runner selects
-`stdlib/overlay/` files before upstream sources, compiles the interfaces and
-implementations with ocamlcc/QBE, archives the objects, and links upstream tests
-against that archive and our ARC runtime. It does not use the host OCaml runtime.
-`build/stdlib_compat/report.md` records module and test outcomes.[^runner]
+The default Ninja build selects the ARC overlay ahead of the pinned upstream
+sources, compiles 78 modules with `occ` and QBE, and publishes the host archive
+and the source bundle. `Stdlib_build` compiles that same bundle when the driver
+needs target objects or a host archive is unavailable. `Stdlib.Fiber` and the
+`Camlinternal` helpers are part of the overlay.
+
+Run `ninja -j1 stdlib_compat` to link the upstream tests against the default
+archive and the ARC runtime. `build/stdlib_compat/report.md` records module and
+test outcomes.[^runner]
 
 `stdlib/camlinternalIntFmt.ml` (`--nopervasives`, compiled right after `CamlinternalFormatBasics`) implements integer parsing and formatting (`format_int`, `format_int32`, `format_int64`, `format_nativeint`, `parse_int`, `parse_int32`, `parse_int64`, `parse_nativeint`) in pure OCaml, replacing the C `caml_*format*` / `caml_*_of_string` implementations previously in `runtime/builtins.c`/`runtime/arc.c`. It handles 63-bit signed decimal bounds (`[-(1<<62), (1<<62)-1]`), signed/unsigned base-prefixed literals (`"-0x30"`, `"0x7fffffffffffffff"` -> `-1`, magnitude `<= INT64_MAX`, sign-extending bit 62) matching `Misc.Int_literal_converter.int`, 32/64-bit parsing, and `%[flags][width][.prec][l|ll|L|n][d|i|u|x|X|o]` formatting.[^int-fmt]
 
@@ -124,7 +128,7 @@ and shared sub/slice/reshape/layout views. These helpers
 live in `runtime/bigarray.inc`, included by `arc.c`. C callers can retain a
 subview with its data and dimensions across collection. The public interface
 is documented in [memory views](/concepts/memory-views.md).
-The native stdlib build now compiles all 77/77 modules. `stdlib/camlinternalSys.ml` (`--nopervasives`, compiled right after `CamlinternalMarshal`) implements the `Callback` named-value table (calling the 1-line `ocamlcc_set_at_exit_fn` hook for `"Pervasives.do_at_exit"`), backtrace stubs (`record_backtrace`, `backtrace_status`, `get_exception_raw_backtrace`, `get_current_callstack`, slot/debug helpers; while `lib/anf.ml` lowers `caml_restore_raw_backtrace` to `Int 0`), and `Sys` config/warnings/temp-dir/executable-name helpers over `ocamlcc_sys_is_win32`, `caml_sys_argv`, and `caml_sys_getenv_opt` (`runtime_variant`/`parameters`/`signal` and 22 C stubs removed from `runtime/arc.c` & `lib/ccalls.ml`). `stdlib/camlinternalChannel.ml` (`--nopervasives`, compiled right after `CamlinternalBulkOps` and before `CamlinternalMarshal`) implements buffered `in_channel` and `out_channel` (4096-byte `bytes` buffers, weak array registry for `out_channels_list ()` / `flush_all ()`, unbuffered mode, 64-bit `LargeFile` seeks/lengths, `input_scan_line`, binary 32-bit ints, and Bigarray 1D `char` slice transfers) over thin POSIX fd shims (`ocamlcc_raw_fd_{read,write,lseek,size,close,isatty}`, `ocamlcc_stdio_flush`, and `ocamlcc_ba_{to_bytes,of_bytes_slice}`), removing `OcamlccChannel`, `ARC_TAG_CHANNEL`, and all `caml_ml_*` channel functions from `runtime/arc.c` and `runtime/arc.h`. `stdlib/camlinternalMarshal.ml` (`--nopervasives`, compiled right after `CamlinternalChannel`) implements Marshal in pure OCaml over `CamlinternalChannel` and tiny object/bigarray metadata helpers (`ocamlcc_ptr_id`,
+The native stdlib build compiles all 78 modules, including Fiber. `stdlib/camlinternalSys.ml` (`--nopervasives`, compiled right after `CamlinternalMarshal`) implements the `Callback` named-value table (calling the 1-line `ocamlcc_set_at_exit_fn` hook for `"Pervasives.do_at_exit"`), backtrace stubs (`record_backtrace`, `backtrace_status`, `get_exception_raw_backtrace`, `get_current_callstack`, slot/debug helpers; while `lib/anf.ml` lowers `caml_restore_raw_backtrace` to `Int 0`), and `Sys` config/warnings/temp-dir/executable-name helpers over `ocamlcc_sys_is_win32`, `caml_sys_argv`, and `caml_sys_getenv_opt` (`runtime_variant`/`parameters`/`signal` and 22 C stubs removed from `runtime/arc.c` & `lib/ccalls.ml`). `stdlib/camlinternalChannel.ml` (`--nopervasives`, compiled right after `CamlinternalBulkOps` and before `CamlinternalMarshal`) implements buffered `in_channel` and `out_channel` (4096-byte `bytes` buffers, weak array registry for `out_channels_list ()` / `flush_all ()`, unbuffered mode, 64-bit `LargeFile` seeks/lengths, `input_scan_line`, binary 32-bit ints, and Bigarray 1D `char` slice transfers) over thin POSIX fd shims (`ocamlcc_raw_fd_{read,write,lseek,size,close,isatty}`, `ocamlcc_stdio_flush`, and `ocamlcc_ba_{to_bytes,of_bytes_slice}`), removing `OcamlccChannel`, `ARC_TAG_CHANNEL`, and all `caml_ml_*` channel functions from `runtime/arc.c` and `runtime/arc.h`. `stdlib/camlinternalMarshal.ml` (`--nopervasives`, compiled right after `CamlinternalChannel`) implements Marshal in pure OCaml over `CamlinternalChannel` and tiny object/bigarray metadata helpers (`ocamlcc_ptr_id`,
 `ocamlcc_marshal_kind`, `ocamlcc_ba_info`/`read_bytes`/`of_bytes`), supporting
 uncompressed standard streams (`0x8495a6be`/`0x8495a6bf`, relative sharing
 distances) and optional OCaml-hook-backed compressed streams (`0x8495a6bd` with

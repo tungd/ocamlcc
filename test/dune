@@ -336,7 +336,7 @@
 (rule
  (alias runtest)
  (deps driver_test.exe driver_test.expected ../dune-project ../tests/mod_main.expected
-  (source_tree ../examples) (source_tree ../runtime) (source_tree ../stdlib))
+  (source_tree ../examples) (source_tree ../runtime) ../stdlib.sources)
  (action
   (with-stdout-to driver_test.actual
    (run ./driver_test.exe %{dep:../vendor/qbe/qbe}))))

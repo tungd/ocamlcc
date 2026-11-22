@@ -35,18 +35,17 @@ shadow-stack lowering (`runtime/fiber.c`, `runtime/pal_ctx.S`, `Stdlib.Fiber`),
 error-return exceptions (`try ... with`), `Weak.t`, unboxed `float`/`float
 array` and boxed `Int32`/`Int64`/`Nativeint`, compiler warnings on cyclic
 non-pure mutual `let rec` closures, and an ARC-native core standard library
-(`stdlib/` → `build/stdlib/libocamlstdlib.a`: `Option`, `Result`, `List`,
-`Array`, `Bytes`, `String`, `Buffer`, `Hashtbl`, `Int32`, `Int64`,
-`Nativeint`, `Printf`, `Weak`, `Fiber`, `CamlinternalFormatBasics`, `Stdlib`).
+built from the pinned upstream OCaml stdlib, the ARC overlay, and `Stdlib.Fiber`.
 `runtime/builtins.c` provides the POSIX/libc/libm/pthread OS helpers for stdlib I/O, sync, and crypto, while `runtime/main_entry.c` stays minimal. Unsupported OCaml features include objects/methods (`Lsend`), ephemerons, backtraces, signal handlers, and `Marshal.Closures`.
 
 ## Build
 
 Use OCaml 5.5.x, Dune, Ninja, Make, and a host C compiler.
 A Dune installation includes the compiler, its private QBE backend, and the
-runtime and core stdlib sources used by `occ build`. A C toolchain is
-needed on the consumer host. To select a locally built upstream stdlib, pass
-`--stdlib-dir /absolute/path/to/build/stdlib_compat/out`.
+runtime and canonical stdlib sources used by `occ build`. A C toolchain is
+needed on the consumer host. The default Ninja build supplies a prebuilt
+host archive in `build/stdlib`. Use `--stdlib-dir` to select a prebuilt pack
+explicitly.
 
 The whole project is driven by [ninja](https://ninja-build.org):
 
@@ -81,25 +80,26 @@ The pipeline:
 2. `runtime/*.c` → `build/rt/libocamlrt.a`
 3. `dune build` → `build/bin/occ` (OCaml compiler-libs frontend, ANF,
    Perceus ARC pass, QBE IL writer)
-4. `stdlib/*.ml` → `build/stdlib/libocamlstdlib.a`
+4. `vendor/ocaml-stdlib/src/` with the `stdlib/` overlay → `build/stdlib/libocamlstdlib.a` and `build/stdlib.sources`
 5. `examples/*.ml` → `.ssa` (occ) → `.s` (qbe) → native executable (cc)
 
 ## Upstream standard library
 
 The pinned OCaml 5.5.0 sources and `lib-*` tests live under
 `vendor/ocaml-stdlib/`; `stdlib/overlay/` provides ARC-specific replacements.
-This compatibility build is separate from the smaller default stdlib archive.
-All 72 standard library modules compile with the host OCaml 5.5 frontend.
+The default archive builds 78 modules, including the ARC helpers and
+`Stdlib.Fiber`. The generated source bundle carries the same inputs for
+cross-compilation and source-only installations.
 
 ```sh
-ninja -j1 stdlib_compat                 # build compatibility stdlib, run upstream tests and API regressions
+ninja -j1 stdlib_compat                 # run upstream tests and API regressions against the default archive
 python3 tools/stdlib_compat.py --skip-tests
 python3 tools/stdlib_regressions.py     # generated lexer/parser and Bigarray/Marshal API tests
 python3 tools/stdlib_regressions.py --stock
 python3 tools/stdlib_compat.py --reuse-stdlib --tests 'lib-bigarray/*' 'lib-marshal/*'
 ```
 
-The upstream runner links native tests to our compatibility archive and ARC
+The upstream runner links native tests to the default archive and ARC
 runtime. It records every result in `build/stdlib_compat/report.md` and `.json`,
 with full command logs. Its exit code reports whether the matrix completed;
 consult the report for individual failures and skips. It skips toplevel expect

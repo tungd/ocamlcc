@@ -53,4 +53,4 @@ jobs:
       - name: Exercise upstream stdlib and installed multi-module startup
         run: |
           opam exec -- ninja -j1 stdlib_compat
-          opam exec -- sh tests/installed_driver.sh "$RUNNER_TEMP/ocamlcc/bin/occ" --stdlib-dir "$PWD/build/stdlib_compat/out"
+          opam exec -- sh tests/installed_driver.sh "$RUNNER_TEMP/ocamlcc/bin/occ" --stdlib-dir "$PWD/build/stdlib"

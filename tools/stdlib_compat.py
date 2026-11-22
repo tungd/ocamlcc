@@ -775,6 +775,9 @@ def materialize_sources(
         if "std_exit" not in modules:
             modules.append("std_exit")
 
+    if (overlay_dir.parent / "stdlib__fiber.ml").exists() and "fiber" not in modules:
+        modules.append("fiber")
+
     extra_file = overlay_dir / "EXTRA_MODULES"
     if extra_file.exists():
         for ln in extra_file.read_text(encoding="utf-8").splitlines():
@@ -789,7 +792,10 @@ def materialize_sources(
         ov = overlay_dir / f"{base}.{ext}"
         st = overlay_dir.parent / f"{base}.{ext}"
         up = vendor_src / f"{base}.{ext}"
-        if ov.exists():
+        if base == "fiber" and ext == "ml":
+            src = overlay_dir.parent / "stdlib__fiber.ml"
+            layer = "overlay"
+        elif ov.exists():
             src = ov
             layer = "overlay"
         elif base.startswith("camlinternal") and base != "camlinternalFormatBasics" and st.exists():
@@ -812,6 +818,8 @@ def materialize_sources(
                 check=True,
             )
             text = apply_compat_patches(f"{base}.{ext}", proc.stdout)
+            if base == "stdlib" and "fiber" in modules:
+                text += "\nmodule Fiber = Stdlib__Fiber\n"
             dst.write_text(text, encoding="utf-8")
         else:
             raw = src.read_text(encoding="utf-8")
@@ -838,7 +846,7 @@ def materialize_sources(
 
 def compflags_for(base: str, ext: str) -> list[str]:
     flags: list[str] = []
-    if base in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalChannel", "camlinternalMarshal", "camlinternalSys", "stdlib"):
+    if base in ("camlinternalFormatBasics", "camlinternalIntFmt", "camlinternalBulkOps", "camlinternalChannel", "camlinternalMarshal", "camlinternalSys", "stdlib", "fiber"):
         flags.append("--nopervasives")
     if base == "stdlib" or base.endswith("Labels") or base == "float":
         flags.append("--no-alias-deps")
@@ -929,6 +937,7 @@ def compile_stdlib(
     overlay_dir: Path,
     out_dir: Path,
     work_src: Path,
+    source_bundle: Path | None = None,
 ) -> tuple[list[ModuleResult], list[Path]]:
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -936,6 +945,8 @@ def compile_stdlib(
 
     resolved = materialize_sources(vendor_src, overlay_dir, work_src)
     mli_order = parse_cmi_deps(vendor_src / ".depend", list(resolved.keys()))
+    if source_bundle is not None:
+        write_source_bundle(source_bundle, resolved, mli_order)
 
     mli_status: dict[str, tuple[bool, str]] = {}
     for base in mli_order:
@@ -961,7 +972,7 @@ def compile_stdlib(
         else:
             mli_status[base] = (True, "")
 
-    archive = out_dir / "libocamlstdlib_compat.a"
+    archive = out_dir / "libocamlstdlib.a"
     # During the build only successfully assembled units may supply facts.
     # Publish the archive summary after the loose-object phase finishes.
     archive.unlink(missing_ok=True)
@@ -1113,7 +1124,7 @@ def run_lib_tests(
             "main_entry.o",
         ]
     ]
-    stdlib_archive = stdlib_out / "libocamlstdlib_compat.a"
+    stdlib_archive = stdlib_out / "libocamlstdlib.a"
 
     results: list[TestResult] = []
     for suite_dir in sorted(testsuite_dir.glob("lib-*")):
@@ -1307,15 +1318,36 @@ def write_report(
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_source_bundle(
+    output: Path,
+    resolved: dict[str, tuple[str, Path | None, Path | None]],
+    mli_order: list[str],
+) -> None:
+    with output.open("wb") as bundle:
+        bundle.write(b"occ-stdlib-sources-v1\n")
+        for ext, order, index in (("mli", mli_order, 1), ("ml", resolved, 2)):
+            for base in order:
+                source = resolved[base][index]
+                if source is None:
+                    continue
+                contents = source.read_bytes()
+                flags = ",".join(compflags_for(base, ext)) or "-"
+                header = f"{source.name} {unit_prefix(base)} {flags} {len(contents)}\n"
+                bundle.write(header.encode("ascii"))
+                bundle.write(contents)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build & test upstream OCaml stdlib with overlay")
     parser.add_argument("--tests", nargs="+", help="Select upstream paths by glob, e.g. 'lib-bigarray/*'")
     parser.add_argument("--reuse-stdlib", action="store_true", help="Reuse the last stdlib build and module receipt")
     parser.add_argument("--skip-tests", action="store_true", help="Only compile stdlib modules")
+    parser.add_argument("--depfile", type=Path)
+    parser.add_argument("--source-bundle", type=Path)
     parser.add_argument("--report", default="build/stdlib_compat/report.md")
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).absolute().parent.parent
     ocamlcc = root / "build/bin/occ"
     qbe = root / "build/qbe/qbe"
     rt_dir = root / "build/rt"
@@ -1324,9 +1356,18 @@ def main() -> int:
     overlay_dir = root / "stdlib/overlay"
     compat_dir = root / "build/stdlib_compat"
     work_src = compat_dir / "src"
-    out_dir = compat_dir / "out"
+    out_dir = root / "build/stdlib"
     test_build_dir = compat_dir / "tests"
     report_path = root / args.report
+
+    if args.source_bundle is not None and args.depfile is None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="occ-stdlib-") as temp:
+            resolved = materialize_sources(vendor_src, overlay_dir, Path(temp) / "src")
+            mli_order = parse_cmi_deps(vendor_src / ".depend", list(resolved))
+            write_source_bundle(args.source_bundle, resolved, mli_order)
+        return 0
 
     for req in (ocamlcc, qbe, vendor_src / "StdlibModules"):
         if not req.exists():
@@ -1341,7 +1382,8 @@ def main() -> int:
         mod_results = [ModuleResult(**result) for result in json.loads(module_receipt.read_text())]
     else:
         mod_results, _ = compile_stdlib(
-            root, ocamlcc, qbe, qbe_target, vendor_src, overlay_dir, out_dir, work_src
+            root, ocamlcc, qbe, qbe_target, vendor_src, overlay_dir, out_dir, work_src,
+            source_bundle=args.source_bundle,
         )
         module_receipt.write_text(json.dumps([asdict(result) for result in mod_results], indent=2))
 
@@ -1368,7 +1410,14 @@ def main() -> int:
         modules=[asdict(result) for result in mod_results],
         tests=[asdict(result) for result in test_results] if test_results is not None else None,
         command_logs=str(COMMAND_LOG_DIR)), indent=2))
-    return 0
+    if args.depfile is not None:
+        sources = [vendor_src, overlay_dir, overlay_dir.parent]
+        sources += list(vendor_src.iterdir()) + list(overlay_dir.iterdir())
+        sources += sorted(overlay_dir.parent.glob("camlinternal*.ml"))
+        sources += [overlay_dir.parent / "stdlib__fiber.ml"]
+        deps = " ".join(str(source.relative_to(root)) for source in sources if source.exists())
+        args.depfile.write_text("build/stdlib/libocamlstdlib.a: " + deps + "\n", encoding="utf-8")
+    return int(full_pass != total_mods)
 
 
 if __name__ == "__main__":

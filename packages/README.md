@@ -37,7 +37,7 @@ python3 tools/ocpkg.py query --lock build/crunch/ocpkg.lock.json
 python3 tools/ocpkg.py emit ninja \
   --lock build/crunch/ocpkg.lock.json --vendor build/crunch/vendor \
   --output build/crunch/build.ninja --compiler build/bin/occ \
-  --qbe build/qbe/qbe --stdlib build/stdlib_compat/out --runtime runtime
+  --qbe build/qbe/qbe --stdlib build/stdlib --runtime runtime
 ninja -j1 -f build/crunch/build.ninja
 build/crunch/ocaml-crunch --version
 ```

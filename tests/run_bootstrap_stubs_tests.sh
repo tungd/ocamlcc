@@ -8,7 +8,7 @@ mkdir -p "$OUT"
 ZSTD_CFLAGS="$(pkg-config --cflags libzstd 2>/dev/null || echo '-I/opt/local/include')"
 ZSTD_LIBS="$(pkg-config --libs libzstd 2>/dev/null || echo '-L/opt/local/lib -lzstd')"
 
-HOST_CMI="$ROOT/build/stdlib_compat/out/stdlib.cmi"
+HOST_CMI="$ROOT/build/stdlib/stdlib.cmi"
 if [ ! -f "$HOST_CMI" ]; then
   HOST_CMI="$(ocamlopt -where)/stdlib.cmi"
 fi
@@ -30,7 +30,7 @@ cc -std=c11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
 "$OUT/compiler_stubs_test_asan" "$HOST_CMI"
 
 # 2. Native + ASan test of bootstrap/unix/ compiled by ocamlcc against stdlib_compat
-STDLIB_DIR="$ROOT/build/stdlib_compat/out"
+STDLIB_DIR="$ROOT/build/stdlib"
 "$ROOT/build/bin/occ" compile-mli --nostdlib -I "$STDLIB_DIR" \
   "$ROOT/bootstrap/unix/unix.mli" -o "$OUT/unix.cmi"
 "$ROOT/build/bin/occ" compile --nostdlib --mod -I "$STDLIB_DIR" -I "$OUT" \
@@ -53,7 +53,7 @@ cc -c "$OUT/sys_util.s" -o "$OUT/sys_util.o"
 cc -c "$OUT/bootstrap_unix_test.s" -o "$OUT/bootstrap_unix_test.o"
 
 cc "$OUT/bootstrap_unix_test.o" "$OUT/sys_util.o" "$OUT/unix.o" "$OUT/unix_stubs.o" \
-  "$STDLIB_DIR/libocamlstdlib_compat.a" "$ROOT/build/rt/libocamlrt.a" \
+  "$STDLIB_DIR/libocamlstdlib.a" "$ROOT/build/rt/libocamlrt.a" \
   -lm -pthread -o "$OUT/bootstrap_unix_test"
 "$OUT/bootstrap_unix_test"
 
@@ -62,6 +62,6 @@ cc -std=c11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
   -c "$ROOT/bootstrap/unix/unix_stubs.c" -o "$OUT/unix_stubs_asan.o"
 cc -fsanitize=address,undefined -fno-sanitize-recover=all \
   "$OUT/bootstrap_unix_test.o" "$OUT/sys_util.o" "$OUT/unix.o" "$OUT/unix_stubs_asan.o" \
-  "$STDLIB_DIR/libocamlstdlib_compat.a" "$ROOT/build/asan/rt/libocamlrt.a" \
+  "$STDLIB_DIR/libocamlstdlib.a" "$ROOT/build/asan/rt/libocamlrt.a" \
   -lm -pthread -o "$OUT/bootstrap_unix_test_asan"
 "$OUT/bootstrap_unix_test_asan"

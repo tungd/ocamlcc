@@ -130,6 +130,7 @@ let test_fiber_shadow_cycle () =
   (y, alive_during, (if freed > 0 then 1 else 0), alive_after, delta)
 
 let () =
+  let live_initial = arc_live () in
   let cval = run_closure_cycle 3 in
   let leaked_closures = arc_live () in
   let freed_closures = arc_collect () in
@@ -144,11 +145,11 @@ let () =
   let live_final = arc_live () in
   print_int cval;
   print_endline "";
-  print_int (if leaked_closures > 0 then 1 else 0);
+  print_int (if leaked_closures > live_initial then 1 else 0);
   print_endline "";
   print_int (if freed_closures >= 2 then 1 else 0);
   print_endline "";
-  print_int live_after_closures;
+  print_int (live_after_closures - live_initial);
   print_endline "";
   print_int alive_during;
   print_endline "";
@@ -180,7 +181,7 @@ let () =
   print_endline "";
   print_int fdelta;
   print_endline "";
-  print_int live_final;
+  print_int (live_final - live_initial);
   print_endline ""
 
 let () =

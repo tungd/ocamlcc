@@ -31,8 +31,8 @@ tracing GC):
 1. **Stage 0** — host Dune/OCaml 5.5.0 builds `build/bin/occ` (uses OCaml
    `ocamlopt` right-to-left evaluation order on tuple/cons arguments such as
    `Translprim.make_params`).
-2. **Stage 1** — `stage0` compiles `stdlib_compat` (72 modules from shared
-   `build/bootstrap/stdlib_src`), the 104-module transitive subset of OCaml
+2. **Stage 1** — `stage0` compiles the canonical stdlib (78 modules with the ARC
+   overlay), the 104-module transitive subset of OCaml
    5.5.0 `compiler-libs.common` (+ 4 `.mli`-only interfaces, fetched on demand
    from a SHA-256-pinned OCaml 5.5.0 release tarball), `bootstrap/unix/`, and
    the compiler modules listed in `tools/bootstrap.py`, linking against

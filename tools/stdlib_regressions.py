@@ -40,7 +40,7 @@ def run_case(case: Path, stock: bool = False) -> None:
             command(['ocamlc', '-o', 'run', *[p.name for p in sources]])
         else:
             cc = ROOT / 'build/bin/occ'
-            stdlib = ROOT / 'build/stdlib_compat/out'
+            stdlib = ROOT / 'build/stdlib'
             common = ['--nostdlib', '-I', stdlib, '-I', work]
             for p in work.glob('*.mli'):
                 command([cc, 'compile-mli', *common, p.name])
@@ -52,7 +52,7 @@ def run_case(case: Path, stock: bool = False) -> None:
                 p.with_suffix('.s').write_bytes(asm)
                 command(['cc', '-c', p.with_suffix('.s').name, '-o', p.with_suffix('.o').name])
                 objects.append(p.with_suffix('.o').name)
-            command(['cc', *objects, stdlib / 'libocamlstdlib_compat.a', ROOT / 'build/rt/libocamlrt.a', '-lm', '-o', 'run'])
+            command(['cc', *objects, stdlib / 'libocamlstdlib.a', ROOT / 'build/rt/libocamlrt.a', '-lm', '-o', 'run'])
         actual = command([work / 'run'], timeout=60)
         (work / 'actual').write_bytes(actual)
         expected = (case / 'expected').read_bytes()

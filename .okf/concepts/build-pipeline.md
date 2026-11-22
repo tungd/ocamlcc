@@ -26,7 +26,8 @@ One checked-in `build.ninja` drives everything[^build-ninja]:
 | `build/qbe/qbe` | `cc -c` each `vendor/qbe/*.c` (amd64 sysv/winabi, arm64/_apple, rv64, plus `gvn`/`gcm`/`ifopt`) → link. `config.h` is generated out-of-tree by `tools/gen-config.sh` (host default target). |
 | `build/rt/libocamlrt.a` | `cc -c -fPIC` `runtime/*.c` (with `main_entry.c` separated from `builtins.c` so `.so`/`.dylib` libraries do not pull `main`) + `runtime/pal_ctx.S` → `ar rcs`. |
 | `build/bin/occ` | `dune build bin/occ` (with `(public_name occ)` for `dune build -p ocamlcc`) → copy out of `_build/`. |
-| `build/stdlib/libocamlstdlib.a` | `occ compile-mli` / `compile --mod` over `stdlib/*.ml` → `qbe` → `cc -c` → `ar rcs`. |
+| `build/stdlib/libocamlstdlib.a` | `tools/stdlib_compat.py` prepares the pinned upstream library with the ARC overlay, then compiles it with `occ`, QBE and the target C toolchain. |
+| `build/stdlib.sources` | The same build publishes the overlay-resolved sources and interface order for the driver’s source fallback. |
 | `build/<name>` | `occ compile x.ml -o x.ssa` → `qbe x.ssa > x.s` → `cc x.s libocamlstdlib.a libocamlrt.a`. |
 | `build/asan/<name>` | ASan + UBSan (`-fsanitize=address,undefined -fno-sanitize-recover=all`) runtime `build/asan/rt/libocamlrt.a` linked with compiled examples. |
 
@@ -66,13 +67,13 @@ When compiling user projects without `build.ninja`, `occ build`
 topological dependency ordering over `.mli`/`.ml` units via compiler-libs
 `Depend` (allowing `.mli`-mediated mutual `.ml` dependencies via Tarjan SCC
 condensation), automatic resolution of `ocamlcc`'s own `stdlib.cmi` (from
-prebuilt `build/stdlib` on host or compiled from `stdlib/` into `work_dir/stdlib`
+prebuilt `build/stdlib` on host or compiled from `stdlib.sources` into `work_dir/stdlib`
 before user units, passing `--nostdlib` internally unless `--nostdlib` was
 explicitly requested), `.cmi`/`.ssa` compilation, optional `.mli -> .h` +
 `_shim.c` generation (`lib/c_bindgen.ml`, emitting an umbrella header +
 `<stem>_<mod>.h` sub-headers when multiple `.mli`s are passed to `--emit-header`),
 `qbe -t <target>` assembly, target C/xcrun/NDK toolchain compilation of
-`runtime/` and `stdlib/` (excluding `main_entry.o` for library targets and
+runtime sources and the canonical stdlib (excluding `main_entry.o` for library targets and
 hiding internal runtime/stdlib symbols on `--shared` via Darwin
 `-exported_symbols_list` / `-unexported_symbols_list` or ELF `--version-script`
 / `--exclude-libs,ALL`), and executable, shared, static, or `.xcframework`
@@ -81,7 +82,7 @@ is present or `--emit-header` is explicitly passed).
 
 # Persisted export summaries
 
-The bundled and compatibility archives ship a versioned `.a.opt` companion.
+The canonical stdlib archive ships a versioned `.a.opt` companion.
 `compile --emit-opt` emits per-unit records with the SSA. `archive-opt`
 combines the records for the archive and writes a `.exports` companion for
 each loose object. The archive and object companions carry binary and
@@ -141,7 +142,7 @@ rename for new contents. Export summaries use the shared atomic writer.
 
 # Installed driver
 
-A staged Dune installation supplies the vendored QBE executable and core stdlib and runtime sources relative to the compiler prefix. The installed driver can build multi-unit executables outside the checkout.
+A staged Dune installation supplies the vendored QBE executable and canonical stdlib bundle and runtime sources relative to the compiler prefix. The installed driver can build multi-unit executables outside the checkout.
 
 # C record field names
 

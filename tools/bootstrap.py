@@ -56,6 +56,7 @@ OCAMLCC_MODULES: list[tuple[str, bool, bool]] = [
     ("target", True, True),
     ("linker", True, True),
     ("runtime_build", True, True),
+    ("stdlib_build", True, True),
     ("dep_graph", True, True),
     ("driver", True, True),
     ("main", False, False),
@@ -262,15 +263,15 @@ def build_stage(
 
     statuses: list[UnitStatus] = []
 
-    # 1. stdlib_compat (72 modules)
+    # 1. Canonical stdlib with the ARC overlay.
     # Use a stage-invariant prepared-source directory so embedded [assert]
     # [__FILE__] paths match bit-for-bit across stages.
     stdlib_dir = stage_dir / "stdlib"
     stdlib_work_src = stage_dir.parent / "stdlib_src"
-    if reuse_stdlib is not None and (reuse_stdlib / "libocamlstdlib_compat.a").is_file():
+    if reuse_stdlib is not None and (reuse_stdlib / "libocamlstdlib.a").is_file():
         print(f"[{stage_name}] Reusing stdlib_compat from {reuse_stdlib}", flush=True)
         shutil.copytree(reuse_stdlib, stdlib_dir)
-        stdlib_archive = stdlib_dir / "libocamlstdlib_compat.a"
+        stdlib_archive = stdlib_dir / "libocamlstdlib.a"
     else:
         print(f"[{stage_name}] Compiling stdlib_compat (72 modules)...", flush=True)
         stdlib_compat.COMMAND_LOG_DIR = stage_dir / "logs" / "stdlib"
@@ -304,7 +305,7 @@ def build_stage(
                 if stop_on_error:
                     write_stage_report(stage_dir, stage_name, statuses, None)
                     return False, statuses, None
-        stdlib_archive = stdlib_dir / "libocamlstdlib_compat.a"
+        stdlib_archive = stdlib_dir / "libocamlstdlib.a"
         if stdlib_ok != len(mod_results):
             write_stage_report(stage_dir, stage_name, statuses, None)
             return False, statuses, None
@@ -695,7 +696,7 @@ def smoke_test_compiler(compiler: Path, stage_dir: Path, qbe: Path, qbe_target: 
         return False
     asm.write_text(p2.stdout, encoding="utf-8")
     p3 = subprocess.run(
-        ["cc", str(asm), str(stdlib_dir / "libocamlstdlib_compat.a"),
+        ["cc", str(asm), str(stdlib_dir / "libocamlstdlib.a"),
          str(ROOT / "build" / "rt" / "libocamlrt.a"), "-lm", "-pthread", "-o", str(exe)],
         capture_output=True, text=True,
     )
@@ -758,65 +759,17 @@ def validate_stage2(compiler: Path, stage2_dir: Path, qbe: Path, qbe_target: str
     val_dir.mkdir(parents=True, exist_ok=True)
     runner = CommandRunner(stage2_dir / "logs" / "validate", timeout=120)
 
-    stdlib_src = ROOT / "stdlib"
     stdlib_out = val_dir / "stdlib"
-    stdlib_out.mkdir(parents=True, exist_ok=True)
-    stdlib_mods = [
-        ("camlinternalFormatBasics", "camlinternalFormatBasics.ml", []),
-        ("camlinternalIntFmt", "camlinternalIntFmt.ml", []),
-        ("camlinternalBulkOps", "camlinternalBulkOps.ml", []),
-        ("camlinternalChannel", "camlinternalChannel.ml", []),
-        ("camlinternalMarshal", "camlinternalMarshal.ml", []),
-        ("camlinternalSys", "camlinternalSys.ml", []),
-        ("stdlib__option", "stdlib__option.ml", []),
-        ("stdlib__result", "stdlib__result.ml", []),
-        ("stdlib__int32", "stdlib__int32.ml", []),
-        ("stdlib__int64", "stdlib__int64.ml", []),
-        ("stdlib__nativeint", "stdlib__nativeint.ml", []),
-        ("stdlib__bytes", "stdlib__bytes.ml", []),
-        ("stdlib__string", "stdlib__string.ml", []),
-        ("stdlib__list", "stdlib__list.ml", []),
-        ("stdlib__array", "stdlib__array.ml", []),
-        ("stdlib__buffer", "stdlib__buffer.ml", []),
-        ("stdlib__hashtbl", "stdlib__hashtbl.ml", []),
-        ("stdlib__printf", "stdlib__printf.ml", []),
-        ("stdlib__weak", "stdlib__weak.ml", []),
-        ("stdlib__fiber", "stdlib__fiber.ml", []),
-        ("stdlib", "stdlib.ml", ["--no-alias-deps"]),
-    ]
-    stdlib_objs: list[Path] = []
-    for prefix, fname, extra in stdlib_mods:
-        ssa = stdlib_out / f"{prefix}.ssa"
-        asm = stdlib_out / f"{prefix}.s"
-        obj = stdlib_out / f"{prefix}.o"
-        p1 = runner.run(
-            [
-                str(compiler), "compile", "--nostdlib", "--nopervasives",
-                "-I", str(stdlib_out), "--mod", "--emit-cmi",
-                "--cmi-prefix", str(stdlib_out / prefix),
-                *extra,
-                str(stdlib_src / fname), "-o", str(ssa),
-            ]
-        )
-        if p1.returncode != 0:
-            print(f"[validate] FAIL compile stdlib/{fname}: {first_err(p1)}", flush=True)
+    modules, _ = stdlib_compat.compile_stdlib(
+        ROOT, compiler, qbe, qbe_target, ROOT / "vendor/ocaml-stdlib/src",
+        ROOT / "stdlib/overlay", stdlib_out, val_dir / "stdlib-src",
+    )
+    for module in modules:
+        if not module.as_ok:
+            print(f"[validate] FAIL stdlib/{module.prefix} ({module.stage_failed}): {module.error}",
+                  flush=True)
             return False
-        p2 = runner.run([str(qbe), "-t", qbe_target, str(ssa)])
-        if p2.returncode != 0:
-            print(f"[validate] FAIL qbe stdlib/{prefix}: {first_err(p2)}", flush=True)
-            return False
-        asm.write_text(p2.stdout, encoding="utf-8")
-        p3 = runner.run(["cc", "-c", "-fPIC", str(asm), "-o", str(obj)])
-        if p3.returncode != 0:
-            print(f"[validate] FAIL as stdlib/{prefix}: {first_err(p3)}", flush=True)
-            return False
-        stdlib_objs.append(obj)
     stdlib_a = stdlib_out / "libocamlstdlib.a"
-    p_ar = runner.run(["ar", "rcs", str(stdlib_a), *[str(o) for o in stdlib_objs]])
-    if p_ar.returncode != 0:
-        print(f"[validate] FAIL ar libocamlstdlib.a: {first_err(p_ar)}", flush=True)
-        return False
-
     rt_a = ROOT / "build" / "rt" / "libocamlrt.a"
 
     def compile_and_run_single(name: str, extra_flags: list[str], archive: Path | None) -> bool:
@@ -1002,7 +955,7 @@ def main() -> int:
             return 1
 
     if args.stage in ("stage1", "all"):
-        reuse = (ROOT / "build" / "stdlib_compat" / "out") if args.reuse_stage1_stdlib else None
+        reuse = (ROOT / "build" / "stdlib") if args.reuse_stage1_stdlib else None
         ok1, _st1, bin1 = build_stage(
             stage_name="stage1",
             compiler=stage0,

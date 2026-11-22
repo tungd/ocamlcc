@@ -108,8 +108,7 @@ let () =
     else Filename.concat root "build/qbe/qbe"
   in
   let runtime_dir = Filename.concat root "runtime" in
-  let stdlib_src_dir = Filename.concat root "stdlib" in
-  let stdlib_build_dir = Filename.concat root "build/stdlib" in
+  let stdlib_src_dir = Filename.concat root "stdlib.sources" in
   let rt_build_dir = Filename.concat root "build/rt" in
 
   (* 1. Target parsing *)
@@ -156,6 +155,24 @@ let () =
       in
       (* 3a. Multi-module executable (inputs reversed) *)
       let exe_out = Filename.concat tmp "mod_app" in
+      let stdlib_build_dir =
+        let unwrap = function Ok value -> value | Error msg -> failwith msg in
+        let stage = Filename.concat tmp "fixture" in
+        let plan = Stdlib_build.prepare ~disabled:false ~prefer_prebuilt:false
+            ~prefer_archive:false ~sources:(Some stdlib_src_dir)
+            ~prebuilt:None ~work_dir:stage |> unwrap in
+        let target = Target.resolve "host" |> unwrap in
+        let toolchain = Target.toolchain target |> unwrap in
+        let objects = Stdlib_build.link_inputs ~verbose:false ~qbe ~target ~toolchain plan
+            |> unwrap in
+        let directory = Option.get (Stdlib_build.interface_dir plan) in
+        let archive = Filename.concat directory "libocamlstdlib.a" in
+        Sys_util.run_cmd ~verbose:false toolchain.ar_prog (["rcs"; archive] @ objects)
+        |> unwrap;
+        let summaries = List.map (fun obj -> Filename.remove_extension obj ^ ".opt") objects in
+        Export_summary.write_archive ~archive ~units:summaries;
+        directory
+      in
       let base_cfg =
         { (Driver.default_config ()) with
           qbe_path = Some qbe;

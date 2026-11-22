@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Use the pinned upstream stdlib and ARC overlay for the default archive, self-hosted builds, and installed source fallback. Retire the hand-written duplicate modules and preserve 63-bit unsigned formatting for OCaml ints. See [upstream stdlib](/concepts/stdlib-compatibility.md).
+
 - 2026-11-22 (codex/1) — Install the compiler as `occ` and switch Ninja, bootstrap, tests, and documentation to that name. Keep a transitional alias in the Ninja build tree.
 
 - 2026-11-22 (codex/1) — Pair `build --single-thread-rc` with `libocamlrt_st.a` or matching target objects. Keep the thread-safe runtime as the default. See [runtime objects](/concepts/build-pipeline.md#runtime-objects).

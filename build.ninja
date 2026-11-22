@@ -147,7 +147,7 @@ build single_thread_runtime: phony $builddir/rt-single/libocamlrt_st.a $builddir
 
 # ------------------------------------------------------------- ocamlcc ----
 
-build $builddir/bin/occ: dune_occ runtime/ocamlcc_bigarray_types.h bin/main.ml lib/qbe_il.ml lib/qbe_il.mli lib/frontend.ml lib/frontend.mli lib/builtins.ml lib/builtins.mli lib/anf.ml lib/anf.mli lib/anf_ir.ml lib/anf_ir.mli lib/anf_scalar.ml lib/anf_scalar.mli lib/lambda_opt.ml lib/lambda_opt.mli lib/bounds.ml lib/bounds.mli lib/arc_analysis.ml lib/arc_analysis.mli lib/arc_views.ml lib/arc_views.mli lib/arc_pass.ml lib/arc_pass.mli lib/ccalls.ml lib/ccalls.mli lib/c_bindgen.ml lib/c_bindgen.mli lib/target.ml lib/target.mli lib/linker.ml lib/linker.mli lib/runtime_build.ml lib/runtime_build.mli lib/dep_graph.ml lib/dep_graph.mli lib/driver.ml lib/driver.mli lib/export_summary.ml lib/export_summary.mli lib/codegen_ctx.ml lib/codegen_ctx.mli lib/codegen_analysis.ml lib/codegen_analysis.mli lib/codegen_scalar.ml lib/codegen_scalar.mli lib/codegen_expr.ml lib/codegen_expr.mli lib/codegen_fn.ml lib/codegen_fn.mli lib/codegen.ml lib/codegen.mli lib/pipeline.ml lib/pipeline.mli lib/sys_util.ml lib/sys_util.mli lib/dune bin/dune dune-project
+build $builddir/bin/occ: dune_occ runtime/ocamlcc_bigarray_types.h bin/main.ml lib/qbe_il.ml lib/qbe_il.mli lib/frontend.ml lib/frontend.mli lib/builtins.ml lib/builtins.mli lib/anf.ml lib/anf.mli lib/anf_ir.ml lib/anf_ir.mli lib/anf_scalar.ml lib/anf_scalar.mli lib/lambda_opt.ml lib/lambda_opt.mli lib/bounds.ml lib/bounds.mli lib/arc_analysis.ml lib/arc_analysis.mli lib/arc_views.ml lib/arc_views.mli lib/arc_pass.ml lib/arc_pass.mli lib/ccalls.ml lib/ccalls.mli lib/c_bindgen.ml lib/c_bindgen.mli lib/target.ml lib/target.mli lib/linker.ml lib/linker.mli lib/runtime_build.ml lib/runtime_build.mli lib/stdlib_build.ml lib/stdlib_build.mli lib/dep_graph.ml lib/dep_graph.mli lib/driver.ml lib/driver.mli lib/export_summary.ml lib/export_summary.mli lib/codegen_ctx.ml lib/codegen_ctx.mli lib/codegen_analysis.ml lib/codegen_analysis.mli lib/codegen_scalar.ml lib/codegen_scalar.mli lib/codegen_expr.ml lib/codegen_expr.mli lib/codegen_fn.ml lib/codegen_fn.mli lib/codegen.ml lib/codegen.mli lib/pipeline.ml lib/pipeline.mli lib/sys_util.ml lib/sys_util.mli lib/dune bin/dune dune-project
 
 rule occ_compat
   command = ln -sf occ $out
@@ -158,121 +158,13 @@ build $builddir/bin/ocamlcc: occ_compat $builddir/bin/occ
 # ------------------------------------------------------------- stdlib -----
 
 stdlibdir = $builddir/stdlib
-stdlib_flags = --nostdlib --nopervasives --mod --emit-opt -I $stdlibdir
+rule build_stdlib
+  command = python3 tools/stdlib_compat.py --skip-tests --depfile $builddir/stdlib.d --source-bundle $builddir/stdlib.sources
+  depfile = $builddir/stdlib.d
+  description = BUILD upstream stdlib
+  pool = console
 
-build $stdlibdir/camlinternalFormatBasics.ssa | $stdlibdir/camlinternalFormatBasics.cmi $stdlibdir/camlinternalFormatBasics.opt: occ_ssa stdlib/camlinternalFormatBasics.ml | $builddir/bin/occ
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/camlinternalFormatBasics
-build $stdlibdir/camlinternalFormatBasics.s: qbe_ssa $stdlibdir/camlinternalFormatBasics.ssa | $builddir/qbe/qbe
-build $stdlibdir/camlinternalFormatBasics.o: as_obj $stdlibdir/camlinternalFormatBasics.s
-
-build $stdlibdir/camlinternalIntFmt.ssa | $stdlibdir/camlinternalIntFmt.cmi $stdlibdir/camlinternalIntFmt.opt: occ_ssa stdlib/camlinternalIntFmt.ml | $builddir/bin/occ
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/camlinternalIntFmt
-build $stdlibdir/camlinternalIntFmt.s: qbe_ssa $stdlibdir/camlinternalIntFmt.ssa | $builddir/qbe/qbe
-build $stdlibdir/camlinternalIntFmt.o: as_obj $stdlibdir/camlinternalIntFmt.s
-
-build $stdlibdir/camlinternalBulkOps.ssa | $stdlibdir/camlinternalBulkOps.cmi $stdlibdir/camlinternalBulkOps.opt: occ_ssa stdlib/camlinternalBulkOps.ml | $builddir/bin/occ
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/camlinternalBulkOps
-build $stdlibdir/camlinternalBulkOps.s: qbe_ssa $stdlibdir/camlinternalBulkOps.ssa | $builddir/qbe/qbe
-build $stdlibdir/camlinternalBulkOps.o: as_obj $stdlibdir/camlinternalBulkOps.s
-
-build $stdlibdir/camlinternalChannel.ssa | $stdlibdir/camlinternalChannel.cmi $stdlibdir/camlinternalChannel.opt: occ_ssa stdlib/camlinternalChannel.ml | $builddir/bin/occ $stdlibdir/camlinternalBulkOps.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/camlinternalChannel
-build $stdlibdir/camlinternalChannel.s: qbe_ssa $stdlibdir/camlinternalChannel.ssa | $builddir/qbe/qbe
-build $stdlibdir/camlinternalChannel.o: as_obj $stdlibdir/camlinternalChannel.s
-
-build $stdlibdir/camlinternalMarshal.ssa | $stdlibdir/camlinternalMarshal.cmi $stdlibdir/camlinternalMarshal.opt: occ_ssa stdlib/camlinternalMarshal.ml | $builddir/bin/occ $stdlibdir/camlinternalBulkOps.cmi $stdlibdir/camlinternalChannel.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/camlinternalMarshal
-build $stdlibdir/camlinternalMarshal.s: qbe_ssa $stdlibdir/camlinternalMarshal.ssa | $builddir/qbe/qbe
-build $stdlibdir/camlinternalMarshal.o: as_obj $stdlibdir/camlinternalMarshal.s
-
-build $stdlibdir/camlinternalSys.ssa | $stdlibdir/camlinternalSys.cmi $stdlibdir/camlinternalSys.opt: occ_ssa stdlib/camlinternalSys.ml | $builddir/bin/occ
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/camlinternalSys
-build $stdlibdir/camlinternalSys.s: qbe_ssa $stdlibdir/camlinternalSys.ssa | $builddir/qbe/qbe
-build $stdlibdir/camlinternalSys.o: as_obj $stdlibdir/camlinternalSys.s
-
-build $stdlibdir/stdlib__option.ssa | $stdlibdir/stdlib__option.cmi $stdlibdir/stdlib__option.opt: occ_ssa stdlib/stdlib__option.ml | $builddir/bin/occ
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__option
-build $stdlibdir/stdlib__option.s: qbe_ssa $stdlibdir/stdlib__option.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__option.o: as_obj $stdlibdir/stdlib__option.s
-
-build $stdlibdir/stdlib__result.ssa | $stdlibdir/stdlib__result.cmi $stdlibdir/stdlib__result.opt: occ_ssa stdlib/stdlib__result.ml | $builddir/bin/occ
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__result
-build $stdlibdir/stdlib__result.s: qbe_ssa $stdlibdir/stdlib__result.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__result.o: as_obj $stdlibdir/stdlib__result.s
-
-build $stdlibdir/stdlib__bytes.ssa | $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__bytes.opt: occ_ssa stdlib/stdlib__bytes.ml | $builddir/bin/occ $stdlibdir/camlinternalBulkOps.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__bytes
-build $stdlibdir/stdlib__bytes.s: qbe_ssa $stdlibdir/stdlib__bytes.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__bytes.o: as_obj $stdlibdir/stdlib__bytes.s
-
-build $stdlibdir/stdlib__string.ssa | $stdlibdir/stdlib__string.cmi $stdlibdir/stdlib__string.opt: occ_ssa stdlib/stdlib__string.ml | $builddir/bin/occ $stdlibdir/camlinternalBulkOps.cmi $stdlibdir/stdlib__bytes.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__string
-build $stdlibdir/stdlib__string.s: qbe_ssa $stdlibdir/stdlib__string.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__string.o: as_obj $stdlibdir/stdlib__string.s
-
-build $stdlibdir/stdlib__list.ssa | $stdlibdir/stdlib__list.cmi $stdlibdir/stdlib__list.opt: occ_ssa stdlib/stdlib__list.ml | $builddir/bin/occ
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__list
-build $stdlibdir/stdlib__list.s: qbe_ssa $stdlibdir/stdlib__list.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__list.o: as_obj $stdlibdir/stdlib__list.s
-
-build $stdlibdir/stdlib__array.ssa | $stdlibdir/stdlib__array.cmi $stdlibdir/stdlib__array.opt: occ_ssa stdlib/stdlib__array.ml | $builddir/bin/occ $stdlibdir/camlinternalBulkOps.cmi $stdlibdir/stdlib__list.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__array
-build $stdlibdir/stdlib__array.s: qbe_ssa $stdlibdir/stdlib__array.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__array.o: as_obj $stdlibdir/stdlib__array.s
-
-build $stdlibdir/stdlib__buffer.ssa | $stdlibdir/stdlib__buffer.cmi $stdlibdir/stdlib__buffer.opt: occ_ssa stdlib/stdlib__buffer.ml | $builddir/bin/occ $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__buffer
-build $stdlibdir/stdlib__buffer.s: qbe_ssa $stdlibdir/stdlib__buffer.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__buffer.o: as_obj $stdlibdir/stdlib__buffer.s
-
-build $stdlibdir/stdlib__hashtbl.ssa | $stdlibdir/stdlib__hashtbl.cmi $stdlibdir/stdlib__hashtbl.opt: occ_ssa stdlib/stdlib__hashtbl.ml | $builddir/bin/occ $stdlibdir/stdlib__array.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__hashtbl
-build $stdlibdir/stdlib__hashtbl.s: qbe_ssa $stdlibdir/stdlib__hashtbl.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__hashtbl.o: as_obj $stdlibdir/stdlib__hashtbl.s
-
-build $stdlibdir/stdlib__printf.ssa | $stdlibdir/stdlib__printf.cmi $stdlibdir/stdlib__printf.opt: occ_ssa stdlib/stdlib__printf.ml | $builddir/bin/occ $stdlibdir/camlinternalFormatBasics.cmi $stdlibdir/camlinternalIntFmt.cmi $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi $stdlibdir/stdlib__list.cmi $stdlibdir/stdlib__buffer.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__printf
-build $stdlibdir/stdlib__printf.s: qbe_ssa $stdlibdir/stdlib__printf.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__printf.o: as_obj $stdlibdir/stdlib__printf.s
-
-build $stdlibdir/stdlib__weak.ssa | $stdlibdir/stdlib__weak.cmi $stdlibdir/stdlib__weak.opt: occ_ssa stdlib/stdlib__weak.ml | $builddir/bin/occ
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__weak
-build $stdlibdir/stdlib__weak.s: qbe_ssa $stdlibdir/stdlib__weak.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__weak.o: as_obj $stdlibdir/stdlib__weak.s
-
-build $stdlibdir/stdlib__fiber.ssa | $stdlibdir/stdlib__fiber.cmi $stdlibdir/stdlib__fiber.opt: occ_ssa stdlib/stdlib__fiber.ml | $builddir/bin/occ
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__fiber
-build $stdlibdir/stdlib__fiber.s: qbe_ssa $stdlibdir/stdlib__fiber.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__fiber.o: as_obj $stdlibdir/stdlib__fiber.s
-
-build $stdlibdir/stdlib__int32.ssa | $stdlibdir/stdlib__int32.cmi $stdlibdir/stdlib__int32.opt: occ_ssa stdlib/stdlib__int32.ml | $builddir/bin/occ $stdlibdir/camlinternalIntFmt.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__int32
-build $stdlibdir/stdlib__int32.s: qbe_ssa $stdlibdir/stdlib__int32.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__int32.o: as_obj $stdlibdir/stdlib__int32.s
-
-build $stdlibdir/stdlib__int64.ssa | $stdlibdir/stdlib__int64.cmi $stdlibdir/stdlib__int64.opt: occ_ssa stdlib/stdlib__int64.ml | $builddir/bin/occ $stdlibdir/camlinternalIntFmt.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__int64
-build $stdlibdir/stdlib__int64.s: qbe_ssa $stdlibdir/stdlib__int64.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__int64.o: as_obj $stdlibdir/stdlib__int64.s
-
-build $stdlibdir/stdlib__nativeint.ssa | $stdlibdir/stdlib__nativeint.cmi $stdlibdir/stdlib__nativeint.opt: occ_ssa stdlib/stdlib__nativeint.ml | $builddir/bin/occ $stdlibdir/camlinternalIntFmt.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib__nativeint
-build $stdlibdir/stdlib__nativeint.s: qbe_ssa $stdlibdir/stdlib__nativeint.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib__nativeint.o: as_obj $stdlibdir/stdlib__nativeint.s
-
-build $stdlibdir/stdlib.ssa | $stdlibdir/stdlib.cmi $stdlibdir/stdlib.opt: occ_ssa stdlib/stdlib.ml | $builddir/bin/occ $stdlibdir/camlinternalFormatBasics.cmi $stdlibdir/camlinternalIntFmt.cmi $stdlibdir/camlinternalBulkOps.cmi $stdlibdir/camlinternalChannel.cmi $stdlibdir/camlinternalMarshal.cmi $stdlibdir/camlinternalSys.cmi $stdlibdir/stdlib__option.cmi $stdlibdir/stdlib__result.cmi $stdlibdir/stdlib__int32.cmi $stdlibdir/stdlib__int64.cmi $stdlibdir/stdlib__nativeint.cmi $stdlibdir/stdlib__bytes.cmi $stdlibdir/stdlib__string.cmi $stdlibdir/stdlib__list.cmi $stdlibdir/stdlib__array.cmi $stdlibdir/stdlib__buffer.cmi $stdlibdir/stdlib__hashtbl.cmi $stdlibdir/stdlib__printf.cmi $stdlibdir/stdlib__weak.cmi $stdlibdir/stdlib__fiber.cmi
-  flags = $stdlib_flags --cmi-prefix $stdlibdir/stdlib
-build $stdlibdir/stdlib.s: qbe_ssa $stdlibdir/stdlib.ssa | $builddir/qbe/qbe
-build $stdlibdir/stdlib.o: as_obj $stdlibdir/stdlib.s
-
-build $stdlibdir/libocamlstdlib.a: ar $stdlibdir/camlinternalFormatBasics.o $stdlibdir/camlinternalIntFmt.o $stdlibdir/camlinternalBulkOps.o $stdlibdir/camlinternalChannel.o $stdlibdir/camlinternalMarshal.o $stdlibdir/camlinternalSys.o $stdlibdir/stdlib__option.o $stdlibdir/stdlib__result.o $stdlibdir/stdlib__int32.o $stdlibdir/stdlib__int64.o $stdlibdir/stdlib__nativeint.o $stdlibdir/stdlib__bytes.o $stdlibdir/stdlib__string.o $stdlibdir/stdlib__list.o $stdlibdir/stdlib__array.o $stdlibdir/stdlib__buffer.o $stdlibdir/stdlib__hashtbl.o $stdlibdir/stdlib__printf.o $stdlibdir/stdlib__weak.o $stdlibdir/stdlib__fiber.o $stdlibdir/stdlib.o
-
-rule archive_opt
-  command = $builddir/bin/occ archive-opt $in
-  description = OPT $out
-
-build $stdlibdir/libocamlstdlib.a.opt | $stdlibdir/camlinternalFormatBasics.exports $stdlibdir/camlinternalIntFmt.exports $stdlibdir/camlinternalBulkOps.exports $stdlibdir/camlinternalChannel.exports $stdlibdir/camlinternalMarshal.exports $stdlibdir/camlinternalSys.exports $stdlibdir/stdlib__option.exports $stdlibdir/stdlib__result.exports $stdlibdir/stdlib__int32.exports $stdlibdir/stdlib__int64.exports $stdlibdir/stdlib__nativeint.exports $stdlibdir/stdlib__bytes.exports $stdlibdir/stdlib__string.exports $stdlibdir/stdlib__list.exports $stdlibdir/stdlib__array.exports $stdlibdir/stdlib__buffer.exports $stdlibdir/stdlib__hashtbl.exports $stdlibdir/stdlib__printf.exports $stdlibdir/stdlib__weak.exports $stdlibdir/stdlib__fiber.exports $stdlibdir/stdlib.exports: archive_opt $stdlibdir/libocamlstdlib.a $stdlibdir/camlinternalFormatBasics.opt $stdlibdir/camlinternalIntFmt.opt $stdlibdir/camlinternalBulkOps.opt $stdlibdir/camlinternalChannel.opt $stdlibdir/camlinternalMarshal.opt $stdlibdir/camlinternalSys.opt $stdlibdir/stdlib__option.opt $stdlibdir/stdlib__result.opt $stdlibdir/stdlib__int32.opt $stdlibdir/stdlib__int64.opt $stdlibdir/stdlib__nativeint.opt $stdlibdir/stdlib__bytes.opt $stdlibdir/stdlib__string.opt $stdlibdir/stdlib__list.opt $stdlibdir/stdlib__array.opt $stdlibdir/stdlib__buffer.opt $stdlibdir/stdlib__hashtbl.opt $stdlibdir/stdlib__printf.opt $stdlibdir/stdlib__weak.opt $stdlibdir/stdlib__fiber.opt $stdlibdir/stdlib.opt | $builddir/bin/occ
-
+build $stdlibdir/libocamlstdlib.a $stdlibdir/libocamlstdlib.a.opt $stdlibdir/stdlib.cmi $builddir/stdlib.sources: build_stdlib tools/stdlib_compat.py vendor/ocaml-stdlib/src/StdlibModules | $builddir/bin/occ $builddir/qbe/qbe
 
 # ------------------------------------------------------------ examples ----
 
@@ -522,6 +414,13 @@ rule run_stdlib_opt
 
 build test_stdlib_opt: run_stdlib_opt tests/stdlib_opt/run.sh tests/stdlib_opt/main.ml | $builddir/bin/occ $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a.opt
 
+rule run_default_stdlib
+  command = sh tests/default_stdlib.sh $builddir/bin/occ
+  description = TEST default upstream stdlib
+  pool = console
+
+build test_default_stdlib: run_default_stdlib tests/default_stdlib.sh | $builddir/bin/occ $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a.opt
+
 rule run_separate_exports
   command = sh tests/separate_exports/run.sh
   pool = console
@@ -529,7 +428,7 @@ rule run_separate_exports
 
 build test_separate_exports: run_separate_exports tests/separate_exports/run.sh tests/separate_exports/provider.ml tests/separate_exports/provider.mli tests/separate_exports/consumer.ml tests/separate_exports/entry.ml | $builddir/bin/occ $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a.opt
 
-build test: phony test_stdlib_opt test_separate_exports test_native_ffi test_single_thread_rc test_single_thread_driver test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
+build test: phony test_default_stdlib test_stdlib_opt test_separate_exports test_native_ffi test_single_thread_rc test_single_thread_driver test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
 
 rule cc_rt_asan
   command = $cc $rt_cflags -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iruntime -c $in -o $out
@@ -631,11 +530,11 @@ build asan_stdlib_runtime: run_asan_test | $builddir/asan/stdlib_runtime tests/s
 build asan_test: phony asan_stdlib_runtime asan_adt asan_closures asan_arrays_bytes asan_arc_test asan_exn asan_weak_cycle asan_cycle_collect asan_mod_main asan_stdlib_test asan_fiber_test asan_fiber_io asan_mt_ffi asan_tupled_letrec asan_primitives_test asan_bindgen
 
 rule run_stdlib_compat
-  command = python3 tools/stdlib_compat.py && sh tests/stdlib_compat_opt.sh && python3 tools/stdlib_regressions.py && sh tests/bigarray_bindgen/run.sh
+  command = python3 tools/stdlib_compat.py --reuse-stdlib && sh tests/stdlib_compat_opt.sh && python3 tools/stdlib_regressions.py && sh tests/bigarray_bindgen/run.sh
   description = TEST upstream stdlib compatibility
   pool = console
 
-build stdlib_compat: run_stdlib_compat | $builddir/bin/occ $builddir/qbe/qbe $builddir/rt/libocamlrt.a
+build stdlib_compat: run_stdlib_compat | $stdlibdir/libocamlstdlib.a $builddir/bin/occ $builddir/qbe/qbe $builddir/rt/libocamlrt.a
 
 default $builddir/qbe/qbe $builddir/rt/libocamlrt.a $stdlibdir/libocamlstdlib.a.opt $builddir/bin/occ $builddir/bin/ocamlcc $builddir/hello
 

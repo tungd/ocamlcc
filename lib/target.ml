@@ -131,14 +131,29 @@ let prebuilt_runtime ~single_thread override =
       else search_upwards (Filename.concat "build" dir)
 
 let stdlib_sources override =
+  let bundle directory = Filename.concat directory "stdlib.sources" in
+  let existing path =
+    if Sys.file_exists path && not (Sys.is_directory path) then Some path else None
+  in
+  let at path =
+    if Sys.file_exists path && Sys.is_directory path then
+      List.find_map existing [bundle path; bundle (Filename.dirname path)]
+    else existing path
+  in
   match override with
-  | Some d -> Some d
+  | Some path -> at path
   | None -> (
-      match Sys.getenv_opt "OCAMLCC_STDLIB_DIR" with
-      | Some d when Sys.file_exists d -> Some d
+      match Option.bind (Sys.getenv_opt "OCAMLCC_STDLIB_DIR") at with
+      | Some _ as sources -> sources
       | _ -> (match installed_toolchain () with
-              | Some dir -> Some (Filename.concat dir "stdlib")
-              | None -> search_upwards "stdlib"))
+              | Some dir -> at (Filename.concat dir "stdlib")
+              | None ->
+                  let sibling =
+                    bundle (Filename.dirname (Filename.dirname Sys.executable_name))
+                  in
+                  match existing sibling with
+                  | Some _ as sources -> sources
+                  | None -> search_upwards "build/stdlib.sources"))
 
 let prebuilt_stdlib override =
   match override with
