@@ -161,6 +161,8 @@ type cexpr =
   | ReadScalarSlot of scalar_rep * Ident.t
   | AssignScalar of Ident.t * scalar_rep * scalar_operand
 
+and unicode_validation = Unicode_test | Unicode_check
+
 and imported_function = {
   unit_name : string;
   symbol : string;
@@ -171,6 +173,7 @@ and imported_function = {
   borrowed_entry : (string * bool list) option;
   inline_leaf : lfunction option;
   inline_lambda : Lambda.lfunction option;
+  unicode_validation : unicode_validation option;
 }
 
 and lfunction = {
@@ -424,6 +427,19 @@ let scalar_rep = function
   | Pbigarray_native_int -> Some (Integer_scalar Pnativeint)
   | _ -> None
 
+let unicode_scalar_test arg =
+  let outside = Ident.create_local "outside_first_range" in
+  let offset = Ident.create_local "scalar_offset" in
+  let outside_high = Ident.create_local "outside_second_range" in
+  (* Tagged unsigned comparisons reject negative integers as well. After
+     subtraction, only the second scalar interval falls within its width. *)
+  Let (outside, Binop (Isout, Int 0xD7FF, arg),
+    If (Var outside,
+      Let (offset, Binop (Sub, arg, Int 0xE000),
+        Let (outside_high, Binop (Isout, Int (0x10FFFF - 0xE000), Var offset),
+          If (Var outside_high, Halt (Int 0), Halt (Int 1)))),
+      Halt (Int 1)))
+
 let rec conv_tail (lam : Lambda.lambda) : aexpr =
   conv_expr lam (fun a -> Halt a)
 
@@ -555,10 +571,25 @@ and conv_simple ?(result_kind = Lambda.Pgenval) (id : Ident.t)
               match imported_callee ap_func with
               | Some target when target.arity = List.length ap_args ->
                   let target =
-                    if ap_inlined = Never_inline then { target with inline_leaf = None }
+                    if ap_inlined = Never_inline then
+                      { target with inline_leaf = None; unicode_validation = None }
                     else target
                   in
-                  conv_atoms ap_args (fun args -> emit_cexpr (DirectApp (target, args)))
+                  conv_atoms ap_args (fun args ->
+                    match target.unicode_validation, args with
+                    | Some validation, [arg] ->
+                        let valid = Ident.create_local "scalar_valid" in
+                        let result = Ident.create_local "scalar_checked" in
+                        let success = match validation with
+                          | Unicode_test -> Int 1 | Unicode_check -> arg in
+                        let slow_target = { target with unicode_validation = None } in
+                        let checked = LetJoin (valid, unicode_scalar_test arg,
+                          If (Var valid, Halt success,
+                            Let (result, DirectApp (slow_target, args), Halt (Var result)))) in
+                        (match k () with
+                        | Halt (Var output) when Ident.same output id -> checked
+                        | continuation -> LetJoin (id, checked, continuation))
+                    | _ -> emit_cexpr (DirectApp (target, args)))
               | _ ->
               conv_expr ap_func (fun fn ->
                   conv_atoms ap_args (fun args -> emit_cexpr (App (fn, args)))))))
@@ -1909,6 +1940,20 @@ let inline_local_calls code =
         Option.bind (imported_callee_and_unit call.ap_func) (fun (target, unit_id) ->
           Option.map (fun def -> def, size def.body, Some unit_id) target.inline_lambda)
   in
+  let rec call_free = function
+    | Lapply _ | Lsend _ | Lfunction _ | Lletrec _ -> false
+    | expr ->
+        let free = ref true in
+        iter_head_constructor (fun child -> free := !free && call_free child) expr;
+        !free
+  in
+  let small_inline_hint def call cost =
+    cost <= 24 &&
+    (match def.attr.inline, call.ap_inlined with
+    | (Always_inline | Hint_inline), _ | _, (Always_inline | Hint_inline) ->
+        call_free def.body
+    | _ -> false)
+  in
   let rec visit depth defs = function
     | Llet (mode, kind, id, rhs, body) ->
         let def = known defs rhs in
@@ -1923,9 +1968,11 @@ let inline_local_calls code =
         (match callee defs call with
         | Some (def, cost, imported) when def.kind = Curried
             && List.compare_lengths def.params call.ap_args = 0
-            && depth < 12 && cost <= !(budget imported) ->
+            && depth < 12
+            && (cost <= !(budget imported)
+                || (Option.is_none imported && small_inline_hint def call cost)) ->
             let remaining = budget imported in
-            remaining := !remaining - cost;
+            remaining := max 0 (!remaining - cost);
             let def = duplicate_function def in
             let body = fresh_exits Labels.empty def.body in
             record_uses (free_variables (Lfunction def)) body;
@@ -2440,6 +2487,40 @@ let module_bindings code =
     | _ -> defs
   in
   bindings Ident.Map.empty code
+
+(* Seal the Unicode fast path only after recognizing the implementation's
+   scalar bounds and identity success path. The cold call keeps the original
+   failure behavior and links against the same sealed implementation. *)
+let unicode_validations code =
+  let open Lambda in
+  let definitions = module_bindings (propagate_immediate_constants code) in
+  let unary id =
+    match Ident.Map.find_opt id definitions with
+    | Some (_, Lfunction { kind = Curried; params = [input, Pintval];
+                            return = Pintval; attr; body; _ })
+      when attr.inline <> Never_inline -> Some (input, body)
+    | _ -> None
+  in
+  let is_range input lo hi = function
+    | Lprim (Psequand,
+        [ Lprim (Pintcomp Cle, [Lconst (Const_int first); Lvar left], _);
+          Lprim (Pintcomp Cle, [Lvar right; Lconst (Const_int last)], _) ], _) ->
+        first = lo && last = hi && Ident.same left input && Ident.same right input
+    | _ -> false
+  in
+  let is_validator id = match unary id with
+    | Some (input, Lprim (Psequor, [first; second], _)) ->
+        is_range input 0 0xD7FF first && is_range input 0xE000 0x10FFFF second
+    | _ -> false
+  in
+  fun id ->
+    if is_validator id then Some Unicode_test else
+      match unary id with
+      | Some (input, Lifthenelse
+          (Lapply { ap_func = Lvar validate; ap_args = [Lvar checked]; _ }, Lvar result, _))
+        when Ident.same input checked && Ident.same input result && is_validator validate ->
+          Some Unicode_check
+      | _ -> None
 
 (* Make a module slot only for values already rooted by a published closure.
    Local functions and values that die in the initializer retain their normal

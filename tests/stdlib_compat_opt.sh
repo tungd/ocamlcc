@@ -30,3 +30,20 @@ awk '
     END { exit !found || indirect }
 ' "$stdlib/stdlib__bytes.ssa"
 echo 'stdlib compatibility direct calls: PASS'
+
+probe=$(mktemp -d)
+trap 'rm -rf "$probe"' EXIT
+cat > "$probe/probe.ml" <<'ML'
+let valid n = Uchar.is_valid n
+let of_int n = Uchar.to_int (Uchar.of_int n)
+ML
+build/bin/ocamlcc compile --nostdlib --stdlib-dir "$stdlib" --mod "$probe/probe.ml" -o "$probe/probe.ssa"
+awk '
+    /function l \$ocamlcc_Probe_(valid|of_int)\(/ { guard = 0; count++ }
+    / =l cultl 110591,/ { guard = 1 }
+    /call extern \$ocamlcc_Stdlib__Uchar_(is_valid|of_int)__/ {
+        if (!guard) exit 1
+        cold++
+    }
+    END { if (cold != 2 || count != 2) exit 1 }
+' "$probe/probe.ssa"

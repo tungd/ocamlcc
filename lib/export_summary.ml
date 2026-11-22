@@ -1,5 +1,5 @@
-let archive_version = "ocamlcc-opt-v4"
-let object_version = "ocamlcc-exports-v4"
+let archive_version = "ocamlcc-opt-v5"
+let object_version = "ocamlcc-exports-v5"
 let digest path = Digest.to_hex (Digest.file path)
 
 let read path = In_channel.with_open_bin path In_channel.input_all
@@ -29,6 +29,9 @@ let rows ~cmi_digest exports =
       Printf.bprintf buffer " %s " symbol;
       List.iter (fun flag -> Buffer.add_char buffer (if flag then '1' else '0')) flags)
       fn.borrowed_entry;
+    Option.iter (function
+      | Anf.Unicode_test -> Buffer.add_string buffer " unicode-test"
+      | Unicode_check -> Buffer.add_string buffer " unicode-check") fn.unicode_validation;
     Buffer.add_char buffer '\n')
     exports;
   Buffer.contents buffer
@@ -104,6 +107,10 @@ let parse_rows lines =
   let units = Hashtbl.create 32 in
   let add row =
     let fields = String.split_on_char ' ' row in
+    let fields, unicode_validation = match List.rev fields with
+      | "unicode-test" :: rest -> List.rev rest, Some Anf.Unicode_test
+      | "unicode-check" :: rest -> List.rev rest, Some Anf.Unicode_check
+      | _ -> fields, None in
     let fields, worker = match fields with
       | [unit_name; digest; path; entry; arity; yields; immediate; raises; worker; mask] ->
           [unit_name; digest; path; entry; arity; yields; immediate; raises], Some (worker, mask)
@@ -115,6 +122,10 @@ let parse_rows lines =
       when unit_name_valid unit_name && entry_valid entry ->
         let path = List.map nonnegative (String.split_on_char '.' path) in
         let arity = nonnegative arity and yields = bool_of_string yields in
+        let returns_immediate = bool_of_string immediate in
+        if Option.is_some unicode_validation &&
+           (unit_name <> "Stdlib__Uchar" || arity <> 1 || not returns_immediate) then
+          invalid_arg "invalid Unicode validation summary";
         let borrowed_entry = Option.map (fun (symbol, mask) ->
           if yields || not (entry_valid symbol) || symbol = entry
              || String.length mask <> arity || not (String.contains mask '1')
@@ -127,8 +138,7 @@ let parse_rows lines =
             raises = (match raises with
               | "false" -> No_raise | "finalizer" -> Finalizer_raise | "true" -> May_raise
               | _ -> invalid_arg "invalid exception effect");
-            returns_immediate = bool_of_string immediate;
-            inline_leaf = None; inline_lambda = None }
+            returns_immediate; unicode_validation; inline_leaf = None; inline_lambda = None }
         in
         let exports = match Hashtbl.find_opt units unit_name with
           | None -> []
@@ -147,7 +157,7 @@ let read_archive archive =
   | header :: lines
     when let suffix = " " ^ digest archive in
          List.exists (fun version -> header = version ^ suffix)
-           [archive_version; "ocamlcc-opt-v3"; "ocamlcc-opt-v2"; "ocamlcc-opt-v1"] ->
+           [archive_version; "ocamlcc-opt-v4"; "ocamlcc-opt-v3"; "ocamlcc-opt-v2"; "ocamlcc-opt-v1"] ->
       Some (parse_rows lines)
   | _ -> None
 
@@ -158,7 +168,8 @@ let read_object cmi =
     when obj <> "" && obj <> "." && obj <> ".." && Filename.basename obj = obj
       && (let suffix = " " ^ digest (Filename.concat (Filename.dirname cmi) obj) in
           List.exists (fun version -> header = version ^ suffix)
-            [object_version; "ocamlcc-exports-v3"; "ocamlcc-exports-v2"; "ocamlcc-exports-v1"]) ->
+            [object_version; "ocamlcc-exports-v4"; "ocamlcc-exports-v3";
+             "ocamlcc-exports-v2"; "ocamlcc-exports-v1"]) ->
       Some (parse_rows lines)
   | _ -> None
 

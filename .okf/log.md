@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Borrow mutable array projections across read-only index expressions and inline verified Uchar scalar-range fast paths. Tterm paired replay improved 2.5% plain and 10.2% Unicode (default), 4.1% plain and 12.4% Unicode (single-thread RC). Against Round 4 in a fresh stock-paired run, Round 5 improved 4.1% plain and 26.6% Unicode (default), 8.6% plain and 26.4% Unicode (single-thread RC). All 1,758 parser assertions match stock OCaml 5.5.0.
+
 - 2026-11-22 (codex/1) — Retire small immediate-only blocks without a subtree worklist and skip their registration under single-thread ownership. Tterm paired replay changed -0.4% plain and -2.2% Unicode (default), +0.4% plain and -4.0% Unicode (single-thread RC). Native cycle, weak, ASan and TSan tests passed.
 
 - 2026-11-22 (codex/1) — Publish compatibility stdlib object summaries during assembly and retain borrowed candidates across nested definitions and inlined value aliases. Tterm paired replay changed +5.8% plain and -5.9% Unicode (default), -1.9% plain and -8.4% Unicode (single-thread RC). Parser allocation medians were identical.

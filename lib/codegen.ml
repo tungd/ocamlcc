@@ -45,7 +45,7 @@ let export_captured b mod_value path target arity =
   name
 
 let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
-    ~exported ~effects ~inline_leaf ~borrowed
+    ?(unicode_validation = fun _ -> None) ~exported ~effects ~inline_leaf ~borrowed
     (program : Anf.program) =
   let mod_sym = sanitize (Ident.name program.Anf.module_ident) in
   let b = create ~inline_single_thread_rc mod_sym in
@@ -166,7 +166,8 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
           | Some (symbol, false, worker_arity) when arity = worker_arity -> Some (symbol, flags)
           | _ -> None) in
         Some (path, { Anf.unit_name; symbol; arity; yields; raises; returns_immediate;
-                      borrowed_entry; inline_leaf; inline_lambda }))
+                      borrowed_entry; inline_leaf; inline_lambda;
+                      unicode_validation = unicode_validation id }))
     exported
   in
   if b.cur_fn.term = None then begin

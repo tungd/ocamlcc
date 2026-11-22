@@ -75,6 +75,36 @@ let () =
 
 let () =
   let il = compile {|
+    external get : int array -> int -> int = "%array_safe_get"
+    external set : int array -> int -> int -> unit = "%array_safe_set"
+    external ( + ) : int -> int -> int = "%addint"
+    external ( - ) : int -> int -> int = "%subint"
+    external ( >= ) : int -> int -> bool = "%greaterequal"
+    type screen = { mutable cells : int array; mutable offset : int }
+    type state = { screen : screen; rows : int }
+    external reset : screen -> unit = "reset_screen" [@@noalloc]
+    let[@inline never] row state i =
+      let cells = state.screen.cells in
+      let j = state.screen.offset + i in
+      get cells (if j >= state.rows then j - state.rows else j)
+    let[@inline never] write_row state i v =
+      let cells = state.screen.cells in
+      let j = state.screen.offset + i in
+      set cells (if j >= state.rows then j - state.rows else j) v
+    let[@inline never] read_after_call state i =
+      let cells = state.screen.cells in
+      reset state.screen;
+      get cells i
+    let use state i = write_row state i 20; row state i + read_after_call state i
+  |} in
+  List.iter (fun name ->
+    let body = function_body il name in
+    if contains ~sub:"arc_retain" body || contains ~sub:"arc_release" body then
+      failwith (name ^ ": owning array projection\n" ^ body)) ["row_borrowed"; "write_row_borrowed"];
+  require (function_body il "read_after_call") "arc_retain"
+
+let () =
+  let il = compile {|
     external length : string -> int = "%string_length"
     external ( + ) : int -> int -> int = "%addint"
     external ( - ) : int -> int -> int = "%subint"

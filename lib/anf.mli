@@ -169,6 +169,8 @@ type cexpr =
   | ReadScalarSlot of scalar_rep * Ident.t
   | AssignScalar of Ident.t * scalar_rep * scalar_operand
 
+and unicode_validation = Unicode_test | Unicode_check
+
 and imported_function = {
   unit_name : string;
   symbol : string;
@@ -179,6 +181,7 @@ and imported_function = {
   borrowed_entry : (string * bool list) option;
   inline_leaf : lfunction option;
   inline_lambda : Lambda.lfunction option;
+  unicode_validation : unicode_validation option;
 }
 
 and lfunction = {
@@ -258,3 +261,4 @@ val bound_parameters : lfunction -> Ident.t list
 val pure_defs : aexpr -> (Ident.t * lfunction) list
 
 val inline_export_leaves : Lambda.lambda -> aexpr -> Ident.t -> lfunction option
+val unicode_validations : Lambda.lambda -> Ident.t -> unicode_validation option

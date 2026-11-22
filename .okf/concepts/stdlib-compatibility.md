@@ -46,6 +46,12 @@ paths and advertise their borrowed entries. The final archive publishes the
 same facts in `libocamlstdlib_compat.a.opt`.
 See [persisted export summaries](/concepts/build-pipeline.md#persisted-export-summaries).
 
+The compiler verifies the scalar intervals in `Uchar.is_valid` and the
+identity success path in `Uchar.of_int` before including their inline hints
+in the summary. Consumers test those intervals inline. Invalid inputs go
+through the original, link-stamped entry so validation and exception text
+come from the same stdlib implementation.
+
 # Build and test
 
 `tools/import-ocaml-stdlib.sh` vendors OCaml 5.5.0 standard library sources,

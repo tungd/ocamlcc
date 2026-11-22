@@ -9,6 +9,7 @@ val compile_program : ?emit_entry:bool -> Anf.program -> Qbe_il.module_
 val compile_with_exports :
   ?emit_entry:bool ->
   ?inline_single_thread_rc:bool ->
+  ?unicode_validation:(Ident.t -> Anf.unicode_validation option) ->
   exported:(int list * Ident.t) list ->
   effects:(Ident.t -> bool * bool * Anf.exception_effect) ->
   inline_leaf:(Ident.t -> Anf.lfunction option) ->

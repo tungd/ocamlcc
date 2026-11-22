@@ -5,6 +5,18 @@ let check_invalid_arg label f =
   with Invalid_argument _ -> Printf.printf "%s:INVALID_ARG\n" label
 
 let () =
+  let valid n =
+    assert (Uchar.is_valid n);
+    assert (Uchar.to_int (Uchar.of_int n) = n) in
+  let invalid n =
+    assert (not (Uchar.is_valid n));
+    match Uchar.of_int n with
+    | _ -> assert false
+    | exception Invalid_argument text ->
+        assert (text = Printf.sprintf "%X is not a Unicode scalar value" n) in
+  List.iter valid [0; 0xD7FF; 0xE000; 0x10FFFF];
+  List.iter invalid [min_int; -1; 0xD800; 0xDFFF; 0x110000; max_int];
+
   (* Bytes blit / overlap / blit_string / fill / equal / compare *)
   let b = Bytes.of_string "abcdefgh" in
   Bytes.blit b 0 b 2 4;

@@ -487,9 +487,9 @@ let add_borrowed_entry env id borrow =
     imm_funs;
     borrowed_entries = Ident.Map.add id entry env.borrowed_entries }
 
-(* Fuse a field into local borrowed operands, keeping its receiver live.
-   A mutable projection only fuses with its immediate, final consumer so
-   it cannot be reloaded after an intervening operation. *)
+(* Fuse a field into borrowed operands while keeping its receiver live.
+   A mutable projection has a single consumer and can cross only read-only
+   computations, such as the arithmetic and joins used to form an index. *)
 let fuse_field_read ~stable id index owner body =
   let open Anf in
   let uses atom = Ident.Set.mem id (atom_vars atom) in
@@ -532,6 +532,19 @@ let fuse_field_read ~stable id index owner body =
     | StringGet (false, _, _) -> true
     | _ -> false
   in
+  let can_delay_snapshot = function
+    | Atom (Var _ | Int _ | Char _ | Unit)
+    | Field (_, (Immediate_field | Immutable_field), _)
+    | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr | Cmp _), _, _) -> true
+    | _ -> false
+  in
+  let rec index_expression = function
+    | Halt _ -> true
+    | Let (_, ce, next) -> can_delay_snapshot ce && index_expression next
+    | If (_, yes, no) | LetJoin (_, yes, no) ->
+        index_expression yes && index_expression no
+    | _ -> false
+  in
   let use_in ce =
     let borrowed, consumed = atom_operands ce in
     Ident.Set.mem id borrowed || List.exists uses consumed
@@ -552,10 +565,12 @@ let fuse_field_read ~stable id index owner body =
             in
             Option.map (fun next -> Let (result, ce', next)) next
         | _ -> None)
-    | Let (result, ce, next) when stable && can_cross ce ->
+    | Let (result, ce, next) when (if stable then can_cross ce else can_delay_snapshot ce) ->
         Option.map (fun next -> Let (result, ce, next)) (fuse next)
     | LetJoin (result, rhs, next) when not (live next) ->
         Option.map (fun rhs -> LetJoin (result, rhs, next)) (fuse rhs)
+    | LetJoin (result, rhs, next) when not stable && index_expression rhs && not (live rhs) ->
+        Option.map (fun next -> LetJoin (result, rhs, next)) (fuse next)
     | If (cond, yes, no) when uses cond && not (live yes || live no) ->
         Some (If (substitute cond, yes, no))
     | ScalarIf (rep, cond, yes, no) when uses cond && not (live yes || live no) ->
