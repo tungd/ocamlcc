@@ -125,6 +125,13 @@ the immutable member must still register it. The native runtime test exercises
 this sequence, and the concurrent root-table stress test exercises duplicate
 drops and swap-moved root indices.
 
+The single-thread RC runtime can skip registering a small block whose scanned
+fields currently hold only immediates. A later drop reevaluates its contents.
+Both runtimes can retire such a block directly on the final drop when it has
+no buffered root or weak registration. This also applies when retaining its
+storage for reuse. The single-thread slow path reads collector activity with
+relaxed ordering, while the shared runtime retains its acquire load.
+
 **Weak copies.** A shallow duplicate starts with its own weak-target state.
 `Weak.get_copy` uses the same copy path as `Obj.dup` and preserves the logical
 layout while taking ownership of copied pointer fields. Runtime-managed

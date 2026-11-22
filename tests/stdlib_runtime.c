@@ -1349,6 +1349,36 @@ static void test_leaf_weak_retirement(void)
     assert(arc_live_objects() == before);
 }
 
+static void test_small_immediate_retirement(void)
+{
+    int64_t before = arc_live_objects();
+    int64_t weak = ocamlcc_weak_create(tagged(1));
+    for (uint16_t n = 1; n <= 2; ++n) {
+        uint32_t bytes = n * sizeof(int64_t);
+        int64_t *block = arc_alloc(17, n, bytes);
+        for (uint16_t i = 0; i < n; ++i)
+            block[i] = tagged(-1 - i);
+
+        void *token = arc_drop_reuse((int64_t)(uintptr_t)block);
+        assert(token != NULL);
+        block = arc_alloc_reuse(token, 17, n, bytes);
+        for (uint16_t i = 0; i < n; ++i)
+            block[i] = tagged(i);
+
+        int64_t *some = arc_alloc(0, 1, sizeof(*some));
+        arc_retain(block);
+        *some = (int64_t)(uintptr_t)block;
+        ocamlcc_weak_set(weak, tagged(0), (int64_t)(uintptr_t)some);
+        arc_release(some);
+        assert(ocamlcc_weak_check(weak, tagged(0)) == tagged(1));
+        arc_release(block);
+        assert(ocamlcc_weak_check(weak, tagged(0)) == tagged(0));
+    }
+    assert(ocamlcc_arc_collect(1) == tagged(0));
+    arc_release_val(weak);
+    assert(arc_live_objects() == before);
+}
+
 static void *exn_hint_worker(void *unused)
 {
     (void)unused;
@@ -1381,6 +1411,7 @@ int main(void)
     test_aligned_slab_reclamation();
     test_slab_class_boundaries();
     test_leaf_weak_retirement();
+    test_small_immediate_retirement();
     test_main_shadow_stack();
     test_bulk_array_ownership();
     test_array_scan_promotion();

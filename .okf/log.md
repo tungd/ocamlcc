@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Retire small immediate-only blocks without a subtree worklist and skip their registration under single-thread ownership. Tterm paired replay changed -0.4% plain and -2.2% Unicode (default), +0.4% plain and -4.0% Unicode (single-thread RC). Native cycle, weak, ASan and TSan tests passed.
+
 - 2026-11-22 (codex/1) — Publish compatibility stdlib object summaries during assembly and retain borrowed candidates across nested definitions and inlined value aliases. Tterm paired replay changed +5.8% plain and -5.9% Unicode (default), -1.9% plain and -8.4% Unicode (single-thread RC). Parser allocation medians were identical.
 
 - 2026-11-22 (codex/1) — Fuse finalizer poll fast paths, throttle bounded self-tail loops, and branch directly from single-use short-circuit joins. Tterm paired replay improved 3.2% plain and 1.8% Unicode (default), 3.9% plain and 4.0% Unicode (single-thread RC).

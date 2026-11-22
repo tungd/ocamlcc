@@ -346,6 +346,24 @@ typedef struct CCVec {
 
 static CCVec g_cc_roots = { NULL, 0, 0, 0 };
 
+static inline int is_heap_ptr(int64_t val)
+{
+    return val != 0 && (val & 1) == 0;
+}
+
+/* The caller either owns the last drop or is the single mutator. A
+ * shared-runtime decrement may not inspect fields that can still change. */
+static inline int is_small_immediate_block(const ArcHeader *hdr)
+{
+    if (hdr->tag >= ARC_TAG_ARRAY || hdr->byte_size > 2u * sizeof(int64_t))
+        return 0;
+    uint16_t count = arc_scan_count(hdr);
+    const int64_t *fields = (const int64_t *)(hdr + 1);
+    return count <= 2u &&
+           (count == 0u || !is_heap_ptr(fields[0])) &&
+           (count < 2u || !is_heap_ptr(fields[1]));
+}
+
 static inline int is_unscanned_leaf_tag(uint16_t tag)
 {
     return tag == (uint16_t)ARC_TAG_STRING ||
@@ -421,6 +439,10 @@ static inline void cc_roots_add(ArcHeader *hdr)
     if ((atomic_load_explicit(&hdr->reserved, memory_order_relaxed) & CC_BUFFERED) != 0u ||
         !is_cycle_candidate_obj(hdr))
         return;
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+    if (is_small_immediate_block(hdr))
+        return;
+#endif
     arc_lock(&g_cc_lock);
     if ((atomic_load_explicit(&hdr->reserved, memory_order_relaxed) & CC_BUFFERED) != 0u) {
         arc_unlock(&g_cc_lock);
@@ -824,11 +846,6 @@ void ocamlcc_format_exn(int64_t ex, char *buf, size_t cap)
 static inline int64_t tag_int(int64_t n)
 {
     return (int64_t)(((uint64_t)n << 1) | 1ull);
-}
-
-static inline int is_heap_ptr(int64_t val)
-{
-    return val != 0 && (val & 1) == 0;
 }
 
 int64_t caml_fresh_oo_id(int64_t ignored)
@@ -1488,6 +1505,11 @@ static inline void drop_child_val(DropWorklist *w, int64_t val, ArcHeader **tail
 static __attribute__((noinline)) void release_subtree_slow(ArcHeader *root,
                                                            int free_root)
 {
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+    const memory_order cc_order = memory_order_relaxed;
+#else
+    const memory_order cc_order = memory_order_acquire;
+#endif
     ForeignRelease *foreign_head = NULL, *foreign_tail = NULL;
     int defer_nested_releases = 0;
     DropWorklist w;
@@ -1556,7 +1578,7 @@ static __attribute__((noinline)) void release_subtree_slow(ArcHeader *root,
 
         if (((atomic_load_explicit(&cur->reserved, memory_order_relaxed) &
               CC_BUFFERED) != 0u && is_cycle_candidate_obj(cur)) ||
-            atomic_load_explicit(&g_cc_active, memory_order_acquire) != 0) {
+            atomic_load_explicit(&g_cc_active, cc_order) != 0) {
             arc_lock(&g_cc_lock);
             cc_roots_remove_locked(cur);
             arc_unlock(&g_cc_lock);
@@ -1574,14 +1596,16 @@ static __attribute__((noinline)) void release_subtree_slow(ArcHeader *root,
 
 static inline void release_subtree(ArcHeader *root, int free_root)
 {
-    /* These layouts own no children or custom resources and cannot have
-     * a buffered cycle root. A registered weak target still needs clearing. */
+    /* A small block with no child pointers can be retired here as long
+     * as it has no weak registration or previous cycle-root entry. */
     uint16_t tag = root->tag;
-    if (free_root &&
-        (tag == ARC_TAG_STRING || tag == ARC_TAG_FLOAT || tag == ARC_TAG_FLOAT_ARRAY) &&
+    if ((tag == ARC_TAG_STRING || tag == ARC_TAG_FLOAT || tag == ARC_TAG_FLOAT_ARRAY ||
+         (is_small_immediate_block(root) &&
+          (atomic_load_explicit(&root->reserved, memory_order_relaxed) & CC_BUFFERED) == 0u)) &&
         !might_be_weak_target(root)) {
         account_objects(&g_live_objects, -1);
-        slab_free(root);
+        if (free_root)
+            slab_free(root);
     } else {
         release_subtree_slow(root, free_root);
     }
