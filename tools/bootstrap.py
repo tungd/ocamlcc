@@ -31,11 +31,15 @@ import stdlib_compat  # noqa: E402
 OCAMLCC_MODULES: list[tuple[str, bool, bool]] = [
     # (basename, has_mli, is_mod)
     ("bigarray_header", False, True),
+    ("sys_util", True, True),
     ("qbe_il", True, True),
     ("ccalls", True, True),
     ("builtins", True, True),
     ("frontend", True, True),
     ("bounds", True, True),
+    ("anf_ir", True, True),
+    ("anf_scalar", True, True),
+    ("lambda_opt", True, True),
     ("anf", True, True),
     ("arc_pass", True, True),
     ("codegen_ctx", False, True),

@@ -68,12 +68,12 @@ let compile_source (request : Request.t) source =
   let inline_leaf =
     match exported with
     | [] -> (fun _ -> None)
-    | _ -> Anf.inline_export_leaves lambda.code anf.code
+    | _ -> Lambda_opt.inline_export_leaves lambda.code anf.code
   in
   let anf, effects, borrowed = Arc_pass.run_with_effects ~exported anf in
   let unicode_validation =
     if modname = "Stdlib__Uchar" && exported <> [] then
-      Anf.unicode_validations lambda.code
+      Lambda_opt.unicode_validations lambda.code
     else fun _ -> None
   in
   let il, exports =

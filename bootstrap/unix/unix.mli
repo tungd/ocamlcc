@@ -1,5 +1,5 @@
 (** Minimal Unix compatibility shim for self-hosted ocamlcc.
-    Covers only the Unix surface used by [lib/driver.ml]; linked solely into
+    Covers the Unix operations shared by the driver and CLI. Linked into
     the bootstrap compiler binary so host Dune builds remain unchanged. *)
 
 type error =
@@ -25,9 +25,10 @@ type file_kind =
   | S_FIFO
   | S_SOCK
 
-type stats = { st_kind : file_kind }
+type stats = { st_kind : file_kind; st_perm : int }
 
 val lstat : string -> stats
+val chmod : string -> int -> unit
 val rmdir : string -> unit
 val unlink : string -> unit
 

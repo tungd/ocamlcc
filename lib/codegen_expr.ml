@@ -330,6 +330,14 @@ let compile_float_arithmetic b op left right =
   emit b (Binop (qop, Double, result, left, right));
   result
 
+let qbe_integer_arithmetic : Anf.integer_arithmetic -> Binop.t = function
+  | Add_int -> Add | Sub_int -> Sub | Mul_int -> Mul
+  | Div_int -> Div | Rem_int -> Rem
+  | And_int -> And | Or_int -> Or | Xor_int -> Xor
+
+let qbe_integer_shift : Anf.integer_shift -> Binop.t = function
+  | Left_shift -> Shl | Logical_right -> Shr | Arithmetic_right -> Sar
+
 let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
   let av = compile_atom hooks b a in
   let cv = compile_atom hooks b c in
@@ -418,31 +426,18 @@ let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
       emit b
         (Call (Long, dst, { fn = Global "caml_compare"; args = [ (Long, av); (Long, cv) ] }));
       dst
-  | Bint_add bi | Bint_sub bi | Bint_mul bi | Bint_and bi | Bint_or bi | Bint_xor bi ->
+  | Bint_arith (bi, arithmetic) ->
       let ty, _, _ = bint_spec bi in
-      let ua = unbox_bint b bi av in
-      let uc = unbox_bint b bi cv in
-      let qop =
-        match op with
-        | Bint_add _ -> Binop.Add
-        | Bint_sub _ -> Binop.Sub
-        | Bint_mul _ -> Binop.Mul
-        | Bint_and _ -> Binop.And
-        | Bint_or _ -> Binop.Or
-        | Bint_xor _ -> Binop.Xor
-        | _ -> assert false
-      in
-      let res = fresh_temp b "bop" in
-      emit b (Binop (qop, ty, res, ua, uc));
-      box_bint b bi res
-  | (Bint_div bi | Bint_mod bi) ->
       let lhs = unbox_bint b bi av in
       let rhs = unbox_bint b bi cv in
-      let qop = match op with Bint_div _ -> Binop.Div | _ -> Binop.Rem in
-      compile_bint_div_mod b ~boxed:true bi qop lhs rhs
-  | Bint_lsl bi -> compile_bint_shift b bi Shl av cv
-  | Bint_lsr bi -> compile_bint_shift b bi Shr av cv
-  | Bint_asr bi -> compile_bint_shift b bi Sar av cv
+      let qop = qbe_integer_arithmetic arithmetic in
+      (match arithmetic with
+       | Div_int | Rem_int -> compile_bint_div_mod b ~boxed:true bi qop lhs rhs
+       | Add_int | Sub_int | Mul_int | And_int | Or_int | Xor_int ->
+           let res = fresh_temp b "bop" in
+           emit b (Binop (qop, ty, res, lhs, rhs));
+           box_bint b bi res)
+  | Bint_shift (bi, shift) -> compile_bint_shift b bi (qbe_integer_shift shift) av cv
   | Bint_cmp (kind, cmp) ->
       let lhs = unbox_bint b kind av in
       let rhs = unbox_bint b kind cv in
@@ -1204,11 +1199,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       let rep = Anf.Integer_scalar kind in
       let l = compile_scalar_operand hooks b rep lhs in
       let r = compile_scalar_operand hooks b rep rhs in
-      let qop = match op with
-        | Add_int -> Binop.Add | Sub_int -> Binop.Sub | Mul_int -> Binop.Mul
-        | Div_int -> Binop.Div | Rem_int -> Binop.Rem
-        | And_int -> Binop.And | Or_int -> Binop.Or | Xor_int -> Binop.Xor
-      in
+      let qop = qbe_integer_arithmetic op in
       (match op with
        | Div_int | Rem_int -> compile_bint_div_mod b ~boxed:false kind qop l r
        | _ ->
@@ -1237,13 +1228,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
   | IntegerShift (kind, op, value, count) ->
       let value = compile_scalar_operand hooks b (Integer_scalar kind) value in
       let count = compile_atom hooks b count in
-      let qop =
-        match op with
-        | Left_shift -> Binop.Shl
-        | Logical_right -> Binop.Shr
-        | Arithmetic_right -> Binop.Sar
-      in
-      compile_raw_bint_shift b kind qop value count
+      compile_raw_bint_shift b kind (qbe_integer_shift op) value count
   | ScalarStore (access, arr, index, value) ->
       let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
       let rep = Option.get (Anf.scalar_rep access.kind) in

@@ -19,7 +19,7 @@ type file_kind =
   | S_FIFO
   | S_SOCK
 
-type stats = { st_kind : file_kind }
+type stats = { st_kind : file_kind; st_perm : int }
 
 type open_flag =
   | O_RDONLY
@@ -37,7 +37,8 @@ type process_status =
 
 external c_enoent : unit -> int = "ocamlcc_unix_enoent"
 external c_error_message : int -> string = "ocamlcc_unix_error_message"
-external c_lstat : string -> (int, int) result = "ocamlcc_unix_lstat"
+external c_lstat : string -> (int * int, int) result = "ocamlcc_unix_lstat"
+external c_chmod : string -> int -> (unit, int) result = "ocamlcc_unix_chmod"
 external c_rmdir : string -> (unit, int) result = "ocamlcc_unix_rmdir"
 external c_unlink : string -> (unit, int) result = "ocamlcc_unix_unlink"
 external c_openfile : string -> int -> int -> (int, int) result = "ocamlcc_unix_openfile"
@@ -76,7 +77,10 @@ let kind_of_int = function
   | _ -> S_SOCK
 
 let lstat path =
-  { st_kind = kind_of_int (unwrap "lstat" path (c_lstat path)) }
+  let kind, st_perm = unwrap "lstat" path (c_lstat path) in
+  { st_kind = kind_of_int kind; st_perm }
+
+let chmod path perm = unwrap "chmod" path (c_chmod path perm)
 
 let rmdir path = unwrap "rmdir" path (c_rmdir path)
 let unlink path = unwrap "unlink" path (c_unlink path)

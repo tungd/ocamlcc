@@ -89,9 +89,7 @@ let is_imm_binop : Anf.binop -> bool = function
   | Compare_ints | Isout | Fcmp _ | Compare_floats | Bint_cmp _
   | Compare_bints _ ->
       true
-  | Float_arithmetic _ | Bint_add _ | Bint_sub _ | Bint_mul _
-  | Bint_div _ | Bint_mod _ | Bint_and _ | Bint_or _ | Bint_xor _
-  | Bint_lsl _ | Bint_lsr _ | Bint_asr _ ->
+  | Float_arithmetic _ | Bint_arith _ | Bint_shift _ ->
       false
 
 let is_imm_unop : Anf.unop -> bool = function
@@ -801,7 +799,7 @@ let operation_can_raise ~finalizers known raising = function
   | DirectApp (target, _) ->
       target.raises = May_raise || (finalizers && target.raises = Finalizer_raise)
   | Binop ((Div | Mod), _, Int n) when n <> 0 -> false
-  | Binop ((Div | Mod | Bint_div _ | Bint_mod _), _, _)
+  | Binop ((Div | Mod | Bint_arith (_, (Div_int | Rem_int))), _, _)
   | IntegerBinop (_, (Div_int | Rem_int), _, _) -> true
   | StringGet (true, _, _)
   | BytesSet (true, _, _, _)

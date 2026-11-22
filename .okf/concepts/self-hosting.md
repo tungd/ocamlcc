@@ -60,11 +60,11 @@ Matching upstream OCaml, `libzstd` is never compiled into or linked with
   the three other `compiler-libs.common` C primitives
   (`caml_sys_get_stdlib_dirs`, `caml_sys_time_include_children`,
   `caml_terminfo_rows`).
-- `bootstrap/unix/` provides the 11 `Unix` functions used by `lib/driver.ml`
-  (`lstat`, `rmdir`, `unlink`, `openfile`, `close`, `pipe ~cloexec`,
-  `in_channel_of_descr`, `create_process`, `waitpid`, `error_message`, and
-  `stdin`/`stdout`/`stderr`), leaving `lib/driver.ml` and host Dune builds
-  unchanged.
+- `bootstrap/unix/` supplies the Unix operations used by the compiler and
+  driver. It includes `lstat` with file modes and `chmod` so `Sys_util` can
+  preserve permissions when atomically replacing an artifact. The native and
+  sanitizer bootstrap stub tests compile and exercise the writer with this
+  shim.
 
 # Runtime boundary principle
 
@@ -76,5 +76,5 @@ the irreducible C/asm kernel (`pal_ctx.S`, `pal.c`, ARC allocator/cycle
 collector/weak/finalizers, `closure.c`, fiber stack/shadow-stack core, and thin
 POSIX/libm/Bigarray primitives).
 
-The bootstrap source order includes the Lambda bounds proof pass before ANF
-so every stage can compile the same guarded-indexing pipeline.
+The bootstrap source order includes `Sys_util` and builds `Bounds`,
+`Anf_ir`, `Anf_scalar`, and `Lambda_opt` ahead of the ANF converter.

@@ -1,4 +1,4 @@
-(* TDD contract test for bootstrap/unix/ covering all Unix calls in lib/driver.ml. *)
+(* TDD contract test for bootstrap/unix/ covering shared filesystem and process operations. *)
 
 let () =
   let base =
@@ -10,8 +10,12 @@ let () =
   let fpath = Filename.concat base "hello.txt" in
   let fd = Unix.openfile fpath [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644 in
   Unix.close fd;
+  Unix.chmod fpath 0o640;
+  Sys_util.write_if_changed fpath "updated";
   let st_f = Unix.lstat fpath in
   assert (st_f.Unix.st_kind = Unix.S_REG);
+  assert (st_f.Unix.st_perm = 0o640);
+  assert (Sys_util.read_file fpath = "updated");
   let st_d = Unix.lstat base in
   assert (st_d.Unix.st_kind = Unix.S_DIR);
 

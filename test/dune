@@ -445,3 +445,8 @@
  (name pipeline_output_test)
  (modules pipeline_output_test)
  (libraries ocamlcc))
+
+(test
+ (name anf_isolation_test)
+ (modules anf_isolation_test)
+ (libraries ocamlcc compiler-libs.common))

@@ -100,12 +100,15 @@ and dump_ce (ce : Anf.cexpr) : string =
         | Anf.Float_arithmetic Mulf -> "fmul" | Anf.Float_arithmetic Divf -> "fdiv"
         | Anf.Fcmp _ -> "fcmp"
         | Anf.Compare_floats -> "fcmp3"
-        | Anf.Bint_add _ -> "badd" | Anf.Bint_sub _ -> "bsub"
-        | Anf.Bint_mul _ -> "bmul" | Anf.Bint_div _ -> "bdiv"
-        | Anf.Bint_mod _ -> "bmod" | Anf.Bint_and _ -> "band"
-        | Anf.Bint_or _ -> "bor" | Anf.Bint_xor _ -> "bxor"
-        | Anf.Bint_lsl _ -> "blsl" | Anf.Bint_lsr _ -> "blsr"
-        | Anf.Bint_asr _ -> "basr" | Anf.Bint_cmp _ -> "bcmp"
+        | Anf.Bint_arith (_, op) ->
+            (match op with
+             | Add_int -> "badd" | Sub_int -> "bsub" | Mul_int -> "bmul"
+             | Div_int -> "bdiv" | Rem_int -> "bmod" | And_int -> "band"
+             | Or_int -> "bor" | Xor_int -> "bxor")
+        | Anf.Bint_shift (_, op) ->
+            (match op with
+             | Left_shift -> "blsl" | Logical_right -> "blsr" | Arithmetic_right -> "basr")
+        | Anf.Bint_cmp _ -> "bcmp"
         | Anf.Compare_bints _ -> "bcmp3"
       in
       Printf.sprintf "(binop %s %s %s)" name (dump_atom a) (dump_atom b)

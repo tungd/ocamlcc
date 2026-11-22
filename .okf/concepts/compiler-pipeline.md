@@ -22,7 +22,13 @@ sources:
     title: compiler-libs frontend wrapper
   - id: lib-anf
     resource: ../lib/anf.ml
-    title: Lambda-to-ANF conversion and free-variable analysis
+    title: Lambda-to-ANF conversion
+  - id: lambda-opt
+    resource: ../lib/lambda_opt.ml
+    title: Pre-ANF Lambda optimization and export analysis
+  - id: anf-scalar
+    resource: ../lib/anf_scalar.ml
+    title: Unboxed scalar selection inside ANF
   - id: lib-arc-pass
     resource: ../lib/arc_pass.ml
     title: Perceus ARC, reuse, exception-unwind, and yield-effect pass
@@ -73,6 +79,17 @@ in-process export collection, or sealed link symbols for separately built
 objects. The CLI and driver pass export facts and CMI paths directly from the
 result into publication. An optional summary loader reads external metadata
 against the CMI selected by the frontend.
+
+# ANF lowering
+
+`Lambda_opt.optimize` owns Lambda optimization and returns the rewritten term
+with binder representations, module slots, and export identifiers.[^lambda-opt]
+Each `Anf.lower` invocation passes its own immutable environment through
+conversion. The optimizer and converter share the import lookup for that
+invocation. `Anf_ir` owns the common IR and free-variable queries, and
+`Anf_scalar.run` selects unboxed scalar operations over that IR.[^anf-scalar]
+Boxed arithmetic and shifts carry the integer width and operation separately.
+ARC and QBE use those fields to classify and lower the operation.
 
 # Implementation status
 
@@ -293,3 +310,6 @@ continue to carry direct-entry facts.
 
 [^lib-pipeline]: The compile entry points and their output contract live in
   `lib/pipeline.mli`.
+
+[^lambda-opt]: `lib/lambda_opt.mli` describes the facts returned alongside the optimized term.
+[^anf-scalar]: `lib/anf_scalar.mli` exposes one ANF-to-ANF transformation.

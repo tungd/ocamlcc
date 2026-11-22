@@ -134,7 +134,7 @@ build single_thread_runtime: phony $builddir/rt-single/libocamlrt.a
 
 # ------------------------------------------------------------- ocamlcc ----
 
-build $builddir/bin/ocamlcc: dune_ocamlcc runtime/ocamlcc_bigarray_types.h bin/main.ml lib/qbe_il.ml lib/qbe_il.mli lib/frontend.ml lib/frontend.mli lib/builtins.ml lib/builtins.mli lib/anf.ml lib/anf.mli lib/bounds.ml lib/bounds.mli lib/arc_pass.ml lib/arc_pass.mli lib/ccalls.ml lib/ccalls.mli lib/c_bindgen.ml lib/c_bindgen.mli lib/driver.ml lib/driver.mli lib/export_summary.ml lib/export_summary.mli lib/codegen_ctx.ml lib/codegen_analysis.ml lib/codegen_expr.ml lib/codegen_fn.ml lib/codegen.ml lib/codegen.mli lib/pipeline.ml lib/pipeline.mli lib/sys_util.ml lib/sys_util.mli lib/dune bin/dune dune-project
+build $builddir/bin/ocamlcc: dune_ocamlcc runtime/ocamlcc_bigarray_types.h bin/main.ml lib/qbe_il.ml lib/qbe_il.mli lib/frontend.ml lib/frontend.mli lib/builtins.ml lib/builtins.mli lib/anf.ml lib/anf.mli lib/anf_ir.ml lib/anf_ir.mli lib/anf_scalar.ml lib/anf_scalar.mli lib/lambda_opt.ml lib/lambda_opt.mli lib/bounds.ml lib/bounds.mli lib/arc_pass.ml lib/arc_pass.mli lib/ccalls.ml lib/ccalls.mli lib/c_bindgen.ml lib/c_bindgen.mli lib/driver.ml lib/driver.mli lib/export_summary.ml lib/export_summary.mli lib/codegen_ctx.ml lib/codegen_analysis.ml lib/codegen_expr.ml lib/codegen_fn.ml lib/codegen.ml lib/codegen.mli lib/pipeline.ml lib/pipeline.mli lib/sys_util.ml lib/sys_util.mli lib/dune bin/dune dune-project
 
 # ------------------------------------------------------------- stdlib -----
 

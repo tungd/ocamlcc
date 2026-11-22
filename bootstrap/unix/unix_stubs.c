@@ -67,7 +67,15 @@ int64_t ocamlcc_unix_lstat(int64_t path_val)
     else if (S_ISLNK(st.st_mode)) kind = 4;
     else if (S_ISFIFO(st.st_mode)) kind = 5;
     else kind = 6;
-    return mk_ok(tag_int(kind));
+    return mk_ok(mk_pair(tag_int(kind), tag_int(st.st_mode & 07777)));
+}
+
+int64_t ocamlcc_unix_chmod(int64_t path_val, int64_t perm_val)
+{
+    if (!cstr_valid(path_val)) return mk_err(EINVAL);
+    if (chmod((const char *)(uintptr_t)path_val, (mode_t)(perm_val >> 1)) != 0)
+        return mk_err(errno);
+    return mk_ok(1);
 }
 
 int64_t ocamlcc_unix_rmdir(int64_t path_val)
