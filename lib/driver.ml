@@ -244,7 +244,13 @@ let build_xcframework cfg ~work_dir =
   in
   let* device = slice ~target_name:"ios-arm64" ~directory:"dev" ~archive:"ios_arm64.a" in
   let* simulator = slice ~target_name:"ios-sim-arm64" ~directory:"sim" ~archive:"ios_sim_arm64.a" in
-  Linker.xcframework ~verbose:cfg.verbose ~work_dir ~output ~header [device; simulator]
+  let headers = Option.map (fun source ->
+    let directory = Filename.concat work_dir "xcf_headers" in
+    mkdir_p directory;
+    write_file (Filename.concat directory (Filename.basename source)) (read_file source);
+    directory) header in
+  let slices = List.map (fun library -> { Linker.Xcframework_slice.library; headers }) [device; simulator] in
+  Linker.xcframework ~verbose:cfg.verbose ~output slices
 
 let build cfg =
   let target_name = Option.value ~default:"host" cfg.target in

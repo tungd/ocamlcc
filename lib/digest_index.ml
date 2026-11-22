@@ -10,15 +10,16 @@ type stamp = {
 
 external stamp : string -> stamp = "ocpkg_digest_stat"
 
-type t = {
-  verify : bool;
+type memo = {
   entries : (string, stamp * Sha256.t) Hashtbl.t;
   updates : (string, stamp * Sha256.t) Hashtbl.t;
 }
 
-let file index path =
-  if index.verify then Sha256.file path
-  else
+type t = Verify | Memoize of memo
+
+let file index path = match index with
+  | Verify -> Sha256.file path
+  | Memoize index ->
     try
       let before = stamp path in
       match Hashtbl.find_opt index.entries path with
@@ -75,10 +76,12 @@ let save path updates =
     Sys_util.write_atomic path (Buffer.contents data))
 
 let with_index ~cache ~workspace ~verify f =
-  let directory = Filename.concat cache "stat-index" in
-  let path = Filename.concat directory (Digest.to_hex (Digest.string workspace)) in
-  let entries = if verify then Hashtbl.create 0 else read path in
-  let index = {verify; entries; updates = Hashtbl.create 64} in
-  Fun.protect ~finally:(fun () ->
-    if Hashtbl.length index.updates > 0 then
-      try save path index.updates with Sys_error _ | Unix.Unix_error _ -> ()) (fun () -> f index)
+  if verify then f Verify
+  else
+    let directory = Filename.concat cache "stat-index" in
+    let path = Filename.concat directory (Digest.to_hex (Digest.string workspace)) in
+    let memo = {entries = read path; updates = Hashtbl.create 64} in
+    Fun.protect ~finally:(fun () ->
+      if Hashtbl.length memo.updates > 0 then
+        try save path memo.updates with Sys_error _ | Unix.Unix_error _ -> ())
+      (fun () -> f (Memoize memo))

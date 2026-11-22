@@ -24,7 +24,9 @@ val compile_many :
 
 val link : Request.t -> (string, string) result
 
+module Xcframework_slice : sig
+  type t = { library : string; headers : string option }
+end
+
 val xcframework :
-  ?header_dirs:string option list ->
-  verbose:bool -> work_dir:string -> output:string -> header:string option ->
-  string list -> (string, string) result
+  verbose:bool -> output:string -> Xcframework_slice.t list -> (string, string) result

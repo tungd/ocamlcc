@@ -80,24 +80,28 @@ let pack_stdlib ~index ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands
         Ok ())) in
   entry.directory
 
+module Stdlib_input = struct
+  type t = Prebuilt of string | Source of string
+
+  let files = function
+    | Prebuilt directory -> matching_files directory [".cmi"; ".a"; ".a.opt"; ".o"; ".exports"]
+    | Source path -> [path]
+end
+
 let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose =
   let* target = Target.resolve name in
   let* qbe = Target.qbe None in
   let* commands = Target.toolchain target in
   let* compiler = compiler_binary () |> require "occ" in
   let host = Target.is_host target in
-  let prebuilt =
+  let* stdlib_input =
     match Target.prebuilt_stdlib None with
     | Some dir when host && Sys.file_exists (Filename.concat dir "stdlib.cmi")
-                        && Option.is_some (Export_summary.find_archive dir) -> Some dir
-    | _ -> None
-  in
-  let* stdlib, stdlib_inputs = match prebuilt with
-    | Some directory ->
-        Ok (Some directory, matching_files directory [".cmi"; ".a"; ".a.opt"; ".o"; ".exports"])
-    | None ->
+                        && Option.is_some (Export_summary.find_archive dir) ->
+        Ok (Stdlib_input.Prebuilt dir)
+    | _ ->
         let+ source = Target.stdlib_sources None |> require "standard library sources" in
-        (None, [source])
+        Stdlib_input.Source source
   in
   let rt_sources = Option.fold ~none:[] ~some:(fun dir ->
         matching_files dir [".c"; ".h"; ".inc"; ".S"]) (Target.runtime_sources None) in
@@ -107,7 +111,8 @@ let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose =
         (Target.prebuilt_runtime ~single_thread None)
     else []
   in
-  let* digests = Build_cache.fingerprints ~index (compiler :: self () :: qbe :: stdlib_inputs @ rt_sources @ rt_objects) in
+  let* digests = Build_cache.fingerprints ~index
+      (compiler :: self () :: qbe :: Stdlib_input.files stdlib_input @ rt_sources @ rt_objects) in
   let options =
     ["schema", "1"; "target", target.name; "qbe-target", target.qbe_target;
      "rc", string_of_bool single_thread; "cc", commands.cc_prog; "ar", commands.ar_prog]
@@ -115,18 +120,13 @@ let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose =
     @ List.map (fun flag -> "cflag", flag) cflags
   in
   let fingerprint = Build_cache.key (options @ digests) in
-  let* stdlib =
-    match stdlib, stdlib_inputs with
-    | Some directory, _ -> Ok directory
-    | None, [stdlib_source] ->
-        pack_stdlib ~index ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose
-    | _ -> Error "cannot locate standard library"
-  in
-  let* fingerprint = match prebuilt with
-    | Some _ -> Ok fingerprint
-    | None ->
+  let* stdlib, fingerprint = match stdlib_input with
+    | Prebuilt directory -> Ok (directory, fingerprint)
+    | Source stdlib_source ->
+        let* stdlib =
+          pack_stdlib ~index ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose in
         let+ artifacts = Build_cache.fingerprints ~index (matching_files stdlib [".cmi"; ".a"; ".a.opt"]) in
-        Build_cache.key (("source toolchain", Sha256.to_hex fingerprint) :: artifacts)
+        stdlib, Build_cache.key (("source toolchain", Sha256.to_hex fingerprint) :: artifacts)
   in
   Ok {target; commands; qbe; stdlib; fingerprint; single_thread; cflags; verbose; cache; index}
 

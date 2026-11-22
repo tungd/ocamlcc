@@ -205,32 +205,17 @@ let compile ~tools ~scope ~wrapping ~exports ?cache ?(cflags = []) ~sources ~c_s
         compile_steps available imports output rest
   in
   let* output = compile_steps Names.empty [] initial steps in
+  (* Workspace C files can include headers beyond their source directory.
+     Their compiler inputs are independent of the OCaml unit cache. *)
   let rec compile_native index output = function
     | [] -> Ok {output with objects = List.rev output.objects; units = List.rev output.units}
     | file :: rest ->
         let basename = Printf.sprintf "c%d_%s.o" index (Filename.remove_extension (Filename.basename file)) in
-        let build path =
-          if tools.verbose then Printf.eprintf "compile %s\n%!" file;
-          Pkg_toolchain.compile_c tools
-            ~flags:(("-I" ^ Filename.dirname file) :: runtime_flags @ cflags) file (Filename.concat path basename)
-        in
-        let* artifact_directory, hit = match cache with
-          | None -> let+ () = build directory in (directory, false)
-          | Some store ->
-              let headers =
-                let dir = Filename.dirname file in
-                Sys.readdir dir |> Array.to_list |> List.filter (fun name -> Filename.check_suffix name ".h")
-                |> List.sort String.compare |> List.map (Filename.concat dir)
-              in
-              let* digests = Build_cache.fingerprints (file :: headers) in
-              let key = Build_cache.key (["toolchain", Sha256.to_hex tools.fingerprint; "output", basename] @ digests) in
-              let+ entry = Build_cache.ensure ~index:tools.index ~store ~key build in
-              copy_artifacts entry.directory directory;
-              entry.directory, entry.hit
-        in
-        let output = {output with objects = Filename.concat artifact_directory basename :: output.objects;
-          compiled = output.compiled + (if hit then 0 else 1);
-          hits = output.hits + (if hit then 1 else 0) } in
+        let obj = Filename.concat directory basename in
+        if tools.verbose then Printf.eprintf "compile %s\n%!" file;
+        let* () = Pkg_toolchain.compile_c tools
+            ~flags:(("-I" ^ Filename.dirname file) :: runtime_flags @ cflags) file obj in
+        let output = {output with objects = obj :: output.objects; compiled = output.compiled + 1} in
         compile_native (index + 1) output rest
   in
   compile_native 0 output c_sources

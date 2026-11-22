@@ -2,18 +2,23 @@ open Ocpkg_format
 open Sys_util
 open Result_syntax
 
+module Product = struct
+  type t = Native of { target : string; kind : kind option } | Xcframework
+end
+
 type options = {
-  target : string;
-  kind : kind option;
+  product : Product.t;
   output : string option;
   single_thread : bool;
   verbose : bool;
   verify_cache : bool;
-  xcframework : bool;
   emit_header : string option;
 }
 
-let defaults = {target = "host"; kind = None; output = None; single_thread = false; verbose = false; verify_cache = false; xcframework = false; emit_header = None}
+let defaults = {
+  product = Native {target = "host"; kind = None}; output = None;
+  single_thread = false; verbose = false; verify_cache = false; emit_header = None;
+}
 
 type pack = {
   recipe : recipe;
@@ -173,9 +178,18 @@ let entry_point tools store modules =
     Sys.remove ssa) in
   Filename.concat entry.directory "entry.o"
 
-let digest_objects index paths =
-  let+ digests = Build_cache.fingerprints ~index paths in
-  List.map (fun (_, digest) -> "object", digest) digests
+let digest_objects index ~work_dir paths =
+  let temporary = work_dir ^ Filename.dir_sep in
+  let rec collect fields = function
+    | [] -> Ok (List.rev fields)
+    | path :: rest ->
+        let file =
+          if String.starts_with ~prefix:temporary path then Sha256.file
+          else Digest_index.file index in
+        let* digest = file path in
+        collect (("object", Sha256.to_hex digest) :: fields) rest
+  in
+  collect [] paths
 
 let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_objects ~dependency_ldflags =
   let mode = match kind with
@@ -193,20 +207,35 @@ let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_object
         ["-Xlinker"; "-install_name"; "-Xlinker"; output] @ ldflags
     | _ -> ldflags
   in
-  let* fingerprints = digest_objects tools.index (user_objects @ internal_objects) in
-  let key = Build_cache.key
-      (["toolchain", Sha256.to_hex tools.Pkg_toolchain.fingerprint;
-        "mode", (match kind with Exe -> "exe" | Static -> "static" | Shared -> "shared");
-        "output", output]
-        @ List.map (fun flag -> "ldflag", flag) extra_ldflags @ fingerprints) in
-  let link_receipt = Filename.concat workspace.root ".ocpkg/cache/link" in
-  mkdir_p link_receipt;
-  let receipt = Filename.concat link_receipt (Sha256.to_hex key) in
+  let* receipt =
+    (* Custom flags can load libraries and other files outside the object list. *)
+    if kind <> Static && ldflags <> [] then Ok None
+    else
+      let+ fingerprints = digest_objects tools.index ~work_dir (user_objects @ internal_objects) in
+      let key = Build_cache.key
+          (["toolchain", Sha256.to_hex tools.Pkg_toolchain.fingerprint;
+            "mode", (match kind with Exe -> "exe" | Static -> "static" | Shared -> "shared");
+            "output", output]
+            @ List.map (fun flag -> "ldflag", flag) extra_ldflags @ fingerprints) in
+      let link_receipt = Filename.concat workspace.root ".ocpkg/cache/link" in
+      mkdir_p link_receipt;
+      Some (Filename.concat link_receipt (Sha256.to_hex key))
+  in
   let hit =
-    Sys.file_exists receipt && Sys.file_exists output &&
-    match Digest_index.file tools.index output with
-    | Ok digest -> String.trim (read_file receipt) = Sha256.to_hex digest
-    | Error _ -> false
+    Option.exists (fun receipt ->
+      Sys.file_exists receipt &&
+      match Unix.lstat output with
+      | {Unix.st_kind = Unix.S_REG; _} ->
+          let usable =
+            if kind <> Exe || Sys.win32 then true
+            else match Unix.access output [Unix.X_OK] with
+            | () -> true
+            | exception Unix.Unix_error ((Unix.EACCES | Unix.ENOENT), _, _) -> false
+          in
+          usable && (match Digest_index.file tools.index output with
+            | Ok digest -> String.trim (read_file receipt) = Sha256.to_hex digest
+            | Error _ -> false)
+      | _ | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false) receipt
   in
   if hit then Ok output
   else begin
@@ -218,9 +247,14 @@ let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_object
         Linker.link {mode; target = tools.target; toolchain = tools.commands; work_dir;
           output = temporary; user_objects; internal_objects; extra_ldflags; verbose = tools.verbose}
       in
-      let+ digest = Sha256.file temporary in
+      let+ seal =
+        match receipt with
+        | None -> Ok None
+        | Some receipt ->
+            let+ digest = Sha256.file temporary in
+            Some (receipt, Sha256.to_hex digest ^ "\n") in
       Unix.rename temporary output;
-      write_if_changed receipt (Sha256.to_hex digest ^ "\n");
+      Option.iter (fun (receipt, digest) -> write_if_changed receipt digest) seal;
       output)
   end
 
@@ -234,41 +268,46 @@ let app_shims tools scope (workspace : Pkg_project.t) options ~sources ~cache ~o
   | [], None -> Ok []
   | [], Some _ -> Error "--emit-header requires at least one .mli input"
   | files, emit_header ->
-      let output = Option.value ~default:(Filename.remove_extension output ^ ".h") emit_header in
-      let header = Filename.basename output in
+      let header_output = Option.value ~default:(Filename.remove_extension output ^ ".h") emit_header in
+      let header = Filename.basename header_output in
       let interfaces = List.map (fun path -> Pipeline.module_name_of_file path, path) files in
       let include_dirs = compiled_dir :: tools.Pkg_toolchain.stdlib :: scope.Pkg_compile.visible in
       let* digests = Build_cache.fingerprints (files @ files_with_suffix compiled_dir ".cmi") in
       let digests = List.map (fun (path, hash) -> Filename.basename path, hash) digests in
       let dependencies = List.map (fun key -> "dependency", Sha256.to_hex key) scope.package_keys in
-      let key = Build_cache.key (["toolchain", Sha256.to_hex tools.fingerprint; "header", header]
+      let key = Build_cache.key (["toolchain", Sha256.to_hex tools.fingerprint; "bindings", "1"; "header", header]
           @ dependencies @ digests) in
-      let+ entry = Build_cache.ensure ~index:tools.Pkg_toolchain.index ~store:cache ~key (fun directory ->
+      let* entry = Build_cache.ensure ~index:tools.Pkg_toolchain.index ~store:cache ~key (fun directory ->
+        let headers = Filename.concat directory "headers" in
         let* generated = C_bindgen.generate_headers ~include_dirs ~nopervasives:false ~nostdlib:true
-            ~work_dir:directory ~output:(Filename.concat directory header) interfaces in
+            ~work_dir:directory ~output:(Filename.concat headers header) interfaces in
         let pic = if tools.target.os = Windows then [] else ["-fPIC"] in
-        let flags = ["-std=c99"; "-O2"; "-I" ^ directory] @ pic @ tools.cflags in
+        let flags = ["-std=c99"; "-O2"; "-I" ^ headers] @ pic @ tools.cflags in
         let+ _ = Linker.compile_many ~verbose:tools.verbose ~work_dir:directory
             tools.commands flags generated.shim_files in
         List.iter Sys.remove generated.shim_files) in
-      let destination = Filename.dirname output in
+      let destination = Filename.dirname header_output in
+      let headers = files_with_suffix (Filename.concat entry.directory "headers") "" in
       mkdir_p destination;
-      List.iter (fun path ->
-        write_if_changed (Filename.concat destination (Filename.basename path)) (read_file path))
-        (files_with_suffix entry.directory ".h"
-         |> fun paths ->
-           let primary = Filename.concat entry.directory header in
-           if List.mem primary paths then paths else primary :: paths);
-      files_with_suffix entry.directory ".o"
+      let collides path =
+        Filename.basename path = Filename.basename output &&
+        Sys.file_exists (Filename.dirname output) &&
+        Unix.realpath destination = Unix.realpath (Filename.dirname output)
+      in
+      if List.exists collides headers then Error "the library or executable and its headers need distinct paths"
+      else begin
+        List.iter (fun path ->
+          write_if_changed (Filename.concat destination (Filename.basename path)) (read_file path)) headers;
+        Ok (files_with_suffix entry.directory ".o")
+      end
 
-let build_target (workspace : Pkg_project.t) (options : options) selected_test =
-  let kind = Option.value ~default:workspace.manifest.kind options.kind in
+let build_target (workspace : Pkg_project.t) (options : options) ~target ~kind selected_test =
   let single_thread = options.single_thread || workspace.manifest.single_thread_rc in
   let* cache = Pkg_project.cache_dir () in
   Digest_index.with_index ~cache ~workspace:workspace.root ~verify:options.verify_cache (fun index ->
   let* lock = Pkg_project.read_lock workspace in
   let* () = Pkg_vendor.verify ~index ~vendor:(Pkg_project.vendor_dir workspace) lock.packages in
-  let* tools = Pkg_toolchain.prepare ~index ~cache ~target:options.target ~single_thread
+  let* tools = Pkg_toolchain.prepare ~index ~cache ~target ~single_thread
       ~cflags:workspace.manifest.cflags ~verbose:options.verbose in
   let* packs = prepare_dependencies tools workspace lock in
   let catalog_exe =
@@ -347,15 +386,16 @@ let build_xcframework (workspace : Pkg_project.t) options =
       let path = Filename.concat temporary (name ^ ".a") in
       let directory = if headers then Some (Filename.concat temporary name) else None in
       let emit_header = Option.map (fun dir -> Filename.concat dir header_basename) directory in
-      let options = {options with target; kind = Some Static; output = Some path; emit_header} in
-      let+ library = build_target workspace options None in
-      library, directory
+      let options = {options with output = Some path; emit_header} in
+      let+ library = build_target workspace options ~target ~kind:Static None in
+      { Linker.Xcframework_slice.library; headers = directory }
     in
-    let* device, device_headers = slice "ios-arm64" "device" in
-    let* simulator, simulator_headers = slice "ios-sim-arm64" "simulator" in
-    let staged = Filename.concat temporary (Filename.basename output) in
-    let* _ = Linker.xcframework ~verbose:options.verbose ~work_dir:temporary ~output:staged ~header:None
-      ~header_dirs:[device_headers; simulator_headers] [device; simulator] in
+    let* device = slice "ios-arm64" "device" in
+    let* simulator = slice "ios-sim-arm64" "simulator" in
+    let product = Filename.concat temporary "product" in
+    Unix.mkdir product 0o700;
+    let staged = Filename.concat product (Filename.basename output) in
+    let* _ = Linker.xcframework ~verbose:options.verbose ~output:staged [device; simulator] in
     let previous = Filename.concat temporary ".previous" in
     let had_previous = Sys.file_exists output in
     if had_previous && not (Sys.file_exists (Filename.concat output "Info.plist")) then
@@ -365,7 +405,7 @@ let build_xcframework (workspace : Pkg_project.t) options =
       (try Unix.rename staged output with error ->
         if had_previous then Unix.rename previous output;
         raise error);
-      (match options.emit_header, device_headers with
+      (match options.emit_header, device.headers with
        | Some destination, Some directory ->
            mkdir_p (Filename.dirname destination);
            Array.iter (fun file ->
@@ -375,25 +415,31 @@ let build_xcframework (workspace : Pkg_project.t) options =
       Ok output
     end)
 
-let is_xcframework options = options.xcframework || options.target = "ios-xcframework"
-
 let build workspace options =
   protect (fun () ->
-    if is_xcframework options then build_xcframework workspace options
-    else build_target workspace options None)
+    Pkg_project.with_dependencies workspace (fun workspace ->
+      match options.product with
+      | Xcframework -> build_xcframework workspace options
+      | Native {target; kind} ->
+          let kind = Option.value ~default:workspace.manifest.kind kind in
+          build_target workspace options ~target ~kind None))
+
+let executable_target command = function
+  | Product.Native {target; kind = None | Some Exe} -> Ok target
+  | Native {kind = Some (Shared | Static); _} | Xcframework ->
+      Error (command ^ " requires an executable target")
 
 let run workspace options args =
   protect (fun () ->
-    if is_xcframework options then Error "run requires an executable target"
-    else
-      let* output = build workspace {options with kind = Some Exe} in
-      Unix.chdir workspace.Pkg_project.root;
-      Unix.execv output (Array.of_list (output :: args)))
+    let* target = executable_target "run" options.product in
+    let* output = Pkg_project.with_dependencies workspace (fun workspace ->
+      build_target workspace options ~target ~kind:Exe None) in
+    Unix.chdir workspace.Pkg_project.root;
+    Unix.execv output (Array.of_list (output :: args)))
 
 let test workspace options selectors args =
   protect (fun () ->
-    if is_xcframework options then Error "test requires an executable target"
-    else
+      let* target = executable_target "test" options.product in
       let tests = workspace.Pkg_project.manifest.tests in
       let choose value =
         List.find_opt (fun (test : test) -> Package_name.to_string test.name = value) tests
@@ -414,7 +460,8 @@ let test workspace options selectors args =
         | test :: rest ->
             let name = Package_name.to_string test.name in
             let result =
-              let* path = build_target workspace {options with kind = Some Exe; output = None} (Some test) in
+              let* path = Pkg_project.with_dependencies workspace (fun workspace ->
+                build_target workspace {options with output = None} ~target ~kind:Exe (Some test)) in
               run_cmd ~verbose:options.verbose path args in
             match result with
             | Ok () -> Printf.printf "PASS %s\n%!" name; run (passed + 1) failed rest

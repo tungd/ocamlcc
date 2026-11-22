@@ -39,8 +39,9 @@ Symlinks and special files are rejected.
 `ocpkg.mod` declares the project kind, entry point, source paths, and direct
 requirements. `ocpkg.lock` records the selected catalog digest and resolved
 recipes in sorted package order. The line-based
-`packages/snapshots/default.snap` catalog includes the Crunch recipes and
-Astring, Base64, Bytesrw, Fmt, Jsonm, Logs, Re, and Uutf.
+`packages/snapshots/default.snap` catalog includes the Crunch recipes, the
+ARC Unix descriptor package, and Astring, Base64, Bytesrw, Fmt, Jsonm, Logs,
+Re, and Uutf. [ARC Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility)
 Package names, relative paths, compilation inputs, and SHA-256 values are
 validated before they enter the parsed model.
 
@@ -64,9 +65,15 @@ for the full transfer, and stream at most 64 MiB to the archive cache.
 `query`, and `vendor` use the locked recipes. `add`, `upgrade`, and online
 `vendor` can download a recipe's archive.
 
-`add` accepts multiple `name[@version]` selectors. `remove` drops direct
+`add` accepts multiple `name[@version]` selectors and deduplicates requests
+that resolve to the same pin. `remove` drops direct
 requirements and unused vendor trees. `upgrade` refreshes selected direct
 dependencies, or all direct dependencies when invoked without names.
+`tidy` regenerates the lock for the current manifest, updates existing
+vendor trees from offline sources, and leaves missing packages for
+`vendor`. Dependency edits check existing trees before moving them, undo
+vendor moves on publication failure, and share the project lock with
+commands that read the lock or build against the vendor tree.
 `clean` clears workspace build artifacts. `clean --global` clears shared
 compiled artifacts, downloaded archives, and the stat index. `version`
 prints the version declared in `ocamlcc.opam`.
@@ -92,15 +99,19 @@ downstream executable or shared-library linker arguments with `ldflag`.
 
 Workspace units use the local `.ocpkg/cache/unit/` store, keyed by source
 bytes, imported interface and export digests, and effective dependency
-fingerprints. The linker reuses an output whose inputs and digest still
-match. The incremental test measures zero compiler and linker invocations
+fingerprints. Workspace C sources compile on each build to pick up current
+headers. The linker reuses a regular output whose inputs and digest still
+match, with an execute permission check for executables. Executables and
+shared libraries with custom linker flags resolve those inputs on every link.
+The incremental test measures zero compiler and linker invocations
 on an unchanged rebuild, then one compiled unit and relinking after a leaf
 edit. `run` invokes the executable. `test` builds the selected manifest
 entries, forwards arguments after `--`, and reports pass and failure counts.
 Static and shared library builds cache their generated C bindings
-alongside unit outputs. The build
-can emit public headers at an explicit path and package ARM64 iOS device
-and simulator static archives as an XCFramework. Mach-O shared libraries
+alongside unit outputs. An explicit header path publishes the umbrella
+header and every generated companion header. The CLI rejects conflicting
+native and XCFramework output modes. An XCFramework pairs each ARM64 iOS
+device or simulator archive with its own headers. Mach-O shared libraries
 record the final output path as the install name for atomic publication.
 
 On 2026-11-22, a warm, unchanged Cmdliner workspace in an extracted
@@ -108,6 +119,12 @@ macOS ARM64 bundle measured nine runs per command and toolchain. Median
 `ocpkg build` time dropped from 707.3 ms to 13.7 ms, and median `ocpkg run`
 time dropped from 706.0 ms to 15.4 ms. One warm build with `--verify-cache`
 took 693.3 ms.
+
+The 2026-11-23 review rechecked the unchanged Cmdliner workspace from a
+relocated macOS ARM64 bundle. Over nine warm runs per command, the medians
+were 15.3 ms for `ocpkg build` and 17.7 ms for `ocpkg run`. A reader blocked
+while dependency metadata was being published and succeeded after the writer
+released the project lock.
 
 The native Crunch integration ran `ocpkg vendor` and `ocpkg build` on
 macOS ARM64. All nine generation and runtime checks passed, including
@@ -143,6 +160,9 @@ and toolchain identities from their historical runs.
 `ninja -j1 ocpkg_catalog` vendors and tests the public APIs of Astring,
 Base64, Bytesrw, Fmt, Jsonm, Logs, Re, and Uutf. It passed on macOS ARM64
 and Ubuntu 24.04 ARM64. The Fmt and Logs recipes cover their core libraries.
+The review also passed `ocpkg_test` and `dist_smoke` on both hosts. On macOS,
+the device and simulator XCFramework slices each contained a compilable
+umbrella header and its companion headers.
 
 Uucp 17.0.0's generated Unicode block table initially hit the ARM64
 conditional branch range limit. With the QBE emitter fix, a custom snapshot

@@ -168,6 +168,26 @@ let () =
     Pkg_vendor.verify ~vendor [recipe] |> require)
 
 let () =
+  test "failed dependency publication restores the verified vendor tree" (fun root ->
+    let source = Filename.concat root "source" in
+    let file = Filename.concat source "main.ml" in
+    Unix.mkdir source 0o755;
+    Sys_util.write_file file "let version = 1\n";
+    let previous = specimen "app" (Sha256.tree_hash source |> require) in
+    let vendor = Filename.concat root "vendor" in
+    let cache = Filename.concat root "archives" in
+    Pkg_vendor.vendor ~fetch:never_fetch ~offline:true ~cache ~vendor ~project_root:root
+      ~catalog_root:root [previous] |> require;
+    Sys_util.write_file file "let version = 2\n";
+    let next = {previous with tree = Sha256.tree_hash source |> require} in
+    let publish () =
+      Pkg_vendor.verify ~vendor [next] |> require;
+      Error "simulated metadata failure" in
+    reject "simulated metadata failure"
+      (Pkg_vendor.reconcile ~mode:Refresh ~cache:(fun () -> Ok cache) ~directory:vendor
+         ~project_root:root ~catalog_root:root ~previous:[previous] ~next:[next] publish);
+    Pkg_vendor.verify ~vendor [previous] |> require;
+    assert (Array.to_list (Sys.readdir vendor) |> List.sort String.compare = [".ocpkg.lock"; "app"]));
   test "vendor root symlinks are refused" (fun root ->
     let outside = Filename.concat root "elsewhere" in
     Unix.mkdir outside 0o750;

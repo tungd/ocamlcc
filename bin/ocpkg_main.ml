@@ -24,129 +24,27 @@ let usage = {|Usage: ocpkg <command>
 let display_package recipe =
   Printf.printf "%s %s\n" (Package_name.to_string recipe.package.name) recipe.package.version
 
-let acquire ~offline (workspace : Pkg_project.t) lock =
-  let* cache = Pkg_project.archive_cache () in
-  Pkg_vendor.vendor ~fetch:Http_fetch.download ~offline ~cache
-    ~vendor:(Pkg_project.vendor_dir workspace) ~project_root:workspace.root
-    ~catalog_root:(Pkg_project.catalog_root workspace) lock.packages
-
-let catalog_package (catalog : Pkg_project.catalog) key =
-  match List.find_opt (fun recipe -> recipe.package.name = key) catalog.recipes with
-  | Some recipe -> Ok recipe
-  | None -> Error ("missing package: " ^ Package_name.to_string key)
-
-let map_result f values =
-  let rec collect acc = function
-    | [] -> Ok (List.rev acc)
-    | value :: rest ->
-        let* value = f value in
-        collect (value :: acc) rest
-  in
-  collect [] values
-
-let update workspace previous next =
-  let* cache = Pkg_project.archive_cache () in
-  Pkg_vendor.reconcile ~fetch:Http_fetch.download ~cache
-    ~directory:(Pkg_project.vendor_dir workspace) ~project_root:workspace.Pkg_project.root
-    ~catalog_root:(Pkg_project.catalog_root workspace) ~previous:previous.packages
-    ~next:next.packages (fun () -> Pkg_project.write_dependencies workspace next)
-
-let replace_requirements (manifest : manifest) (selected : requirement list) =
-  let names = List.map (fun (item : requirement) -> item.name) selected in
-  {manifest with requirements = selected @ List.filter (fun (item : requirement) ->
-    not (List.mem item.name names)) manifest.requirements}
-
-let pin_selection workspace previous (catalog : Pkg_project.catalog) selected =
-  let* latest = Pkg_vendor.resolve ~catalog:catalog.recipes selected in
-  let names = List.map (fun recipe -> recipe.package.name) latest in
-  let retained = List.filter (fun recipe -> not (List.mem recipe.package.name names)) previous.packages in
-  let known = List.map (fun recipe -> recipe.package.name) (latest @ retained) in
-  let recipes = latest @ retained @ List.filter (fun recipe ->
-    not (List.mem recipe.package.name known)) catalog.recipes in
-  Pkg_project.make_lock workspace {catalog with recipes}
-
-let add (workspace : Pkg_project.t) specs =
-  let missing = {catalog = workspace.manifest.snapshot; digest = Sha256.string ""; packages = []} in
-  let* previous = Pkg_project.read_lock ~missing workspace in
-  let* catalog = Pkg_project.catalog workspace in
-  let specs =
-    match specs with
-    | [name; version] when not (String.contains name '@') &&
-                           List.exists (fun recipe -> Package_name.to_string recipe.package.name = name &&
-                             recipe.package.version = version) catalog.recipes &&
-                           not (List.exists (fun recipe -> Package_name.to_string recipe.package.name = version) catalog.recipes) ->
-        [name ^ "@" ^ version]
-    | specs -> specs
-  in
-  let request spec =
-    let raw_name, version = match String.index_opt spec '@' with
-      | Some i -> String.sub spec 0 i, Some (String.sub spec (i + 1) (String.length spec - i - 1))
-      | None -> spec, None in
-    let* name = Package_name.of_string raw_name in
-    let* recipe = catalog_package catalog name in
-    Ok {recipe.package with version = Option.value ~default:recipe.package.version version}
-  in
-  let* selected = map_result request (List.sort_uniq String.compare specs) in
-  let names = List.map (fun (item : requirement) -> item.name) selected in
-  if List.length names <> List.length (List.sort_uniq Package_name.compare names) then
-    Error "a package was requested with multiple versions"
-  else
-    let workspace = {workspace with Pkg_project.manifest = replace_requirements workspace.manifest selected} in
-    let* lock = pin_selection workspace previous catalog selected in
-    let+ () = update workspace previous lock in
-    List.iter (fun (item : requirement) ->
-      Printf.printf "%s %s\n" (Package_name.to_string item.name) item.version) selected
-
-let direct_names (manifest : manifest) specs =
-  let* names = map_result Package_name.of_string specs in
-  match List.find_opt (fun name ->
-    not (List.exists (fun (item : requirement) -> item.name = name) manifest.requirements)) names with
-  | Some name -> Error ("not a direct dependency: " ^ Package_name.to_string name)
-  | None -> Ok (List.sort_uniq Package_name.compare names)
-
-let remove (workspace : Pkg_project.t) specs =
-  let manifest = workspace.manifest in
-  let* previous = Pkg_project.read_lock workspace in
-  let* names = direct_names manifest specs in
-  let requirements = List.filter (fun (item : requirement) -> not (List.mem item.name names))
-    manifest.requirements in
-  let* packages = Pkg_vendor.resolve ~catalog:previous.packages requirements in
-  let replacements = List.filter (fun (name, _) ->
-    List.exists (fun recipe -> name = recipe.package.name) packages) manifest.replacements in
-  let workspace = {workspace with manifest = {manifest with requirements; replacements}} in
-  update workspace previous {previous with packages}
-
-let upgrade (workspace : Pkg_project.t) specs =
-  let manifest = workspace.manifest in
-  let* previous = Pkg_project.read_lock workspace in
-  let* catalog = Pkg_project.catalog workspace in
-  let* names = if specs = [] then Ok (List.map (fun (item : requirement) -> item.name) manifest.requirements)
-    else direct_names manifest specs in
-  let* selected = map_result (fun name -> let+ recipe = catalog_package catalog name in recipe.package) names in
-  let workspace = {workspace with manifest = replace_requirements manifest selected} in
-  let* lock = pin_selection workspace previous catalog selected in
-  update workspace previous lock
-
 let clean directory names =
   try List.iter (fun name -> Sys_util.rm_rf (Filename.concat directory name)) names; Ok ()
   with
   | Sys_error message -> Error message
   | Unix.Unix_error (error, _, path) -> Error (path ^ ": " ^ Unix.error_message error)
 
-let vendor workspace ~offline =
-  let* lock = Pkg_project.read_lock workspace in
-  let+ () = acquire ~offline workspace lock in
-  Printf.printf "Verified %d vendored packages\n" (List.length lock.packages)
+let print_verified count = Printf.printf "Verified %d vendored packages\n" count
 
-let tidy workspace =
-  let* catalog = Pkg_project.catalog workspace in
-  let* lock = Pkg_project.make_lock workspace catalog in
-  Pkg_project.write_dependencies workspace lock
+let add workspace specs =
+  let+ selected = Pkg_project.add ~fetch:Http_fetch.download workspace specs in
+  List.iter (fun (item : requirement) ->
+    Printf.printf "%s %s\n" (Package_name.to_string item.name) item.version) selected
+
+let vendor workspace ~offline =
+  let+ count = Pkg_project.vendor ~fetch:Http_fetch.download ~offline workspace in
+  print_verified count
 
 let verify workspace =
   let* lock = Pkg_project.read_lock workspace in
   let+ () = Pkg_vendor.verify ~vendor:(Pkg_project.vendor_dir workspace) lock.packages in
-  Printf.printf "Verified %d vendored packages\n" (List.length lock.packages)
+  print_verified (List.length lock.packages)
 
 let query workspace = function
   | None ->
@@ -177,8 +75,8 @@ let with_project command =
   let* workspace = Pkg_project.open_workspace () in
   command workspace
 
-let with_dependency_update command =
-  with_project (fun workspace -> Pkg_project.with_dependency_update workspace command)
+let with_dependencies command =
+  with_project (fun workspace -> Pkg_project.with_dependencies workspace command)
 
 let split_args args =
   let rec split prefix = function
@@ -189,22 +87,43 @@ let split_args args =
   split [] args
 
 let build_options args =
-  let rec parse (options : Workspace.options) positional = function
-    | [] -> Ok (options, List.rev positional)
-    | "--target" :: target :: rest -> parse {options with target} positional rest
-    | "-o" :: path :: rest -> parse {options with output = Some path} positional rest
-    | "--exe" :: rest -> parse {options with kind = Some Exe} positional rest
-    | "--shared" :: rest -> parse {options with kind = Some Shared} positional rest
-    | "--static" :: rest -> parse {options with kind = Some Static} positional rest
-    | "--xcframework" :: rest -> parse {options with xcframework = true} positional rest
-    | "--emit-header" :: path :: rest -> parse {options with emit_header = Some path} positional rest
-    | "--verify-cache" :: rest -> parse {options with verify_cache = true} positional rest
-    | "--single-thread-rc" :: rest -> parse {options with single_thread = true} positional rest
-    | ("-v" | "--verbose") :: rest -> parse {options with verbose = true} positional rest
-    | flag :: _ when String.starts_with ~prefix:"-" flag -> Error ("unknown build option: " ^ flag)
-    | arg :: rest -> parse options (arg :: positional) rest
+  let product target mode =
+    let native kind =
+      let target = Option.value ~default:"host" target in
+      Ok (Workspace.Product.Native {target; kind}) in
+    match target, mode with
+    | (None | Some "ios-xcframework"), Some `Xcframework
+    | Some "ios-xcframework", None -> Ok Workspace.Product.Xcframework
+    | Some "ios-xcframework", Some (`Native _) -> Error "conflicting output modes"
+    | Some _, Some `Xcframework -> Error "--xcframework selects its own targets"
+    | _, None -> native None
+    | _, Some (`Native kind) -> native (Some kind)
   in
-  parse Workspace.defaults [] args
+  let rec parse (options : Workspace.options) target mode positional = function
+    | [] ->
+        let+ product = product target mode in
+        {options with product}, List.rev positional
+    | "--target" :: name :: rest -> parse options (Some name) mode positional rest
+    | "-o" :: path :: rest -> parse {options with output = Some path} target mode positional rest
+    | ("--exe" | "--shared" | "--static" | "--xcframework" as flag) :: rest ->
+        let selected =
+          match flag with
+          | "--exe" -> `Native Exe
+          | "--shared" -> `Native Shared
+          | "--static" -> `Native Static
+          | _ -> `Xcframework
+        in
+        if mode <> None && mode <> Some selected then Error "conflicting output modes"
+        else parse options target (Some selected) positional rest
+    | "--emit-header" :: path :: rest ->
+        parse {options with emit_header = Some path} target mode positional rest
+    | "--verify-cache" :: rest -> parse {options with verify_cache = true} target mode positional rest
+    | "--single-thread-rc" :: rest -> parse {options with single_thread = true} target mode positional rest
+    | ("-v" | "--verbose") :: rest -> parse {options with verbose = true} target mode positional rest
+    | flag :: _ when String.starts_with ~prefix:"-" flag -> Error ("unknown build option: " ^ flag)
+    | arg :: rest -> parse options target mode (arg :: positional) rest
+  in
+  parse Workspace.defaults None None [] args
 
 let run = function
   | [] | ["-h"] | ["--help"] -> print_string usage; Ok ()
@@ -216,22 +135,22 @@ let run = function
       let+ _ = Pkg_project.initialize ~name:(Some name) in
       print_endline "Created ocpkg.mod"
   | ("add" | "get") :: (_ :: _ as specs) ->
-      with_dependency_update (fun workspace -> add workspace specs)
+      with_project (fun workspace -> add workspace specs)
   | "remove" :: (_ :: _ as specs) ->
-      with_dependency_update (fun workspace -> remove workspace specs)
+      with_project (fun workspace -> Pkg_project.remove workspace specs)
   | "upgrade" :: specs ->
-      with_dependency_update (fun workspace -> upgrade workspace specs)
+      with_project (fun workspace -> Pkg_project.upgrade ~fetch:Http_fetch.download workspace specs)
   | ["clean"] -> with_project (fun workspace -> clean (Filename.concat workspace.root ".ocpkg") ["bin"; "cache"])
   | ["clean"; "--global"] ->
       let* cache = Pkg_project.cache_dir () in
       clean cache ["pkg"; "stdlib"; "runtime"; "stat-index"; "archives"]
   | ["version"] | ["--version"] -> print_endline ("ocpkg " ^ Ocpkg_version.value); Ok ()
-  | ["vendor"] -> with_dependency_update (fun workspace -> vendor workspace ~offline:false)
-  | ["vendor"; "--offline"] -> with_dependency_update (fun workspace -> vendor workspace ~offline:true)
-  | ["tidy"] -> with_dependency_update tidy
-  | ["verify"] -> with_project verify
-  | ["query"] -> with_project (fun workspace -> query workspace None)
-  | ["query"; key] -> with_project (fun workspace -> query workspace (Some key))
+  | ["vendor"] -> with_project (fun workspace -> vendor workspace ~offline:false)
+  | ["vendor"; "--offline"] -> with_project (fun workspace -> vendor workspace ~offline:true)
+  | ["tidy"] -> with_project Pkg_project.tidy
+  | ["verify"] -> with_dependencies verify
+  | ["query"] -> with_dependencies (fun workspace -> query workspace None)
+  | ["query"; key] -> with_dependencies (fun workspace -> query workspace (Some key))
   | "build" :: flags ->
       let* options, positional = build_options flags in
       if positional <> [] then Error "build expects options"

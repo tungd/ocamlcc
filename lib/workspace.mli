@@ -1,11 +1,15 @@
+module Product : sig
+  type t =
+    | Native of { target : string; kind : Ocpkg_format.kind option }
+    | Xcframework
+end
+
 type options = {
-  target : string;
-  kind : Ocpkg_format.kind option;
+  product : Product.t;
   output : string option;
   single_thread : bool;
   verbose : bool;
   verify_cache : bool;
-  xcframework : bool;
   emit_header : string option;
 }
 

@@ -45,6 +45,16 @@ for flavor in shared static; do
         exit 1
     fi
 done
+printf 'val twice : int -> int\n' > src/other.mli
+printf 'let twice n = n * 2\n' > src/other.ml
+printf 'public_mli src/other.mli\n' >> ocpkg.mod
+"$runner" build --static --emit-header 'public headers/bindings.hpp' -o libboth.a
+printf '#include "bindings.hpp"\n' | cc -x c -I 'public headers' -fsyntax-only -
+if "$runner" build --static --emit-header collide.a -o ./collide.a > collision.out 2> collision.log; then
+    exit 1
+fi
+grep -q 'need distinct paths' collision.log
+test ! -e collide.a
 echo 'native ocpkg library outputs: PASS'
 
 mkdir -p native support src-bin
@@ -82,4 +92,8 @@ printf 'let () = print_int (Fixture.value ())\n' > src-bin/main.ml
 "$runner" add fixture
 mv fixture.snap fixture.old.snap
 test "$("$runner" run)" = 42
+printf 'int support_value(void) { return 49; }\n' > support/value.c
+cc -c support/value.c -o support/value.o
+ar rcs support/libocpkgfixture.a support/value.o
+test "$("$runner" run)" = 50
 echo 'native ocpkg recipe C and linker flags: PASS'

@@ -44,7 +44,7 @@ pkg second 1
   file second.ml <= data.ml
 SNAP
 "$runner" tidy
-"$runner" add first second@1
+"$runner" add first first@1 second@1
 test "$("$runner" query)" = "$(printf 'first 1\nsecond 1')"
 test "$("$runner" test)" = '0 passed, 0 failed (0 tests)'
 "$runner" version | grep -Eq '^ocpkg [0-9]'
@@ -61,9 +61,20 @@ cp first/data.ml vendor/first/data.ml
 "$runner" upgrade first
 test "$(cat vendor/first/data.ml)" = 'let value = 3'
 test "$("$runner" query)" = "$(printf 'first 2\nsecond 1')"
+# A same-version recipe refresh must keep a previously vendored project usable.
+sed -e 's/local upgraded/local first/' \
+    -e 's/7469e6bcefa82be6f6632e00f9b30099fc6fdf60eaeb5645cb3457db4ebef0c8/4ee035a4450787b68d3cc16e298a0e59412249fdc5a577414ded234e2e07cfd2/' \
+    local.snap > newer.snap
+mv newer.snap local.snap
+"$runner" tidy
+"$runner" verify
+test "$(cat vendor/first/data.ml)" = 'let value = 1'
+rm -r vendor/second
 "$runner" remove first
 test ! -e vendor/first
+test ! -e vendor/second
 test "$("$runner" query)" = 'second 1'
+"$runner" vendor --offline
 mkdir -p .ocpkg/cache .ocpkg/bin "$OCPKG_CACHE/pkg"
 "$runner" clean
 "$runner" clean --global

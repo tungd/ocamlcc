@@ -10,7 +10,9 @@ vendors packages from the snapshot. `ocpkg remove NAME ...` drops direct
 requirements and unused vendor trees. `ocpkg upgrade [NAME ...]` refreshes
 the selected direct dependencies or all direct dependencies when given no
 names. `ocpkg tidy` regenerates the lock from the manifest and the current
-snapshot. `ocpkg query` lists the locked closure.
+snapshot. It updates existing vendor trees from offline sources and leaves
+missing packages for a subsequent `ocpkg vendor` command. `ocpkg query` lists
+the locked closure.
 
 Commit `ocpkg.mod` and `ocpkg.lock` alongside the project sources. The lock
 contains the recipes used by `build`, `run`, `test`, and `vendor --offline`,
@@ -34,7 +36,10 @@ forwards arguments to the selected tests and prints the result count. Use
 device and simulator libraries. Recipes can list staged C sources and
 headers, repeat `cflag` for compiler arguments, and repeat `ldflag` for
 executable and shared-library linker arguments. Each directive contains a
-single argument. [Package formats and build inputs](../.okf/concepts/package-catalog.md)
+single argument. Workspace C sources compile on each build so the C compiler
+can read their current headers. Executable and shared-library builds with
+custom linker flags relink so the linker can resolve their current inputs.
+[Package formats and build inputs](../.okf/concepts/package-catalog.md)
 
 ## Daily-use packages
 

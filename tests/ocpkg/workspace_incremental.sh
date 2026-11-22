@@ -45,6 +45,13 @@ if grep -q '^+ ' repeat.log; then
     cat repeat.log >&2
     exit 1
 fi
+chmod a-x 'app output'
+"$runner" build -o 'app output'
+test "$("./app output")" = 42
+if "$runner" build --shared --static > ambiguous.out 2> ambiguous.log; then
+    exit 1
+fi
+grep -q 'conflicting output modes' ambiguous.log
 cat > src/main.ml <<'ML'
 let () = Printf.printf "%d\n" (Answer.answer + 2)
 ML
@@ -57,4 +64,22 @@ test "$("$runner" run)" = 43
 grep -Fx 'test passed' checks.out
 grep -Fx 'PASS checks' checks.out
 grep -Fx '1 passed, 0 failed (1 tests)' checks.out
+mkdir -p native/include
+cat > native/value.c <<'C'
+#include <stdint.h>
+#include "include/value.h"
+int64_t native_value(int64_t unit) {
+    (void)unit;
+    return VALUE * 2 + 1;
+}
+C
+printf '#define VALUE 42\n' > native/include/value.h
+printf 'c_source native/value.c\n' >> ocpkg.mod
+cat > src/main.ml <<'ML'
+external value : unit -> int = "native_value"
+let () = print_int (value ())
+ML
+test "$("$runner" run)" = 42
+printf '#define VALUE 43\n' > native/include/value.h
+test "$("$runner" run)" = 43
 echo 'workspace incremental compilation: PASS'

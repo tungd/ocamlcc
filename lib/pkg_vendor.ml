@@ -7,6 +7,8 @@ type fetch = url:string -> destination:string -> (unit, string) result
 let show = Package_name.to_string
 let package_name recipe = recipe.package.name
 let max_download = 64 * 1024 * 1024
+module Names = Map.Make (Package_name)
+module Name_set = Set.Make (Package_name)
 
 let filesystem f =
   try f () with
@@ -19,41 +21,39 @@ let stat path =
   | stat -> Some stat
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
 
-let rec each f = function
-  | [] -> Ok ()
+let rec fold_result f acc = function
+  | [] -> Ok acc
   | next :: rest ->
-      let* () = f next in
-      each f rest
+      let* acc = f acc next in
+      fold_result f acc rest
+
+let each f = fold_result (fun () -> f) ()
 
 let resolve ~catalog requirements =
-  let entries = Hashtbl.create (List.length catalog) in
-  let state = Hashtbl.create (List.length catalog) in
-  let ordered = ref [] in
-  let* () = each (fun recipe ->
+  let* entries = fold_result (fun entries recipe ->
     let key = package_name recipe in
-    if Hashtbl.mem entries key then Error ("duplicate package: " ^ show key)
-    else (Hashtbl.add entries key recipe; Ok ())) catalog in
+    if Names.mem key entries then Error ("duplicate package: " ^ show key)
+    else Ok (Names.add key recipe entries)) Names.empty catalog in
   let missing key = Error ("missing package: " ^ show key) in
-  let rec visit key =
-    match Hashtbl.find_opt state key, Hashtbl.find_opt entries key with
-    | Some `Done, _ -> Ok ()
-    | Some `Visiting, _ -> Error ("package dependency cycle: " ^ show key)
-    | None, None -> missing key
-    | None, Some recipe ->
-        Hashtbl.add state key `Visiting;
-        let* () = each visit recipe.dependencies in
-        Hashtbl.replace state key `Done;
-        ordered := recipe :: !ordered;
-        Ok ()
+  let rec visit active ((complete, _) as resolved) key =
+    if Name_set.mem key complete then Ok resolved
+    else if Name_set.mem key active then Error ("package dependency cycle: " ^ show key)
+    else match Names.find_opt key entries with
+    | None -> missing key
+    | Some recipe ->
+        let+ complete, ordered =
+          fold_result (visit (Name_set.add key active)) resolved recipe.dependencies in
+        Name_set.add key complete, recipe :: ordered
   in
-  let* () = each (fun (required : requirement) ->
-    match Hashtbl.find_opt entries required.name with
-    | Some recipe when recipe.package.version = required.version -> visit required.name
+  let+ _, ordered = fold_result (fun resolved (required : requirement) ->
+    match Names.find_opt required.name entries with
+    | Some recipe when recipe.package.version = required.version ->
+        visit Name_set.empty resolved required.name
     | Some recipe ->
         Error (Printf.sprintf "package %s is pinned at %s, requested %s"
                  (show required.name) recipe.package.version required.version)
-    | None -> missing required.name) requirements in
-  Ok (List.rev !ordered)
+    | None -> missing required.name) (Name_set.empty, []) requirements in
+  List.rev ordered
 
 let checked_local ~catalog_root relative =
   let canonical = Unix.realpath catalog_root in
@@ -218,17 +218,41 @@ let vendor ~fetch ~offline ~cache ~vendor ~project_root ~catalog_root recipes =
       let* () = each publish recipes in
       verify ~vendor recipes))
 
-let reconcile ~fetch ~cache ~directory ~project_root ~catalog_root ~previous ~next commit =
+module Update = struct
+  type t = Materialize of fetch | Refresh
+  type plan = { retire : recipe list; install : recipe list; keep : recipe list }
+
+  let plan mode ~present ~previous ~next =
+    let next_by_name = List.fold_left (fun by_name recipe ->
+      Names.add (package_name recipe) recipe by_name) Names.empty next in
+    let retire = List.filter (fun recipe ->
+      match Names.find_opt (package_name recipe) next_by_name with
+      | Some replacement -> not (Sha256.equal recipe.tree replacement.tree)
+      | None -> true) previous in
+    let retiring = List.fold_left (fun names recipe ->
+      Name_set.add (package_name recipe) names) Name_set.empty retire in
+    let install, keep = List.fold_right (fun recipe (install, keep) ->
+      let name = package_name recipe in
+      if Name_set.mem name present then
+        if Name_set.mem name retiring then recipe :: install, keep
+        else install, recipe :: keep
+      else match mode with
+      | Materialize _ -> recipe :: install, keep
+      | Refresh -> install, keep) next ([], []) in
+    {retire; install; keep}
+end
+
+let reconcile ~mode ~cache ~directory ~project_root ~catalog_root ~previous ~next commit =
   filesystem (fun () ->
     mkdir_p directory;
     let* () = checked_vendor directory in
     lock_vendor directory (fun () ->
-      let find source recipe = List.find_opt (fun item -> package_name item = package_name recipe) source in
-      let obsolete = List.filter (fun recipe ->
-        match find next recipe with
-        | Some replacement -> not (Sha256.equal recipe.tree replacement.tree)
-        | None -> true) previous in
-      let known_old recipe = Option.is_some (find obsolete recipe) in
+      let present = List.fold_left (fun names recipe ->
+        match stat (path_for directory recipe) with
+        | Some _ -> Name_set.add (package_name recipe) names
+        | None -> names) Name_set.empty next in
+      let {Update.retire = obsolete; install = staged; keep = kept} =
+        Update.plan mode ~present ~previous ~next in
       let check_old recipe =
         let path = path_for directory recipe in
         match stat path with
@@ -238,43 +262,44 @@ let reconcile ~fetch ~cache ~directory ~project_root ~catalog_root ~previous ~ne
             | Ok false -> Ok ()
             | _ -> Error ("refusing to overwrite changed vendor directory: " ^ path)) in
       let* () = each check_old obsolete in
-      let staged = List.filter (fun recipe ->
-        known_old recipe || stat (path_for directory recipe) = None) next in
-      let* () = verify ~vendor:directory (List.filter (fun recipe ->
-          not (List.exists (fun item -> package_name item = package_name recipe) staged)) next) in
+      let* () = verify ~vendor:directory kept in
       let scratch = Filename.temp_dir ~temp_dir:directory ".update-" "" in
       let rollback_complete = ref true in
       Fun.protect ~finally:(fun () -> if !rollback_complete then rm_rf scratch) (fun () ->
         let incoming = Filename.concat scratch "incoming" in
-        let* () = vendor ~fetch ~offline:false ~cache ~vendor:incoming ~project_root ~catalog_root staged in
+        let* () = match staged with
+          | [] -> Ok ()
+          | _ ->
+              let* cache = cache () in
+              let offline, fetch =
+                match mode with
+                | Update.Materialize fetch -> false, fetch
+                | Refresh -> true, (fun ~url:_ ~destination:_ -> Error "update requires offline sources")
+              in
+              vendor ~fetch ~offline ~cache ~vendor:incoming ~project_root ~catalog_root staged in
         let* () = each check_old obsolete in
         let backup = Filename.concat scratch "backup" in
         Unix.mkdir backup 0o700;
-        let moved = ref [] in
-        let installed = ref [] in
+        let undo = ref [] in
+        let move source destination =
+          Unix.rename source destination;
+          undo := (destination, source) :: !undo
+        in
         let committed = ref false in
         Fun.protect ~finally:(fun () ->
           if not !committed then begin
             rollback_complete := false;
-            List.iter (fun (source, destination) -> Unix.rename destination source) !installed;
-            List.iter (fun (source, destination) -> Unix.rename destination source) !moved;
+            List.iter (fun (source, destination) -> Unix.rename source destination) !undo;
             rollback_complete := true
           end) (fun () ->
           List.iter (fun recipe ->
             let source = path_for directory recipe in
-            if stat source <> None then begin
-              let destination = path_for backup recipe in
-              Unix.rename source destination;
-              moved := (source, destination) :: !moved
-            end) obsolete;
+            if stat source <> None then move source (path_for backup recipe)) obsolete;
           let* () = each (fun recipe ->
             let source = path_for incoming recipe in
             let destination = path_for directory recipe in
             match stat destination with
             | Some _ -> Error ("refusing to overwrite vendor directory: " ^ destination)
-            | None ->
-                Unix.rename source destination;
-                installed := (source, destination) :: !installed;
-                Ok ()) staged in
+            | None -> move source destination; Ok ()) staged in
           let+ () = commit () in
           committed := true))))

@@ -22,8 +22,15 @@ val vendor :
   project_root:string -> catalog_root:string ->
   Ocpkg_format.recipe list -> (unit, string) result
 
+module Update : sig
+  type t = Materialize of fetch | Refresh
+end
+
 val reconcile :
-  fetch:fetch -> cache:string -> directory:string -> project_root:string ->
+  mode:Update.t -> cache:(unit -> (string, string) result) -> directory:string -> project_root:string ->
   catalog_root:string -> previous:Ocpkg_format.recipe list ->
   next:Ocpkg_format.recipe list -> (unit -> (unit, string) result) ->
   (unit, string) result
+(** Refresh replaces or removes existing trees offline and leaves missing
+    packages for a later vendor command. Materialize also installs missing
+    packages and may fetch archives. Both roll back tree moves if publication fails. *)
