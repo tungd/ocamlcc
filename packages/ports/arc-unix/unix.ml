@@ -50,6 +50,13 @@ type error = Error.t =
 
 exception Unix_error of error * string * string
 
+external register_leaf_error : (int -> string -> exn) -> unit =
+  "arc_unix_register_leaf_error"
+
+let () =
+  register_leaf_error (fun errno operation ->
+    Unix_error (Error.of_number errno, operation, ""))
+
 let error_message = Error.message
 
 let raise_errno ?(argument = "") operation code =

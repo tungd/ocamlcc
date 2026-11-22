@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Adapt Unix errno at a borrowed C leaf boundary for unchanged Mirage entropy. Compare offset writes and error propagation with stock OCaml. See [package build cache](/concepts/package-catalog.md#build-cache).
+
 - 2026-11-23 (codex/1) — Add opt-in ARC leaf C headers for unchanged Mirage Crypto arithmetic sources. Compare field and point outputs with stock OCaml. See [package build cache](/concepts/package-catalog.md#build-cache).
 
 - 2026-11-23 (codex/1) — Let ocpkg recipes stage hyphenated C source and header names. Test the original header name through native compilation and linking. See [package build cache](/concepts/package-catalog.md#build-cache).

@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdio.h>
@@ -55,6 +56,67 @@ static value copy_string(const void *source, size_t length)
 }
 
 static value text(const char *str) { return copy_string(str, strlen(str)); }
+
+typedef value (*arc_unix_leaf3_fn)(value, value, value);
+
+/* The exception constructor is installed by Unix's module initializer. */
+static value leaf_error_factory;
+static _Thread_local struct {
+    jmp_buf *target;
+    char *operation;
+    int error;
+} leaf_error;
+
+value arc_unix_register_leaf_error(value factory)
+{
+    value previous = leaf_error_factory;
+    arc_retain_val(factory);
+    leaf_error_factory = factory;
+    if (previous != 0)
+        arc_release_val(previous);
+    return integer(0);
+}
+
+_Noreturn void arc_unix_leaf_uerror(const char *operation, value argument)
+{
+    int error = errno;
+    if (leaf_error.target == NULL || argument != 0)
+        abort();
+    leaf_error.operation = strdup(operation);
+    leaf_error.error = leaf_error.operation != NULL ? error : ENOMEM;
+    longjmp(*leaf_error.target, 1);
+}
+
+value arc_unix_call_leaf3(arc_unix_leaf3_fn leaf, value a, value b, value c)
+{
+    jmp_buf target;
+    jmp_buf *previous = leaf_error.target;
+    leaf_error.target = &target;
+    if (setjmp(target) == 0) {
+        value result = leaf(a, b, c);
+        leaf_error.target = previous;
+        return result;
+    }
+
+    int error = leaf_error.error;
+    char *operation = leaf_error.operation;
+    leaf_error.operation = NULL;
+    leaf_error.target = previous;
+    if (leaf_error_factory == 0)
+        abort();
+    value name = text(operation != NULL ? operation : "uerror");
+    free(operation);
+    if (ocamlcc_get_exn() == 0) {
+        value exception = ocamlcc_apply2(leaf_error_factory, integer(error), name);
+        if (ocamlcc_get_exn() == 0)
+            ocamlcc_set_exn(exception);
+        else
+            arc_release_val(exception);
+    } else {
+        arc_release_val(name);
+    }
+    return integer(0);
+}
 
 value arc_unix_errno(value name)
 {

@@ -110,6 +110,17 @@ With `MIRAGE_CRYPTO_SOURCE` pointing at the unpacked Mirage Crypto 2.4.1
 source, `ninja -j1 ocpkg_mirage_leaf` compares unchanged P-256 C stubs
 against stock OCaml in both ARC profiles.
 
+The Unix leaf adapter wraps a three-argument C call through
+`arc_unix_call_leaf3`. It catches `uerror(operation, Nothing)` within
+that C boundary and lets ARC propagate the corresponding
+`Unix.Unix_error`. A wrapper can rename the upstream entropy function
+at include time and expose the original entry point under the adapter.
+`ocpkg_mirage_entropy` uses the same source directory to compare the
+unchanged entropy stub's buffer slice and a forced `EIO` with stock OCaml.
+The public API fixture in `tests/ocpkg/mirage_public.ml` checks a
+known P-256 signature and the Unix RNG's offset write. It runs against
+the installed stock Mirage packages as a reference for package integration.
+
 Workspace units use the local `.ocpkg/cache/unit/` store, keyed by source
 bytes, imported interface and export digests, and effective dependency
 fingerprints. Workspace C sources compile on each build to pick up current

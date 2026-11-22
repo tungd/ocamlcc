@@ -15,6 +15,8 @@
   (runtime/arc.h as occ/rt-src/arc.h)
   (runtime/caml/mlvalues.h as occ/rt-src/caml/mlvalues.h)
   (runtime/caml/memory.h as occ/rt-src/caml/memory.h)
+  (runtime/caml/bigarray.h as occ/rt-src/caml/bigarray.h)
+  (runtime/caml/unixsupport.h as occ/rt-src/caml/unixsupport.h)
   (runtime/ocamlcc_bigarray_types.h as occ/rt-src/ocamlcc_bigarray_types.h)
   (runtime/ocamlcc_bigarray.h as occ/rt-src/ocamlcc_bigarray.h)
   (runtime/bigarray.inc as occ/rt-src/bigarray.inc)
