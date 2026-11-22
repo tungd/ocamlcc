@@ -8,6 +8,40 @@
 static int ba_compare(const ArcBigarray *, const ArcBigarray *, int);
 static uint32_t ba_hash(const ArcBigarray *);
 
+static _Atomic int64_t lexing_engine;
+
+int64_t ocamlcc_lexing_install_engine(int64_t engine)
+{
+    int64_t empty = 0;
+    arc_retain_val(engine);
+    if (!atomic_compare_exchange_strong_explicit(&lexing_engine, &empty, engine,
+            memory_order_release, memory_order_relaxed))
+        arc_release_val(engine);
+    return 1;
+}
+
+static int64_t apply_lexing_engine(bool with_memory, int64_t tables,
+                                  int64_t state, int64_t buffer)
+{
+    int64_t engine = atomic_load_explicit(&lexing_engine, memory_order_acquire);
+    if (engine == 0)
+        pal_abort();
+    /* C primitives borrow their arguments. The OCaml closure takes owners. */
+    arc_retain_val(tables);
+    arc_retain_val(buffer);
+    return ocamlcc_apply4_raw(engine, tag_int(with_memory), tables, state, buffer);
+}
+
+int64_t caml_lex_engine(int64_t tables, int64_t state, int64_t buffer)
+{
+    return apply_lexing_engine(false, tables, state, buffer);
+}
+
+int64_t caml_new_lex_engine(int64_t tables, int64_t state, int64_t buffer)
+{
+    return apply_lexing_engine(true, tables, state, buffer);
+}
+
 static _Atomic int64_t g_next_oo_id = 0;
 
 int64_t caml_fresh_oo_id(int64_t ignored)

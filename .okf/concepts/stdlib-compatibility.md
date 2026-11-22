@@ -187,8 +187,14 @@ Continuation callstack introspection still returns an empty backtrace.
 
 The Lexing overlay implements both DFA engines in OCaml, including signed
 16-bit transitions, unsigned memory-code offsets, captures, backtracking,
-refill continuations, EOF, and positions. `tests/stdlib/lexing` uses real
-ocamllex output and passes against both stock OCaml and ocamlcc.
+refill continuations, EOF, and positions. Direct OCaml declarations of
+`caml_lex_engine` and `caml_new_lex_engine` dispatch to the same raw engine.
+These calls advance byte offsets and capture state. The public
+`Lexing.engine` and `Lexing.new_engine` wrappers also update the position
+records. The compiler initializes the Lexing module for callers that
+only reference the primitive. The generated fixtures in
+`tests/stdlib/lexing` cover both entry points, including refill, EOF,
+exceptions, and unchanged position records on direct calls.
 The Digest overlay (`stdlib/overlay/digest.ml`) implements RFC 1321 MD5 and
 RFC 7693 BLAKE2b (`MD5`, `BLAKE128`, `BLAKE256`, `BLAKE512`) in pure OCaml
 with zero C externals (`ARC_CUSTOM_BLAKE2`, `caml_md5_*`, and `caml_blake2_*`

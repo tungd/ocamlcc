@@ -139,6 +139,12 @@ let run_engine with_memory tbl start_state buf =
   in
   step state
 
+external install_engine :
+  (bool -> lex_tables -> int -> lexbuf -> int) -> unit =
+  "ocamlcc_lexing_install_engine"
+
+let () = install_engine run_engine
+
 let c_engine = run_engine false
 let c_new_engine = run_engine true
 

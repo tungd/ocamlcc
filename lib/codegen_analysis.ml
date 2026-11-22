@@ -169,6 +169,9 @@ let collect_globals self_sym (e : Anf.aexpr) : string list =
         (* Primitive calls can mention no module global. Initialize the
            public Effect exception constructors before any such call. *)
         add "Stdlib__Effect"
+    | Ccall (("caml_lex_engine" | "caml_new_lex_engine"), _) ->
+        (* An external declaration can reference only Lexing's types. *)
+        add "Stdlib__Lexing"
     | Fun lf -> scan_aexpr lf.body
     | _ -> ()
   in

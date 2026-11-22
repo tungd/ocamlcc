@@ -126,6 +126,9 @@ let table =
     ("caml_atomic_fetch_add_field", abi 3 false false);
     ("ocamlcc_set_at_exit_fn", abi 1 false false);
     ("ocamlcc_caml_install_lookup", abi 1 false false);
+    ("ocamlcc_lexing_install_engine", abi 1 false false);
+    ("caml_lex_engine", abi 3 true true);
+    ("caml_new_lex_engine", abi 3 true true);
     ("caml_sys_exit", abi 1 false false);
     (* channels / raw fd hooks *)
     ("caml_sys_open", abi 3 true false);
@@ -328,6 +331,7 @@ let returns_imm = function
   | "ocamlcc_raw_fd_isatty" | "ocamlcc_stdio_flush"
   | "ocamlcc_ba_to_bytes" | "ocamlcc_ba_of_bytes_slice"
   | "ocamlcc_set_at_exit_fn" | "ocamlcc_caml_install_lookup" | "ocamlcc_sys_is_win32"
+  | "ocamlcc_lexing_install_engine" | "caml_lex_engine" | "caml_new_lex_engine"
   | "ocamlcc_fiber_is_done" | "ocamlcc_fiber_is_main"
   | "ocamlcc_fiber_can_yield" | "ocamlcc_fiber_sched_set"
   | "ocamlcc_effect_register_exceptions"
