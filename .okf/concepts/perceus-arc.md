@@ -195,7 +195,11 @@ Object and archive summaries carry the alternate entry symbol and a mask in
 parameter order. The implementation stamp covers both entry points and the
 mask. This keeps independently compiled callers tied to the same ownership
 contract. An imported call uses the borrowed entry when each borrowed
-argument is immediate, already borrowed, or kept alive by the caller. A
+argument is immediate, already borrowed, or kept alive by the caller.
+Local stack slots can lend their current value. A fresh immutable projection
+from a direct receiver can feed a known local or imported borrowed worker
+when every borrowed position is eligible. A mutable field keeps an owned
+snapshot across calls, where an alias or finalizer could replace it. A
 dying owned argument selects the owning entry and can be reused by the
 callee. Older summaries also select the owning entry.
 

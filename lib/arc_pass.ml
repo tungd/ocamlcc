@@ -64,6 +64,7 @@ type state = {
 
 let is_borrowed (env : state) (id : Ident.t) : bool =
   Ident.Set.mem id env.borrowed || Ident.Set.mem id env.frame_borrowed
+  || Ident.Map.mem id env.view_owners
 
 (* The false edge of ANF's conditional tests for the tagged zero, even
    when the scrutinee may be a constructor block on the other edge. *)
@@ -487,10 +488,35 @@ let add_borrowed_entry env id borrow =
     imm_funs;
     borrowed_entries = Ident.Map.add id entry env.borrowed_entries }
 
+let can_borrow_arguments env live flags args =
+  let valid borrow a =
+    not borrow || is_imm_atom env a
+    || match a with
+       | Anf.Var id ->
+           is_borrowed env id || Ident.Set.mem id live
+       | MutVar _ | BorrowedField _ -> true
+       | _ -> false
+  in
+  List.compare_lengths flags args = 0 && List.for_all2 valid flags args
+
+let borrowed_call env live = function
+  | Anf.App (Var fn, args) -> (
+      match Ident.Map.find_opt fn env.borrowed_entries with
+      | Some entry when can_borrow_arguments env live entry.borrow args ->
+          Some (entry.worker, List.combine entry.borrow args)
+      | _ -> None)
+  | _ -> None
+
+let select_imported_entry env live = function
+  | Anf.DirectApp (({ borrowed_entry = Some (_, flags); _ } as target), args)
+    when not (can_borrow_arguments env live flags args) ->
+      Anf.DirectApp ({ target with borrowed_entry = None }, args)
+  | ce -> ce
+
 (* Fuse a field into borrowed operands while keeping its receiver live.
    A mutable projection has a single consumer and can cross only read-only
    computations, such as the arithmetic and joins used to form an index. *)
-let fuse_field_read ~stable id index owner body =
+let fuse_field_read env ~stable id index owner body =
   let open Anf in
   let uses atom = Ident.Set.mem id (atom_vars atom) in
   let live expr = Ident.Set.mem id (Anf.free_vars expr) in
@@ -502,7 +528,25 @@ let fuse_field_read ~stable id index owner body =
   let scalar = function
     | Boxed_scalar a -> Boxed_scalar (substitute a)
     | Raw_scalar _ as v -> v in
-  let reader = function
+  let through_call live flags args rebuild =
+    if List.compare_lengths flags args <> 0 then None
+    else
+      let args = List.map2 (fun borrow arg -> if borrow then substitute arg else arg) flags args in
+      if can_borrow_arguments env live flags args then Some (rebuild args) else None
+  in
+  let reader next ce =
+    (* The callee can run finalizers or mutate through aliases. Across the
+       call, only a projection from a stable, directly owned base can lend
+       its owner. A nested receiver may itself come from a mutable field. *)
+    let stable_receiver = stable && match owner with Var _ -> true | _ -> false in
+    match ce with
+    | App ((Var fn as callee), args)
+      when stable_receiver && not (Ident.Set.mem fn env.yielding_funs) ->
+        Option.bind (borrowed_flags env fn) (fun flags ->
+          through_call (Anf.free_vars next) flags args (fun args -> App (callee, args)))
+    | DirectApp (({ borrowed_entry = Some (_, flags); yields = false; _ } as target), args)
+      when stable_receiver ->
+        through_call (Anf.free_vars next) flags args (fun args -> DirectApp (target, args))
     | FloatBinop (op, a, b) -> Some (FloatBinop (op, scalar a, scalar b))
     | FloatCompare (op, a, b) -> Some (FloatCompare (op, scalar a, scalar b))
     | Field (i, kind, base) -> Some (Field (i, kind, substitute base))
@@ -556,7 +600,7 @@ let fuse_field_read ~stable id index owner body =
   in
   let rec fuse = function
     | Let (result, ce, next) when use_in ce -> (
-        match reader ce with
+        match reader next ce with
         | Some ce' when not (use_in ce') ->
             let next =
               if not (live next) then Some next
@@ -728,31 +772,6 @@ let mutable_slot_result snapshots body =
     | _ -> None
   in
   scan snapshots body
-
-let can_borrow_arguments env live flags args =
-  let valid borrow a =
-    not borrow || is_imm_atom env a
-    || match a with
-       | Anf.Var id ->
-           is_borrowed env id || Ident.Set.mem id live
-           || Ident.Map.mem id env.view_owners
-       | _ -> false
-  in
-  List.compare_lengths flags args = 0 && List.for_all2 valid flags args
-
-let borrowed_call env live = function
-  | Anf.App (Var fn, args) -> (
-      match Ident.Map.find_opt fn env.borrowed_entries with
-      | Some entry when can_borrow_arguments env live entry.borrow args ->
-          Some (entry.worker, List.combine entry.borrow args)
-      | _ -> None)
-  | _ -> None
-
-let select_imported_entry env live = function
-  | Anf.DirectApp (({ borrowed_entry = Some (_, flags); _ } as target), args)
-    when not (can_borrow_arguments env live flags args) ->
-      Anf.DirectApp ({ target with borrowed_entry = None }, args)
-  | ce -> ce
 
 let rec restore_borrowed pairs consumed =
   match pairs, consumed with
@@ -1100,7 +1119,7 @@ let prepare_consumed (env : state) ~(borrowed_also : Ident.Set.t)
     List.map
       (fun (a : Anf.atom) ->
         match a with
-        | MutVar _ | ModuleSlot _ ->
+        | MutVar _ | BorrowedField _ | ModuleSlot _ ->
             let tmp = Ident.create_local "mval" in
             mat_binds := (tmp, a) :: !mat_binds;
             Anf.Var tmp
@@ -1260,7 +1279,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
   | Let (id, (Field (index, ((Immutable_field | Mutable_field) as kind),
                      ((Var _ | BorrowedField _) as owner)) as ce), body) -> (
       let stable = kind = Immutable_field in
-      match fuse_field_read ~stable id index owner body with
+      match fuse_field_read env ~stable id index owner body with
       | Some fused -> transform_aexpr env fused
       | None when stable && field_is_read_only_in_loop id body ->
           transform_view env id (Anf.BorrowedField (index, owner)) body

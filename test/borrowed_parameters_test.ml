@@ -235,6 +235,19 @@ let () =
       let use buffer index = Provider.write buffer index; length buffer
       external create : int -> bytes = "caml_create_bytes"
       let dying length = Provider.write (create length) 0
+      type row = { buffer : bytes }
+      let projected row index = Provider.write row.buffer index
+      type 'a ref = { mutable contents : 'a }
+      external ( == ) : int -> int -> bool = "%eq"
+      let[@inline] ref contents = { contents }
+      let local_slot buffer index =
+        let slot = ref buffer in
+        if index == 0 then slot.contents <- create 1;
+        Provider.write slot.contents index
+      let[@inline never] write buffer index = Provider.write buffer index
+      let local_projected row index = write row.buffer index
+      type mutable_row = { mutable current : bytes }
+      let mutable_projected row index = Provider.write row.current index
   |}) in
   require provider "export function l $ocamlcc_Provider_write_borrowed__";
   let use = function_body consumer "use" in
@@ -242,7 +255,18 @@ let () =
   forbid use "arc_retain";
   let dying = function_body consumer "dying" in
   require dying "call extern $ocamlcc_Provider_write__";
-  forbid dying "call extern $ocamlcc_Provider_write_borrowed__"
+  forbid dying "call extern $ocamlcc_Provider_write_borrowed__";
+  List.iter (fun name ->
+    let body = function_body consumer name in
+    require body "call extern $ocamlcc_Provider_write_borrowed__";
+    if name = "projected" then forbid body "arc_retain")
+    ["projected"; "local_slot"];
+  let local = function_body consumer "local_projected" in
+  require local "call $ocamlcc_Borrow_params_write_borrowed(";
+  forbid local "arc_retain";
+  let mutable_projection = function_body consumer "mutable_projected" in
+  require mutable_projection "arc_retain";
+  forbid mutable_projection "call extern $ocamlcc_Provider_write_borrowed__"
 
 let () =
   let il = compile {|
