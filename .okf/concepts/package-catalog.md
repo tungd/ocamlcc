@@ -66,6 +66,25 @@ archive cache. `add`, `get`, and `vendor` can download package sources.
 of each stored artifact tree. A builder writes to a private directory.
 Successful outputs are published by rename while the cache key is locked.
 
+`ocpkg build` verifies the lock and vendor tree before preparing the
+toolchain. The fingerprint covers the compiler, QBE, stdlib, runtime,
+target, ARC profile, and compiler flags. Vendored recipes build into
+archives with `.a.opt` metadata in the shared package cache. A wrapped recipe
+exposes its chosen public module and keeps its prefixed implementation
+interfaces on the hidden OCaml load path.
+
+Workspace units use the local `.ocpkg/cache/unit/` store, keyed by source
+bytes, imported interface and export digests, and effective dependency
+fingerprints. The linker reuses an output whose inputs and digest still
+match. The incremental test measures zero compiler and linker invocations
+on an unchanged rebuild, then one compiled unit and relinking after a leaf
+edit. `run` invokes the executable and `test` builds the selected manifest
+entries.
+
+The native Crunch integration ran `ocpkg vendor` and `ocpkg build` on
+macOS ARM64. All nine generation and runtime checks passed, including
+byte-for-byte upstream golden outputs and both binary-data round trips.
+
 # Model
 
 - Snapshot: immutable package selection, dependencies, source SHA-256 digests,

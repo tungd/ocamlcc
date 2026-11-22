@@ -7,6 +7,7 @@ module Request : sig
     filename : string;
     modname : string;
     include_dirs : string list;
+    hidden_include_dirs : string list;
     stdlib_dir : string option;
     output_prefix : string option;
     emit_cmi : bool;

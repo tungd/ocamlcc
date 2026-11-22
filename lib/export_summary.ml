@@ -176,8 +176,11 @@ let optional f =
 module Loader = struct
   type t = unit_name:string -> cmi:string -> Anf.exports option
 
-  let create ?archive ?(exclude_units = []) () =
-    let archived = lazy (Option.bind archive (fun file -> optional (fun () -> read_archive file))) in
+  let create ?archive ?(archives = []) ?(exclude_units = []) () =
+    let archived =
+      Option.to_list archive @ archives
+      |> List.map (fun file -> Filename.dirname file, lazy (optional (fun () -> read_archive file)))
+    in
     let cache = Hashtbl.create 32 in
     let lookup ~unit_name ~cmi =
       let key = unit_name, cmi in
@@ -190,9 +193,9 @@ module Loader = struct
               | Some (cmi_digest, exports) when digest cmi = cmi_digest -> Some exports
               | _ -> None
             in
-            if Option.exists (fun file -> Filename.dirname file = Filename.dirname cmi) archive
-            then Option.bind (Lazy.force archived) matching
-            else Option.bind (read_object cmi) matching) in
+            match List.assoc_opt (Filename.dirname cmi) archived with
+            | Some archive -> Option.bind (Lazy.force archive) matching
+            | None -> Option.bind (read_object cmi) matching) in
           Hashtbl.add cache key result;
           result
     in

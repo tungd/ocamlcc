@@ -23,8 +23,10 @@ let error_msg exn =
       | exn -> Printexc.to_string exn)
 
 let with_flags ~include_dirs ~emit_cmi ~nopervasives ~nostdlib
-    ?(no_alias_deps = false) ?(nolabels = false) ?(open_modules = []) f =
+    ?(hidden_include_dirs = []) ?(no_alias_deps = false) ?(nolabels = false)
+    ?(open_modules = []) f =
   let saved_inc = !Clflags.include_dirs in
+  let saved_hidden = !Clflags.hidden_include_dirs in
   let saved_dont = !Clflags.dont_write_files in
   let saved_nop = !Clflags.nopervasives in
   let saved_nostd = !Clflags.no_std_include in
@@ -34,6 +36,7 @@ let with_flags ~include_dirs ~emit_cmi ~nopervasives ~nostdlib
   Fun.protect
     ~finally:(fun () ->
       Clflags.include_dirs := saved_inc;
+      Clflags.hidden_include_dirs := saved_hidden;
       Clflags.dont_write_files := saved_dont;
       Clflags.nopervasives := saved_nop;
       Clflags.no_std_include := saved_nostd;
@@ -43,6 +46,7 @@ let with_flags ~include_dirs ~emit_cmi ~nopervasives ~nostdlib
       Compmisc.init_path ())
     (fun () ->
       Clflags.include_dirs := include_dirs;
+      Clflags.hidden_include_dirs := hidden_include_dirs;
       Clflags.dont_write_files := not emit_cmi;
       Clflags.nopervasives := nopervasives;
       Clflags.no_std_include := nostdlib;
@@ -63,12 +67,12 @@ module Implementation = struct
   }
 end
 
-let compile_unit ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
+let compile_unit ?(include_dirs = []) ?hidden_include_dirs ?output_prefix ?(emit_cmi = false)
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
     ?(nolabels = false) ?(open_modules = []) ~resolve_imports
     ~filename ~modname source : (Implementation.t, error) result =
   try
-    with_flags ~include_dirs ~emit_cmi ~nopervasives ~nostdlib ~no_alias_deps
+    with_flags ~include_dirs ?hidden_include_dirs ~emit_cmi ~nopervasives ~nostdlib ~no_alias_deps
       ~nolabels ~open_modules (fun () ->
         Location.input_name := filename;
         let lexbuf = Lexing.from_string source in
@@ -109,20 +113,20 @@ let compile_unit ?(include_dirs = []) ?output_prefix ?(emit_cmi = false)
         Ok { Implementation.lambda = program; cmis; interface })
   with exn -> Error { msg = error_msg exn }
 
-let compile_implementation ?include_dirs ?output_prefix ?emit_cmi ?nopervasives
+let compile_implementation ?include_dirs ?hidden_include_dirs ?output_prefix ?emit_cmi ?nopervasives
     ?nostdlib ?no_alias_deps ?nolabels ?open_modules ~filename ~modname source =
-  compile_unit ?include_dirs ?output_prefix ?emit_cmi ?nopervasives ?nostdlib
+  compile_unit ?include_dirs ?hidden_include_dirs ?output_prefix ?emit_cmi ?nopervasives ?nostdlib
     ?no_alias_deps ?nolabels ?open_modules ~resolve_imports:false
     ~filename ~modname source
   |> Result.map (fun (unit : Implementation.t) -> unit.lambda)
 
-let compile_interface ?(include_dirs = []) ?output_prefix
+let compile_interface ?(include_dirs = []) ?hidden_include_dirs ?output_prefix
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
     ?(nolabels = false) ?(open_modules = []) ~filename ~modname source :
     (string, error) result =
   ignore modname;
   try
-    with_flags ~include_dirs ~emit_cmi:true ~nopervasives ~nostdlib
+    with_flags ~include_dirs ?hidden_include_dirs ~emit_cmi:true ~nopervasives ~nostdlib
       ~no_alias_deps ~nolabels ~open_modules (fun () ->
         Location.input_name := filename;
         let lexbuf = Lexing.from_string source in

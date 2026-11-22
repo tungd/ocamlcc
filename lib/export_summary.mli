@@ -12,7 +12,7 @@ val find_archive : string -> string option
 module Loader : sig
   type t
 
-  val create : ?archive:string -> ?exclude_units:string list -> unit -> t
+  val create : ?archive:string -> ?archives:string list -> ?exclude_units:string list -> unit -> t
 
   val lookup : t -> unit_name:string -> cmi:string -> Anf.exports option
   (** Read on demand using the CMI selected by the frontend. Missing, malformed

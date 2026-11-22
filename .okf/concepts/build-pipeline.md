@@ -177,8 +177,8 @@ The 14 Dune suites, 26 Ninja checks, 16 ASan/UBSan checks and installed core-std
 
 # Package companion
 
-The [package catalog](/concepts/package-catalog.md) describes `tools/ocpkg.py`,
-which vendors locked package sources and emits a separate Ninja file. Dune
-excludes the generated `build/` tree, including vendored upstream projects.
-The compiler CLI exposes `--runtime-objects-dir` to select a prebuilt runtime
-directory explicitly; an empty directory forces compilation from runtime sources.
+The [package catalog](/concepts/package-catalog.md) describes the native
+`ocpkg` workspace builder. It verifies vendored sources, uses the compiler
+pipeline for unit compilation, and invokes QBE and the target C toolchain
+directly. Dune excludes the generated `build/` tree, including vendored
+upstream projects.

@@ -9,3 +9,5 @@ end
 val plan_build_order : string list -> (Step.t list, string) result
 (** Scan source dependencies and order compilation steps. Interfaces can
     break implementation cycles. Independent steps preserve input order. *)
+
+val references : Step.t -> (string list, string) result

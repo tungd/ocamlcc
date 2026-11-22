@@ -250,3 +250,5 @@ let plan_build_order (ocaml_files : string list) : (Step.t list, string) result 
           if !cyclic || List.length !result <> n then
             Error "cyclic module dependency detected"
           else Ok (List.rev !result))
+
+let references (step : Step.t) = parse_deps ~kind:step.kind step.path

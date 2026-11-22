@@ -10,6 +10,7 @@ end
 
 val compile_unit :
   ?include_dirs:string list ->
+  ?hidden_include_dirs:string list ->
   ?output_prefix:string ->
   ?emit_cmi:bool ->
   ?nopervasives:bool ->
@@ -27,6 +28,7 @@ val compile_unit :
 
 val compile_implementation :
   ?include_dirs:string list ->
+  ?hidden_include_dirs:string list ->
   ?output_prefix:string ->
   ?emit_cmi:bool ->
   ?nopervasives:bool ->
@@ -43,6 +45,7 @@ val compile_implementation :
 
 val compile_interface :
   ?include_dirs:string list ->
+  ?hidden_include_dirs:string list ->
   ?output_prefix:string ->
   ?nopervasives:bool ->
   ?nostdlib:bool ->

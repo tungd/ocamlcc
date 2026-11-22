@@ -10,6 +10,7 @@ module Request = struct
     filename : string;
     modname : string;
     include_dirs : string list;
+    hidden_include_dirs : string list;
     stdlib_dir : string option;
     output_prefix : string option;
     emit_cmi : bool;
@@ -26,7 +27,7 @@ module Request = struct
   }
 
   let create ~filename ~modname =
-    { filename; modname; include_dirs = []; stdlib_dir = None;
+    { filename; modname; include_dirs = []; hidden_include_dirs = []; stdlib_dir = None;
       output_prefix = None; emit_cmi = false; nopervasives = false;
       nostdlib = false; no_alias_deps = false; nolabels = false;
       open_modules = []; emit_entry = true; inline_single_thread_rc = false;
@@ -43,13 +44,13 @@ end
 
 let compile_source (request : Request.t) source =
   let open Sys_util.Result_syntax in
-  let { Request.filename; modname; include_dirs; stdlib_dir; output_prefix;
+  let { Request.filename; modname; include_dirs; hidden_include_dirs; stdlib_dir; output_prefix;
         emit_cmi; nopervasives; nostdlib; no_alias_deps; nolabels; open_modules;
         emit_entry; inline_single_thread_rc; imports; summaries; export_policy } =
     request
   in
   let* implementation =
-    Frontend.compile_unit ~include_dirs ?output_prefix ~emit_cmi ~nopervasives
+    Frontend.compile_unit ~include_dirs ~hidden_include_dirs ?output_prefix ~emit_cmi ~nopervasives
       ~nostdlib ~no_alias_deps ~nolabels ~open_modules
       ~resolve_imports:(Option.is_some summaries) ~filename ~modname source
     |> Result.map_error (fun { Frontend.msg } -> msg)
@@ -97,10 +98,10 @@ let compile_file (request : Request.t) =
 
 let compile_interface_file (request : Request.t) =
   let open Sys_util.Result_syntax in
-  let { Request.filename; modname; include_dirs; output_prefix; nopervasives;
+  let { Request.filename; modname; include_dirs; hidden_include_dirs; output_prefix; nopervasives;
         nostdlib; no_alias_deps; nolabels; open_modules; _ } = request
   in
   let* source = read_source filename in
-  Frontend.compile_interface ~include_dirs ?output_prefix ~nopervasives
+  Frontend.compile_interface ~include_dirs ~hidden_include_dirs ?output_prefix ~nopervasives
     ~nostdlib ~no_alias_deps ~nolabels ~open_modules ~filename ~modname source
   |> Result.map_error (fun { Frontend.msg } -> msg)

@@ -506,3 +506,12 @@
  (name build_cache_test)
  (modules build_cache_test)
  (libraries ocamlcc ocpkg_core unix))
+
+
+(rule
+ (alias runtest)
+ (deps ../stdlib.sources ../bin/main.exe (source_tree ../runtime))
+ (action
+  (progn
+   (run sh %{dep:../tests/ocpkg/workspace_incremental.sh} %{exe:../bin/ocpkg_main.exe} %{dep:../vendor/qbe/qbe})
+   (run sh %{dep:../tests/ocpkg/wrapped_packages.sh} %{exe:../bin/ocpkg_main.exe} %{dep:../vendor/qbe/qbe}))))

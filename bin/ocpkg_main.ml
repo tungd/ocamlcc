@@ -9,6 +9,9 @@ let usage = {|Usage: ocpkg <command>
   tidy                    Canonicalize requirements and update the lock
   verify                  Verify the lock and vendor tree
   query [name]            List selected packages or show a catalog recipe
+  build [options]         Compile and link the workspace offline
+  run [options] [-- args] Build and run the executable
+  test [options] [names]  Run configured tests
   env                     Show workspace, cache and toolchain paths
 |}
 
@@ -78,7 +81,7 @@ let env () =
    | Error _ -> ());
   show "OCPKG_CACHE" (Some cache);
   show "OCPKG_SNAPSHOT" (Pkg_project.root_catalog ());
-  show "OCC" (Sys_util.find_in_path "occ");
+  show "OCC" (Pkg_toolchain.compiler_binary ());
   show "QBE" (Result.to_option (Target.qbe None));
   show "OCC_STDLIB" (Target.prebuilt_stdlib None);
   show "OCC_RUNTIME" (Target.prebuilt_runtime ~single_thread:false None);
@@ -87,6 +90,22 @@ let env () =
 let with_project command =
   let* workspace = Pkg_project.open_workspace () in
   command workspace
+
+let build_options args =
+  let rec parse (options : Workspace.options) positional = function
+    | [] -> Ok (options, List.rev positional)
+    | "--" :: values -> Ok (options, List.rev_append positional values)
+    | "--target" :: target :: rest -> parse {options with target} positional rest
+    | "-o" :: path :: rest -> parse {options with output = Some path} positional rest
+    | "--exe" :: rest -> parse {options with kind = Some Exe} positional rest
+    | "--shared" :: rest -> parse {options with kind = Some Shared} positional rest
+    | "--static" :: rest -> parse {options with kind = Some Static} positional rest
+    | "--single-thread-rc" :: rest -> parse {options with single_thread = true} positional rest
+    | ("-v" | "--verbose") :: rest -> parse {options with verbose = true} positional rest
+    | flag :: _ when String.starts_with ~prefix:"-" flag -> Error ("unknown build option: " ^ flag)
+    | arg :: rest -> parse options (arg :: positional) rest
+  in
+  parse Workspace.defaults [] args
 
 let run = function
   | [] | ["-h"] | ["--help"] -> print_string usage; Ok ()
@@ -106,6 +125,17 @@ let run = function
   | ["verify"] -> with_project verify
   | ["query"] -> with_project (fun workspace -> query workspace None)
   | ["query"; key] -> with_project (fun workspace -> query workspace (Some key))
+  | "build" :: flags ->
+      let* options, positional = build_options flags in
+      if positional <> [] then Error "build expects options"
+      else with_project (fun workspace ->
+        let+ output = Workspace.build workspace options in print_endline output)
+  | "run" :: flags ->
+      let* options, args = build_options flags in
+      with_project (fun workspace -> Workspace.run workspace options args)
+  | "test" :: flags ->
+      let* options, names = build_options flags in
+      with_project (fun workspace -> Workspace.test workspace options names)
   | _ -> Error ("invalid arguments\n" ^ usage)
 
 let () =

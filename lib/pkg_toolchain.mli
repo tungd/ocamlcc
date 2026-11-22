@@ -1,0 +1,22 @@
+type t = {
+  target : Target.t;
+  commands : Target.Toolchain.t;
+  qbe : string;
+  stdlib : string;
+  fingerprint : Sha256.t;
+  single_thread : bool;
+  cflags : string list;
+  verbose : bool;
+  cache : string;
+}
+
+val compiler_binary : unit -> string option
+val prepare :
+  target:string -> single_thread:bool -> cflags:string list -> verbose:bool ->
+  (t, string) result
+
+val runtime : t -> include_main:bool -> (string list, string) result
+val stdlib_link_inputs : t -> archive:bool -> string list
+val assemble : t -> string -> string -> (unit, string) result
+val compile_c : t -> flags:string list -> string -> string -> (unit, string) result
+val archive : t -> string -> string list -> (unit, string) result
