@@ -264,6 +264,7 @@ module Native = struct
   external setsid : unit -> int = "arc_unix_setsid"
   external execv : string -> string array -> int = "arc_unix_execv"
   external kill : int -> int -> int = "arc_unix_kill"
+  external signal_number : int -> int = "arc_unix_signal_number"
   external waitpid : int -> bool -> bool -> (int * Process_status.t, int) result =
     "arc_unix_waitpid"
   external socket : Socket_domain.t -> Socket_type.t -> int -> bool -> int =
@@ -408,6 +409,10 @@ let execv path argv =
   raise_errno ~argument:path "execv" (Native.execv path argv)
 
 let kill pid signal = ignore (check "kill" (Native.kill pid signal))
+
+let signal_number signal =
+  let native = Native.signal_number signal in
+  if native < 0 then invalid_arg "Unix.signal_number" else native
 
 let waitpid flags pid =
   get "waitpid"

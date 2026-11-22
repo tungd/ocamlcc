@@ -229,6 +229,11 @@ val execv : string -> string array -> 'a
 val kill : int -> int -> unit
 (** Send a signal given as a [Sys.sig*] constant or native signal number. *)
 
+val signal_number : int -> int
+(** Convert a [Sys.sig*] constant to a native signal number. Nonnegative
+    values in the native integer range pass through. Other values raise
+    [Invalid_argument]. *)
+
 val waitpid : Wait_flag.t list -> int -> int * Process_status.t
 (** With [WNOHANG], [(0, WEXITED 0)] means no child status is ready. *)
 

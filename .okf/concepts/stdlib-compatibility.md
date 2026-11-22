@@ -114,6 +114,8 @@ The process interface exposes `getpid`, `kill` and `waitpid` with
 `Sys.sig*` constants in both directions and preserves the POSIX nonblocking
 result as `(0, WEXITED 0)`. A fiber can reap all ready children with
 `WNOHANG` without blocking the scheduler.
+`Unix.signal_number` converts a returned `Sys.sig*` value to the native
+number, for example when encoding a shell exit status.
 
 `environment` copies the current environment. `create_process` inherits it
 and `create_process_env` supplies a child-only environment. Both use

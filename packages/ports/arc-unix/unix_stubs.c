@@ -619,6 +619,11 @@ static int signal_from_native(int signal)
     return signal;
 }
 
+value arc_unix_signal_number(value signal)
+{
+    return integer(signal_to_native(signal >> 1));
+}
+
 value arc_unix_getpid(value unit)
 {
     (void)unit;

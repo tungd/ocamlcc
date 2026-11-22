@@ -31,6 +31,11 @@ int64_t native_enoent(int64_t unit) {
     return (int64_t)ENOENT * 2 + 1;
 }
 
+int64_t native_sigterm(int64_t unit) {
+    (void)unit;
+    return (int64_t)SIGTERM * 2 + 1;
+}
+
 int64_t start_child(int64_t reader, int64_t writer) {
     pid_t pid = fork();
     if (pid == 0) {
@@ -93,6 +98,7 @@ C
 cat > src/main.ml <<'ML'
 external cloexec : Unix.file_descr -> bool = "fd_is_cloexec"
 external enoent : unit -> int = "native_enoent"
+external sigterm : unit -> int = "native_sigterm"
 external start_child : Unix.file_descr -> Unix.file_descr -> int = "start_child"
 external clean_up_child : int -> unit = "clean_up_child"
 external install_term_handler : unit -> bool = "install_term_handler"
@@ -271,6 +277,11 @@ let with_child f =
 
 let test_children () =
   assert (Unix.getpid () > 0);
+  assert (Unix.signal_number Sys.sigterm = sigterm ());
+  assert (Unix.signal_number (sigterm ()) = sigterm ());
+  assert (match Unix.signal_number min_int with
+    | exception Invalid_argument _ -> true
+    | _ -> false);
   Unix.kill (Unix.getpid ()) 0;
   with_child (fun pid writer ->
     assert (Unix.waitpid [Unix.WNOHANG] pid = (0, Unix.WEXITED 0));

@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Expose the ARC Unix signal-number conversion for shell exit status reporting. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
+
 - 2026-11-23 (codex/1) — Add ARC Unix subprocess launch, environment, fork, session creation and exec. Exercise standard streams and child exit through ocpkg. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
 
 - 2026-11-23 (codex/1) — Add ARC Unix seek, truncation, sync, and POSIX record locks. Test write-lock contention against a separate process and acquisition after it exits. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
