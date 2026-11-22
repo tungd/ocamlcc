@@ -229,6 +229,10 @@ type wait_flag = Wait_flag.t = WNOHANG | WUNTRACED
 type process_status = Process_status.t =
   | WEXITED of int | WSIGNALED of int | WSTOPPED of int
 
+module Stdio = struct
+  type t = { stdin : File_descr.t; stdout : File_descr.t; stderr : File_descr.t }
+end
+
 module Native = struct
   external pipe : bool -> (file_descr * file_descr, int) result = "arc_unix_pipe"
   external close : file_descr -> int = "arc_unix_close"
@@ -253,6 +257,12 @@ module Native = struct
   external read : file_descr -> bytes -> int -> int -> int = "arc_unix_read"
   external write : file_descr -> bytes -> int -> int -> int = "arc_unix_write"
   external gettimeofday : unit -> (float, int) result = "arc_unix_gettimeofday"
+  external environment : unit -> (string array, int) result = "arc_unix_environment"
+  external spawn : string -> string array -> string array option -> Stdio.t -> int =
+    "arc_unix_spawn"
+  external fork : unit -> int = "arc_unix_fork"
+  external setsid : unit -> int = "arc_unix_setsid"
+  external execv : string -> string array -> int = "arc_unix_execv"
   external kill : int -> int -> int = "arc_unix_kill"
   external waitpid : int -> bool -> bool -> (int * Process_status.t, int) result =
     "arc_unix_waitpid"
@@ -371,6 +381,31 @@ let write = transfer "write" Native.write
 let gettimeofday () = get "gettimeofday" (Native.gettimeofday ())
 
 external getpid : unit -> int = "arc_unix_getpid"
+
+let environment () = get "environment" (Native.environment ())
+
+let check_exec operation path argv =
+  check_path operation path;
+  if Array.length argv = 0 || Array.exists (fun value -> String.contains value '\000') argv then
+    raise (Unix_error (EINVAL, operation, path))
+
+let spawn environment path argv stdin stdout stderr =
+  let operation = "create_process" in
+  check_exec operation path argv;
+  Option.iter (fun entries ->
+    if Array.exists (fun value -> String.contains value '\000') entries then
+      raise (Unix_error (EINVAL, operation, path))) environment;
+  let stdio : Stdio.t = { stdin; stdout; stderr } in
+  check ~argument:path operation (Native.spawn path argv environment stdio)
+
+let create_process = spawn None
+let create_process_env path argv env = spawn (Some env) path argv
+let fork () = check "fork" (Native.fork ())
+let setsid () = check "setsid" (Native.setsid ())
+
+let execv path argv =
+  check_exec "execv" path argv;
+  raise_errno ~argument:path "execv" (Native.execv path argv)
 
 let kill pid signal = ignore (check "kill" (Native.kill pid signal))
 

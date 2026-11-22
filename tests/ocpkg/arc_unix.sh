@@ -6,6 +6,7 @@ case "$runner" in /*) ;; *) runner="$PWD/$runner";; esac
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 export OCPKG_CACHE="$scratch/cache"
+export ARC_UNIX_TEST_ENV=parent
 cd "$scratch"
 "$runner" init arc-unix-test
 "$runner" add arc-unix
@@ -13,6 +14,7 @@ printf 'c_source src/fixture.c\n' >> ocpkg.mod
 
 cat > src/fixture.c <<'C'
 #define _POSIX_C_SOURCE 200809L
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdint.h>
@@ -22,6 +24,11 @@ cat > src/fixture.c <<'C'
 int64_t fd_is_cloexec(int64_t descriptor) {
     int flags = fcntl((int)(descriptor >> 1), F_GETFD);
     return flags >= 0 && (flags & FD_CLOEXEC) ? 3 : 1;
+}
+
+int64_t native_enoent(int64_t unit) {
+    (void)unit;
+    return (int64_t)ENOENT * 2 + 1;
 }
 
 int64_t start_child(int64_t reader, int64_t writer) {
@@ -85,6 +92,7 @@ C
 
 cat > src/main.ml <<'ML'
 external cloexec : Unix.file_descr -> bool = "fd_is_cloexec"
+external enoent : unit -> int = "native_enoent"
 external start_child : Unix.file_descr -> Unix.file_descr -> int = "start_child"
 external clean_up_child : int -> unit = "clean_up_child"
 external install_term_handler : unit -> bool = "install_term_handler"
@@ -280,6 +288,53 @@ let test_children () =
     Unix.kill pid Sys.sigterm;
     assert (Unix.waitpid [] pid = (pid, Unix.WSIGNALED Sys.sigterm)))
 
+let test_supervisor () =
+  let key = "ARC_UNIX_TEST_ENV" in
+  assert (Array.exists ((=) (key ^ "=parent")) (Unix.environment ()));
+  assert (Unix.Error.of_number (enoent ()) = Unix.ENOENT);
+  let capture spawn =
+    let input, send = Unix.pipe ~cloexec:true () in
+    let receive, output = Unix.pipe ~cloexec:true () in
+    let child =
+      Fun.protect ~finally:(fun () -> Unix.close input; Unix.close output)
+        (fun () -> spawn input output output)
+    in
+    Fun.protect ~finally:(fun () -> clean_up_child child) (fun () ->
+      Fun.protect ~finally:(fun () -> Unix.close send) (fun () ->
+        assert (Unix.write send (Bytes.of_string "input\n") 0 6 = 6));
+      let output = Buffer.create 32 and bytes = Bytes.create 64 in
+      Fun.protect ~finally:(fun () -> Unix.close receive) (fun () ->
+        let rec read () =
+          let count = Unix.read receive bytes 0 (Bytes.length bytes) in
+          if count > 0 then begin
+            Buffer.add_subbytes output bytes 0 count;
+            read ()
+          end
+        in
+        read ());
+      assert (Unix.waitpid [] child = (child, Unix.WEXITED 0));
+      Buffer.contents output)
+  in
+  let argv = [|"sh"; "-c";
+    "IFS= read -r line && printf '%s:%s' \"$ARC_UNIX_TEST_ENV\" \"$line\" && printf ':stderr' >&2"|] in
+  assert (capture (Unix.create_process "sh" argv) = "parent:input:stderr");
+  assert (capture (Unix.create_process_env "sh" argv [|key ^ "=child"|]) = "child:input:stderr");
+  assert (Sys.getenv key = "parent");
+  let absent = "./absent-executable" in
+  assert (match Unix.create_process absent [|"absent"|] Unix.stdin Unix.stdout Unix.stderr with
+    | exception Unix.Unix_error (Unix.ENOENT, "create_process", path) -> path = absent
+    | _ -> false);
+  assert (match Unix.execv absent [|"absent"|] with
+    | exception Unix.Unix_error (Unix.ENOENT, "execv", path) -> path = absent
+    | _ -> false);
+  match Unix.fork () with
+  | 0 ->
+      (try
+         assert (Unix.setsid () = Unix.getpid ());
+         Unix.execv "/bin/sh" [|"sh"; "-c"; "exit 23"|]
+       with _ -> exit 1)
+  | child -> assert (Unix.waitpid [] child = (child, Unix.WEXITED 23))
+
 let test_signal_events () =
   let module Signals = Unix.Signal_events in
   let test_darwin () =
@@ -359,6 +414,8 @@ let () =
   print_endline "ARC Unix sockets: PASS";
   test_children ();
   print_endline "ARC Unix child status: PASS";
+  test_supervisor ();
+  print_endline "ARC Unix subprocesses: PASS";
   test_signal_events ()
 ML
 system=$(uname -s)

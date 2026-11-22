@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,7 @@
 #include <unistd.h>
 
 #ifdef __APPLE__
+#include <crt_externs.h>
 #include <sys/event.h>
 #endif
 
@@ -621,6 +623,141 @@ value arc_unix_getpid(value unit)
 {
     (void)unit;
     return integer(getpid());
+}
+
+static char **process_environment(void)
+{
+    static char *empty[] = {NULL};
+#ifdef __APPLE__
+    char **entries = *_NSGetEnviron();
+#else
+    extern char **environ;
+    char **entries = environ;
+#endif
+    return entries != NULL ? entries : empty;
+}
+
+value arc_unix_environment(value unit)
+{
+    (void)unit;
+    char **entries = process_environment();
+    size_t count = 0;
+    while (entries[count] != NULL)
+        count++;
+    if (count > (UINT32_MAX - sizeof(ArcHeader)) / sizeof(value))
+        return boxed(1, integer(ENOMEM));
+    value *array = arc_alloc(ARC_TAG_ARRAY, count == 0 ? 0 : 1,
+                             (uint32_t)(count * sizeof *array));
+    for (size_t i = 0; i < count; i++)
+        array[i] = text(entries[i]);
+    return boxed(0, (value)(uintptr_t)array);
+}
+
+/* The vector owns only its pointer array. The ARC strings are borrowed. */
+static char **string_vector(value array)
+{
+    const value *members = (const value *)(uintptr_t)array;
+    const ArcHeader *header = (const ArcHeader *)members - 1;
+    size_t count = header->byte_size / sizeof *members;
+    char **result = malloc((count + 1) * sizeof *result);
+    if (result == NULL)
+        return NULL;
+    for (size_t i = 0; i < count; i++)
+        result[i] = (char *)(uintptr_t)members[i];
+    result[count] = NULL;
+    return result;
+}
+
+static int spawn_with_stdio(pid_t *pid, const char *program, char *const argv[],
+                            char *const env[], const value *stdio)
+{
+    posix_spawn_file_actions_t actions;
+    int error = posix_spawn_file_actions_init(&actions);
+    if (error != 0)
+        return error;
+
+    int from[3] = {number(stdio[0]), number(stdio[1]), number(stdio[2])};
+    int saved[3] = {-1, -1, -1};
+    for (int i = 0; i < 3; i++) {
+        if (fcntl(from[i], F_GETFD) < 0) {
+            error = errno;
+            goto cleanup;
+        }
+    }
+    /* Preserve any standard descriptor that is both a source and a target
+       of a conflicting redirection before applying actions in order. */
+    for (int source = 0; source < 3; source++) {
+        if (from[source] == source ||
+            (from[0] != source && from[1] != source && from[2] != source))
+            continue;
+        saved[source] = fcntl(source, F_DUPFD_CLOEXEC, 3);
+        if (saved[source] < 0) {
+            error = errno;
+            goto cleanup;
+        }
+    }
+    for (int target = 0; target < 3; target++) {
+        int source = from[target];
+        if (source >= 0 && source < 3 && saved[source] >= 0)
+            source = saved[source];
+        error = posix_spawn_file_actions_adddup2(&actions, source, target);
+        if (error != 0)
+            goto cleanup;
+    }
+    error = posix_spawnp(pid, program, &actions, NULL, argv, env);
+
+cleanup:
+    for (int i = 0; i < 3; i++)
+        if (saved[i] >= 0)
+            close(saved[i]);
+    posix_spawn_file_actions_destroy(&actions);
+    return error;
+}
+
+value arc_unix_spawn(value program, value argv, value environment, value stdio)
+{
+    char **arguments = string_vector(argv);
+    if (arguments == NULL)
+        return integer(-ENOMEM);
+    int inherit = environment == integer(0);
+    char **env = inherit ? process_environment() :
+                string_vector(*(const value *)(uintptr_t)environment);
+    if (env == NULL) {
+        free(arguments);
+        return integer(-ENOMEM);
+    }
+    pid_t pid;
+    int error = spawn_with_stdio(&pid, (const char *)(uintptr_t)program, arguments,
+                                 env, (const value *)(uintptr_t)stdio);
+    if (!inherit)
+        free(env);
+    free(arguments);
+    return integer(error != 0 ? -error : pid);
+}
+
+value arc_unix_fork(value unit)
+{
+    (void)unit;
+    pid_t pid = fork();
+    return integer(pid < 0 ? -errno : pid);
+}
+
+value arc_unix_setsid(value unit)
+{
+    (void)unit;
+    pid_t session = setsid();
+    return integer(session < 0 ? -errno : session);
+}
+
+value arc_unix_execv(value program, value argv)
+{
+    char **arguments = string_vector(argv);
+    if (arguments == NULL)
+        return integer(ENOMEM);
+    execv((const char *)(uintptr_t)program, arguments);
+    int error = errno;
+    free(arguments);
+    return integer(error);
 }
 
 value arc_unix_kill(value pid, value signal)

@@ -25,6 +25,8 @@ exception Unix_error of error * string * string
 
 module Error : sig
   type t = error
+  val of_number : int -> t
+  (** Translate a native errno value. *)
   val message : t -> string
 end
 
@@ -206,6 +208,24 @@ type process_status = Process_status.t =
   | WEXITED of int | WSIGNALED of int | WSTOPPED of int
 
 val getpid : unit -> int
+val environment : unit -> string array
+val create_process :
+  string -> string array -> File_descr.t -> File_descr.t -> File_descr.t -> int
+(** Start a program with the given argv and standard descriptors, inheriting
+    the current environment. Searches PATH for a name without a slash. *)
+
+val create_process_env :
+  string -> string array -> string array ->
+  File_descr.t -> File_descr.t -> File_descr.t -> int
+(** Like [create_process], using the given environment in the child. *)
+
+val fork : unit -> int
+(** Fork from a single OS thread. Returns zero in the child. *)
+
+val setsid : unit -> int
+val execv : string -> string array -> 'a
+(** Replace the current process with the program at the given path. *)
+
 val kill : int -> int -> unit
 (** Send a signal given as a [Sys.sig*] constant or native signal number. *)
 
