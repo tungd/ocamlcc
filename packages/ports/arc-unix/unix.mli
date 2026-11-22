@@ -245,10 +245,11 @@ module Signal_events : sig
   type t
 
   val with_events : (t -> 'a) -> 'a
-  (** On Darwin, route SIGINT, SIGTERM and SIGCHLD to a kqueue within the
-      callback and restore the process's previous signal actions on exit.
-      Use from a single OS thread with one active scope per process. Raises
-      [Unix_error (EBUSY, _, _)] for a nested scope and [ENOSYS] elsewhere. *)
+  (** Route SIGINT, SIGTERM and SIGCHLD to a readable descriptor within
+      the callback and restore the previous signal actions on exit.
+      Use from a single OS thread with one active scope per process.
+      Supported on macOS and Linux. Raises [Unix_error (EBUSY, _, _)] for
+      a nested scope and [Unix_error (ENOSYS, _, _)] on other platforms. *)
 
   val descriptor : t -> File_descr.t
   (** Borrow the active scope's descriptor for [Fiber.fd_wait]. *)

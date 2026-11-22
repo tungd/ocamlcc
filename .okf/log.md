@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Route ARC Unix signals through eventfd on Linux. Exercise Fiber readiness, handler restoration, and SIGTERM in a subprocess launched within the signal scope. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
+
 - 2026-11-23 (codex/1) — Expose Fiber.step_ready for host event loops. Run one queued task and return a boolean so host callbacks can drain work without polling. See [host event loops](/concepts/wren-fibers.md#host-event-loops).
 
 - 2026-11-23 (codex/1) — Adapt Unix errno at a borrowed C leaf boundary for unchanged Mirage entropy. Compare offset writes and error propagation with stock OCaml. See [package build cache](/concepts/package-catalog.md#build-cache).

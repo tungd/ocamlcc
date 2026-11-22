@@ -348,49 +348,63 @@ let test_supervisor () =
 
 let test_signal_events () =
   let module Signals = Unix.Signal_events in
-  let test_darwin () =
-    assert (install_term_handler ());
-    let events, fd = Signals.with_events (fun events ->
+  assert (install_term_handler ());
+  let events, fd =
+    match Signals.with_events (fun events ->
       let fd = Signals.descriptor events in
       assert (cloexec fd && Signals.next events = None);
       assert (match Signals.with_events ignore with
         | exception Unix.Unix_error (Unix.EBUSY, _, _) -> true
         | () -> false);
+      let receive () =
+        let ready = Fiber.fd_wait ~timeout_ms:3000
+            (Unix.File_descr.to_int fd) Fiber.Direction.Read in
+        assert (ready = Fiber.Wait_result.Ready);
+        Signals.next events
+      in
       let await expected trigger =
-        let watcher = Fiber.spawn (fun () ->
-          let ready = Fiber.fd_wait ~timeout_ms:3000
-              (Unix.File_descr.to_int fd) Fiber.Direction.Read in
-          assert (ready = Fiber.Wait_result.Ready);
-          Signals.next events) in
+        let watcher = Fiber.spawn receive in
         let sender = Fiber.spawn trigger in
-        Fiber.await sender;
-        assert (Fiber.await watcher = Some expected)
+        let result = Fiber.await sender in
+        assert (Fiber.await watcher = Some expected);
+        result
       in
       with_child (fun pid writer ->
         await Signals.Event.Child_exit (fun () ->
           assert (Unix.write writer (Bytes.of_string "x") 0 1 = 1));
         assert (Unix.waitpid [Unix.WNOHANG] pid = (pid, Unix.WEXITED 23)));
-      await Signals.Event.Interrupt (fun () -> Unix.kill (Unix.getpid ()) Sys.sigint);
-      await Signals.Event.Terminate (fun () -> Unix.kill (Unix.getpid ()) Sys.sigterm);
+      let pid = Unix.getpid () in
+      Unix.kill pid Sys.sigint;
+      Unix.kill pid Sys.sigterm;
+      let first = receive () in
+      let second = receive () in
+      assert (match first, second with
+        | Some Signals.Event.Interrupt, Some Signals.Event.Terminate
+        | Some Signals.Event.Terminate, Some Signals.Event.Interrupt -> true
+        | _ -> false);
+      assert (Signals.next events = None);
       assert (term_signals () = 0);
-      events, fd) in
-    assert (not (cloexec fd));
-    assert (match Signals.next events with
-      | exception Invalid_argument _ -> true
-      | _ -> false);
-    let exception Exit_scope in
-    assert (match Signals.with_events (fun _ -> raise Exit_scope) with
-      | exception Exit_scope -> true
-      | _ -> false);
-    Unix.kill (Unix.getpid ()) Sys.sigterm;
-    assert (term_signals () = 1);
-    print_endline "ARC Unix signal readiness: PASS"
+      let child = await Signals.Event.Child_exit (fun () ->
+        Unix.create_process "/bin/sh" [|"sh"; "-c"; "kill -TERM $$"|]
+          Unix.stdin Unix.stdout Unix.stderr) in
+      assert (Unix.waitpid [Unix.WNOHANG] child = (child, Unix.WSIGNALED Sys.sigterm));
+      events, fd) with
+    | result -> result
+    | exception Unix.Unix_error (error, operation, _) ->
+        Printf.eprintf "%s: %s\n%!" operation (Unix.error_message error);
+        exit 1
   in
-  if Sys.argv.(1) = "Darwin" then test_darwin ()
-  else
-    assert (match Signals.with_events ignore with
-      | exception Unix.Unix_error (Unix.ENOSYS, _, _) -> true
-      | () -> false)
+  assert (not (cloexec fd));
+  assert (match Signals.next events with
+    | exception Invalid_argument _ -> true
+    | _ -> false);
+  let exception Exit_scope in
+  assert (match Signals.with_events (fun _ -> raise Exit_scope) with
+    | exception Exit_scope -> true
+    | _ -> false);
+  Unix.kill (Unix.getpid ()) Sys.sigterm;
+  assert (term_signals () = 1);
+  print_endline "ARC Unix signal readiness: PASS"
 
 let () =
   let reader, writer = Unix.pipe ~cloexec:true () in

@@ -124,21 +124,24 @@ streams. The daemon bootstrap can use `fork` and `setsid` from a single
 OS thread, and `execv` replaces the current image during reload.
 `Unix.Error.of_number` converts errno values from native bindings.
 
-On macOS, `Unix.Signal_events.with_events` temporarily owns delivery of
-SIGINT, SIGTERM, and SIGCHLD for the process. Use it from the single
-scheduler thread. Await the
-borrowed kqueue descriptor with `Fiber.fd_wait`, then drain `next` until it
-returns `None`. A `Child_exit` event can cover multiple child statuses, so
-reap with `waitpid [WNOHANG]` until no status is ready. The scope restores the
-previous signal actions and closes the descriptor, including on exceptions.
-Other platforms report `ENOSYS` for this signal source.
+`Unix.Signal_events.with_events` temporarily owns delivery of SIGINT,
+SIGTERM, and SIGCHLD for the process. Use it from the single scheduler
+thread. Await its borrowed descriptor with `Fiber.fd_wait` and drain
+`next` until it returns `None`. Reap with `waitpid [WNOHANG]` until no
+status is ready because one `Child_exit` event can cover multiple children.
+macOS uses kqueue. Linux uses an eventfd watched by epoll and keeps the
+caller's signal mask during the callback, including when launching children.
+The scope restores previous signal actions and closes the descriptor on
+exit, including on exceptions. Other platforms report `ENOSYS`.
 
 `ninja -j1 ocpkg_arc_unix` exercises a close-on-exec pipe, nonblocking reads,
 offset byte transfers, end of file, file creation and append, native
 descriptor adoption, duplication, and inheritance flags. The package
 fixture also checks Unix-domain and loopback connections, listener and
 client readiness, half-close, datagram pairs, running, stopped, signaled,
-and exited children, and macOS signal readiness through the Fiber scheduler.
+and exited children, and signal readiness through the Fiber scheduler on
+macOS and Linux. A subprocess launched within the scope can still exit
+from SIGTERM.
 File checks cover symlink-aware metadata, seek and truncation, and record
 lock contention against a separate process.
 Subprocess checks cover PATH lookup, standard stream redirection, inherited
