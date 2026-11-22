@@ -1,6 +1,7 @@
 (library
  (name ocamlcc)
  (wrapped false)
+ (modules (:standard \ sha256))
  (libraries compiler-libs.common unix))
 
 ;; Keep standalone generated C headers in sync with the runtime view ABI.
@@ -13,3 +14,9 @@
     (echo "let contents = {|")
     (cat %{deps})
     (echo "|}")))))
+
+(library
+ (name ocpkg_core)
+ (wrapped false)
+ (modules sha256)
+ (libraries unix))

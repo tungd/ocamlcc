@@ -28,6 +28,13 @@ scheduler or replace Ninja/Make. A curated snapshot ties exact sources and
 recipes to an ocamlcc compiler/runtime and records compatibility evidence.
 Module dependency ordering is an implementation detail, not the product focus.
 
+# Content digests
+
+`Sha256` streams file bytes and hashes directory trees using the existing
+package companion's canonical encoding. It orders paths by component and
+includes the file digest and executable bit for each regular file.
+Symlinks and special files are rejected.
+
 # Model
 
 - Snapshot: immutable package selection, dependencies, source SHA-256 digests,

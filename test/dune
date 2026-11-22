@@ -480,3 +480,8 @@
  (name linker_test)
  (modules linker_test)
  (libraries ocamlcc))
+
+(test
+ (name sha256_test)
+ (modules sha256_test)
+ (libraries ocamlcc ocpkg_core unix))
