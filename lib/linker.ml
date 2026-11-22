@@ -21,6 +21,17 @@ let compile_source ~verbose (tc : Target.Toolchain.t) extra_flags src obj =
   let args = tc.cc_base_args @ extra_flags @ ["-c"; src; "-o"; obj] in
   run_cmd ~verbose tc.cc_prog args
 
+let compile_many ~verbose ~work_dir toolchain flags sources =
+  let rec compile objects index = function
+    | [] -> Ok (List.rev objects)
+    | source :: rest ->
+        let base = Filename.chop_extension (Filename.basename source) in
+        let object_file = Filename.concat work_dir (Printf.sprintf "u_%d_%s.o" index base) in
+        let* () = compile_source ~verbose toolchain flags source object_file in
+        compile (object_file :: objects) (index + 1) rest
+  in
+  compile [] 0 sources
+
 let archive ~verbose (tc : Target.Toolchain.t) output objects =
   if Sys.file_exists output then Sys.remove output;
   run_cmd ~verbose tc.ar_prog (["rcs"; output] @ objects)

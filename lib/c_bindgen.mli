@@ -29,3 +29,12 @@ val generate_file :
   unit ->
   (generated, string) result
 (** Convenience wrapper reading [filename] from disk before calling [generate]. *)
+
+type headers = { shim_files : string list; symbols : string list }
+
+val generate_headers :
+  include_dirs:string list -> nopervasives:bool -> nostdlib:bool ->
+  work_dir:string -> output:string -> (string * string) list ->
+  (headers, string) result
+(** Generate headers and shims for ordered [(module_name, filename)] pairs.
+    With multiple interfaces, [output] is an umbrella header. *)

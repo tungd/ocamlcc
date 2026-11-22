@@ -120,7 +120,10 @@ paths. `Dep_graph` scans source dependencies and returns ordered interface
 and implementation steps. It restores the caller's compiler-libs dependency
 state after each scan. `Linker` owns native compilation commands, final
 archive and linker arguments, symbol visibility, and XCFramework packaging.
-`Driver` coordinates these operations with the compilation pipeline.
+`Build_units` compiles the ordered interfaces and implementations, threading
+export facts and emitting the executable entry point. `C_bindgen` handles
+single headers, umbrella headers, and FFI shims. `Driver` selects the output
+mode and coordinates these operations with the runtime and stdlib inputs.
 
 # Runtime objects
 

@@ -978,3 +978,53 @@ let generate_file ?(include_dirs = []) ?(nopervasives = false)
   | source ->
       generate ~include_dirs ~nopervasives ~nostdlib ?header_include ~filename
         ~modname source
+
+type headers = { shim_files : string list; symbols : string list }
+
+let generate_headers ~include_dirs ~nopervasives ~nostdlib ~work_dir ~output interfaces =
+  let open Sys_util.Result_syntax in
+  match interfaces with
+  | [] -> Error "--emit-header requires at least one .mli input"
+  | _ ->
+      let header_dir = Filename.dirname output in
+      Sys_util.mkdir_p header_dir;
+      let multiple = List.length interfaces > 1 in
+      let basename = Filename.basename output in
+      let stem = Filename.remove_extension basename in
+      let ext = match Filename.extension basename with "" -> ".h" | ext -> ext in
+      let rec generate_all headers shim_files symbols = function
+        | [] ->
+            if multiple then begin
+              let guard =
+                "OCAMLCC_UMBRELLA_" ^
+                String.map (function
+                  | 'A' .. 'Z' | '0' .. '9' as c -> c
+                  | _ -> '_') (String.uppercase_ascii basename)
+              in
+              let includes =
+                List.rev_map (Printf.sprintf "#include \"%s\"") headers
+                |> String.concat "\n"
+              in
+              Sys_util.write_file output
+                (Printf.sprintf "#ifndef %s\n#define %s\n\n%s\n\n#endif /* %s */\n"
+                   guard guard includes guard)
+            end;
+            Ok { shim_files = List.rev shim_files; symbols = List.rev symbols }
+        | (modname, filename) :: rest ->
+            let base = String.uncapitalize_ascii modname in
+            let out_h =
+              if multiple then Filename.concat header_dir (stem ^ "_" ^ base ^ ext)
+              else output
+            in
+            let out_c = Filename.concat work_dir (base ^ "_shim.c") in
+            let header_include = Filename.basename out_h in
+            let* generated =
+              generate_file ~include_dirs ~nopervasives ~nostdlib ~header_include
+                ~filename ~modname ()
+            in
+            Sys_util.write_file out_h generated.header;
+            Sys_util.write_file out_c generated.shim_c;
+            generate_all (header_include :: headers) (out_c :: shim_files)
+              (List.rev_append generated.exported_symbols symbols) rest
+      in
+      generate_all [] [] [] interfaces

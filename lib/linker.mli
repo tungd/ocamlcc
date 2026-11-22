@@ -18,6 +18,10 @@ val compile_source :
   verbose:bool -> Target.Toolchain.t -> string list -> string -> string ->
   (unit, string) result
 
+val compile_many :
+  verbose:bool -> work_dir:string -> Target.Toolchain.t -> string list ->
+  string list -> (string list, string) result
+
 val link : Request.t -> (string, string) result
 
 val xcframework :

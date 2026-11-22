@@ -58,6 +58,7 @@ OCAMLCC_MODULES: list[tuple[str, bool, bool]] = [
     ("runtime_build", True, True),
     ("stdlib_build", True, True),
     ("dep_graph", True, True),
+    ("build_units", True, True),
     ("driver", True, True),
     ("main", False, False),
 ]

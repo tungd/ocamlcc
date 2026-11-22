@@ -109,7 +109,6 @@ let () =
   in
   let runtime_dir = Filename.concat root "runtime" in
   let stdlib_src_dir = Filename.concat root "stdlib.sources" in
-  let rt_build_dir = Filename.concat root "build/rt" in
 
   (* 1. Target parsing *)
   let targets_ok =
@@ -155,14 +154,14 @@ let () =
       in
       (* 3a. Multi-module executable (inputs reversed) *)
       let exe_out = Filename.concat tmp "mod_app" in
+      let fixture = Filename.concat tmp "fixture" in
+      let unwrap = function Ok value -> value | Error msg -> failwith msg in
+      let target = Target.resolve "host" |> unwrap in
+      let toolchain = Target.toolchain target |> unwrap in
       let stdlib_build_dir =
-        let unwrap = function Ok value -> value | Error msg -> failwith msg in
-        let stage = Filename.concat tmp "fixture" in
         let plan = Stdlib_build.prepare ~disabled:false ~prefer_prebuilt:false
             ~prefer_archive:false ~sources:(Some stdlib_src_dir)
-            ~prebuilt:None ~work_dir:stage |> unwrap in
-        let target = Target.resolve "host" |> unwrap in
-        let toolchain = Target.toolchain target |> unwrap in
+            ~prebuilt:None ~work_dir:fixture |> unwrap in
         let objects = Stdlib_build.link_inputs ~verbose:false ~qbe ~target ~toolchain plan
             |> unwrap in
         let directory = Option.get (Stdlib_build.interface_dir plan) in
@@ -172,6 +171,14 @@ let () =
         let summaries = List.map (fun obj -> Filename.remove_extension obj ^ ".opt") objects in
         Export_summary.write_archive ~archive ~units:summaries;
         directory
+      in
+      let rt_build_dir = Filename.concat fixture "rt" in
+      let _runtime =
+        Runtime_build.link_inputs
+          { single_thread = false; prefer_prebuilt = false; include_main = true;
+            prebuilt_dir = None; source_dir = Some runtime_dir; work_dir = rt_build_dir;
+            toolchain; verbose = false }
+        |> unwrap
       in
       let base_cfg =
         { (Driver.default_config ()) with
@@ -331,6 +338,7 @@ let () =
          Driver.build
            { base_cfg with
              prebuilt_stdlib_dir = Some (Filename.concat tmp "no_prebuilt_stdlib");
+             prebuilt_rt_dir = Some (Filename.concat tmp "no_prebuilt_runtime");
              inputs = [ fb_app_ml ];
              output = Some fb_app_out;
              work_dir = Some (Filename.concat tmp "work_fb_app") }
