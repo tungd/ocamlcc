@@ -114,7 +114,9 @@ build $builddir/rt/arc.o: cc_rt runtime/arc.c | runtime/arc_internal.h runtime/a
 build $builddir/rt/slab.o: cc_rt runtime/slab.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
 build $builddir/rt/cycle.o: cc_rt runtime/cycle.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
 build $builddir/rt/weak.o: cc_rt runtime/weak.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
-build $builddir/rt/primitives.o: cc_rt runtime/primitives.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h runtime/bigarray.inc
+build $builddir/rt/primitives.o: cc_rt runtime/primitives.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h runtime/bigarray.inc $
+  runtime/caml_compat.inc runtime/caml/mlvalues.h runtime/caml/alloc.h runtime/caml/custom.h $
+  runtime/caml/callback.h runtime/caml/fail.h runtime/caml/hash.h runtime/caml/intext.h
 build $builddir/rt/closure.o:  cc_rt runtime/closure.c  | runtime/arc.h runtime/pal.h
 build $builddir/rt/fiber.o:    cc_rt runtime/fiber.c    | runtime/fiber.h runtime/arc.h runtime/pal.h
 build $builddir/rt/builtins.o:   cc_rt runtime/builtins.c
@@ -135,7 +137,9 @@ build $builddir/rt-single/arc.o: cc_rt_single runtime/arc.c | runtime/arc_intern
 build $builddir/rt-single/slab.o: cc_rt_single runtime/slab.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
 build $builddir/rt-single/cycle.o: cc_rt_single runtime/cycle.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
 build $builddir/rt-single/weak.o: cc_rt_single runtime/weak.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
-build $builddir/rt-single/primitives.o: cc_rt_single runtime/primitives.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h runtime/bigarray.inc
+build $builddir/rt-single/primitives.o: cc_rt_single runtime/primitives.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h runtime/bigarray.inc $
+  runtime/caml_compat.inc runtime/caml/mlvalues.h runtime/caml/alloc.h runtime/caml/custom.h $
+  runtime/caml/callback.h runtime/caml/fail.h runtime/caml/hash.h runtime/caml/intext.h
 build $builddir/rt-single/pal.o: cc_rt_single runtime/pal.c | runtime/pal.h
 build $builddir/rt-single/pal_ctx.o $builddir/rt-single/closure.o $builddir/rt-single/fiber.o $builddir/rt-single/builtins.o $builddir/rt-single/main_entry.o: copy_rt_single $builddir/rt/pal_ctx.o $builddir/rt/closure.o $builddir/rt/fiber.o $builddir/rt/builtins.o $builddir/rt/main_entry.o
 build $builddir/rt-single/libocamlrt_st.a: ar $builddir/rt-single/arc.o $builddir/rt-single/slab.o $builddir/rt-single/cycle.o $builddir/rt-single/weak.o $builddir/rt-single/primitives.o $builddir/rt-single/pal.o $builddir/rt-single/pal_ctx.o $builddir/rt-single/closure.o $builddir/rt-single/fiber.o $builddir/rt-single/builtins.o $builddir/rt-single/main_entry.o
@@ -471,7 +475,9 @@ build $builddir/asan/rt/arc.o: cc_rt_asan runtime/arc.c | runtime/arc_internal.h
 build $builddir/asan/rt/slab.o: cc_rt_asan runtime/slab.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
 build $builddir/asan/rt/cycle.o: cc_rt_asan runtime/cycle.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
 build $builddir/asan/rt/weak.o: cc_rt_asan runtime/weak.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
-build $builddir/asan/rt/primitives.o: cc_rt_asan runtime/primitives.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h runtime/bigarray.inc
+build $builddir/asan/rt/primitives.o: cc_rt_asan runtime/primitives.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h runtime/bigarray.inc $
+  runtime/caml_compat.inc runtime/caml/mlvalues.h runtime/caml/alloc.h runtime/caml/custom.h $
+  runtime/caml/callback.h runtime/caml/fail.h runtime/caml/hash.h runtime/caml/intext.h
 build $builddir/asan/rt/closure.o:  cc_rt_asan runtime/closure.c  | runtime/arc.h runtime/pal.h
 build $builddir/asan/rt/fiber.o:    cc_rt_asan runtime/fiber.c    | runtime/fiber.h runtime/arc.h runtime/pal.h
 build $builddir/asan/rt/builtins.o:   cc_rt_asan runtime/builtins.c
@@ -575,7 +581,9 @@ build $builddir/tsan/rt/arc.o: cc_rt_tsan runtime/arc.c | runtime/arc_internal.h
 build $builddir/tsan/rt/slab.o: cc_rt_tsan runtime/slab.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
 build $builddir/tsan/rt/cycle.o: cc_rt_tsan runtime/cycle.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
 build $builddir/tsan/rt/weak.o: cc_rt_tsan runtime/weak.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
-build $builddir/tsan/rt/primitives.o: cc_rt_tsan runtime/primitives.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h runtime/bigarray.inc
+build $builddir/tsan/rt/primitives.o: cc_rt_tsan runtime/primitives.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h runtime/bigarray.inc $
+  runtime/caml_compat.inc runtime/caml/mlvalues.h runtime/caml/alloc.h runtime/caml/custom.h $
+  runtime/caml/callback.h runtime/caml/fail.h runtime/caml/hash.h runtime/caml/intext.h
 build $builddir/tsan/rt/closure.o:    cc_rt_tsan runtime/closure.c  | runtime/arc.h runtime/pal.h
 build $builddir/tsan/rt/fiber.o:      cc_rt_tsan runtime/fiber.c    | runtime/fiber.h runtime/arc.h runtime/pal.h
 build $builddir/tsan/rt/builtins.o:   cc_rt_tsan runtime/builtins.c
@@ -644,6 +652,13 @@ rule run_ocpkg_mirage
 
 build ocpkg_mirage_leaf: run_ocpkg_mirage tests/ocpkg/mirage_leaf.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a
 build ocpkg_mirage_entropy: run_ocpkg_mirage tests/ocpkg/mirage_entropy.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a
+
+rule run_ocpkg_zarith
+  command = sh tests/ocpkg/zarith.sh $builddir/bin/ocpkg "$${ZARITH_SOURCE:?Set ZARITH_SOURCE to the unpacked Zarith 1.14 sources}"
+  description = TEST Zarith C compatibility
+  pool = console
+
+build ocpkg_zarith: run_ocpkg_zarith tests/ocpkg/zarith.sh tests/ocpkg/zarith_public.ml tools/stage-zarith.py | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a
 
 rule run_dist_smoke
   command = sh tests/ocpkg/dist_smoke.sh "$$(sh tools/dist.sh --path)" "$$(mktemp -d)"

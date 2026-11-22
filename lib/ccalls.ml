@@ -125,6 +125,7 @@ let table =
     ("caml_atomic_exchange_field", abi 3 false false);
     ("caml_atomic_fetch_add_field", abi 3 false false);
     ("ocamlcc_set_at_exit_fn", abi 1 false false);
+    ("ocamlcc_caml_install_lookup", abi 1 false false);
     ("caml_sys_exit", abi 1 false false);
     (* channels / raw fd hooks *)
     ("caml_sys_open", abi 3 true false);
@@ -324,7 +325,7 @@ let returns_imm = function
   | "ocamlcc_raw_fd_read" | "ocamlcc_raw_fd_write" | "ocamlcc_raw_fd_close"
   | "ocamlcc_raw_fd_isatty" | "ocamlcc_stdio_flush"
   | "ocamlcc_ba_to_bytes" | "ocamlcc_ba_of_bytes_slice"
-  | "ocamlcc_set_at_exit_fn" | "ocamlcc_sys_is_win32"
+  | "ocamlcc_set_at_exit_fn" | "ocamlcc_caml_install_lookup" | "ocamlcc_sys_is_win32"
   | "ocamlcc_fiber_is_done" | "ocamlcc_fiber_is_main"
   | "ocamlcc_fiber_can_yield" | "ocamlcc_fiber_sched_set"
   | "ocamlcc_effect_register_exceptions"

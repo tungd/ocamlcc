@@ -1,6 +1,10 @@
 /* Native implementations of standard-library primitives and Bigarray. */
 #include "arc_internal.h"
 
+#define OCAMLCC_CAML_ALLOC 1
+#include "caml/custom.h"
+#include <string.h>
+
 static int ba_compare(const ArcBigarray *, const ArcBigarray *, int);
 static uint32_t ba_hash(const ArcBigarray *);
 
@@ -636,6 +640,16 @@ static int64_t follow_forward(int64_t v, int64_t *steps)
     return v;
 }
 
+static const struct custom_operations *foreign_custom_ops(int64_t v)
+{
+    if (!is_heap_ptr(v))
+        return NULL;
+    const ArcHeader *header = (const ArcHeader *)(uintptr_t)v - 1;
+    if (header->tag != ARC_TAG_CUSTOM || header->reserved != ARC_CUSTOM_FOREIGN)
+        return NULL;
+    return Custom_ops_val(v);
+}
+
 static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
                            int64_t *steps)
 {
@@ -655,10 +669,12 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
         int ib = (b & 1) != 0;
         if (ia && ib)
             return (a < b) ? -1 : 1;
-        if (ia)
-            return -1;
-        if (ib)
-            return 1;
+        if (ia || ib) {
+            const struct custom_operations *ops = foreign_custom_ops(ia ? b : a);
+            if (ops != NULL && ops->compare_ext != NULL)
+                return ops->compare_ext(a, b);
+            return ia ? -1 : 1;
+        }
 
         const ArcHeader *ha = (const ArcHeader *)(uintptr_t)a - 1;
         const ArcHeader *hb = (const ArcHeader *)(uintptr_t)b - 1;
@@ -684,6 +700,17 @@ static int val_compare_raw(int64_t a, int64_t b, int total, int depth,
         if (ta == (uint16_t)ARC_TAG_CUSTOM) {
             if (ha->reserved != hb->reserved)
                 return (ha->reserved < hb->reserved) ? -1 : 1;
+            if (ha->reserved == ARC_CUSTOM_FOREIGN) {
+                const struct custom_operations *left = Custom_ops_val(a);
+                const struct custom_operations *right = Custom_ops_val(b);
+                if (left != right) {
+                    int order = strcmp(left->identifier, right->identifier);
+                    if (order != 0)
+                        return order;
+                }
+                if (left->compare != NULL)
+                    return left->compare(a, b);
+            }
             if (ha->reserved == ARC_CUSTOM_BIGARRAY)
                 return ba_compare((void *)(uintptr_t)a, (void *)(uintptr_t)b, total);
             if (ha->reserved == ARC_CUSTOM_INT32 ||
@@ -920,16 +947,18 @@ int64_t caml_hash(int64_t count_val, int64_t limit_val,
                 h = hash_mix_intnat(h, fields[1]);
                 num--;
             } else if (tag == (uint16_t)ARC_TAG_CUSTOM) {
-                int64_t cv = unbox_custom_i64(v);
                 if (hdr->reserved == ARC_CUSTOM_INT32 ||
                     hdr->reserved == ARC_CUSTOM_NATIVEINT) {
-                    h = hash_mix_intnat(h, cv);
+                    h = hash_mix_intnat(h, unbox_custom_i64(v));
                     num--;
                 } else if (hdr->reserved == ARC_CUSTOM_BIGARRAY) {
                     h = hash_mix_intnat(h, ba_hash((void *)(uintptr_t)v));
                     num--;
                 } else if (hdr->reserved == ARC_CUSTOM_INT64) {
-                    h = hash_mix_int64(h, cv);
+                    h = hash_mix_int64(h, unbox_custom_i64(v));
+                    num--;
+                } else if (hdr->reserved == ARC_CUSTOM_FOREIGN && Custom_ops_val(v)->hash != NULL) {
+                    h = hash_mix32(h, (uint32_t)Custom_ops_val(v)->hash(v));
                     num--;
                 }
             } else if (tag == (uint16_t)ARC_TAG_ARRAY || tag < 245u) {
@@ -2171,3 +2200,5 @@ int64_t ocamlcc_marshal_kind(int64_t v)
         return tag_int(251);
     return tag_int((int64_t)tag);
 }
+
+#include "caml_compat.inc"

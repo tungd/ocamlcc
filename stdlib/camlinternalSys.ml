@@ -62,6 +62,11 @@ let lookup_named_value (name : string) : 'a option =
   mutex_unlock named_lock;
   r
 
+external install_named_value_lookup : (string -> obj_t option) -> unit =
+  "ocamlcc_caml_install_lookup"
+
+let () = install_named_value_lookup lookup_named_value
+
 (* ---- Backtraces (empty stubs) ---- *)
 
 let backtrace_enabled : bool mref = { contents = false }

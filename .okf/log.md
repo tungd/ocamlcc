@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Support scoped allocating C primitives and inline custom values for unchanged Zarith sources. Exercise GMP, mixed integer comparison, exception propagation, and temporary ARC ownership. See [allocating C primitives](/concepts/package-catalog.md#allocating-c-primitives).
+
 - 2026-11-23 (codex/1) — Route ARC Unix signals through eventfd on Linux. Exercise Fiber readiness, handler restoration, and SIGTERM in a subprocess launched within the signal scope. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
 
 - 2026-11-23 (codex/1) — Expose Fiber.step_ready for host event loops. Run one queued task and return a boolean so host callbacks can drain work without polling. See [host event loops](/concepts/wren-fibers.md#host-event-loops).

@@ -18,6 +18,9 @@ sources:
   - id: mfetch
     resource: https://github.com/robur-coop/mfetch
     title: Source vendoring and locking
+  - id: zarith-check
+    resource: tests/ocpkg/zarith.sh
+    title: Zarith 1.14 native integration fixture
 ---
 
 # Native toolchain
@@ -153,6 +156,36 @@ released the project lock.
 The native Crunch integration ran `ocpkg vendor` and `ocpkg build` on
 macOS ARM64. All nine generation and runtime checks passed, including
 byte-for-byte upstream golden outputs and both binary-data round trips.
+
+# Allocating C primitives
+
+`cflag -DOCAMLCC_CAML_ALLOC` selects the allocating C headers. A C wrapper
+enters `ocamlcc_caml_call` at the OCaml entry point. The call owns every
+temporary until return or raise, including a boxed value reduced to an
+immediate and tuple fields initialized from borrowed arguments. The runtime
+returns an owned result to OCaml. The call is synchronous, and field writes
+are limited to initialization of fresh blocks.
+
+Custom payloads store their bytes inline and use static operations with
+no finalizer. Polymorphic comparison can call `compare_ext` for a mixed
+immediate and boxed pair, and hashing calls the custom hash operation.
+Named exceptions resolve through the existing `Callback` table.
+Marshal supports the built-in custom kinds.
+
+With `ZARITH_SOURCE` set to the unpacked Zarith 1.14 source directory and
+GMP available through `pkg-config`, `ninja -j1 ocpkg_zarith` packages the
+original OCaml and C sources with generated entry-point wrappers. It checks
+GMP exponentiation, alias and tuple ownership, comparison, hashing, and
+exceptions. A loop checks that temporary ARC object counts return to
+baseline in both profiles.[^zarith-check]
+
+From the snapshot directory, run
+`python3 /path/to/ocamlcc/tools/stage-zarith.py /path/to/zarith-1.14 ports/zarith`.
+The helper writes the port and prints the recipe to add to the snapshot.
+It preserves the upstream C and OCaml source bytes and takes the GMP flags
+from the host's `pkg-config`.
+
+[^zarith-check]: The fixture stages byte-identical sources and exercises the host GMP library.
 
 # Standalone bundle
 

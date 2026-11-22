@@ -36,6 +36,7 @@
 #define ARC_CUSTOM_COND      4u
 #define ARC_CUSTOM_BIGARRAY  6u
 #define ARC_CUSTOM_BIGARRAY_BUFFER 7u
+#define ARC_CUSTOM_FOREIGN   8u
 
 /* The top scan-count bit is spare when the payload cannot hold 32768
  * fields. Larger blocks retain the full scan count. */
