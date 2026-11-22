@@ -13,6 +13,8 @@
   (runtime/weak.c as occ/rt-src/weak.c)
   (runtime/primitives.c as occ/rt-src/primitives.c)
   (runtime/arc.h as occ/rt-src/arc.h)
+  (runtime/caml/mlvalues.h as occ/rt-src/caml/mlvalues.h)
+  (runtime/caml/memory.h as occ/rt-src/caml/memory.h)
   (runtime/ocamlcc_bigarray_types.h as occ/rt-src/ocamlcc_bigarray_types.h)
   (runtime/ocamlcc_bigarray.h as occ/rt-src/ocamlcc_bigarray.h)
   (runtime/bigarray.inc as occ/rt-src/bigarray.inc)

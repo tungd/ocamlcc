@@ -21,6 +21,8 @@ install -m 755 "$build_dir/bin/occ" "$build_dir/bin/ocpkg" "$prefix/bin/"
 install -m 755 "$build_dir/qbe/qbe" "$lib/qbe"
 install -m 644 "$build_dir/rt/libocamlrt.a" "$build_dir/rt-single/libocamlrt_st.a" "$lib/rt/"
 install -m 644 runtime/*.c runtime/*.h runtime/*.S runtime/*.inc "$lib/rt-src/"
+mkdir -p "$lib/rt-src/caml"
+install -m 644 runtime/caml/*.h "$lib/rt-src/caml/"
 install -m 644 "$build_dir/stdlib/"*.cmi "$build_dir/stdlib/"*.o "$build_dir/stdlib/"*.exports \
   "$build_dir/stdlib/libocamlstdlib.a" "$build_dir/stdlib/libocamlstdlib.a.opt" "$lib/stdlib/"
 install -m 644 "$build_dir/stdlib.sources" "$lib/stdlib-src/stdlib.sources"

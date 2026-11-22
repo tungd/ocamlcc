@@ -637,6 +637,13 @@ build ocpkg_test: phony ocpkg_native_cli ocpkg_workspace_incremental ocpkg_wrapp
 
 build ocpkg_catalog: run_ocpkg_test tests/ocpkg/catalog_daily.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a packages/snapshots/default.snap
 
+rule run_ocpkg_mirage_leaf
+  command = sh $in $builddir/bin/ocpkg "$$MIRAGE_CRYPTO_SOURCE"
+  description = TEST Mirage Crypto leaf C compatibility
+  pool = console
+
+build ocpkg_mirage_leaf: run_ocpkg_mirage_leaf tests/ocpkg/mirage_leaf.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a
+
 rule run_dist_smoke
   command = sh tests/ocpkg/dist_smoke.sh "$$(sh tools/dist.sh --path)" "$$(mktemp -d)"
   description = TEST relocated distribution

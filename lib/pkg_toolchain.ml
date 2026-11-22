@@ -104,7 +104,8 @@ let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose =
         Stdlib_input.Source source
   in
   let rt_sources = Option.fold ~none:[] ~some:(fun dir ->
-        matching_files dir [".c"; ".h"; ".inc"; ".S"]) (Target.runtime_sources None) in
+        matching_files dir [".c"; ".h"; ".inc"; ".S"]
+        @ matching_files (Filename.concat dir "caml") [".h"]) (Target.runtime_sources None) in
   let rt_objects =
     if host then
       Option.fold ~none:[] ~some:(fun dir -> matching_files dir [".a"; ".o"])

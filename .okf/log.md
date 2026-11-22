@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Add opt-in ARC leaf C headers for unchanged Mirage Crypto arithmetic sources. Compare field and point outputs with stock OCaml. See [package build cache](/concepts/package-catalog.md#build-cache).
+
 - 2026-11-23 (codex/1) — Let ocpkg recipes stage hyphenated C source and header names. Test the original header name through native compilation and linking. See [package build cache](/concepts/package-catalog.md#build-cache).
 
 - 2026-11-23 (codex/1) — Bound scheduler polls by the main fiber's sleep deadline. Verify a quiet descriptor stays pending while the main fiber sleeps and resumes. See [main-fiber sleep](/concepts/wren-fibers.md#main-fiber-sleep).

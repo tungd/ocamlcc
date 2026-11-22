@@ -99,6 +99,17 @@ downstream executable or shared-library linker arguments with `ldflag`.
 C source and header names may contain hyphens, so recipes can preserve
 upstream header names and their corresponding includes.
 
+Recipes can opt into the ARC leaf C headers with
+`cflag -DOCAMLCC_CAML_LEAF`. The headers expose borrowed tagged integers,
+strings, writable byte buffers, and read-only record fields for C functions
+that neither allocate ARC values nor call OCaml. The relocated and Dune
+installs carry the headers under `lib/occ/rt-src/caml`. The package
+fingerprint includes those headers.
+
+With `MIRAGE_CRYPTO_SOURCE` pointing at the unpacked Mirage Crypto 2.4.1
+source, `ninja -j1 ocpkg_mirage_leaf` compares unchanged P-256 C stubs
+against stock OCaml in both ARC profiles.
+
 Workspace units use the local `.ocpkg/cache/unit/` store, keyed by source
 bytes, imported interface and export digests, and effective dependency
 fingerprints. Workspace C sources compile on each build to pick up current
