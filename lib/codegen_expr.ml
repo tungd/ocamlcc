@@ -1043,6 +1043,8 @@ let with_dereferenced_receiver b (ce : Anf.cexpr) f =
   | Some (Anf.MutVar slot) -> with_heap_slot b slot f
   | _ -> f ()
 
+(* Keep each emitter's temporaries in its own frame. A recursive walk of a
+   large ANF function can keep thousands of these continuations active. *)
 let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   match e with
   | Halt a -> compile_atom hooks b a
@@ -1052,70 +1054,19 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   | Let (id, (App _ as ce), Halt (Var v)) when tail && Ident.same id v ->
       compile_cexpr hooks b ~tail:true ce
   | Let (id, PollFinalizers, CheckExn (exception_kind, on_err, on_ok)) ->
-      let done_ = fresh_label b "finalizers_done" in
-      emit_finalizer_poll b done_;
-      ignore (compile_check_exn hooks b exception_kind on_err (fun () ->
-        close_block b (Jmp done_);
-        unit_const));
-      start_block b done_;
-      with_shadowed_vars b [id] (fun () ->
-        bind_value b id unit_const;
-        compile_aexpr hooks b tail on_ok)
+      compile_finalizer_poll hooks b tail id exception_kind on_err on_ok
   | Let (id, (StringGet (true, _, _) | BytesSet (true, _, _, _)
             | BytesGetN (true, _, _, _) | BytesSetN (true, _, _, _, _)
             | ArrayGet (true, _, _, _) | ArraySet (true, _, _, _, _)
             | FloatArrayGet (true, _, _) | FloatArraySet (true, _, _, _) as ce),
       CheckExn (_, on_err, on_ok)) ->
-      let on_oob () = ignore (compile_aexpr hooks b tail on_err) in
-      let value = compile_cexpr ~on_oob hooks b ~tail:false ce in
-      bind_value b id value;
-      let res = with_dereferenced_receiver b ce (fun () ->
-        compile_aexpr hooks b tail on_ok) in
-      forget_value b id;
-      res
+      compile_checked_access hooks b tail id ce on_err on_ok
   | Let (id, ce, body) ->
-      let v =
-        match ce with
-        | DirectApp ({ inline_leaf = Some lf; _ }, args) -> inline_leaf hooks b lf args
-        | _ -> compile_cexpr hooks b ~tail:false ce
-      in
-      if not (block_is_open b) then unit_const
-      else begin
-        bind_value b id v;
-        let res =
-          match ce, body with
-          | (CreateBytes _ | MakeArrayInit _), CheckExn (_, on_err, on_ok) ->
-              (* Checked allocators return a tagged failure value on error. *)
-              compile_check_exn hooks b Anf.May_raise on_err (fun () ->
-                  with_known_heap b v (fun () -> compile_aexpr hooks b tail on_ok))
-          | _ -> with_dereferenced_receiver b ce (fun () ->
-              compile_aexpr hooks b tail body) in
-        forget_value b id;
-        res
-      end
+      compile_let hooks b tail id ce body
   | MutLet (id, ce, body) ->
-      let v = compile_cexpr hooks b ~tail:false ce in
-      let slot = fresh_temp b "mslot" in
-      emit_start_alloc b slot 8;
-      let store = match ce with
-        | ScalarValue (rep, _) -> scalar_store (scalar_type rep)
-        | _ -> Storel in
-      emit b (Store (store, v, slot));
-      bind_slot b id slot;
-      let res = with_dereferenced_receiver b ce (fun () ->
-        compile_aexpr hooks b tail body) in
-      forget_slot b id;
-      res
+      compile_mutable_let hooks b tail id ce body
   | LetJoin (id, rhs, body) ->
-      let v = compile_aexpr hooks b false rhs in
-      forget_heap_slots b;
-      if not (block_is_open b) then unit_const
-      else begin
-        bind_value b id v;
-        let res = compile_aexpr hooks b tail body in
-        forget_value b id;
-        res
-      end
+      compile_join hooks b tail id rhs body
   | LetRec (bindings, body) ->
       hooks.compile_letrec (compile_aexpr hooks) b tail bindings body
   | If (cond, th, el) -> compile_if hooks b tail Long cond th el
@@ -1130,119 +1081,24 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       jump_static_handler b id (fun () -> List.map (compile_atom hooks b) args);
       unit_const
   | While (cond, body) ->
-      forget_heap_slots b;
-      let lcond = fresh_label b "wcond" in
-      close_block b (Jmp lcond);
-      start_block b lcond;
-      let cv_tagged = compile_aexpr hooks b false cond in
-      if block_is_open b then begin
-        let lbody = fresh_label b "wbody" in
-        let ldone = fresh_label b "wdone" in
-        let cv = fresh_temp b "wcmp" in
-        emit b (Cmp (Ne, Long, cv, cv_tagged, Int 1L));
-        close_block b (Br (cv, lbody, ldone));
-        start_block b lbody;
-        ignore (compile_aexpr hooks b false body);
-        if block_is_open b then close_block b (Jmp lcond);
-        start_block b ldone
-      end;
-      unit_const
+      compile_while hooks b cond body
   | For (id, start_a, stop_a, dir, body) ->
-      let sv = compile_untagged hooks b start_a in
-      let ev = compile_untagged hooks b stop_a in
-      forget_heap_slots b;
-      let enter_op, cont_op, step =
-        match dir with
-        | Asttypes.Upto -> (Cmp.Sle, Cmp.Slt, 1L)
-        | Asttypes.Downto -> (Cmp.Sge, Cmp.Sgt, -1L)
-      in
-      let enter = fresh_temp b "forenter" in
-      emit b (Cmp (enter_op, Long, enter, sv, ev));
-      let lpre = open_label b in
-      let lbody = fresh_label b "fbody" in
-      let lstep = fresh_label b "fstep" in
-      let lnext = fresh_label b "fnext" in
-      let ldone = fresh_label b "fdone" in
-      let iv = fresh_temp b "fori" in
-      let next_i = fresh_temp b "forn" in
-      close_block b (Br (enter, lbody, ldone));
-      start_block b lbody;
-      emit b (Phi (Long, iv, [ (lpre, sv); (lnext, next_i) ]));
-      with_untagged_index b id iv
-        (fun () -> ignore (compile_aexpr hooks b false body));
-      if block_is_open b then close_block b (Jmp lstep);
-      start_block b lstep;
-      let more = fresh_temp b "formore" in
-      emit b (Cmp (cont_op, Long, more, iv, ev));
-      close_block b (Br (more, lnext, ldone));
-      start_block b lnext;
-      emit b (Binop (Add, Long, next_i, iv, Int step));
-      close_block b (Jmp lbody);
-      start_block b ldone;
-      unit_const
+      compile_for hooks b id start_a stop_a dir body
   | Retain (id, body) ->
       let v = compile_atom hooks b (Var id) in
       emit_arc_if_heap b `Retain v;
       compile_aexpr hooks b tail body
   | (Release _ | ReleaseMut _) as cleanup ->
-      let rec ends_in_raise = function
-        | Anf.Release (_, body) | ReleaseMut (_, body) -> ends_in_raise body
-        | Raise _ | Unwind -> true
-        | _ -> false
-      in
-      let rec emit_releases = function
-        | Anf.Release (id, body) ->
-            emit_arc_if_heap b `Release (compile_atom hooks b (Var id));
-            emit_releases body
-        | ReleaseMut (id, body) ->
-            (match mutable_slot_opt b id with
-            | Some _ ->
-                emit_arc_if_heap b `Release (compile_atom hooks b (MutVar id))
-            | None -> ());
-            emit_releases body
-        | rest -> rest
-      in
-      let body =
-        if (inline_rc b) && not (compact_arc b) && ends_in_raise cleanup
-        then with_compact_arc b (fun () -> emit_releases cleanup)
-        else emit_releases cleanup
-      in
-      compile_aexpr hooks b tail body
+      compile_releases hooks b tail cleanup
   | DropReuse (v_id, tok_id, body) ->
-      let v = compile_atom hooks b (Var v_id) in
-      let tok = fresh_temp b "rtok" in
-      emit b
-        (Call (Long, tok, { fn = Global "arc_drop_reuse"; args = [ (Long, v) ] }));
-      bind_value b tok_id tok;
-      let res = compile_aexpr hooks b tail body in
-      forget_value b tok_id;
-      res
+      compile_drop_reuse hooks b tail v_id tok_id body
   | FreeReuse (tok_id, body) ->
       let tok = bound_value b tok_id in
       emit b
         (Call_void { fn = Global "arc_free_reuse"; args = [ (Long, tok) ] });
       compile_aexpr hooks b tail body
   | ShadowPush (vars, muts, rtoks, body) ->
-      if vars <> [] || muts <> [] || rtoks <> [] then
-        with_shadow_stack b (fun () ->
-            List.iter
-              (fun id ->
-                shadow_call b "arc_fiber_push" (compile_atom hooks b (Var id)))
-              vars;
-            List.iter
-              (fun mid ->
-                match mutable_slot_opt b mid with
-                | Some slot ->
-                    let v = fresh_temp b "shmut" in
-                    emit b (Load (Loadl, Long, v, slot));
-                    shadow_call b "arc_fiber_push" v
-                | None -> ())
-              muts;
-            List.iter
-              (fun tid ->
-                shadow_call b "arc_fiber_push_reuse" (bound_value b tid))
-              rtoks);
-      compile_aexpr hooks b tail body
+      compile_shadow_push hooks b tail vars muts rtoks body
   | ShadowPop (n_vals, n_reuse, body) ->
       if n_vals > 0 || n_reuse > 0 then
         with_shadow_stack b (fun () ->
@@ -1257,33 +1113,212 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   | CheckExn (exception_kind, on_err, on_ok) ->
       compile_check_exn hooks b exception_kind on_err (fun () -> compile_aexpr hooks b tail on_ok)
   | TryWith (body, exn_id, handler) ->
-      let lcatch = fresh_label b "catch" in
-      let ljoin = fresh_label b (if tail then "ret" else "tryj") in
-      let res = fresh_temp b (if tail then "res" else "tryv") in
-      let preds = ref [] in
-      let bv = with_try_handler b lcatch (fun () -> compile_aexpr hooks b tail body) in
-      if block_is_open b then begin
-        preds := (open_label b, bv) :: !preds;
-        close_block b (Jmp ljoin)
-      end;
-      start_block b lcatch;
-      let ex = fresh_temp b "exn" in
-      emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
-      emit b
-        (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, Int 0L) ] });
-      bind_value b exn_id ex;
-      let hv = compile_aexpr hooks b tail handler in
-      forget_value b exn_id;
-      if block_is_open b then begin
-        preds := (open_label b, hv) :: !preds;
-        close_block b (Jmp ljoin)
-      end;
-      (match !preds with
-      | [] -> unit_const
-      | _ ->
-          start_block b ljoin;
-          emit b (Phi (Long, res, List.rev !preds));
-          res)
+      compile_try_with hooks b tail body exn_id handler
+
+and[@inline never] compile_finalizer_poll hooks b tail id exception_kind on_err on_ok =
+  let done_ = fresh_label b "finalizers_done" in
+  emit_finalizer_poll b done_;
+  ignore (compile_check_exn hooks b exception_kind on_err (fun () ->
+    close_block b (Jmp done_);
+    unit_const));
+  start_block b done_;
+  with_shadowed_vars b [id] (fun () ->
+    bind_value b id unit_const;
+    compile_aexpr hooks b tail on_ok)
+
+and[@inline never] compile_checked_access hooks b tail id ce on_err on_ok =
+  let on_oob () = ignore (compile_aexpr hooks b tail on_err) in
+  let value = compile_cexpr ~on_oob hooks b ~tail:false ce in
+  bind_value b id value;
+  let res = with_dereferenced_receiver b ce (fun () ->
+    compile_aexpr hooks b tail on_ok) in
+  forget_value b id;
+  res
+
+and[@inline never] compile_let hooks b tail id ce body =
+  let v =
+    match ce with
+    | DirectApp ({ inline_leaf = Some lf; _ }, args) -> inline_leaf hooks b lf args
+    | _ -> compile_cexpr hooks b ~tail:false ce
+  in
+  if not (block_is_open b) then unit_const
+  else begin
+    bind_value b id v;
+    let res =
+      match ce, body with
+      | (CreateBytes _ | MakeArrayInit _), CheckExn (_, on_err, on_ok) ->
+          (* Checked allocators return a tagged failure value on error. *)
+          compile_check_exn hooks b Anf.May_raise on_err (fun () ->
+              with_known_heap b v (fun () -> compile_aexpr hooks b tail on_ok))
+      | _ -> with_dereferenced_receiver b ce (fun () ->
+          compile_aexpr hooks b tail body) in
+    forget_value b id;
+    res
+  end
+
+and[@inline never] compile_mutable_let hooks b tail id ce body =
+  let v = compile_cexpr hooks b ~tail:false ce in
+  let slot = fresh_temp b "mslot" in
+  emit_start_alloc b slot 8;
+  let store = match ce with
+    | ScalarValue (rep, _) -> scalar_store (scalar_type rep)
+    | _ -> Storel in
+  emit b (Store (store, v, slot));
+  bind_slot b id slot;
+  let res = with_dereferenced_receiver b ce (fun () ->
+    compile_aexpr hooks b tail body) in
+  forget_slot b id;
+  res
+
+and[@inline never] compile_join hooks b tail id rhs body =
+  let v = compile_aexpr hooks b false rhs in
+  forget_heap_slots b;
+  if not (block_is_open b) then unit_const
+  else begin
+    bind_value b id v;
+    let res = compile_aexpr hooks b tail body in
+    forget_value b id;
+    res
+  end
+
+and[@inline never] compile_while hooks b cond body =
+  forget_heap_slots b;
+  let lcond = fresh_label b "wcond" in
+  close_block b (Jmp lcond);
+  start_block b lcond;
+  let cv_tagged = compile_aexpr hooks b false cond in
+  if block_is_open b then begin
+    let lbody = fresh_label b "wbody" in
+    let ldone = fresh_label b "wdone" in
+    let cv = fresh_temp b "wcmp" in
+    emit b (Cmp (Ne, Long, cv, cv_tagged, Int 1L));
+    close_block b (Br (cv, lbody, ldone));
+    start_block b lbody;
+    ignore (compile_aexpr hooks b false body);
+    if block_is_open b then close_block b (Jmp lcond);
+    start_block b ldone
+  end;
+  unit_const
+
+and[@inline never] compile_for hooks b id start_a stop_a dir body =
+  let sv = compile_untagged hooks b start_a in
+  let ev = compile_untagged hooks b stop_a in
+  forget_heap_slots b;
+  let enter_op, cont_op, step =
+    match dir with
+    | Asttypes.Upto -> (Cmp.Sle, Cmp.Slt, 1L)
+    | Asttypes.Downto -> (Cmp.Sge, Cmp.Sgt, -1L)
+  in
+  let enter = fresh_temp b "forenter" in
+  emit b (Cmp (enter_op, Long, enter, sv, ev));
+  let lpre = open_label b in
+  let lbody = fresh_label b "fbody" in
+  let lstep = fresh_label b "fstep" in
+  let lnext = fresh_label b "fnext" in
+  let ldone = fresh_label b "fdone" in
+  let iv = fresh_temp b "fori" in
+  let next_i = fresh_temp b "forn" in
+  close_block b (Br (enter, lbody, ldone));
+  start_block b lbody;
+  emit b (Phi (Long, iv, [ (lpre, sv); (lnext, next_i) ]));
+  with_untagged_index b id iv
+    (fun () -> ignore (compile_aexpr hooks b false body));
+  if block_is_open b then close_block b (Jmp lstep);
+  start_block b lstep;
+  let more = fresh_temp b "formore" in
+  emit b (Cmp (cont_op, Long, more, iv, ev));
+  close_block b (Br (more, lnext, ldone));
+  start_block b lnext;
+  emit b (Binop (Add, Long, next_i, iv, Int step));
+  close_block b (Jmp lbody);
+  start_block b ldone;
+  unit_const
+
+and[@inline never] compile_releases hooks b tail cleanup =
+  let rec ends_in_raise = function
+    | Anf.Release (_, body) | ReleaseMut (_, body) -> ends_in_raise body
+    | Raise _ | Unwind -> true
+    | _ -> false
+  in
+  let rec emit_releases = function
+    | Anf.Release (id, body) ->
+        emit_arc_if_heap b `Release (compile_atom hooks b (Var id));
+        emit_releases body
+    | ReleaseMut (id, body) ->
+        (match mutable_slot_opt b id with
+        | Some _ ->
+            emit_arc_if_heap b `Release (compile_atom hooks b (MutVar id))
+        | None -> ());
+        emit_releases body
+    | rest -> rest
+  in
+  let body =
+    if (inline_rc b) && not (compact_arc b) && ends_in_raise cleanup
+    then with_compact_arc b (fun () -> emit_releases cleanup)
+    else emit_releases cleanup
+  in
+  compile_aexpr hooks b tail body
+
+and[@inline never] compile_drop_reuse hooks b tail v_id tok_id body =
+  let v = compile_atom hooks b (Var v_id) in
+  let tok = fresh_temp b "rtok" in
+  emit b
+    (Call (Long, tok, { fn = Global "arc_drop_reuse"; args = [ (Long, v) ] }));
+  bind_value b tok_id tok;
+  let res = compile_aexpr hooks b tail body in
+  forget_value b tok_id;
+  res
+
+and[@inline never] compile_shadow_push hooks b tail vars muts rtoks body =
+  if vars <> [] || muts <> [] || rtoks <> [] then
+    with_shadow_stack b (fun () ->
+        List.iter
+          (fun id ->
+            shadow_call b "arc_fiber_push" (compile_atom hooks b (Var id)))
+          vars;
+        List.iter
+          (fun mid ->
+            match mutable_slot_opt b mid with
+            | Some slot ->
+                let v = fresh_temp b "shmut" in
+                emit b (Load (Loadl, Long, v, slot));
+                shadow_call b "arc_fiber_push" v
+            | None -> ())
+          muts;
+        List.iter
+          (fun tid ->
+            shadow_call b "arc_fiber_push_reuse" (bound_value b tid))
+          rtoks);
+  compile_aexpr hooks b tail body
+
+and[@inline never] compile_try_with hooks b tail body exn_id handler =
+  let lcatch = fresh_label b "catch" in
+  let ljoin = fresh_label b (if tail then "ret" else "tryj") in
+  let res = fresh_temp b (if tail then "res" else "tryv") in
+  let preds = ref [] in
+  let bv = with_try_handler b lcatch (fun () -> compile_aexpr hooks b tail body) in
+  if block_is_open b then begin
+    preds := (open_label b, bv) :: !preds;
+    close_block b (Jmp ljoin)
+  end;
+  start_block b lcatch;
+  let ex = fresh_temp b "exn" in
+  emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
+  emit b
+    (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, Int 0L) ] });
+  bind_value b exn_id ex;
+  let hv = compile_aexpr hooks b tail handler in
+  forget_value b exn_id;
+  if block_is_open b then begin
+    preds := (open_label b, hv) :: !preds;
+    close_block b (Jmp ljoin)
+  end;
+  (match !preds with
+  | [] -> unit_const
+  | _ ->
+      start_block b ljoin;
+      emit b (Phi (Long, res, List.rev !preds));
+      res)
 
 and inline_leaf hooks b (lf : Anf.lfunction) args =
   let args = List.map (compile_atom hooks b) args in

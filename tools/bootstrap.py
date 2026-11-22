@@ -18,6 +18,7 @@ import os
 import platform
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -154,6 +155,8 @@ class CommandRunner:
 
 
 def first_err(res: subprocess.CompletedProcess[str]) -> str:
+    if res.returncode < 0 and not res.stderr and not res.stdout:
+        return f"terminated by signal {-res.returncode} ({signal.strsignal(-res.returncode)})"
     return stdlib_compat.extract_first_error(res.stderr, res.stdout)
 
 
@@ -274,7 +277,7 @@ def build_stage(
         shutil.copytree(reuse_stdlib, stdlib_dir)
         stdlib_archive = stdlib_dir / "libocamlstdlib.a"
     else:
-        print(f"[{stage_name}] Compiling stdlib_compat (72 modules)...", flush=True)
+        print(f"[{stage_name}] Compiling the canonical stdlib...", flush=True)
         stdlib_compat.COMMAND_LOG_DIR = stage_dir / "logs" / "stdlib"
         stdlib_compat.COMMAND_NUMBER = 0
         t0 = time.monotonic()

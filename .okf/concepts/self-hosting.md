@@ -47,6 +47,14 @@ tracing GC):
    compiler across `hello`, `fib`, `closures`, `exn`, `mod_main`, `fiber_test`,
    `fiber_io`, `primitives_test`, `bindgen`, and ASan checks.
 
+# Native compiler stack use
+
+The ARC and QBE expression walkers keep allocation-heavy branches in their
+own functions. The self-hosted ARM64 compiler exhausted the main native
+stack while compiling the generated compiler-libs parser when those branches
+shared the recursive dispatch frames. Replaying the same parser command
+succeeded after the split at the default macOS stack size.
+
 # Compiler-only stubs & zstd isolation
 
 Matching upstream OCaml, `libzstd` is never compiled into or linked with

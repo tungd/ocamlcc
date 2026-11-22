@@ -353,86 +353,19 @@ let emit_shadowed_call (env : state) ~(ce : Anf.cexpr) ~(ce_may_raise : bool)
   let inner = make_let after_ce in
   if can_suspend then Anf.ShadowPush (svars, smuts, [], inner) else inner
 
+(* Keep the recursive dispatcher's frame small when the compiler builds itself.
+   Parser-generated ANF can contain hundreds of nested static catches. *)
 let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
   match e with
-  | Halt a ->
-      prepare_consumed env ~borrowed_also:Ident.Set.empty
-        ~live_after:Ident.Set.empty [ a ] (fun remaining_owned atoms' ->
-          let a' = match atoms' with [ x ] -> x | _ -> assert false in
-          let cont = Anf.Halt a' in
-          (* A [Halt] may flow into a join point or loop exit instead of
-             leaving the function; only release mutables that really leave
-             scope here (muts introduced inside this region). *)
-          let cont =
-            emit_mut_releases
-              (Ident.Set.diff env.scope.muts env.scope.no_release_muts)
-              cont
-          in
-          emit_drops env remaining_owned cont)
+  | Halt a -> transform_halt env a
   | HaltScalar _ ->
       let cont = emit_mut_releases (Ident.Set.diff env.scope.muts env.scope.no_release_muts) e in
       emit_drops env env.scope.owned cont
-  | Raise a ->
-      prepare_consumed env ~borrowed_also:Ident.Set.empty
-        ~live_after:env.exn.try_owned [ a ] (fun remaining_owned atoms' ->
-          let a' = match atoms' with [ x ] -> x | _ -> assert false in
-          let drop_vars =
-            Ident.Set.diff
-              (Ident.Set.union remaining_owned env.scope.frame_borrowed)
-              env.exn.try_owned
-          in
-          let drop_muts = Ident.Set.diff env.scope.muts env.exn.try_muts in
-          emit_plain_drops env drop_vars
-            (emit_mut_releases drop_muts (Anf.Raise a')))
+  | Raise a -> transform_raise env a
   | Unwind | CheckExn _ | Retain _ | Release _ | ReleaseMut _
   | DropReuse _ | FreeReuse _ | ShadowPush _ | ShadowPop _ ->
       e
-  | Let (id, Fun lf, body) ->
-      if Ident.Set.mem id env.facts.pure then
-        let lf' = transform_fun env ~self_id:None ~has_closure:false lf in
-        let read_only =
-          if Ident.Set.mem id env.facts.yielding then Ident.Set.empty
-          else read_only_parameters ~borrowed:(borrowed_flags env) lf
-        in
-        let body' =
-          if Ident.Set.is_empty read_only then transform_aexpr env body
-          else
-            let worker, env_body = add_borrowed_entry env id (borrow_flags lf read_only) in
-            let body' = transform_aexpr env_body body in
-            let exported = Ident.Set.mem id env.facts.exported in
-            if exported || Ident.Set.mem worker (Anf.free_vars body') then
-              let worker_def =
-                transform_fun env ~self_id:None ~has_closure:false
-                  ~borrowed_params:read_only { lf with private_entry = not exported }
-              in
-              Let (worker, Fun worker_def, body')
-            else body'
-        in
-        Let (id, Fun lf', body')
-      else
-        let cap =
-          Anf.free_vars lf.body
-          |> Ident.Set.filter (fun v ->
-                 not (List.exists (Ident.same v) (Anf.bound_parameters lf))
-                 && not (Ident.Set.mem v env.facts.pure))
-        in
-        let cap_atoms = List.map (fun v -> Anf.Var v) (Ident.Set.elements cap) in
-        let lf' = transform_fun env ~self_id:None ~has_closure:true lf in
-        let base_live = Ident.Set.remove id (live_with_handlers env body) in
-        let live_after =
-          if can_raise env body then Ident.Set.union base_live env.exn.try_owned
-          else base_live
-        in
-        prepare_consumed env ~borrowed_also:Ident.Set.empty ~live_after
-          cap_atoms (fun remaining_owned _ ->
-            let dead_before = Ident.Set.diff remaining_owned live_after in
-            let owned_body =
-              Ident.Set.add id (Ident.Set.diff remaining_owned dead_before)
-            in
-            let body' =
-              transform_aexpr { env with scope = { env.scope with owned = owned_body } } body
-            in
-            emit_drops env dead_before (Let (id, Fun lf', body')))
+  | Let (id, Fun lf, body) -> transform_fun_binding env id lf body
   | Let (id, (Field (index, ((Immutable_field | Mutable_field) as kind),
                      ((Var _ | BorrowedField _) as owner)) as ce), body) -> (
       let stable = kind = Immutable_field in
@@ -446,47 +379,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
     when Ident.Set.mem slot env.scope.muts && Arc_views.read_only_slot_snapshot slot id body ->
       transform_view env id source body
   | Let (id, ce, body) -> transform_let env id ce body
-  | MutLet (id, ce, body) ->
-      let immediate = mutlet_is_imm env id ce body in
-      let ce = specialize_ownership env ce in
-      let ce_may_raise = ce_may_raise env ce in
-      let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
-      let ce = select_imported_entry env base_live_body ce in
-      let borrowed_in_ce, consumed_in_ce = atom_operands ce in
-      let borrowed_in_ce = keep_view_owners env borrowed_in_ce in
-      let live_before_ce =
-        Ident.Set.union base_live_body
-          (if ce_may_raise || can_raise env body then env.exn.try_owned
-           else Ident.Set.empty)
-      in
-      let live_after = Ident.Set.union live_before_ce borrowed_in_ce in
-      prepare_consumed env ~borrowed_also:borrowed_in_ce ~live_after
-        consumed_in_ce (fun remaining_owned atoms' ->
-          let ce' = rebuild_cexpr ce atoms' in
-          let used_before = Ident.Set.union borrowed_in_ce live_before_ce in
-          let dead_before = Ident.Set.diff remaining_owned used_before in
-          let rem_after_before = Ident.Set.diff remaining_owned dead_before in
-          let live_for_after_ce =
-            Ident.Set.union base_live_body
-              (if can_raise env body then env.exn.try_owned else Ident.Set.empty)
-          in
-          let dead_after = Ident.Set.diff rem_after_before live_for_after_ce in
-          let live_for_body = Ident.Set.diff rem_after_before dead_after in
-          let env_body =
-            { env with
-              scope = { env.scope with
-                owned = live_for_body;
-                imm = set_imm env.scope.imm id immediate;
-                muts = if immediate then env.scope.muts else Ident.Set.add id env.scope.muts } }
-          in
-          let body' = transform_aexpr env_body body in
-          let body_with_dead_after = emit_drops env dead_after body' in
-          let make_let next = Anf.MutLet (id, ce', next) in
-          let node =
-            emit_shadowed_call env ~ce:ce' ~ce_may_raise ~is_pure_tail:false
-              ~rem_after_before ~body_cont:body_with_dead_after make_let
-          in
-          emit_drops env dead_before node)
+  | MutLet (id, ce, body) -> transform_mutable_let env id ce body
   | LetJoin (id, rhs, body) -> (
       match Arc_views.mutable_slot_result env.scope.slot_snapshots rhs with
       | Some (slot, field, rhs)
@@ -497,71 +390,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
             | Some index -> Anf.BorrowedField (index, MutVar slot) in
           transform_join env ignored rhs (Anf.Let (id, Atom source, body))
       | _ -> transform_join env id rhs body)
-  | LetRec (bindings, body) ->
-      let rec_ids =
-        List.fold_left
-          (fun s (rb : Anf.rec_binding) -> Ident.Set.add rb.id s)
-          Ident.Set.empty bindings
-      in
-      let all_pure =
-        List.for_all
-          (fun (rb : Anf.rec_binding) -> Ident.Set.mem rb.id env.facts.pure)
-          bindings
-      in
-      if all_pure then
-        transform_pure_group env bindings body
-      else
-        let cap_list_per_rb =
-          List.map
-            (fun (rb : Anf.rec_binding) ->
-              Anf.free_vars rb.def.body
-              |> Ident.Set.filter (fun v ->
-                     not (List.exists (Ident.same v) (Anf.bound_parameters rb.def))
-                     && not (Ident.Set.mem v rec_ids)
-                     && not (Ident.Set.mem v env.facts.pure))
-              |> Ident.Set.elements)
-            bindings
-        in
-        let all_cap_atoms =
-          List.concat_map (List.map (fun v -> Anf.Var v)) cap_list_per_rb
-        in
-        let self_opt =
-          match bindings with [ rb ] -> Some rb.id | _ -> None
-        in
-        let bindings' =
-          List.map2
-            (fun (rb : Anf.rec_binding) cap_outer ->
-              let env_fun =
-                { env with
-                  scope = { env.scope with
-                    borrowed =
-                    Ident.Set.union env.scope.borrowed
-                      (Ident.Set.union rec_ids (Ident.Set.of_list cap_outer)) } }
-              in
-              { rb with
-                def =
-                  transform_fun env_fun ~self_id:self_opt ~has_closure:true
-                    rb.def })
-            bindings cap_list_per_rb
-        in
-        let base_live =
-          Ident.Set.diff (live_with_handlers env body) rec_ids
-        in
-        let live_after =
-          if can_raise env body then Ident.Set.union base_live env.exn.try_owned
-          else base_live
-        in
-        prepare_consumed env ~borrowed_also:Ident.Set.empty ~live_after
-          all_cap_atoms (fun remaining_owned _ ->
-            let dead_before = Ident.Set.diff remaining_owned live_after in
-            let owned_body =
-              Ident.Set.union rec_ids
-                (Ident.Set.diff remaining_owned dead_before)
-            in
-            let body' =
-              transform_aexpr { env with scope = { env.scope with owned = owned_body } } body
-            in
-            emit_drops env dead_before (LetRec (bindings', body')))
+  | LetRec (bindings, body) -> transform_recursive_group env bindings body
   | If (cond, th, el) ->
       let th' = transform_branch env th in
       let el' = transform_branch (false_edge env cond) el in
@@ -579,119 +408,312 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let cases' = List.map (fun (s, a) -> (s, transform_branch env a)) cases in
       let fail' = Option.map (transform_branch env) fail in
       StringSwitch (scrut, cases', fail')
-  | StaticCatch (body, hid, binders, handler, result_rep) ->
-      let immediate = handler_immediates env hid binders body in
-      let base_fh =
-        List.fold_left
-          (fun s b -> Ident.Set.remove b s)
-          (live_with_handlers env handler)
-          binders
+  | StaticCatch (body, hid, binders, handler, result_rep) -> transform_static_catch env body hid binders handler result_rep
+  | StaticRaise (hid, args) -> transform_static_raise env hid args
+  | TryWith (body, exn_id, handler) -> transform_try_with env body exn_id handler
+  | While (cond, body) -> transform_while env cond body
+  | For (idx, s, e, dir, body) -> transform_for env idx s e dir body
+
+and[@inline never] transform_halt env a =
+  prepare_consumed env ~borrowed_also:Ident.Set.empty
+    ~live_after:Ident.Set.empty [ a ] (fun remaining_owned atoms' ->
+      let a' = match atoms' with [ x ] -> x | _ -> assert false in
+      let cont = Anf.Halt a' in
+      (* A [Halt] may flow into a join point or loop exit instead of
+         leaving the function; only release mutables that really leave
+         scope here (muts introduced inside this region). *)
+      let cont =
+        emit_mut_releases
+          (Ident.Set.diff env.scope.muts env.scope.no_release_muts)
+          cont
       in
-      let fv_handler =
-        if can_raise env handler then Ident.Set.union base_fh env.exn.try_owned
-        else base_fh
+      emit_drops env remaining_owned cont)
+
+and[@inline never] transform_raise env a =
+  prepare_consumed env ~borrowed_also:Ident.Set.empty
+    ~live_after:env.exn.try_owned [ a ] (fun remaining_owned atoms' ->
+      let a' = match atoms' with [ x ] -> x | _ -> assert false in
+      let drop_vars =
+        Ident.Set.diff
+          (Ident.Set.union remaining_owned env.scope.frame_borrowed)
+          env.exn.try_owned
       in
-      let handler_owned = Ident.Set.inter env.scope.owned fv_handler in
-      let handler_owned_list =
-        List.fold_left
-          (fun acc b -> if Ident.Set.mem b immediate then acc else Ident.Set.add b acc)
-          handler_owned binders
-      in
-      let target_live = Ident.Set.union handler_owned env.scope.frame_borrowed in
-      let target =
-        { Exn_frame.Handler.owned = handler_owned;
-          live = target_live; muts = env.scope.muts }
-      in
-      let exn = Exn_frame.with_handler hid target env.exn in
-      let body' = transform_aexpr { env with exn } body in
-      let dead_at_handler = Ident.Set.diff handler_owned fv_handler in
-      let handler' =
-        transform_aexpr
-          { env with
-            scope = { env.scope with
-              owned = Ident.Set.diff handler_owned_list dead_at_handler;
-              imm = Ident.Set.union (Ident.Set.diff env.scope.imm (Ident.Set.of_list binders)) immediate } }
-          handler
-      in
-      StaticCatch (body', hid, binders, emit_drops env dead_at_handler handler', result_rep)
-  | StaticRaise (hid, args) ->
-      let target_owned, target_live, target_muts =
-        match Exn_frame.handler hid env.exn with
-        | Some { owned; live; muts } -> owned, live, muts
-        | None -> (Ident.Set.empty, env.scope.frame_borrowed, env.scope.muts)
-      in
-      prepare_consumed env ~borrowed_also:Ident.Set.empty
-        ~live_after:target_owned args (fun remaining_owned args' ->
-          let dead_vars =
-            Ident.Set.diff
-              (Ident.Set.union remaining_owned env.scope.frame_borrowed)
-              target_live
+      let drop_muts = Ident.Set.diff env.scope.muts env.exn.try_muts in
+      emit_plain_drops env drop_vars
+        (emit_mut_releases drop_muts (Anf.Raise a')))
+
+and[@inline never] transform_fun_binding env id lf body =
+  if Ident.Set.mem id env.facts.pure then
+    let lf' = transform_fun env ~self_id:None ~has_closure:false lf in
+    let read_only =
+      if Ident.Set.mem id env.facts.yielding then Ident.Set.empty
+      else read_only_parameters ~borrowed:(borrowed_flags env) lf
+    in
+    let body' =
+      if Ident.Set.is_empty read_only then transform_aexpr env body
+      else
+        let worker, env_body = add_borrowed_entry env id (borrow_flags lf read_only) in
+        let body' = transform_aexpr env_body body in
+        let exported = Ident.Set.mem id env.facts.exported in
+        if exported || Ident.Set.mem worker (Anf.free_vars body') then
+          let worker_def =
+            transform_fun env ~self_id:None ~has_closure:false
+              ~borrowed_params:read_only { lf with private_entry = not exported }
           in
-          let dead_muts = Ident.Set.diff env.scope.muts target_muts in
-          emit_drops env dead_vars
-            (emit_mut_releases dead_muts (StaticRaise (hid, args'))))
-  | TryWith (body, exn_id, handler) ->
-      let outer_needed =
-        if can_raise env handler then env.exn.try_owned else Ident.Set.empty
+          Let (worker, Fun worker_def, body')
+        else body'
+    in
+    Let (id, Fun lf', body')
+  else
+    let cap =
+      Anf.free_vars lf.body
+      |> Ident.Set.filter (fun v ->
+             not (List.exists (Ident.same v) (Anf.bound_parameters lf))
+             && not (Ident.Set.mem v env.facts.pure))
+    in
+    let cap_atoms = List.map (fun v -> Anf.Var v) (Ident.Set.elements cap) in
+    let lf' = transform_fun env ~self_id:None ~has_closure:true lf in
+    let base_live = Ident.Set.remove id (live_with_handlers env body) in
+    let live_after =
+      if can_raise env body then Ident.Set.union base_live env.exn.try_owned
+      else base_live
+    in
+    prepare_consumed env ~borrowed_also:Ident.Set.empty ~live_after
+      cap_atoms (fun remaining_owned _ ->
+        let dead_before = Ident.Set.diff remaining_owned live_after in
+        let owned_body =
+          Ident.Set.add id (Ident.Set.diff remaining_owned dead_before)
+        in
+        let body' =
+          transform_aexpr { env with scope = { env.scope with owned = owned_body } } body
+        in
+        emit_drops env dead_before (Let (id, Fun lf', body')))
+
+and[@inline never] transform_mutable_let env id ce body =
+  let immediate = mutlet_is_imm env id ce body in
+  let ce = specialize_ownership env ce in
+  let ce_may_raise = ce_may_raise env ce in
+  let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
+  let ce = select_imported_entry env base_live_body ce in
+  let borrowed_in_ce, consumed_in_ce = atom_operands ce in
+  let borrowed_in_ce = keep_view_owners env borrowed_in_ce in
+  let live_before_ce =
+    Ident.Set.union base_live_body
+      (if ce_may_raise || can_raise env body then env.exn.try_owned
+       else Ident.Set.empty)
+  in
+  let live_after = Ident.Set.union live_before_ce borrowed_in_ce in
+  prepare_consumed env ~borrowed_also:borrowed_in_ce ~live_after
+    consumed_in_ce (fun remaining_owned atoms' ->
+      let ce' = rebuild_cexpr ce atoms' in
+      let used_before = Ident.Set.union borrowed_in_ce live_before_ce in
+      let dead_before = Ident.Set.diff remaining_owned used_before in
+      let rem_after_before = Ident.Set.diff remaining_owned dead_before in
+      let live_for_after_ce =
+        Ident.Set.union base_live_body
+          (if can_raise env body then env.exn.try_owned else Ident.Set.empty)
       in
-      let fv_handler =
-        Ident.Set.remove exn_id
-          (Ident.Set.union (live_with_handlers env handler) outer_needed)
-      in
-      let catch_owned = Ident.Set.inter env.scope.owned fv_handler in
-      let body_env =
-        { env with exn = Exn_frame.protect
-            ~owned:(Ident.Set.union catch_owned env.scope.frame_borrowed)
-            ~muts:env.scope.muts env.exn }
-      in
-      let body' = transform_aexpr body_env body in
-      let handler_env =
-        { env with scope = { env.scope with owned = Ident.Set.add exn_id catch_owned } }
-      in
-      let handler' = transform_aexpr handler_env handler in
-      TryWith (body', exn_id, handler')
-  | While (cond, body) ->
-      let loop_env =
+      let dead_after = Ident.Set.diff rem_after_before live_for_after_ce in
+      let live_for_body = Ident.Set.diff rem_after_before dead_after in
+      let env_body =
         { env with
           scope = { env.scope with
-            owned = Ident.Set.empty;
-            frame_borrowed = Ident.Set.union env.scope.frame_borrowed env.scope.owned;
-            no_release_muts = env.scope.muts };
-          exn = Exn_frame.non_tail env.exn }
+            owned = live_for_body;
+            imm = set_imm env.scope.imm id immediate;
+            muts = if immediate then env.scope.muts else Ident.Set.add id env.scope.muts } }
       in
-      let cond' = transform_aexpr loop_env cond in
-      let body' = transform_aexpr loop_env body in
-      if Ident.Set.is_empty env.scope.owned && Ident.Set.is_empty env.scope.muts then
-        While (cond', body')
-      else
-        let u = Ident.create_local "wend" in
-        let dead_muts = Ident.Set.diff env.scope.muts env.scope.no_release_muts in
-        let cont =
-          emit_drops env env.scope.owned
-            (emit_mut_releases dead_muts (Halt (Var u)))
-        in
-        LetJoin (u, While (cond', body'), cont)
-  | For (idx, s, e, dir, body) ->
-      let loop_env =
-        { env with
-          scope = { env.scope with
-            owned = Ident.Set.empty;
-            frame_borrowed = Ident.Set.union env.scope.frame_borrowed env.scope.owned;
-            imm = Ident.Set.add idx env.scope.imm;
-            no_release_muts = env.scope.muts };
-          exn = Exn_frame.non_tail env.exn }
+      let body' = transform_aexpr env_body body in
+      let body_with_dead_after = emit_drops env dead_after body' in
+      let make_let next = Anf.MutLet (id, ce', next) in
+      let node =
+        emit_shadowed_call env ~ce:ce' ~ce_may_raise ~is_pure_tail:false
+          ~rem_after_before ~body_cont:body_with_dead_after make_let
       in
-      let body' = transform_aexpr loop_env body in
-      if Ident.Set.is_empty env.scope.owned && Ident.Set.is_empty env.scope.muts then
-        For (idx, s, e, dir, body')
-      else
-        let u = Ident.create_local "fend" in
-        let dead_muts = Ident.Set.diff env.scope.muts env.scope.no_release_muts in
-        let cont =
-          emit_drops env env.scope.owned
-            (emit_mut_releases dead_muts (Halt (Var u)))
+      emit_drops env dead_before node)
+
+and[@inline never] transform_recursive_group env bindings body =
+  let rec_ids =
+    List.fold_left
+      (fun s (rb : Anf.rec_binding) -> Ident.Set.add rb.id s)
+      Ident.Set.empty bindings
+  in
+  let all_pure =
+    List.for_all
+      (fun (rb : Anf.rec_binding) -> Ident.Set.mem rb.id env.facts.pure)
+      bindings
+  in
+  if all_pure then
+    transform_pure_group env bindings body
+  else
+    let cap_list_per_rb =
+      List.map
+        (fun (rb : Anf.rec_binding) ->
+          Anf.free_vars rb.def.body
+          |> Ident.Set.filter (fun v ->
+                 not (List.exists (Ident.same v) (Anf.bound_parameters rb.def))
+                 && not (Ident.Set.mem v rec_ids)
+                 && not (Ident.Set.mem v env.facts.pure))
+          |> Ident.Set.elements)
+        bindings
+    in
+    let all_cap_atoms =
+      List.concat_map (List.map (fun v -> Anf.Var v)) cap_list_per_rb
+    in
+    let self_opt =
+      match bindings with [ rb ] -> Some rb.id | _ -> None
+    in
+    let bindings' =
+      List.map2
+        (fun (rb : Anf.rec_binding) cap_outer ->
+          let env_fun =
+            { env with
+              scope = { env.scope with
+                borrowed =
+                Ident.Set.union env.scope.borrowed
+                  (Ident.Set.union rec_ids (Ident.Set.of_list cap_outer)) } }
+          in
+          { rb with
+            def =
+              transform_fun env_fun ~self_id:self_opt ~has_closure:true
+                rb.def })
+        bindings cap_list_per_rb
+    in
+    let base_live =
+      Ident.Set.diff (live_with_handlers env body) rec_ids
+    in
+    let live_after =
+      if can_raise env body then Ident.Set.union base_live env.exn.try_owned
+      else base_live
+    in
+    prepare_consumed env ~borrowed_also:Ident.Set.empty ~live_after
+      all_cap_atoms (fun remaining_owned _ ->
+        let dead_before = Ident.Set.diff remaining_owned live_after in
+        let owned_body =
+          Ident.Set.union rec_ids
+            (Ident.Set.diff remaining_owned dead_before)
         in
-        LetJoin (u, For (idx, s, e, dir, body'), cont)
+        let body' =
+          transform_aexpr { env with scope = { env.scope with owned = owned_body } } body
+        in
+        emit_drops env dead_before (LetRec (bindings', body')))
+
+and[@inline never] transform_static_catch env body hid binders handler result_rep =
+  let immediate = handler_immediates env hid binders body in
+  let base_fh =
+    List.fold_left
+      (fun s b -> Ident.Set.remove b s)
+      (live_with_handlers env handler)
+      binders
+  in
+  let fv_handler =
+    if can_raise env handler then Ident.Set.union base_fh env.exn.try_owned
+    else base_fh
+  in
+  let handler_owned = Ident.Set.inter env.scope.owned fv_handler in
+  let handler_owned_list =
+    List.fold_left
+      (fun acc b -> if Ident.Set.mem b immediate then acc else Ident.Set.add b acc)
+      handler_owned binders
+  in
+  let target_live = Ident.Set.union handler_owned env.scope.frame_borrowed in
+  let target =
+    { Exn_frame.Handler.owned = handler_owned;
+      live = target_live; muts = env.scope.muts }
+  in
+  let exn = Exn_frame.with_handler hid target env.exn in
+  let body' = transform_aexpr { env with exn } body in
+  let dead_at_handler = Ident.Set.diff handler_owned fv_handler in
+  let handler' =
+    transform_aexpr
+      { env with
+        scope = { env.scope with
+          owned = Ident.Set.diff handler_owned_list dead_at_handler;
+          imm = Ident.Set.union (Ident.Set.diff env.scope.imm (Ident.Set.of_list binders)) immediate } }
+      handler
+  in
+  StaticCatch (body', hid, binders, emit_drops env dead_at_handler handler', result_rep)
+
+and[@inline never] transform_static_raise env hid args =
+  let target_owned, target_live, target_muts =
+    match Exn_frame.handler hid env.exn with
+    | Some { owned; live; muts } -> owned, live, muts
+    | None -> (Ident.Set.empty, env.scope.frame_borrowed, env.scope.muts)
+  in
+  prepare_consumed env ~borrowed_also:Ident.Set.empty
+    ~live_after:target_owned args (fun remaining_owned args' ->
+      let dead_vars =
+        Ident.Set.diff
+          (Ident.Set.union remaining_owned env.scope.frame_borrowed)
+          target_live
+      in
+      let dead_muts = Ident.Set.diff env.scope.muts target_muts in
+      emit_drops env dead_vars
+        (emit_mut_releases dead_muts (StaticRaise (hid, args'))))
+
+and[@inline never] transform_try_with env body exn_id handler =
+  let outer_needed =
+    if can_raise env handler then env.exn.try_owned else Ident.Set.empty
+  in
+  let fv_handler =
+    Ident.Set.remove exn_id
+      (Ident.Set.union (live_with_handlers env handler) outer_needed)
+  in
+  let catch_owned = Ident.Set.inter env.scope.owned fv_handler in
+  let body_env =
+    { env with exn = Exn_frame.protect
+        ~owned:(Ident.Set.union catch_owned env.scope.frame_borrowed)
+        ~muts:env.scope.muts env.exn }
+  in
+  let body' = transform_aexpr body_env body in
+  let handler_env =
+    { env with scope = { env.scope with owned = Ident.Set.add exn_id catch_owned } }
+  in
+  let handler' = transform_aexpr handler_env handler in
+  TryWith (body', exn_id, handler')
+
+and[@inline never] transform_while env cond body =
+  let loop_env =
+    { env with
+      scope = { env.scope with
+        owned = Ident.Set.empty;
+        frame_borrowed = Ident.Set.union env.scope.frame_borrowed env.scope.owned;
+        no_release_muts = env.scope.muts };
+      exn = Exn_frame.non_tail env.exn }
+  in
+  let cond' = transform_aexpr loop_env cond in
+  let body' = transform_aexpr loop_env body in
+  if Ident.Set.is_empty env.scope.owned && Ident.Set.is_empty env.scope.muts then
+    While (cond', body')
+  else
+    let u = Ident.create_local "wend" in
+    let dead_muts = Ident.Set.diff env.scope.muts env.scope.no_release_muts in
+    let cont =
+      emit_drops env env.scope.owned
+        (emit_mut_releases dead_muts (Halt (Var u)))
+    in
+    LetJoin (u, While (cond', body'), cont)
+
+and[@inline never] transform_for env idx s e dir body =
+  let loop_env =
+    { env with
+      scope = { env.scope with
+        owned = Ident.Set.empty;
+        frame_borrowed = Ident.Set.union env.scope.frame_borrowed env.scope.owned;
+        imm = Ident.Set.add idx env.scope.imm;
+        no_release_muts = env.scope.muts };
+      exn = Exn_frame.non_tail env.exn }
+  in
+  let body' = transform_aexpr loop_env body in
+  if Ident.Set.is_empty env.scope.owned && Ident.Set.is_empty env.scope.muts then
+    For (idx, s, e, dir, body')
+  else
+    let u = Ident.create_local "fend" in
+    let dead_muts = Ident.Set.diff env.scope.muts env.scope.no_release_muts in
+    let cont =
+      emit_drops env env.scope.owned
+        (emit_mut_releases dead_muts (Halt (Var u)))
+    in
+    LetJoin (u, For (idx, s, e, dir, body'), cont)
 
 and transform_view env id source body =
   let owners = keep_view_owners env (atom_vars source) in
