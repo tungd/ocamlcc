@@ -1,26 +1,26 @@
-(* ocamlcc CLI.
+(* occ CLI.
 
    Subcommands:
-     ocamlcc build [flags] <files...> -o <out>             full driver build
-     ocamlcc compile [flags] <file.ml> [-o <out.ssa>]      emit QBE IL
-     ocamlcc compile-mli [flags] <file.mli> [-o <out.cmi>] emit .cmi
-     ocamlcc bindgen [flags] <file.mli> [-o <out.h>] [--shim <out.c>]  emit C header + shim
-     ocamlcc dump-lambda [flags] <file.ml>                 print the Lambda IR *)
+     occ build [flags] <files...> -o <out>             full driver build
+     occ compile [flags] <file.ml> [-o <out.ssa>]      emit QBE IL
+     occ compile-mli [flags] <file.mli> [-o <out.cmi>] emit .cmi
+     occ bindgen [flags] <file.mli> [-o <out.h>] [--shim <out.c>]  emit C header + shim
+     occ dump-lambda [flags] <file.ml>                 print the Lambda IR *)
 
 let usage =
-  "usage: ocamlcc build [--target t] [--shared|--static|--exe|-c|-S] \
+  "usage: occ build [--target t] [--shared|--static|--exe|-c|-S] \
    [--emit-header h] [-I dir] [--nostdlib] [--nopervasives] [--no-main] \
    [--qbe path] [--cc path] [--sysroot path] [--single-thread-rc] \
    [-v] <files...> -o <out>\n\
-   \       ocamlcc compile [-I dir] [--nostdlib] [--nopervasives] [--emit-cmi] \
+   \       occ compile [-I dir] [--nostdlib] [--nopervasives] [--emit-cmi] \
    [--cmi-prefix p] [--mod] [--emit-opt] [--stdlib-dir dir] [--inline-single-thread-rc] <file.ml> [-o <out.ssa>]\n\
-   \       ocamlcc compile-mli [-I dir] [--nostdlib] [--nopervasives] \
+   \       occ compile-mli [-I dir] [--nostdlib] [--nopervasives] \
    <file.mli> [-o <out.cmi>]\n\
-   \       ocamlcc bindgen [-I dir] [--nostdlib] [--nopervasives] \
+   \       occ bindgen [-I dir] [--nostdlib] [--nopervasives] \
    [--shim <out.c>] <file.mli> [-o <out.h>]\n\
-   \       ocamlcc archive-opt <archive.a> <unit.opt>...\n\
-   \       ocamlcc object-opt <unit.opt>\n\
-   \       ocamlcc dump-lambda [-I dir] [--nostdlib] [--nopervasives] <file.ml>"
+   \       occ archive-opt <archive.a> <unit.opt>...\n\
+   \       occ object-opt <unit.opt>\n\
+   \       occ dump-lambda [-I dir] [--nostdlib] [--nopervasives] <file.ml>"
 
 type cli_opts = {
   include_dirs : string list;
@@ -202,10 +202,10 @@ let compile opts =
              write_out opts.out ssa;
              0
            with Sys_error msg ->
-             prerr_endline ("ocamlcc: error: " ^ msg);
+             prerr_endline ("occ: error: " ^ msg);
              2)
       | Error msg ->
-          prerr_endline ("ocamlcc: error: " ^ msg);
+          prerr_endline ("occ: error: " ^ msg);
           2)
 
 let archive_opt opts =
@@ -213,7 +213,7 @@ let archive_opt opts =
   | archive :: (_ :: _ as units) ->
       (try Export_summary.write_archive ~archive ~units; 0
        with Sys_error msg ->
-         prerr_endline ("ocamlcc: error: " ^ msg);
+         prerr_endline ("occ: error: " ^ msg);
          2)
   | _ -> prerr_endline usage; 2
 
@@ -222,7 +222,7 @@ let object_opt opts =
   | [unit] when Filename.check_suffix unit ".opt" ->
       (try Export_summary.write_unit_object unit; 0
        with Sys_error msg ->
-         prerr_endline ("ocamlcc: error: " ^ msg);
+         prerr_endline ("occ: error: " ^ msg);
          2)
   | _ -> prerr_endline usage; 2
 
@@ -253,7 +253,7 @@ let compile_mli opts =
       match Pipeline.compile_interface_file request with
       | Ok _ -> 0
       | Error msg ->
-          prerr_endline ("ocamlcc: error: " ^ msg);
+          prerr_endline ("occ: error: " ^ msg);
           2)
 
 let dump_lambda opts =
@@ -265,7 +265,7 @@ let dump_lambda opts =
       let modname = Pipeline.module_name_of_file file in
       match Sys_util.read_file file with
       | exception Sys_error msg ->
-          prerr_endline ("ocamlcc: error: " ^ msg);
+          prerr_endline ("occ: error: " ^ msg);
           2
       | source -> (
           match
@@ -274,7 +274,7 @@ let dump_lambda opts =
               ~open_modules:opts.open_modules ~filename:file ~modname source
           with
           | Error { msg } ->
-              prerr_endline ("ocamlcc: error: " ^ msg);
+              prerr_endline ("occ: error: " ^ msg);
               2
           | Ok program ->
               Printlambda.lambda Format.std_formatter program.Lambda.code;
@@ -299,7 +299,7 @@ let bindgen opts =
           ?header_include ~filename:file ~modname ()
       with
       | Error msg ->
-          prerr_endline ("ocamlcc: error: " ^ msg);
+          prerr_endline ("occ: error: " ^ msg);
           2
       | Ok { header; shim_c; _ } ->
           write_out opts.out header;
@@ -348,7 +348,7 @@ let build opts =
     match Driver.build cfg with
     | Ok _ -> 0
     | Error msg ->
-        prerr_endline ("ocamlcc: error: " ^ msg);
+        prerr_endline ("occ: error: " ^ msg);
         2
 
 let () =
@@ -365,7 +365,7 @@ let () =
     else
       match parse_opts rest with
       | Error msg ->
-          prerr_endline ("ocamlcc: " ^ msg);
+          prerr_endline ("occ: " ^ msg);
           2
       | Ok opts -> (
           match Sys.argv.(1) with

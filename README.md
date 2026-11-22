@@ -9,7 +9,7 @@ the tracing GC / multicore domain runtime with:
 - **Wren-style stackful fibers** — a single cooperative scheduler with
   deterministic ARC cleanup for abandoned fibers.
 - **QBE** as the code generator (vendored at `vendor/qbe`), driven by a
-  single compiler executable.
+  single compiler executable, `occ`.
 - A **freestanding platform abstraction layer** (`runtime/pal.h`) so the core
   runtime depends on only 6 platform hooks.
 
@@ -23,12 +23,12 @@ Phases 1–5 complete (`ninja test`: 26/26, `ninja asan_test`: 16/16,
 
 `ocamlcc` compiles multi-module OCaml programs (`.mli` interfaces and `.ml`
 implementations) to native binaries, shared/static libraries, and iOS
-`.xcframework`s via a single CLI driver (`ocamlcc build --target <t>`) backed
+`.xcframework`s via a single CLI driver (`occ build --target <t>`) backed
 by vendored QBE 1.3 with Perceus-style Automatic Reference Counting, a
 freestanding 12-class slab allocator (returning empty 64 KB slabs to
 `pal_page_free`) + opt-in trial-deletion cycle collector
 (`ocamlcc_arc_collect` in `runtime/cycle.c`, synchronized with FFI mutator
-gates), `.mli -> .h` C99 header & FFI shim generation (`ocamlcc bindgen`,
+gates), `.mli -> .h` C99 header & FFI shim generation (`occ bindgen`,
 surfacing OCaml exceptions via `ocamlcc_error_t *`), Wren-style stackful
 fibers + cooperative `kqueue`/`epoll` async I/O poller with yield-effect
 shadow-stack lowering (`runtime/fiber.c`, `runtime/pal_ctx.S`, `Stdlib.Fiber`),
@@ -44,7 +44,7 @@ non-pure mutual `let rec` closures, and an ARC-native core standard library
 
 Use OCaml 5.5.x, Dune, Ninja, Make, and a host C compiler.
 A Dune installation includes the compiler, its private QBE backend, and the
-runtime and core stdlib sources used by `ocamlcc build`. A C toolchain is
+runtime and core stdlib sources used by `occ build`. A C toolchain is
 needed on the consumer host. To select a locally built upstream stdlib, pass
 `--stdlib-dir /absolute/path/to/build/stdlib_compat/out`.
 
@@ -79,10 +79,10 @@ The pipeline:
 1. `vendor/qbe/*.c` → `build/qbe/qbe` (host target selected by
    `tools/gen-config.sh`)
 2. `runtime/*.c` → `build/rt/libocamlrt.a`
-3. `dune build` → `build/bin/ocamlcc` (OCaml compiler-libs frontend, ANF,
+3. `dune build` → `build/bin/occ` (OCaml compiler-libs frontend, ANF,
    Perceus ARC pass, QBE IL writer)
 4. `stdlib/*.ml` → `build/stdlib/libocamlstdlib.a`
-5. `examples/*.ml` → `.ssa` (ocamlcc) → `.s` (qbe) → native executable (cc)
+5. `examples/*.ml` → `.ssa` (occ) → `.s` (qbe) → native executable (cc)
 
 ## Upstream standard library
 
@@ -140,14 +140,14 @@ tools/        build helpers
 ## Usage
 
 ```sh
-build/bin/ocamlcc build examples/mod_main.ml examples/mod_lib.ml examples/mod_lib.mli -o build/mod_app
-build/bin/ocamlcc build --shared --emit-header build/mod_lib.h examples/mod_lib.mli examples/mod_lib.ml -o build/libmod_lib.dylib
-build/bin/ocamlcc build --target ios-xcframework --nostdlib -I build/stdlib examples/bindgen_lib.mli examples/bindgen_lib.ml -o build/BindgenLib.xcframework
-build/bin/ocamlcc bindgen examples/bindgen_lib.mli -o build/bindgen_lib.h --shim build/bindgen_lib_shim.c
-build/bin/ocamlcc compile examples/hello.ml -o build/hello.ssa
-build/bin/ocamlcc compile --nostdlib -I build/stdlib examples/stdlib_test.ml -o build/stdlib_test.ssa
-build/bin/ocamlcc compile-mli examples/mod_lib.mli -o build/mod_lib.cmi
-build/bin/ocamlcc dump-lambda examples/hello.ml
+build/bin/occ build examples/mod_main.ml examples/mod_lib.ml examples/mod_lib.mli -o build/mod_app
+build/bin/occ build --shared --emit-header build/mod_lib.h examples/mod_lib.mli examples/mod_lib.ml -o build/libmod_lib.dylib
+build/bin/occ build --target ios-xcframework --nostdlib -I build/stdlib examples/bindgen_lib.mli examples/bindgen_lib.ml -o build/BindgenLib.xcframework
+build/bin/occ bindgen examples/bindgen_lib.mli -o build/bindgen_lib.h --shim build/bindgen_lib_shim.c
+build/bin/occ compile examples/hello.ml -o build/hello.ssa
+build/bin/occ compile --nostdlib -I build/stdlib examples/stdlib_test.ml -o build/stdlib_test.ssa
+build/bin/occ compile-mli examples/mod_lib.mli -o build/mod_lib.cmi
+build/bin/occ dump-lambda examples/hello.ml
 ```
 
 ## Package companion MVP

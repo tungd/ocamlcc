@@ -39,7 +39,7 @@ One `ninja` invocation produces, in order (see [build-pipeline]):
 
 1. `build/qbe/qbe` — the vendored QBE executable[^build-ninja]
 2. `build/rt/libocamlrt.a` — the C runtime (PAL, ARC, fibers, builtins)
-3. `build/bin/ocamlcc` — the compiler CLI, built by dune
+3. `build/bin/occ` — the compiler CLI, built by dune
 4. `build/hello` — an example OCaml program compiled to a native binary
 
 The [smoke test](/concepts/build-pipeline.md) exercises the full
@@ -49,11 +49,11 @@ QBE IL → arm64/AMD64 assembly → linked executable.
 ## CLI
 
 ```sh
-build/bin/ocamlcc build examples/mod_main.ml examples/mod_lib.ml examples/mod_lib.mli -o build/mod_app
-build/bin/ocamlcc build --shared --emit-header build/mod_lib.h examples/mod_lib.mli examples/mod_lib.ml -o build/libmod_lib.dylib
-build/bin/ocamlcc bindgen examples/bindgen_lib.mli -o build/bindgen_lib.h --shim build/bindgen_lib_shim.c
-build/bin/ocamlcc compile examples/hello.ml -o build/hello.ssa  # emit QBE IL
-build/bin/ocamlcc dump-lambda examples/hello.ml                 # dump Lambda IR
+build/bin/occ build examples/mod_main.ml examples/mod_lib.ml examples/mod_lib.mli -o build/mod_app
+build/bin/occ build --shared --emit-header build/mod_lib.h examples/mod_lib.mli examples/mod_lib.ml -o build/libmod_lib.dylib
+build/bin/occ bindgen examples/bindgen_lib.mli -o build/bindgen_lib.h --shim build/bindgen_lib_shim.c
+build/bin/occ compile examples/hello.ml -o build/hello.ssa  # emit QBE IL
+build/bin/occ dump-lambda examples/hello.ml                 # dump Lambda IR
 ```
 
 ## Layout

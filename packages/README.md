@@ -21,7 +21,7 @@ Start from an existing compiler and compatibility stdlib. In a fresh compiler
 checkout, their **bootstrap** is still the repository's existing build:
 
 ```sh
-ninja -j1 build/bin/ocamlcc build/qbe/qbe build/rt/libocamlrt.a
+ninja -j1 build/bin/occ build/qbe/qbe build/rt/libocamlrt.a
 python3 tools/stdlib_compat.py --skip-tests
 ```
 
@@ -36,7 +36,7 @@ python3 tools/ocpkg.py vendor \
 python3 tools/ocpkg.py query --lock build/crunch/ocpkg.lock.json
 python3 tools/ocpkg.py emit ninja \
   --lock build/crunch/ocpkg.lock.json --vendor build/crunch/vendor \
-  --output build/crunch/build.ninja --compiler build/bin/ocamlcc \
+  --output build/crunch/build.ninja --compiler build/bin/occ \
   --qbe build/qbe/qbe --stdlib build/stdlib_compat/out --runtime runtime
 ninja -j1 -f build/crunch/build.ninja
 build/crunch/ocaml-crunch --version

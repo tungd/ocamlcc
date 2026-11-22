@@ -25,9 +25,9 @@ One checked-in `build.ninja` drives everything[^build-ninja]:
 |----------|------------|
 | `build/qbe/qbe` | `cc -c` each `vendor/qbe/*.c` (amd64 sysv/winabi, arm64/_apple, rv64, plus `gvn`/`gcm`/`ifopt`) → link. `config.h` is generated out-of-tree by `tools/gen-config.sh` (host default target). |
 | `build/rt/libocamlrt.a` | `cc -c -fPIC` `runtime/*.c` (with `main_entry.c` separated from `builtins.c` so `.so`/`.dylib` libraries do not pull `main`) + `runtime/pal_ctx.S` → `ar rcs`. |
-| `build/bin/ocamlcc` | `dune build bin/ocamlcc` (with `(public_name ocamlcc)` for `dune build -p ocamlcc`) → copy out of `_build/`. |
-| `build/stdlib/libocamlstdlib.a` | `ocamlcc compile-mli` / `compile --mod` over `stdlib/*.ml` → `qbe` → `cc -c` → `ar rcs`. |
-| `build/<name>` | `ocamlcc compile x.ml -o x.ssa` → `qbe x.ssa > x.s` → `cc x.s libocamlstdlib.a libocamlrt.a`. |
+| `build/bin/occ` | `dune build bin/occ` (with `(public_name occ)` for `dune build -p ocamlcc`) → copy out of `_build/`. |
+| `build/stdlib/libocamlstdlib.a` | `occ compile-mli` / `compile --mod` over `stdlib/*.ml` → `qbe` → `cc -c` → `ar rcs`. |
+| `build/<name>` | `occ compile x.ml -o x.ssa` → `qbe x.ssa > x.s` → `cc x.s libocamlstdlib.a libocamlrt.a`. |
 | `build/asan/<name>` | ASan + UBSan (`-fsanitize=address,undefined -fno-sanitize-recover=all`) runtime `build/asan/rt/libocamlrt.a` linked with compiled examples. |
 
 `ninja smoke` builds and runs `build/hello`; `ninja test` runs all checked
@@ -59,7 +59,9 @@ or `_build` by ninja itself.
 - **Vendored tarballs restore old mtimes** — after re-vendoring QBE, run
   `ninja -t clean` or ninja will happily link stale objects.
 
-When compiling user projects without `build.ninja`, `ocamlcc build`
+The Ninja build provides a temporary `build/bin/ocamlcc` alias for `occ`.
+
+When compiling user projects without `build.ninja`, `occ build`
 (`lib/driver.ml`) orchestrates the full pipeline in one command:
 topological dependency ordering over `.mli`/`.ml` units via compiler-libs
 `Depend` (allowing `.mli`-mediated mutual `.ml` dependencies via Tarjan SCC
@@ -85,7 +87,7 @@ combines the records for the archive and writes a `.exports` companion for
 each loose object. The archive and object companions carry binary and
 interface digests.
 
-`ocamlcc build -c` publishes the unit's `.cmi` and `.exports` next to the
+`occ build -c` publishes the unit's `.cmi` and `.exports` next to the
 output object. The CMI and summary use the OCaml unit name. The summary
 records the object basename, including a custom `-o` name. Consumers look up
 metadata for the interface the typechecker selected, including interfaces

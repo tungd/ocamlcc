@@ -39,7 +39,7 @@ def run_case(case: Path, stock: bool = False) -> None:
                 command(['ocamlc', '-c', p.name])
             command(['ocamlc', '-o', 'run', *[p.name for p in sources]])
         else:
-            cc = ROOT / 'build/bin/ocamlcc'
+            cc = ROOT / 'build/bin/occ'
             stdlib = ROOT / 'build/stdlib_compat/out'
             common = ['--nostdlib', '-I', stdlib, '-I', work]
             for p in work.glob('*.mli'):

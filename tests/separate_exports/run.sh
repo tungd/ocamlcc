@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-compiler=build/bin/ocamlcc
+compiler=build/bin/occ
 stdlib=build/stdlib
 src=tests/separate_exports
 work=build/separate_exports_test

@@ -97,7 +97,7 @@ def main():
                                f"assert (Embedded.read {literal} = Some (In_channel.with_open_bin {json.dumps(str(data / name))} In_channel.input_all));"]
             (artifacts / "consumer.ml").write_text("let () =\n" + "\n".join(assertions) +
                                                     '\nassert (Embedded.read "missing" = None);\nprint_endline "roundtrip: ok"\n')
-            run(f"roundtrip-compile-{block}", [ROOT / "build/bin/ocamlcc", "build", "--stdlib-dir", ROOT / "build/stdlib_compat/out",
+            run(f"roundtrip-compile-{block}", [ROOT / "build/bin/occ", "build", "--stdlib-dir", ROOT / "build/stdlib_compat/out",
                                               "--runtime-dir", ROOT / "runtime", "--qbe", ROOT / "build/qbe/qbe",
                                               "--runtime-objects-dir", build / "no-prebuilt-runtime",
                                               "--work-dir", artifacts / f"consumer-work-{block}", artifacts / "embedded.ml",

@@ -131,7 +131,7 @@ Run the standalone fixture from the repository root. It checks reverse registrat
 ocaml tests/finalizer_lifecycle.ml
 # With the compatibility archive already built
 work=$(mktemp -d)
-build/bin/ocamlcc build --stdlib-dir build/stdlib_compat/out tests/finalizer_lifecycle.ml -o "$work/run"
+build/bin/occ build --stdlib-dir build/stdlib_compat/out tests/finalizer_lifecycle.ml -o "$work/run"
 "$work/run"
 ```
 

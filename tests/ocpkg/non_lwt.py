@@ -28,7 +28,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     receipt_path = out / (args.suite + "-receipt.json")
     receipt = dict(status="running", pid=os.getpid(), commands=[], checks=[],
-                   compiler_sha256=ocpkg.file_hash(ROOT / "build/bin/ocamlcc"),
+                   compiler_sha256=ocpkg.file_hash(ROOT / "build/bin/occ"),
                    snapshot_sha256=ocpkg.file_hash(ROOT / "packages/snapshots/crunch-mvp.json"),
                    harness={p.name:ocpkg.file_hash(p) for p in (ROOT / "tests/ocpkg/ptime_harness").iterdir() if p.is_file()},
                    notes=["Upstream package/test sources are unchanged.",
@@ -80,7 +80,7 @@ def main():
     def arc_build(name, sources):
         binary = out / "arc" / name
         binary.parent.mkdir(exist_ok=True)
-        command = [ROOT / "build/bin/ocamlcc", "build", "--stdlib-dir", ROOT / "build/stdlib_compat/out",
+        command = [ROOT / "build/bin/occ", "build", "--stdlib-dir", ROOT / "build/stdlib_compat/out",
                    "--runtime-dir", ROOT / "runtime", "--runtime-objects-dir", base / "no-prebuilt-runtime",
                    "--qbe", ROOT / "build/qbe/qbe", "--cflags", "-I" + str(ROOT / "runtime"),
                    "--work-dir", out / "work" / name, *sources, "-o", binary]

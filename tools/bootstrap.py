@@ -2,7 +2,7 @@
 """
 Multi-stage self-hosting bootstrap orchestrator for ocamlcc.
 
-  Stage 0: host Dune / ocamlopt -> build/bin/ocamlcc
+  Stage 0: host Dune / ocamlopt -> build/bin/occ
   Stage 1: stage0 compiles stdlib_compat (72) + compiler-libs subset (104+4)
            + bootstrap/unix + ocamlcc -> build/bootstrap/stage1/ocamlcc
   Stage 2: stage1 compiles the exact same ~193 modules -> build/bootstrap/stage2/ocamlcc
@@ -577,7 +577,7 @@ def build_stage(
         return False, statuses, None
 
     # 5. Link the compiler executable
-    bin_path = stage_dir / "ocamlcc"
+    bin_path = stage_dir / "occ"
     sys_libs = ["-lm", "-pthread"]
     link_cmd = [
         "cc",
@@ -985,7 +985,7 @@ def main() -> int:
     stage2_dir = boot_dir / "stage2"
     stage3_dir = boot_dir / "stage3"
 
-    stage0 = ROOT / "build" / "bin" / "ocamlcc"
+    stage0 = ROOT / "build" / "bin" / "occ"
     qbe = ROOT / "build" / "qbe" / "qbe"
     # Each stage links the runtime archive. Ninja owns its implementation
     # members, including the separate ARC, slab, cycle, weak and primitive objects.
@@ -1024,7 +1024,7 @@ def main() -> int:
         if args.stage == "stage1":
             return 0
 
-    stage1_bin = stage1_dir / "ocamlcc"
+    stage1_bin = stage1_dir / "occ"
     if args.stage in ("stage2", "all"):
         if not stage1_bin.is_file():
             print(f"error: stage1 binary not found at {stage1_bin}", file=sys.stderr)
@@ -1050,7 +1050,7 @@ def main() -> int:
         if args.stage == "stage2":
             return 0
 
-    stage2_bin = stage2_dir / "ocamlcc"
+    stage2_bin = stage2_dir / "occ"
     if args.stage in ("stage3", "all"):
         if not stage2_bin.is_file():
             print(f"error: stage2 binary not found at {stage2_bin}", file=sys.stderr)

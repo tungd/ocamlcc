@@ -75,7 +75,7 @@ def extract_first_error(stderr_text: str | None, stdout_text: str | None) -> str
         if "Error:" in ln or "unsupported:" in ln:
             return ln[:220]
     for ln in lines:
-        if "ocamlcc: error:" in ln or "qbe:" in ln or "Undefined" in ln or "undefined" in ln:
+        if "occ: error:" in ln or "ocamlcc: error:" in ln or "qbe:" in ln or "Undefined" in ln or "undefined" in ln:
             return ln[:220]
     return lines[0][:220]
 
@@ -1316,7 +1316,7 @@ def main() -> int:
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent.parent
-    ocamlcc = root / "build/bin/ocamlcc"
+    ocamlcc = root / "build/bin/occ"
     qbe = root / "build/qbe/qbe"
     rt_dir = root / "build/rt"
     vendor_src = root / "vendor/ocaml-stdlib/src"

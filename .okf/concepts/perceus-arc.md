@@ -54,7 +54,7 @@ They share implementation details through `arc_internal.h`. The public
   its recorded size class. Allocations through 256 total bytes use a
   table indexed by the size rounded up to 16 bytes. In the default runtime, the allocator lock protects the shared full and partial lists and per-slab freelists. Empty slabs return to PAL when their class has another slab, preserving one warm slab. Slots preserve 16-byte alignment.
 - **Per-thread magazines in the default runtime.** A thread can cache up to 16 small slots per size class, including slots from different slabs. Local hits use a thread-local pointer and bypass the shared lock and pthread key lookup. A refill takes a batch under the lock. A spill returns half the magazine under one lock acquisition and unmaps retired slabs after unlocking. Cached slots pin their own slab until returned and are excluded from the live-object and allocation-word counters. The pthread key destructor drains the magazines at thread exit. The shared path handles threads that cannot create a cache and releases from later thread destructors. Native tests check reuse across slabs and reclamation after thread exit.
-- **Optional single-thread ARC.** `ocamlcc build --single-thread-rc` selects
+- **Optional single-thread ARC.** `occ build --single-thread-rc` selects
   inline ARC and the matching runtime. A host executable can link
   `build/rt-single/libocamlrt_st.a` from `ninja -j1 single_thread_runtime`.
   The driver builds the same profile from runtime sources when it needs
@@ -63,7 +63,7 @@ They share implementation details through `arc_internal.h`. The public
   this runtime for its lifetime. Those entry points reject a different
   thread. Raw C runtime calls use the owner thread. Native checks exercise
   array ownership, weak upgrades, reuse, and second-thread rejection.
-- **Inline single-thread ARC.** Low-level `ocamlcc compile
+- **Inline single-thread ARC.** Low-level `occ compile
   --inline-single-thread-rc` emits a module for the single-thread runtime. Generated module
   initializers use a single-thread entry symbol, which makes runtime-profile
   mismatches visible during executable linking. Mortal heap retains

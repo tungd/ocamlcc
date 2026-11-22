@@ -1,8 +1,13 @@
 (executable
- (public_name ocamlcc)
+ (public_name occ)
+ (package ocamlcc)
  (name main)
  (libraries ocamlcc))
 
 (rule
  (alias default)
- (action (copy main.exe ocamlcc)))
+ (action (copy main.exe occ)))
+
+(rule
+ (alias default)
+ (action (copy occ ocamlcc)))

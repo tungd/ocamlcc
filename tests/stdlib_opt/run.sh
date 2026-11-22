@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-compiler=build/bin/ocamlcc
+compiler=build/bin/occ
 stdlib=build/stdlib
 main=tests/stdlib_opt/main.ml
 work=build/stdlib_opt_test

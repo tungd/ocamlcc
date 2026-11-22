@@ -49,7 +49,7 @@ cat > "$probe/probe.ml" <<'ML'
 let valid n = Uchar.is_valid n
 let of_int n = Uchar.to_int (Uchar.of_int n)
 ML
-build/bin/ocamlcc compile --nostdlib --stdlib-dir "$stdlib" --mod "$probe/probe.ml" -o "$probe/probe.ssa"
+build/bin/occ compile --nostdlib --stdlib-dir "$stdlib" --mod "$probe/probe.ml" -o "$probe/probe.ssa"
 awk '
     /function l \$ocamlcc_Probe_(valid|of_int)\(/ { guard = 0; count++ }
     / =l cultl 110591,/ { guard = 1 }
