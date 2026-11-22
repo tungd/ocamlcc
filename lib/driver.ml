@@ -631,12 +631,22 @@ let compile_c_or_s ~verbose (tc : toolchain) extra_flags src obj =
   let args = tc.cc_base_args @ extra_flags @ [ "-c"; src; "-o"; obj ] in
   run_cmd ~verbose tc.cc_prog args
 
-let runtime_sources ~include_main runtime_dir =
-  let base =
-    [ "pal.c"; "pal_ctx.S"; "arc.c"; "closure.c"; "fiber.c"; "builtins.c" ]
-  in
-  let files = if include_main then base @ [ "main_entry.c" ] else base in
-  List.map (fun f -> Filename.concat runtime_dir f) files
+let runtime_parts = [ "slab.c"; "cycle.c"; "weak.c"; "primitives.c" ]
+
+let runtime_units ~split ~include_main =
+  [ "pal.c"; "pal_ctx.S"; "arc.c" ]
+  @ (if split then runtime_parts else [])
+  @ [ "closure.c"; "fiber.c"; "builtins.c" ]
+  @ (if include_main then [ "main_entry.c" ] else [])
+
+let runtime_sources ~include_main dir =
+  runtime_units ~split:true ~include_main |> List.map (Filename.concat dir)
+
+let runtime_objects ~include_main dir =
+  let object_path unit = Filename.concat dir (Filename.remove_extension unit ^ ".o") in
+  (* Accept object directories from the same ABI before the source split. *)
+  let split = List.exists (fun unit -> Sys.file_exists (object_path unit)) runtime_parts in
+  runtime_units ~split ~include_main |> List.map object_path
 
 let compile_runtime_objs ~verbose (tc : toolchain) ~include_main runtime_dir
     out_dir =
@@ -1101,20 +1111,7 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                           | Some d
                                             when Sys.file_exists
                                                    (Filename.concat d "arc.o") ->
-                                              let base =
-                                                [ "pal.o"; "pal_ctx.o"; "arc.o";
-                                                  "closure.o"; "fiber.o";
-                                                  "builtins.o" ]
-                                              in
-                                              let files =
-                                                if include_main then
-                                                  base @ [ "main_entry.o" ]
-                                                else base
-                                              in
-                                              Ok
-                                                (List.map
-                                                   (Filename.concat d)
-                                                   files)
+                                              Ok (runtime_objects ~include_main d)
                                           | _ -> (
                                               match resolve_runtime_dir cfg with
                                               | Some rdir ->

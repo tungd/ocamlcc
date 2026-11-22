@@ -133,7 +133,7 @@ int    ocamlcc_c_fpclassify(double d)
     }
 }
 
-/* open_flag bitmasks passed from runtime/arc.c:
+/* open_flag bitmasks passed from runtime/primitives.c:
  * 0x01=RD, 0x02=WR, 0x04=APPEND, 0x08=CREAT, 0x10=TRUNC, 0x20=EXCL, 0x40=NONBLOCK */
 int ocamlcc_c_sys_open(const char *path, int flags_mask, int perm, int *err_out)
 {

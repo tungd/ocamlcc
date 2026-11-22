@@ -22,14 +22,34 @@ sources:
     title: Local borrow and reuse transformations
   - id: arc-runtime
     resource: ../runtime/arc.c
-    title: Freestanding ARC runtime and slab allocator
+    title: ARC ownership, reuse, exceptions and finalizer dispatch
+  - id: slab-runtime
+    resource: ../runtime/slab.c
+    title: Size-class pages and magazines
+  - id: cycle-runtime
+    resource: ../runtime/cycle.c
+    title: Trial-deletion cycle collector
+  - id: weak-runtime
+    resource: ../runtime/weak.c
+    title: Weak arrays and target registration
+  - id: primitive-runtime
+    resource: ../runtime/primitives.c
+    title: Native standard-library and Bigarray primitives
 ---
 
 # Perceus ARC & Freestanding Slab Allocator
 
 Phase 2 replaces libc `malloc`/`free` with a freestanding slab allocator and static Perceus reference counting with zero-leak error-return exceptions and weak references.
 
-## Freestanding Slab Allocator & Thread Safety (`runtime/arc.c`)
+## Runtime source layout
+
+`arc.c` owns reference counting, reuse, exception slots, initialization and
+finalizer dispatch. `slab.c`, `cycle.c`, `weak.c` and `primitives.c` own
+allocation, collection, weak arrays and native primitives respectively.
+They share implementation details through `arc_internal.h`. The public
+`arc.h` layout and exported symbols are the same in the split build.
+
+## Freestanding Slab Allocator & Thread Safety (`runtime/slab.c`)
 - **Size classes and slab reclamation.** The 12 classes span 16 to 2048 bytes. Slabs have size and alignment of 64 KiB. PAL maps whole pages and trims the address range to keep one aligned slab. The `SlabPage` header starts at its base, so `slab_free` recovers the owner by masking the slot address and uses
   its recorded size class. Allocations through 256 total bytes use a
   table indexed by the size rounded up to 16 bytes. In the default runtime, the allocator lock protects the shared full and partial lists and per-slab freelists. Empty slabs return to PAL when their class has another slab, preserving one warm slab. Slots preserve 16-byte alignment.
@@ -83,8 +103,8 @@ an inner catch restores the outer label's ownership facts.
 - **Local immutable aggregates.** The Lambda pass replaces an immutable block of one to four fields with its component bindings when all uses project fields or inspect the known constructor. Strict bindings expose the final allocation under inlined argument bindings and sequences. Conditional and match expressions with a common constructor and field count pass their components through a static join. Tuple, option, and result payloads still evaluate once, even when unused. Escaping values and closure captures retain the aggregate and its ordinary ownership.
 - **Local field borrows.** ARC can fuse an immutable pointer projection into a local access or load it once as a borrowed view when a loop reads it. Liveness keeps the receiver through the last view use and protects it across intervening calls and unwinds. Branches inside the loop can read the view. The loop condition on this optimization preserves early receiver retirement and constructor reuse in ordinary matches. A mutable projection can fuse with a single reader across local field reads, index arithmetic, and conditional joins. A constructor test can also lead to a borrowed payload read in one of its branches. Calls and writes keep the original snapshot and its ownership. Small local functions with explicit inline hints and no nested applications can still expand after the general inlining budget is spent.
 - **Field & mutation balance**: Field reads with Lambda’s `Immediate` kind and `Pintarray` reads produce tagged immediates, so codegen omits the retain and ARC treats the result as unmanaged. Other pointer-capable field and array reads retain their results. `test/immediate_access_test.ml` checks both paths. `SetField`/`ArraySet`/`Assign` release overwritten values; a `MutLet` slot is released exactly once, where it leaves scope (function-exit `Halt`, `Raise`, or `StaticRaise` to a narrower handler).
-- **C-call ABI registry** (`lib/ccalls.ml`): runtime primitives lowered to `Ccall` are classified in one typed table — `argc`, `raises` (stores to `ocamlcc_exn_slot`, so call sites inside `TryWith` get `CheckExn` unwinding), and `yields` (can suspend the fiber, so call sites join the shadow-stack protocol). `anf.ml`'s external lowering consults it: registered `caml_*` primitives lower to `Ccall`, unknown `caml_*` primitives are rejected at compile time, and user externals lower through their declared native ABI. The old hardcoded `ce_may_raise_fn`/`is_yielding_ccall` name lists (which drifted — `Weak.get_copy` was missed once) are gone; `runtime/arc.c`'s `caml_blit_bytes`/`caml_blit_string`/`caml_fill_bytes` raise `Invalid_argument "index out of bounds"` on out-of-bounds (like real OCaml) instead of `pal_abort`, and are registered as raising. ABI contract pinned by `test/ccalls_test.ml`; end-to-end by the `invarg=` probes in `examples/stdlib_test.ml` (which also probe `caml_floatarray_blit`/`caml_floatarray_fill` — both delegate to `caml_array_blit`/`caml_array_fill`, so they are registered `raises = true` and `returns_imm`: an out-of-bounds fill must be caught by the enclosing `TryWith` (`CheckExn` emitted) and must not poison `ocamlcc_exn_slot` for the next checked call, pinned by the `i_fa_oob`/`i_fa_ok` probes).
-- **Comparison contract** (`val_compare_raw` in `runtime/arc.c`): structural comparison is bounded — a C-recursion depth limit (10 000) plus a shared step budget (10⁸) raise `Invalid_argument "compare: cyclic structure"` instead of smashing the stack on cyclic records (even under ASan `-O1` stack-frame instrumentation) or spinning forever on tail-cyclic lists. Unscanned leaf blocks (`ARC_TAG_FLOAT`, `ARC_TAG_FLOAT_ARRAY`, `ARC_TAG_CUSTOM`) compare by numeric/element value and are excluded from `is_cycle_candidate_obj`, `release_subtree` child walks, and `cc_visit_children` via `is_unscanned_leaf_tag`. Float/custom unary and binary ops return owned `rc=1` boxes (`is_imm_binop` / `is_imm_unop`), `FloatField` returns a fresh `rc=1` box, `SetFloatField` borrows the source float, and `Pfloatarray`/`Pgenarray` array construction/mutation release consumed `ARC_TAG_FLOAT` inputs after copying their unboxed `double` payloads. Exception-constructor id blocks (tag 248: field 0 = name string, field 1 = OID) compare **structurally** (name string, then OID) like real OCaml, deterministically, instead of by raw heap address. `pipe`/`fd_read`/`fd_write` raise on failure (`Sys_error "pipe failed"` / `Invalid_argument "index out of bounds"` on out-of-bounds reads/writes) instead of `pal_abort`, and are registered `raises = true` in the C-call ABI registry so `TryWith` unwinds correctly; OS errors on read/write still return the negative count for the Fiber I/O machinery to poll.
+- **C-call ABI registry** (`lib/ccalls.ml`): runtime primitives lowered to `Ccall` are classified in one typed table — `argc`, `raises` (stores to `ocamlcc_exn_slot`, so call sites inside `TryWith` get `CheckExn` unwinding), and `yields` (can suspend the fiber, so call sites join the shadow-stack protocol). `anf.ml`'s external lowering consults it: registered `caml_*` primitives lower to `Ccall`, unknown `caml_*` primitives are rejected at compile time, and user externals lower through their declared native ABI. The old hardcoded `ce_may_raise_fn`/`is_yielding_ccall` name lists (which drifted — `Weak.get_copy` was missed once) are gone; `runtime/primitives.c`'s `caml_blit_bytes`/`caml_blit_string`/`caml_fill_bytes` raise `Invalid_argument "index out of bounds"` on out-of-bounds (like real OCaml) instead of `pal_abort`, and are registered as raising. ABI contract pinned by `test/ccalls_test.ml`; end-to-end by the `invarg=` probes in `examples/stdlib_test.ml` (which also probe `caml_floatarray_blit`/`caml_floatarray_fill` — both delegate to `caml_array_blit`/`caml_array_fill`, so they are registered `raises = true` and `returns_imm`: an out-of-bounds fill must be caught by the enclosing `TryWith` (`CheckExn` emitted) and must not poison `ocamlcc_exn_slot` for the next checked call, pinned by the `i_fa_oob`/`i_fa_ok` probes).
+- **Comparison contract** (`val_compare_raw` in `runtime/primitives.c`): structural comparison is bounded — a C-recursion depth limit (10 000) plus a shared step budget (10⁸) raise `Invalid_argument "compare: cyclic structure"` instead of smashing the stack on cyclic records (even under ASan `-O1` stack-frame instrumentation) or spinning forever on tail-cyclic lists. Unscanned leaf blocks (`ARC_TAG_FLOAT`, `ARC_TAG_FLOAT_ARRAY`, `ARC_TAG_CUSTOM`) compare by numeric/element value and are excluded from `is_cycle_candidate_obj`, `release_subtree` child walks, and `cc_visit_children` via `is_unscanned_leaf_tag`. Float/custom unary and binary ops return owned `rc=1` boxes (`is_imm_binop` / `is_imm_unop`), `FloatField` returns a fresh `rc=1` box, `SetFloatField` borrows the source float, and `Pfloatarray`/`Pgenarray` array construction/mutation release consumed `ARC_TAG_FLOAT` inputs after copying their unboxed `double` payloads. Exception-constructor id blocks (tag 248: field 0 = name string, field 1 = OID) compare **structurally** (name string, then OID) like real OCaml, deterministically, instead of by raw heap address. `pipe`/`fd_read`/`fd_write` raise on failure (`Sys_error "pipe failed"` / `Invalid_argument "index out of bounds"` on out-of-bounds reads/writes) instead of `pal_abort`, and are registered `raises = true` in the C-call ABI registry so `TryWith` unwinds correctly; OS errors on read/write still return the negative count for the Fiber I/O machinery to poll.
 - **Immediate static joins and local slots.** A static handler argument needs ARC only when an incoming exit can pass a managed value. The pass intersects those facts per binder, follows local definitions and nested exits, and uses the handler facts when inferring the result of a catch or join. A local mutable slot uses the immediate convention when its initializer and every assignment are proven unmanaged and no closure captures the slot. That removes retains on reads, releases on writes or scope exit, and fiber shadow roots for that slot. A possible heap write keeps the owning slot path. `test/arc_immediates_test.ml` checks the emitted roots for immediate and mixed paths.
 - **Generated ARC guards.** QBE uses the same nullable heap test for explicit retain and release operations, field and array accesses, and owning-slot cleanup. The heap path calls `arc_retain` or `arc_release`, or uses the selected single-thread inline RC path. Compact exception cleanup and C entry points can use the value helpers directly.
 - **Mutable-slot scope invariant**: For owning slots, `Halt`s that flow into a `LetJoin` rhs, `While`/`For` condition/body, or a loop-exit continuation are *not* scope exits, so they must not emit `ReleaseMut` for slots that remain in scope. `env.scope.no_release_muts` (set to `env.scope.muts` when descending into those regions) defers such slots to the continuation that still uses them; `Halt` releases `env.scope.muts - env.scope.no_release_muts`. Muts introduced *inside* the region still release at its own `Halt`. Regression-tested at the middle-end level in `test/arc_mutlet_test.ml` (drives hand-written `Lmutlet` Lambda terms through `Anf.of_lambda` + `Arc_pass.run` and counts `ReleaseMut` per slot).
@@ -250,6 +270,23 @@ The fiber and foreign-owner branches call out to cold helpers. This keeps
 Darwin's dynamic TLS address lookup outside the ordinary release traversal
 even when the C compiler hoists TLS addresses out of conditional blocks.
 
+
+## Runtime split tterm replay
+
+Five interleaved trials compared the split runtime with `a2e88d8` on Apple
+M4 Pro using the same plain and Unicode payloads. Both builds of the split
+runtime matched the stock parser fixture. Times are median milliseconds per
+payload.
+
+| ARC profile | Workload | Baseline | Split runtime | Change |
+|---|---|---:|---:|---:|
+| Default | Plain | 42.185 | 42.106 | −0.19% |
+| Default | Unicode | 157.173 | 156.008 | −0.74% |
+| Single-thread with inline ARC | Plain | 36.408 | 36.584 | +0.49% |
+| Single-thread with inline ARC | Unicode | 130.752 | 130.547 | −0.16% |
+
+The single-thread small-drop path can insert into its size-class magazine
+inline. Spilling a full magazine still calls the allocator.
 
 ## Round 4 tterm replay
 

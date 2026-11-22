@@ -7,6 +7,11 @@
  (section lib)
  (files
   (runtime/arc.c as runtime/arc.c)
+  (runtime/arc_internal.h as runtime/arc_internal.h)
+  (runtime/slab.c as runtime/slab.c)
+  (runtime/cycle.c as runtime/cycle.c)
+  (runtime/weak.c as runtime/weak.c)
+  (runtime/primitives.c as runtime/primitives.c)
   (runtime/arc.h as runtime/arc.h)
   (runtime/ocamlcc_bigarray_types.h as runtime/ocamlcc_bigarray_types.h)
   (runtime/ocamlcc_bigarray.h as runtime/ocamlcc_bigarray.h)

@@ -147,7 +147,7 @@ typedef struct {
 
 ### 4.5 Platform Abstraction Layer (pal.h)
 
-The C runtime (`runtime/arc.c` with `bigarray.inc` and `marshal.inc`, `runtime/fiber.c`, `runtime/closure.c`, `runtime/pal.c`, `runtime/pal_ctx.S`, `runtime/builtins.c`, `runtime/main_entry.c`) isolates OS/page/poller primitives behind 6 PAL hook groups (`pal.h`), while `runtime/builtins.c` provides POSIX/libc/libm/pthread helpers for standard-library I/O, math, sync, and crypto:
+The C runtime (`runtime/{arc,slab,cycle,weak,primitives}.c` with `arc_internal.h` and `bigarray.inc`, `runtime/fiber.c`, `runtime/closure.c`, `runtime/pal.c`, `runtime/pal_ctx.S`, `runtime/builtins.c`, `runtime/main_entry.c`) isolates OS/page/poller primitives behind 6 PAL hook groups (`pal.h`), while `runtime/builtins.c` provides POSIX/libc/libm/pthread helpers for standard-library I/O, math, sync, and crypto:
 
 1. `pal_page_alloc` / `pal_page_free` / `pal_page_protect_none` (mmap/munmap/mprotect on POSIX; libSystem / Bionic on mobile)
 2. `pal_abort` (`abort()` / `__builtin_trap()`)

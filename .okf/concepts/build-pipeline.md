@@ -110,6 +110,12 @@ The executable initializes every explicitly linked implementation once, in depen
 
 Each unit's generated `ocamlcc_init_<Mod>` first calls `ocamlcc_init_try_enter` on its `ocamlcc_global_<Mod>` slot (`0` uninitialized, `-2` claimed, other value published) and skips initialization if it does not win the claim. Units that mutually reference each other through their `.mli` interfaces recurse into each other's init functions; the runtime treats a same-thread re-entrant call as "already initializing here" (returns `0`, no spin), so the inner unit completes with whichever of its dependencies were initialized before the cycle re-entered. `ocamlcc_init_finish` publishes the unit value — or `0` when `ocamlcc_get_exn()` holds a raised exception, so the failure can be retried — and releases the claim.
 
+# Runtime objects
+
+The default, single-thread, ASan and TSan archives include separate ARC,
+slab, cycle, weak and primitive objects. The driver uses the same source
+list to build a runtime for a different target or an installed toolchain.
+
 # Shared filesystem and process operations
 
 `Sys_util` owns binary file IO, temporary file publication, directory

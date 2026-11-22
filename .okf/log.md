@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Split native ARC ownership, slab allocation, cycle collection, weak arrays, and stdlib primitives into separate runtime objects. Keep the public ARC header and export lists intact. See [Perceus ARC](/concepts/perceus-arc.md#runtime-source-layout).
+
 - 2026-11-22 (codex/1) — Encapsulate the Codegen builder, scope static labels, and extract numeric lowering. Move block rewrites into QBE IL and consolidate the export summary codec. See [compiler pipeline](/concepts/compiler-pipeline.md#code-generation-interfaces).
 
 - 2026-11-22 (codex/1) — Separate ARC program facts and borrowed views from ownership emission. Preserve outer static handler ownership across nested catches with a lexical exception frame. See [Perceus ARC](/concepts/perceus-arc.md).

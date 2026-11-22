@@ -1,4 +1,4 @@
-/* ARC-native Bigarray. Included by arc.c to share allocation and I/O helpers.
+/* ARC-native Bigarray. Included by primitives.c to share allocation and I/O helpers.
  * Views own the backing descriptor; descriptors own PAL pages, never views. */
 #define BA_MAX_DIMS 16
 static char ba_runtime_id;

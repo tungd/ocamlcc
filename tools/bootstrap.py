@@ -983,6 +983,8 @@ def main() -> int:
 
     stage0 = ROOT / "build" / "bin" / "ocamlcc"
     qbe = ROOT / "build" / "qbe" / "qbe"
+    # Each stage links the runtime archive. Ninja owns its implementation
+    # members, including the separate ARC, slab, cycle, weak and primitive objects.
     rt_archive = ROOT / "build" / "rt" / "libocamlrt.a"
     qbe_target = stdlib_compat.detect_host_qbe_target()
 

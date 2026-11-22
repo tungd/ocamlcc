@@ -27,7 +27,7 @@ implementations) to native binaries, shared/static libraries, and iOS
 by vendored QBE 1.3 with Perceus-style Automatic Reference Counting, a
 freestanding 12-class slab allocator (returning empty 64 KB slabs to
 `pal_page_free`) + opt-in trial-deletion cycle collector
-(`ocamlcc_arc_collect` in `runtime/arc.c`, synchronized with FFI mutator
+(`ocamlcc_arc_collect` in `runtime/cycle.c`, synchronized with FFI mutator
 gates), `.mli -> .h` C99 header & FFI shim generation (`ocamlcc bindgen`,
 surfacing OCaml exceptions via `ocamlcc_error_t *`), Wren-style stackful
 fibers + cooperative `kqueue`/`epoll` async I/O poller with yield-effect
