@@ -105,7 +105,7 @@ let rec compile_atom hooks b (a : Anf.atom) : t =
   | ConstBlock (tag, items) ->
       static_payload_ptr b "cblk" (emit_const_block b tag items)
   | Var id -> (
-      match Hashtbl.find_opt b.vars id with
+      match find_ocaml_value b id with
       | Some v -> v
       | None -> (
           match Hashtbl.find_opt b.funs id with
@@ -119,7 +119,7 @@ let rec compile_atom hooks b (a : Anf.atom) : t =
       | Some slot ->
           let dst = fresh_temp b "mut" in
           emit b (Load (Loadl, Long, dst, slot));
-          dst
+          if Ident.Set.mem id b.cur_fn.known_heap_slots then mark_heap b dst else dst
       | None -> (
           match Hashtbl.find_opt b.vars id with
           | Some v -> v
@@ -127,6 +127,13 @@ let rec compile_atom hooks b (a : Anf.atom) : t =
               failwith
                 (Printf.sprintf "codegen: unbound mutable variable %s"
                    (sanitize (Ident.name id)))))
+
+let compile_untagged hooks b = function
+  | Anf.Var id as atom ->
+      (match Hashtbl.find_opt b.cur_fn.untagged_indices id with
+       | Some index -> index
+       | None -> untag b (compile_atom hooks b atom))
+  | atom -> untag b (compile_atom hooks b atom)
 
 let compile_div_mod b qop (av : t) (cv : t) : t =
   let ua = untag b av in
@@ -755,6 +762,23 @@ let array_address b arr index =
 let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
   match ce with
   | Atom a -> compile_atom hooks b a
+  | LoopPollDue (index, start) ->
+      let index = compile_untagged hooks b index in
+      let phase = fresh_temp b "poll_phase" in
+      (* Preserve the first check at an arbitrary loop start, in either
+         direction. Only the low six bits of the distance are observed. *)
+      let distance =
+        match compile_untagged hooks b start with
+        | Int 0L -> index
+        | start ->
+            let distance = fresh_temp b "poll_distance" in
+            emit b (Binop (Sub, Long, distance, index, start));
+            distance
+      in
+      emit b (Binop (And, Long, phase, distance, Int 63L));
+      let due = fresh_temp b "loop_poll_due" in
+      emit b (Cmp (Eq, Long, due, phase, Int 0L));
+      retag b due
   | Binop (op, a, c) -> compile_binop hooks b op a c
   | IntSelect (op, a, c) ->
       let lhs = compile_atom hooks b a in
@@ -884,8 +908,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       unit_const
   | StringGet (safe, s, idx) ->
       let sv = compile_atom hooks b s in
-      let iv = compile_atom hooks b idx in
-      let ui = untag b iv in
+      let ui = compile_untagged hooks b idx in
       let do_read () =
         let caddr = fresh_temp b "strp" in
         emit b (Binop (Add, Long, caddr, sv, ui));
@@ -899,9 +922,8 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       else do_read ()
   | BytesSet (safe, bs, idx, ch) ->
       let bsv = compile_atom hooks b bs in
-      let iv = compile_atom hooks b idx in
+      let ui = compile_untagged hooks b idx in
       let cv = compile_atom hooks b ch in
-      let ui = untag b iv in
       let uc = untag b cv in
       let do_write () =
         let caddr = fresh_temp b "strp" in
@@ -915,8 +937,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       else do_write ()
   | BytesGetN (safe, width, bs, idx) ->
       let bsv = compile_atom hooks b bs in
-      let iv = compile_atom hooks b idx in
-      let ui = untag b iv in
+      let ui = compile_untagged hooks b idx in
       let do_read () =
         let addr = fresh_temp b "bgptr" in
         emit b (Binop (Add, Long, addr, bsv, ui));
@@ -941,9 +962,8 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       else do_read ()
   | BytesSetN (safe, width, bs, idx, v) ->
       let bsv = compile_atom hooks b bs in
-      let iv = compile_atom hooks b idx in
+      let ui = compile_untagged hooks b idx in
       let vv = compile_atom hooks b v in
-      let ui = untag b iv in
       let do_write () =
         let addr = fresh_temp b "bsptr" in
         emit b (Binop (Add, Long, addr, bsv, ui));
@@ -1028,19 +1048,19 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       box_bint b bi swapped
   | ArrayGet (safe, kind, arr, idx) -> (
       let av = compile_atom hooks b arr in
-      let iv = compile_atom hooks b idx in
       match kind with
       | Lambda.Pgenarray ->
           let read () =
+            let iv = compile_atom hooks b idx in
             let dst = fresh_temp b "gavel" in
             emit b (Call (Long, dst, { fn = Global "ocamlcc_gen_array_get";
               args = [Long, Int 0L; Long, av; Long, iv] }));
             dst
           in
-          if safe then compile_bounds_guarded b ?on_oob (untag b iv) (array_len_raw b av) read
+          if safe then compile_bounds_guarded b ?on_oob (compile_untagged hooks b idx) (array_len_raw b av) read
           else read ()
       | Lambda.Pfloatarray ->
-          let ui = untag b iv in
+          let ui = compile_untagged hooks b idx in
           let do_read () =
             let eaddr = array_address b av ui in
             box_double b (load_double b eaddr)
@@ -1050,7 +1070,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
             compile_bounds_guarded b ?on_oob ui len do_read
           else do_read ()
       | Lambda.Paddrarray | Pintarray ->
-          let ui = untag b iv in
+          let ui = compile_untagged hooks b idx in
           let do_read () =
             let eaddr = array_address b av ui in
             let dst = fresh_temp b "avel" in
@@ -1064,21 +1084,21 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
           else do_read ())
   | ArraySet (safe, kind, arr, idx, v) -> (
       let av = compile_atom hooks b arr in
-      let iv = compile_atom hooks b idx in
       let vv = compile_atom hooks b v in
       match kind with
       | Lambda.Pgenarray ->
           let write () =
+            let iv = compile_atom hooks b idx in
             let dst = fresh_temp b "gaset" in
             emit b (Call (Long, dst, { fn = Global "ocamlcc_gen_array_set";
               args = [Long, Int 0L; Long, av; Long, iv; Long, vv] }));
             unit_const
           in
           if safe then compile_bounds_guarded b ?on_oob ~drop_on_oob:vv
-            (untag b iv) (array_len_raw b av) write
+            (compile_untagged hooks b idx) (array_len_raw b av) write
           else write ()
       | Lambda.Pfloatarray ->
-          let ui = untag b iv in
+          let ui = compile_untagged hooks b idx in
           let do_write () =
             let eaddr = array_address b av ui in
             let d = load_double b vv in
@@ -1091,14 +1111,16 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
             compile_bounds_guarded b ?on_oob ~drop_on_oob:vv ui len do_write
           else do_write ()
       | Lambda.Pintarray | Paddrarray ->
-          let ui = untag b iv in
+          let ui = compile_untagged hooks b idx in
           let do_write () =
             if kind = Lambda.Pintarray then begin
               let eaddr = array_address b av ui in
               emit b (Store (Storel, vv, eaddr))
-            end else
+            end else begin
+              let iv = compile_atom hooks b idx in
               emit b (Call_void { fn = Global "ocamlcc_addr_array_set";
-                args = [Long, av; Long, iv; Long, vv] });
+                args = [Long, av; Long, iv; Long, vv] })
+            end;
             unit_const
           in
           if safe then
@@ -1152,14 +1174,14 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       | Integer_scalar kind -> box_bint b kind raw)
   | FloatArrayGet (safe, arr, index) ->
       let av = compile_atom hooks b arr in
-      let idx = untag b (compile_atom hooks b index) in
+      let idx = compile_untagged hooks b index in
       let load () = load_double b (array_address b av idx) in
       if safe then
         compile_bounds_guarded b ?on_oob ~result_type:Double idx (array_len_raw b av) load
       else load ()
   | FloatArraySet (safe, arr, index, value) ->
       let av = compile_atom hooks b arr in
-      let idx = untag b (compile_atom hooks b index) in
+      let idx = compile_untagged hooks b index in
       let store () =
         let v = compile_scalar_operand hooks b Double_scalar value in
         emit b (Store (Stored, v, array_address b av idx));
@@ -1265,6 +1287,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       let slot = Hashtbl.find b.mut_vars id in
       let value = compile_scalar_operand hooks b rep value in
       emit b (Store (scalar_store (scalar_type rep), value, slot));
+      forget_heap_slot b id;
       unit_const
   | Assign (id, rhs) | AssignImm (id, rhs) -> (
       let v = compile_atom hooks b rhs in
@@ -1278,6 +1301,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
               emit b (Store (Storel, v, slot));
               emit b
                 (Call_void { fn = Global "arc_release_val"; args = [ (Long, old_v) ] }));
+          forget_heap_slot b id;
           unit_const
       | None ->
           failwith
@@ -1324,6 +1348,7 @@ let with_dereferenced_receiver b (ce : Anf.cexpr) f =
       (match Hashtbl.find_opt b.vars id with
       | Some value -> with_known_heap b value f
       | None -> f ())
+  | Some (Anf.MutVar slot) -> with_heap_slot b slot f
   | _ -> f ()
 
 let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
@@ -1391,6 +1416,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       res
   | LetJoin (id, rhs, body) ->
       let v = compile_aexpr hooks b false rhs in
+      forget_heap_slots b;
       if b.cur_fn.term <> None then unit_const
       else begin
         Hashtbl.replace b.vars id v;
@@ -1417,6 +1443,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
           unit_const
       | None -> failwith "codegen: uncaught static raise")
   | While (cond, body) ->
+      forget_heap_slots b;
       let lcond = fresh_label b "wcond" in
       close_block b (Jmp lcond);
       start_block b lcond;
@@ -1434,8 +1461,9 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       end;
       unit_const
   | For (id, start_a, stop_a, dir, body) ->
-      let sv = untag b (compile_atom hooks b start_a) in
-      let ev = untag b (compile_atom hooks b stop_a) in
+      let sv = compile_untagged hooks b start_a in
+      let ev = compile_untagged hooks b stop_a in
+      forget_heap_slots b;
       let enter_op, cont_op, step =
         match dir with
         | Asttypes.Upto -> (Cmp.Sle, Cmp.Slt, 1L)
@@ -1453,13 +1481,10 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       close_block b (Br (enter, lbody, ldone));
       start_block b lbody;
       emit b (Phi (Long, iv, [ (lpre, sv); (lnext, next_i) ]));
-      let tagged = retag b iv in
       let indices = b.cur_fn.untagged_indices in
-      with_shadowed_vars b [ id ] (fun () ->
-          Hashtbl.replace b.vars id tagged;
-          Hashtbl.add indices tagged iv;
-          Fun.protect ~finally:(fun () -> Hashtbl.remove indices tagged)
-            (fun () -> ignore (compile_aexpr hooks b false body)));
+      Hashtbl.add indices id iv;
+      Fun.protect ~finally:(fun () -> Hashtbl.remove indices id)
+        (fun () -> ignore (compile_aexpr hooks b false body));
       if b.cur_fn.term = None then close_block b (Jmp lstep);
       start_block b lstep;
       let more = fresh_temp b "formore" in
@@ -1486,10 +1511,8 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
             emit_releases body
         | ReleaseMut (id, body) ->
             (match Hashtbl.find_opt b.mut_vars id with
-            | Some slot ->
-                let v = fresh_temp b "mrel" in
-                emit b (Load (Loadl, Long, v, slot));
-                emit_arc_if_heap b `Release v
+            | Some _ ->
+                emit_arc_if_heap b `Release (compile_atom hooks b (MutVar id))
             | None -> ());
             emit_releases body
         | rest -> rest

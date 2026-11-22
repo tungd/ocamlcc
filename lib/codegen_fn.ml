@@ -108,7 +108,7 @@ and alloc_closure b code_sym arity (env : Ident.t list) : t =
   List.iteri
     (fun i ev ->
       let v =
-        match Hashtbl.find_opt b.vars ev with
+        match find_ocaml_value b ev with
         | Some v -> v
         | None -> (
             match Hashtbl.find_opt b.funs ev with
@@ -461,7 +461,7 @@ let compile_letrec compile_aexpr b tail (bindings : Anf.rec_binding list) body =
         (fun (_, _, env, obj) ->
           List.iteri
             (fun i ev ->
-              let v = Hashtbl.find b.vars ev in
+              let v = Option.get (find_ocaml_value b ev) in
               if
                 List.exists
                   (fun (rb : Anf.rec_binding) -> Ident.same rb.id ev)

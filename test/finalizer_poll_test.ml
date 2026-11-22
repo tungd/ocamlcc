@@ -36,6 +36,10 @@ let il =
         if n = 0 then () else (side_effect n; recurse_with_call (n - 1))
       let ascii c stop = if c < stop && c < 127 && (c = 9 || 31 < c) then c else 0
       let loop n = for i = 0 to n do () done
+      let indexed (a : int array) n =
+        for i = 0 to n do
+          let _ = unsafe_get a i in ()
+        done
       let reverse n = for i = n downto 0 do () done
       let loop_with_call n = for i = 0 to n do side_effect i done
       let while_local n =
@@ -82,7 +86,14 @@ let () =
   check "generic_get" "call extern $ocamlcc_gen_array_get(" true;
   let phase_mask = " =l and [^,\n]+, 127\n" in
   List.iter (fun name -> check ~literal:false name phase_mask true)
-    ["loop"; "reverse"; "loop_with_call"; "while_local"; "while_field"];
+    ["while_local"; "while_field"];
+  List.iter (fun name ->
+    check ~literal:false name " =l and [^,
+]+, 63
+" true)
+    ["loop"; "reverse"; "loop_with_call"; "indexed"];
+  check ~literal:false "indexed" "shl %fori\\.[0-9]+, 1
+" false;
   List.iter (fun name -> check ~literal:false name phase_mask false)
     ["while_call"];
   check "constant_div" "ocamlcc_global_Division_by_zero" false;

@@ -117,7 +117,7 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | FloatArrayGet _ | FloatArraySet _ | FloatOfInt _ | IntOfFloat _
   | FloatSign _ | FloatCompare _ | KeepAlive _ -> true
   | MakeBlock (_, _, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
-  | PollFinalizers -> true
+  | PollFinalizers | LoopPollDue _ -> true
   | Ccall (name, _) -> Ccalls.returns_imm name
   | NativeCcall (prim, _) ->
       not (Primitive.equal_native_repr prim.prim_native_repr_res Same_as_ocaml_repr)
@@ -333,7 +333,7 @@ let split_borrowed flags args =
 let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   match ce with
   | Atom a -> (Ident.Set.empty, [ a ])
-  | Binop (_, a, b) | IntSelect (_, a, b) ->
+  | Binop (_, a, b) | IntSelect (_, a, b) | LoopPollDue (a, b) ->
       (Ident.Set.union (atom_vars a) (atom_vars b), [])
   | Unop (_, a) -> (atom_vars a, [])
   | MakeBlock (_, _, args) | AllocReuse (_, _, _, args) | MakeArray (_, args) ->
@@ -580,6 +580,7 @@ let fuse_field_read env ~stable id index owner body =
   in
   let can_delay_snapshot = function
     | Atom (Var _ | Int _ | Char _ | Unit)
+    | Unop (Isint, _)
     | Field (_, (Immediate_field | Immutable_field), _)
     | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr | Cmp _), _, _) -> true
     | _ -> false
@@ -606,7 +607,7 @@ let fuse_field_read env ~stable id index owner body =
         | Some ce' when not (use_in ce') ->
             let next =
               if not (live next) then Some next
-              else if stable && can_cross ce then fuse next
+              else if (if stable then can_cross ce else can_delay_snapshot ce) then fuse next
               else None
             in
             Option.map (fun next -> Let (result, ce', next)) next
@@ -619,6 +620,13 @@ let fuse_field_read env ~stable id index owner body =
         Option.map (fun next -> LetJoin (result, rhs, next)) (fuse next)
     | If (cond, yes, no) when uses cond && not (live yes || live no) ->
         Some (If (substitute cond, yes, no))
+    | If (cond, yes, no) when not stable ->
+        (* A constructor test can lead to a payload read on either edge.
+           Each path must preserve the field until its last projected use. *)
+        let arm expr = if live expr then fuse expr else Some expr in
+        (match arm yes, arm no with
+         | Some yes, Some no -> Some (If (substitute cond, yes, no))
+         | _ -> None)
     | ScalarIf (rep, cond, yes, no) when uses cond && not (live yes || live no) ->
         Some (ScalarIf (rep, substitute cond, yes, no))
     | Switch (scrut, sw)

@@ -40,7 +40,8 @@ type fn_state = {
   mutable fn_params : (ty * string) list;
   handlers : (int, handler) Hashtbl.t;
   known_heap : (string, unit) Hashtbl.t;
-  untagged_indices : (Qbe_il.t, Qbe_il.t) Hashtbl.t;
+  mutable known_heap_slots : Ident.Set.t;
+  untagged_indices : (Ident.t, Qbe_il.t) Hashtbl.t;
   entry_label : string;
   self : Ident.t option;
   cur_group : string option;
@@ -81,6 +82,7 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
     fn_params = [];
     handlers = Hashtbl.create 8;
     known_heap = Hashtbl.create 16;
+    known_heap_slots = Ident.Set.empty;
     untagged_indices = Hashtbl.create 4;
     entry_label;
     self;
@@ -187,6 +189,21 @@ let with_known_heap b value f =
       Hashtbl.replace facts name ();
       Fun.protect ~finally:(fun () -> Hashtbl.remove facts name) f
   | _ -> f ()
+
+(* A dereference proves the loaded value, and further loads from
+   the same stack slot until a store or control-flow merge. *)
+let forget_heap_slot b slot =
+  b.cur_fn.known_heap_slots <- Ident.Set.remove slot b.cur_fn.known_heap_slots
+
+let forget_heap_slots b =
+  b.cur_fn.known_heap_slots <- Ident.Set.empty
+
+let with_heap_slot b slot f =
+  if Ident.Set.mem slot b.cur_fn.known_heap_slots then f ()
+  else begin
+    b.cur_fn.known_heap_slots <- Ident.Set.add slot b.cur_fn.known_heap_slots;
+    Fun.protect ~finally:(fun () -> forget_heap_slot b slot) f
+  end
 
 let emit b inst =
   if b.cur_fn.term <> None then invalid_arg "codegen: instruction after terminator";
@@ -516,13 +533,12 @@ let ptr_offset b base off_bytes base_name =
     emit b (Binop (Add, Long, dst, base, Int (Int64.of_int off_bytes)));
     dst
 
-let untag b v =
-  match Hashtbl.find_opt b.cur_fn.untagged_indices v with
-  | Some index -> index
-  | None ->
-      let t = fresh_temp b "untag" in
-      emit b (Binop (Sar, Long, t, v, Int 1L));
-      t
+let untag b = function
+  | Int value -> Int (Int64.shift_right value 1)
+  | value ->
+      let raw = fresh_temp b "untag" in
+      emit b (Binop (Sar, Long, raw, value, Int 1L));
+      raw
 
 let retag b v =
   let t = fresh_temp b "retag" in
@@ -530,6 +546,11 @@ let retag b v =
   let t' = fresh_temp b "tag" in
   emit b (Binop (Add, Long, t', t, Int 1L));
   t'
+
+let find_ocaml_value b id =
+  match Hashtbl.find_opt b.vars id with
+  | Some _ as value -> value
+  | None -> Option.map (retag b) (Hashtbl.find_opt b.cur_fn.untagged_indices id)
 
 (* Emits an immortal ArcHeader + NUL-terminated bytes for a string literal
    and returns the data symbol (payload starts at offset 16). *)

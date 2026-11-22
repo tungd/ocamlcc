@@ -160,6 +160,7 @@ type cexpr =
   | Builtin of string * Builtins.arg_kind * atom
   | Ccall of string * atom list
   | PollFinalizers
+  | LoopPollDue of atom * atom
   | NativeCcall of Primitive.description * atom list
   | GetGlobal of string
   | ImportDependency of string

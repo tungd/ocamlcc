@@ -73,6 +73,11 @@ One dispatcher enters the mutator context and removes each pending registration 
 
 ### Allocation-driven delivery
 
+A counted loop uses the low six bits of its raw induction variable
+minus the initial index. It checks on the first iteration and then every
+64 iterations in either direction. Address arithmetic and this poll do
+not require a tagged copy of the index.
+
 When registrations exist, the runtime compares allocation progress since the last completed dispatch with the minor-heap size from `Gc.get ()`. Each newly allocated word and each successful in-place reuse advance the counter. Reuse leaves the public allocation statistics unchanged. Finishing a dispatch also accounts for work done inside callbacks. A skipped collection leaves the allocation budget due.[^runtime]
 
 The ANF poll lowers to a branch on the aligned registration count. A zero

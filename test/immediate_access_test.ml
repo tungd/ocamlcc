@@ -125,3 +125,47 @@ let () =
       in
       require "call extern $arc_alloc(l 0, l 0, l 32)";
       require "call extern $arc_alloc(l 0, l 4, l 32)"
+
+let () =
+  check ~owner_releases:None ~retains:0 "mutable_optional_read"
+    {|type t = { mutable content : bytes option }
+      external length : bytes -> int = "%bytes_length"
+      let f row = match row.content with None -> 0 | Some bytes -> length bytes|};
+  check ~owner_releases:None ~retains:1 "mutable_optional_read_after_callback"
+    {|type t = { mutable content : bytes option }
+      external length : bytes -> int = "%bytes_length"
+      let f row callback =
+        let saved = row.content in
+        callback row;
+        match saved with None -> 0 | Some bytes -> length bytes|}
+
+let () =
+  let source = {|
+    type slot = { mutable bytes : bytes }
+    external length : bytes -> int = "%bytes_length"
+    external cast : 'a -> 'b = "%identity"
+    external positive : int -> int -> bool = "%greaterthan"
+    let use_slot init replacement switch =
+      let slot = { bytes = init } in
+      if switch then slot.bytes <- replacement;
+      if positive (length slot.bytes) 0 then slot.bytes else replacement
+    let overwrite init replacement switch =
+      let slot = { bytes = init } in
+      if positive (length slot.bytes) 0 then (
+        if switch then slot.bytes <- cast 0;
+        slot.bytes)
+      else replacement
+  |} in
+  match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
+    ~filename:"heap_slots.ml" ~modname:"Heap_slots" source with
+  | Error message -> failwith message
+  | Ok il ->
+      let has_slot_guard fn =
+        let start = Str.search_forward (Str.regexp_string ("$ocamlcc_Heap_slots_" ^ fn ^ "(")) il 0 in
+        let stop = Str.search_forward (Str.regexp_string "\n}") il start in
+        match Str.search_forward (Str.regexp "neg %mut\\.") il start with
+        | index -> index < stop
+        | exception Not_found -> false
+      in
+      if has_slot_guard "use_slot" then failwith "dereferenced slot should keep its heap proof";
+      if not (has_slot_guard "overwrite") then failwith "slot write must invalidate its heap proof"

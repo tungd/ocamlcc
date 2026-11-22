@@ -152,6 +152,7 @@ type cexpr =
   | Builtin of string * Builtins.arg_kind * atom
   | Ccall of string * atom list
   | PollFinalizers
+  | LoopPollDue of atom * atom
   | NativeCcall of Primitive.description * atom list
   | GetGlobal of string
   | ImportDependency of string
@@ -381,19 +382,20 @@ let rec is_bounded_local ?backedge = function
 let with_entry_poll body =
   if is_bounded_local body then body else with_finalizer_poll body
 
+let with_poll_when due body =
+  let ignored = Ident.create_local "loop_poll" in
+  LetJoin (ignored, If (Var due, with_finalizer_poll (Halt Unit), Halt Unit), body)
+
 (* Masking a distance from the first check works through tagged-int wraparound. *)
 let with_periodic_finalizer_poll distance body =
   let phase = Ident.create_local "poll_phase" in
   let due = Ident.create_local "loop_poll_due" in
-  let ignored = Ident.create_local "loop_poll" in
   Let (phase, Binop (And, distance, Int 63),
-    Let (due, Binop (Cmp Ceq, Var phase, Int 0),
-      LetJoin (ignored, If (Var due, with_finalizer_poll (Halt Unit), Halt Unit), body)))
+    Let (due, Binop (Cmp Ceq, Var phase, Int 0), with_poll_when due body))
 
 let with_counted_loop_poll index start body =
-  let distance = Ident.create_local "poll_distance" in
-  Let (distance, Binop (Sub, Var index, start),
-    with_periodic_finalizer_poll (Var distance) body)
+  let due = Ident.create_local "loop_poll_due" in
+  Let (due, LoopPollDue (Var index, start), with_poll_when due body)
 
 let while_with_poll cond body =
   if is_bounded_local cond && is_bounded_local body then
@@ -1060,7 +1062,7 @@ let cexpr_vars ?(include_raw = true) free_aexpr acc ce =
       scalar_operand_vars (atom_vars (atom_vars acc a) i) v
   | FloatBinop (_, a, b) | FloatCompare (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> scalar_operand_vars (scalar_operand_vars acc a) b
   | Atom a -> atom_vars acc a
-  | Binop (_, a, b) | IntSelect (_, a, b) -> atom_vars (atom_vars acc a) b
+  | Binop (_, a, b) | IntSelect (_, a, b) | LoopPollDue (a, b) -> atom_vars (atom_vars acc a) b
   | Unop (_, a) -> atom_vars acc a
   | MakeBlock (_, _, args) | MakeArray (_, args) ->
       List.fold_left atom_vars acc args

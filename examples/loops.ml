@@ -89,4 +89,11 @@ let () =
   print_int (if l4 = mn then 1 else 0); print_endline "";
   print_int n5; print_endline "";
   print_int (if l5 = mn then 1 else 0); print_endline "";
-  print_int n6; print_endline ""
+  print_int n6; print_endline "";
+
+  let callbacks = Array.make 3 (fun () -> 0) in
+  for i = 2 downto 0 do
+    callbacks.(i) <- (fun () -> i + 1)
+  done;
+  print_int (callbacks.(0) () + 10 * callbacks.(1) () + 100 * callbacks.(2) ());
+  print_endline ""

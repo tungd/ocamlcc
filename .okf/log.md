@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Lower counted loop poll phases from raw indices, tag indices on demand, and preserve proven stack-slot and option borrows through local reads.
+
 - 2026-11-22 (codex/1) — Preserve immutable block layout and omit scans for unmanaged fields. Keep the lock-free cycle-root eligibility guard inline and restore scan counts on computed pointer stores.
 
 - 2026-11-22 (codex/1) — Borrowed calls accept stack-slot and immutable projection arguments while preserving owned dispatch for dying values and mutable field snapshots.
