@@ -24,7 +24,11 @@
   (runtime/pal.c as runtime/pal.c)
   (runtime/pal.h as runtime/pal.h)
   (runtime/pal_ctx.S as runtime/pal_ctx.S)
-  (stdlib.sources as stdlib/stdlib.sources)))
+  (stdlib.sources as stdlib/stdlib.sources)
+  (packages/snapshots/default.snap as snapshots/default.snap)
+  (packages/ports/crunch-unix/unix.ml as ports/crunch-unix/unix.ml)
+  (packages/ports/crunch-unix/unix.mli as ports/crunch-unix/unix.mli)
+  (packages/ports/crunch-unix/unix_stubs.c as ports/crunch-unix/unix_stubs.c)))
 
 (rule
  (target stdlib.sources)

@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Build the native ocpkg dependency commands and link the HTTPS downloader into ocpkg alone. See [dependency commands](/concepts/package-catalog.md#dependency-commands).
+
 - 2026-11-22 (codex/1) — Verify package resolution, archive bytes, extracted trees and local vendor directories in OCaml. See [verified vendoring](/concepts/package-catalog.md#verified-vendoring).
 
 - 2026-11-22 (codex/1) — Add the typed ocpkg manifest, lock and snapshot formats, and convert the Crunch catalog to the native text format. See [text formats](/concepts/package-catalog.md#text-formats).

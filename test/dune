@@ -496,3 +496,8 @@
  (name pkg_vendor_test)
  (modules pkg_vendor_test)
  (libraries ocamlcc ocpkg_core unix))
+
+(rule
+ (alias runtest)
+ (deps ../packages/snapshots/default.snap)
+ (action (run sh %{dep:../tests/ocpkg/native_cli.sh} %{exe:../bin/ocpkg_main.exe})))

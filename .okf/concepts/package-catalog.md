@@ -53,6 +53,13 @@ device entries, and the 256 MiB limit. It then verifies the staged tree
 digest before publishing it. Vendoring refuses a changed package directory
 and offline mode uses existing digest-verified archives.
 
+# Dependency commands
+
+The native `ocpkg` binary links libcurl. Its downloads accept HTTPS across
+redirects, time out after 30 seconds, and stream at most 64 MiB to the
+archive cache. `add`, `get`, and `vendor` can download package sources.
+`vendor --offline`, `tidy`, `verify`, and `query` work from local inputs.
+
 # Model
 
 - Snapshot: immutable package selection, dependencies, source SHA-256 digests,
