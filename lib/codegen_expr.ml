@@ -2,6 +2,7 @@
 
 open Codegen_ctx
 open Qbe_il
+open Codegen_scalar
 
 type fn_hooks = {
   closure_value : Codegen_ctx.t -> Ident.t -> Qbe_il.t;
@@ -61,7 +62,7 @@ let emit_finalizer_poll b idle =
     let sample = fresh_label b "finalizers_sample" in
     emit b (Binop (And, Word, phase, tick, Int 63L));
     close_block b (Br (phase, idle, sample));
-    start_block b sample) b.cur_fn.poll_tick;
+    start_block b sample) (poll_tick b);
   let count = fresh_temp b "finalizer_count" in
   let active = fresh_temp b "finalizers_active" in
   (* An aligned load is a relaxed atomic read on the supported targets. *)
@@ -78,7 +79,7 @@ let emit_finalizer_poll b idle =
   emit b (Call_void { fn = Global "ocamlcc_poll_finalizers"; args = [] })
 
 let module_slot b id =
-  "ocamlcc_modvar_" ^ b.prefix ^ "_" ^ sanitize (Ident.unique_name id)
+  "ocamlcc_modvar_" ^ (module_prefix b) ^ "_" ^ sanitize (Ident.unique_name id)
 
 let rec compile_atom hooks b (a : Anf.atom) : t =
   match a with
@@ -108,20 +109,20 @@ let rec compile_atom hooks b (a : Anf.atom) : t =
       match find_ocaml_value b id with
       | Some v -> v
       | None -> (
-          match Hashtbl.find_opt b.funs id with
+          match function_info_opt b id with
           | Some info when not info.has_closure -> hooks.closure_value b id
           | _ ->
               failwith
                 (Printf.sprintf "codegen: unbound variable %s"
                    (sanitize (Ident.name id)))))
   | MutVar id -> (
-      match Hashtbl.find_opt b.mut_vars id with
+      match mutable_slot_opt b id with
       | Some slot ->
           let dst = fresh_temp b "mut" in
           emit b (Load (Loadl, Long, dst, slot));
-          if Ident.Set.mem id b.cur_fn.known_heap_slots then mark_heap b dst else dst
+          if known_heap_slot b id then mark_heap b dst else dst
       | None -> (
-          match Hashtbl.find_opt b.vars id with
+          match bound_value_opt b id with
           | Some v -> v
           | None ->
               failwith
@@ -130,7 +131,7 @@ let rec compile_atom hooks b (a : Anf.atom) : t =
 
 let compile_untagged hooks b = function
   | Anf.Var id as atom ->
-      (match Hashtbl.find_opt b.cur_fn.untagged_indices id with
+      (match untagged_index b id with
        | Some index -> index
        | None -> untag b (compile_atom hooks b atom))
   | atom -> untag b (compile_atom hooks b atom)
@@ -154,189 +155,18 @@ let compile_div_mod b qop (av : t) (cv : t) : t =
       close_block b (Br (nz, lok, lzero));
       start_block b lok;
       let res = divide () in
-      let lok_end = b.cur_fn.open_label in
+      let lok_end = open_label b in
       close_block b (Jmp ldone);
       start_block b lzero;
       let ex = fresh_temp b "divex" in
       emit b (Load (Loadl, Long, ex, Global "ocamlcc_global_Division_by_zero"));
       emit b (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, ex) ] });
-      let lzero_end = b.cur_fn.open_label in
+      let lzero_end = open_label b in
       close_block b (Jmp ldone);
       start_block b ldone;
       let dst = fresh_temp b "divv" in
       emit b (Phi (Long, dst, [ (lok_end, res); (lzero_end, unit_const) ]));
       dst
-
-let load_double b (v : t) : t =
-  let d = fresh_temp b "fval" in
-  emit b (Load (Loadd, Double, d, v));
-  d
-
-let box_double b (d : t) : t =
-  let dst = fresh_temp b "fbox" in
-  emit b
-    (Call (Long, dst, { fn = Global "ocamlcc_alloc_float"; args = [ (Double, d) ] }));
-  mark_heap b dst
-
-let bint_spec : Lambda.boxed_integer -> ty * int32 * int64 = function
-  | Pint32 -> (Word, custom_kind_int32, 31L)
-  | Pint64 -> (Long, custom_kind_int64, 63L)
-  | Pnativeint -> (Long, custom_kind_nativeint, 63L)
-
-let unbox_bint b bi (v : t) : t =
-  let ty, _, _ = bint_spec bi in
-  let op = match ty with Word -> Loadw | Long | Double -> Loadl in
-  let dst = fresh_temp b "bi" in
-  emit b (Load (op, ty, dst, v));
-  dst
-
-let box_bint b bi (raw : t) : t =
-  let ty, kind, _ = bint_spec bi in
-  let bits =
-    match ty with
-    | Word ->
-        let ext = fresh_temp b "bext" in
-        emit b (Extsw (ext, raw));
-        ext
-    | Long | Double -> raw
-  in
-  let dst = fresh_temp b "bbox" in
-  emit b
-    (Call
-       ( Long,
-         dst,
-         { fn = Global "ocamlcc_alloc_custom";
-           args = [ (Long, Int (Int64.of_int32 kind)); (Long, bits) ] } ));
-  mark_heap b dst
-
-let compile_bint_div_mod b ~boxed bi qop ua uc : t =
-  let ty, _, _ = bint_spec bi in
-  let wrap raw = if boxed then box_bint b bi raw else raw in
-  let result_ty = if boxed then Long else ty in
-  let failure = if boxed then unit_const else Int 0L in
-  let lok = fresh_label b "bdiv_ok" in
-  let lcheck = fresh_label b "bdiv_chk" in
-  let lneg1 = fresh_label b "bdiv_m1" in
-  let lzero = fresh_label b "bdiv_zero" in
-  let ldone = fresh_label b "bdiv_done" in
-  let nz = fresh_temp b "bdiv_nz" in
-  emit b (Cmp (Ne, ty, nz, uc, Int 0L));
-  close_block b (Br (nz, lcheck, lzero));
-  start_block b lcheck;
-  let is_m1 = fresh_temp b "ism1" in
-  emit b (Cmp (Eq, ty, is_m1, uc, Int (-1L)));
-  close_block b (Br (is_m1, lneg1, lok));
-  start_block b lok;
-  let raw_ok = fresh_temp b "bdivr" in
-  emit b (Binop (qop, ty, raw_ok, ua, uc));
-  let res_ok = wrap raw_ok in
-  let lok_end = b.cur_fn.open_label in
-  close_block b (Jmp ldone);
-  start_block b lneg1;
-  let res_m1 =
-    match qop with
-    | Binop.Div ->
-        let neg_a = fresh_temp b "bdivneg" in
-        emit b (Binop (Binop.Sub, ty, neg_a, Int 0L, ua));
-        wrap neg_a
-    | _ -> wrap (Int 0L)
-  in
-  let lm1_end = b.cur_fn.open_label in
-  close_block b (Jmp ldone);
-  start_block b lzero;
-  let ex = fresh_temp b "divex" in
-  emit b (Load (Loadl, Long, ex, Global "ocamlcc_global_Division_by_zero"));
-  emit b (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, ex) ] });
-  let lzero_end = b.cur_fn.open_label in
-  close_block b (Jmp ldone);
-  start_block b ldone;
-  let dst = fresh_temp b "bdivv" in
-  emit b
-    (Phi
-       ( result_ty,
-         dst,
-         [ (lok_end, res_ok); (lm1_end, res_m1); (lzero_end, failure) ] ));
-  dst
-
-let compile_raw_bint_shift b bi qop ua cv : t =
-  let ty, _, mask = bint_spec bi in
-  let uc = untag b cv in
-  let shw = fresh_temp b "shw" in
-  emit b (Copy (Word, shw, uc));
-  let shm = fresh_temp b "shm" in
-  emit b (Binop (And, Word, shm, shw, Int mask));
-  let res = fresh_temp b "bsh" in
-  emit b (Binop (qop, ty, res, ua, shm));
-  res
-
-let compile_bint_shift b bi qop av cv =
-  box_bint b bi (compile_raw_bint_shift b bi qop (unbox_bint b bi av) cv)
-
-let compile_fcmp b (cmp : Lambda.float_comparison) da db : t =
-  let fop, negate =
-    match cmp with
-    | CFeq -> (Fcmp.Feq, false)
-    | CFneq -> (Fcmp.Fne, false)
-    | CFlt -> (Fcmp.Flt, false)
-    | CFle -> (Fcmp.Fle, false)
-    | CFgt -> (Fcmp.Fgt, false)
-    | CFge -> (Fcmp.Fge, false)
-    | CFnlt -> (Fcmp.Flt, true)
-    | CFnle -> (Fcmp.Fle, true)
-    | CFngt -> (Fcmp.Fgt, true)
-    | CFnge -> (Fcmp.Fge, true)
-  in
-  let raw = fresh_temp b "fcmp" in
-  emit b (Fcmp (fop, Long, raw, da, db));
-  let fin =
-    if not negate then raw
-    else
-      let inv = fresh_temp b "fninv" in
-      emit b (Binop (Xor, Long, inv, raw, Int 1L));
-      inv
-  in
-  retag b fin
-
-let compile_integer_compare b kind relation lhs rhs =
-  let ty, _, _ = bint_spec kind in
-  let compare op =
-    let raw = fresh_temp b "bcmp" in
-    emit b (Cmp (op, ty, raw, lhs, rhs));
-    raw
-  in
-  let raw =
-    match relation with
-    | Anf.Predicate cmp -> compare (cmp_of_ocaml cmp)
-    | Three_way ->
-        let gt = compare Sgt in
-        let lt = compare Slt in
-        let diff = fresh_temp b "bcdiff" in
-        emit b (Binop (Sub, Word, diff, gt, lt));
-        diff
-  in
-  let extended = fresh_temp b "bcmp_l" in
-  emit b (Extsw (extended, raw));
-  retag b extended
-
-let compile_float_arithmetic b op left right =
-  let qop =
-    match op with
-    | Anf.Addf -> Binop.Add
-    | Subf -> Binop.Sub
-    | Mulf -> Binop.Mul
-    | Divf -> Binop.Div
-  in
-  let result = fresh_temp b "fop" in
-  emit b (Binop (qop, Double, result, left, right));
-  result
-
-let qbe_integer_arithmetic : Anf.integer_arithmetic -> Binop.t = function
-  | Add_int -> Add | Sub_int -> Sub | Mul_int -> Mul
-  | Div_int -> Div | Rem_int -> Rem
-  | And_int -> And | Or_int -> Or | Xor_int -> Xor
-
-let qbe_integer_shift : Anf.integer_shift -> Binop.t = function
-  | Left_shift -> Shl | Logical_right -> Shr | Arithmetic_right -> Sar
 
 let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
   let av = compile_atom hooks b a in
@@ -413,94 +243,13 @@ let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
       let raw = fresh_temp b "isout" in
       emit b (Cmp (Ult, Long, raw, av, cv));
       retag b raw
-  | Float_arithmetic op ->
-      let da = load_double b av in
-      let db = load_double b cv in
-      box_double b (compile_float_arithmetic b op da db)
-  | Fcmp cmp ->
-      let da = load_double b av in
-      let db = load_double b cv in
-      compile_fcmp b cmp da db
-  | Compare_floats ->
-      let dst = fresh_temp b "fcmp_v" in
-      emit b
-        (Call (Long, dst, { fn = Global "caml_compare"; args = [ (Long, av); (Long, cv) ] }));
-      dst
-  | Bint_arith (bi, arithmetic) ->
-      let ty, _, _ = bint_spec bi in
-      let lhs = unbox_bint b bi av in
-      let rhs = unbox_bint b bi cv in
-      let qop = qbe_integer_arithmetic arithmetic in
-      (match arithmetic with
-       | Div_int | Rem_int -> compile_bint_div_mod b ~boxed:true bi qop lhs rhs
-       | Add_int | Sub_int | Mul_int | And_int | Or_int | Xor_int ->
-           let res = fresh_temp b "bop" in
-           emit b (Binop (qop, ty, res, lhs, rhs));
-           box_bint b bi res)
-  | Bint_shift (bi, shift) -> compile_bint_shift b bi (qbe_integer_shift shift) av cv
-  | Bint_cmp (kind, cmp) ->
-      let lhs = unbox_bint b kind av in
-      let rhs = unbox_bint b kind cv in
-      compile_integer_compare b kind (Predicate cmp) lhs rhs
-  | Compare_bints kind ->
-      let lhs = unbox_bint b kind av in
-      let rhs = unbox_bint b kind cv in
-      compile_integer_compare b kind Three_way lhs rhs
-
-let narrow_integer b raw =
-  let word = fresh_temp b "int_word" in
-  emit b (Copy (Word, word, raw));
-  word
-
-let extend_integer b raw =
-  let long = fresh_temp b "int_long" in
-  emit b (Extsw (long, raw));
-  long
-
-let integer_of_int b kind value =
-  let raw = untag b value in
-  match kind with
-  | Lambda.Pint32 -> narrow_integer b raw
-  | Pint64 | Pnativeint -> raw
-
-let int_of_integer b kind raw =
-  let long = match kind with
-    | Lambda.Pint32 -> extend_integer b raw
-    | Pint64 | Pnativeint -> raw
-  in
-  retag b long
-
-let convert_integer b (src : Lambda.boxed_integer) (dst : Lambda.boxed_integer) raw =
-  match src, dst with
-  | Lambda.Pint32, (Pint64 | Pnativeint) -> extend_integer b raw
-  | (Pint64 | Pnativeint), Pint32 -> narrow_integer b raw
-  | _ -> raw
-
-let float_of_int b value =
-  let raw = untag b value in
-  let dst = fresh_temp b "fofint" in
-  emit b (Sltof (Double, dst, raw));
-  dst
-
-let int_of_float b value =
-  let raw = fresh_temp b "ioff" in
-  emit b (Dtosi (Long, raw, value));
-  retag b raw
-
-let float_sign b op value =
-  match op with
-  | `Neg ->
-      let dst = fresh_temp b "fneg" in
-      emit b (Neg (Double, dst, value));
-      dst
-  | `Abs ->
-      let bits = fresh_temp b "fbits" in
-      emit b (Cast (Long, bits, value));
-      let masked = fresh_temp b "fabsm" in
-      emit b (Binop (And, Long, masked, bits, Int 0x7fffffffffffffffL));
-      let dst = fresh_temp b "fabsd" in
-      emit b (Cast (Double, dst, masked));
-      dst
+  | Float_arithmetic op -> float_binop b ~boxed:true op av cv
+  | Fcmp cmp -> float_compare b ~boxed:true cmp av cv
+  | Compare_floats -> compare_floats b av cv
+  | Bint_arith (kind, operation) -> integer_binop b ~boxed:true kind operation av cv
+  | Bint_shift (kind, shift) -> integer_shift b ~boxed:true kind shift av cv
+  | Bint_cmp (kind, cmp) -> integer_compare b ~boxed:true kind (Predicate cmp) av cv
+  | Compare_bints kind -> integer_compare b ~boxed:true kind Three_way av cv
 
 let compile_unop hooks b (op : Anf.unop) (a : Anf.atom) : t =
   let av = compile_atom hooks b a in
@@ -533,12 +282,7 @@ let compile_unop hooks b (op : Anf.unop) (a : Anf.atom) : t =
   | Fabs -> box_double b (float_sign b `Abs (load_double b av))
   | Bint_of_int kind -> box_bint b kind (integer_of_int b kind av)
   | Int_of_bint kind -> int_of_integer b kind (unbox_bint b kind av)
-  | Bint_neg bi ->
-      let ty, _, _ = bint_spec bi in
-      let ua = unbox_bint b bi av in
-      let r = fresh_temp b "bneg" in
-      emit b (Neg (ty, r, ua));
-      box_bint b bi r
+  | Bint_neg kind -> integer_neg b ~boxed:true kind av
   | Bint_cvt (src, dst) ->
       let raw = unbox_bint b src av in
       box_bint b dst (convert_integer b src dst raw)
@@ -579,42 +323,38 @@ let apply_closure b clos_val (arg_vals : t list) : t =
       dst
 
 let self_backedge b values =
-  let values = match b.cur_fn.poll_tick with
+  let values = match (poll_tick b) with
     | None -> values
     | Some tick ->
         let next = fresh_temp b "poll_next" in
         emit b (Binop (Add, Word, next, tick, Int 1L));
         values @ [next]
   in
-  b.cur_fn.tail_sites <- (b.cur_fn.open_label, values) :: b.cur_fn.tail_sites;
-  close_block b (Jmp b.cur_fn.entry_label);
+  jump_to_entry b values;
   unit_const
 
 let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
   let is_self id =
-    match b.cur_fn.self with
+    match self b with
     | Some s -> Ident.same s id
     | None -> false
   in
   match fn_atom with
   | Var id -> (
-      match Hashtbl.find_opt b.funs id with
+      match function_info_opt b id with
       | Some info when List.length ap_args = info.arity -> (
           let clos_prefix =
-            if info.has_closure then [ Hashtbl.find b.vars id ] else []
+            if info.has_closure then [ bound_value b id ] else []
           in
           match (info.tag, tail) with
           | Some tag, true
-            when b.cur_fn.cur_group <> None
-                 && b.cur_fn.cur_group = info.group_name ->
+            when current_group b <> None
+                 && current_group b = info.group_name ->
               let vs =
                 pad_to info.group_arity
                   (List.map (compile_atom hooks b) ap_args)
               in
-              b.cur_fn.tail_sites <-
-                (b.cur_fn.open_label, clos_prefix @ (Int tag :: vs))
-                :: b.cur_fn.tail_sites;
-              close_block b (Jmp b.cur_fn.entry_label);
+              jump_to_entry b (clos_prefix @ (Int tag :: vs));
               unit_const
           | Some tag, _ ->
               let vs =
@@ -665,7 +405,7 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
               emit b
                 (Call_void { fn = Global "arc_release_val"; args = [ (Long, v) ] }))
             rest_vals;
-          let lerr_end = b.cur_fn.open_label in
+          let lerr_end = open_label b in
           close_block b (Jmp ljoin);
           start_block b lok;
           with_shadow_stack b (fun () ->
@@ -675,7 +415,7 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
           emit b
             (Call_void
                { fn = Global "arc_release_val"; args = [ (Long, clos_res) ] });
-          let lok_end = b.cur_fn.open_label in
+          let lok_end = open_label b in
           close_block b (Jmp ljoin);
           start_block b ljoin;
           let dst = fresh_temp b "oapp" in
@@ -683,7 +423,7 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
           dst
       | Some info ->
           let clos_val =
-            if info.has_closure then Hashtbl.find b.vars id
+            if info.has_closure then bound_value b id
             else hooks.closure_value b id
           in
           let arg_vals = List.map (compile_atom hooks b) ap_args in
@@ -704,32 +444,12 @@ let compile_ccall hooks b sym args =
   dst
 
 let compile_scalar_operand hooks b rep = function
-  | Anf.Raw_scalar id -> Hashtbl.find b.vars id
+  | Anf.Raw_scalar id -> bound_value b id
   | Boxed_scalar a ->
       let boxed = compile_atom hooks b a in
       match rep with
       | Anf.Double_scalar -> load_double b boxed
       | Integer_scalar kind -> unbox_bint b kind boxed
-
-let scalar_access_symbol op (access : Anf.bigarray_access) =
-  let kind =
-    match access.kind with
-    | Lambda.Pbigarray_float32 -> "float32"
-    | Pbigarray_float64 -> "float64"
-    | Pbigarray_int32 -> "int32"
-    | Pbigarray_int64 | Pbigarray_native_int -> "int64"
-    | _ -> assert false
-  in
-  Printf.sprintf "ocamlcc_ba_%s_%s_1" op kind
-
-let scalar_type = function
-  | Anf.Double_scalar -> Double
-  | Integer_scalar kind -> let ty, _, _ = bint_spec kind in ty
-
-let scalar_store = function
-  | Double -> Stored
-  | Word -> Storew
-  | Long -> Storel
 
 let compile_native_ccall hooks b (prim : Primitive.description) args =
   let arg rep value =
@@ -798,8 +518,8 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
   | MakeBlock (tag, scan, args) ->
       emit_block_alloc b scan tag (List.map (compile_atom hooks b) args)
   | AllocReuse (reuse, tag, scan, args) ->
-      let primary = Hashtbl.find b.vars reuse.primary in
-      let fallback = Option.map (Hashtbl.find b.vars) reuse.fallback in
+      let primary = bound_value b reuse.primary in
+      let fallback = Option.map (bound_value b) reuse.fallback in
       emit_block_alloc b ~reuse:(primary, fallback) scan tag (List.map (compile_atom hooks b) args)
   | MakeArray (kind, args) -> (
       let vs = List.map (compile_atom hooks b) args in
@@ -1157,10 +877,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       unit_const
   | ScalarLoad (access, arr, index) ->
       let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
-      let ty = scalar_type (Option.get (Anf.scalar_rep access.kind)) in
-      let dst = fresh_temp b "scalar_load" in
-      emit b (Call (ty, dst, { fn = Global (scalar_access_symbol "get" access); args }));
-      dst
+      load_bigarray b access args
   | ScalarValue (rep, value) -> compile_scalar_operand hooks b rep value
   | BoxScalar (rep, value) ->
       let raw = compile_scalar_operand hooks b rep value in
@@ -1190,27 +907,21 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
   | FloatCompare (op, lhs, rhs) ->
       let l = compile_scalar_operand hooks b Double_scalar lhs in
       let r = compile_scalar_operand hooks b Double_scalar rhs in
-      compile_fcmp b op l r
+      float_compare b ~boxed:false op l r
   | FloatBinop (op, lhs, rhs) ->
       let l = compile_scalar_operand hooks b Double_scalar lhs in
       let r = compile_scalar_operand hooks b Double_scalar rhs in
-      compile_float_arithmetic b op l r
+      float_binop b ~boxed:false op l r
   | IntegerBinop (kind, op, lhs, rhs) ->
       let rep = Anf.Integer_scalar kind in
       let l = compile_scalar_operand hooks b rep lhs in
       let r = compile_scalar_operand hooks b rep rhs in
-      let qop = qbe_integer_arithmetic op in
-      (match op with
-       | Div_int | Rem_int -> compile_bint_div_mod b ~boxed:false kind qop l r
-       | _ ->
-           let dst = fresh_temp b "integer_op" in
-           emit b (Binop (qop, scalar_type rep, dst, l, r));
-           dst)
+      integer_binop b ~boxed:false kind op l r
   | IntegerCompare (kind, relation, lhs, rhs) ->
       let rep = Anf.Integer_scalar kind in
       let l = compile_scalar_operand hooks b rep lhs in
       let r = compile_scalar_operand hooks b rep rhs in
-      compile_integer_compare b kind relation l r
+      integer_compare b ~boxed:false kind relation l r
   | IntegerOfInt (kind, value) ->
       integer_of_int b kind (compile_atom hooks b value)
   | IntOfInteger (kind, value) ->
@@ -1222,20 +933,16 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
   | IntegerNeg (kind, value) ->
       let rep = Anf.Integer_scalar kind in
       let value = compile_scalar_operand hooks b rep value in
-      let dst = fresh_temp b "integer_neg" in
-      emit b (Binop (Sub, scalar_type rep, dst, Int 0L, value));
-      dst
+      integer_neg b ~boxed:false kind value
   | IntegerShift (kind, op, value, count) ->
       let value = compile_scalar_operand hooks b (Integer_scalar kind) value in
       let count = compile_atom hooks b count in
-      compile_raw_bint_shift b kind (qbe_integer_shift op) value count
+      integer_shift b ~boxed:false kind op value count
   | ScalarStore (access, arr, index, value) ->
       let args = List.map (fun a -> Long, compile_atom hooks b a) [arr; index] in
       let rep = Option.get (Anf.scalar_rep access.kind) in
       let v = compile_scalar_operand hooks b rep value in
-      emit b (Call_void { fn = Global (scalar_access_symbol "set" access);
-                          args = args @ [scalar_type rep, v] });
-      unit_const
+      store_bigarray b access args rep v
   | BigarrayAccess (access, args) ->
       let op = match access.operation with `Get -> "get" | `Set -> "set" in
       compile_ccall hooks b (Printf.sprintf "caml_ba_%s_%d" op access.rank) args
@@ -1254,7 +961,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       gv
   | StoreModuleSlot (id, atom) ->
       let name = module_slot b id in
-      b.datas <- { name; export = false; align = Some 8; items = [D_long 0L] } :: b.datas;
+      add_data b { name; export = false; align = Some 8; items = [D_long 0L] };
       let value = compile_atom hooks b atom in
       emit b (Store (Storel, value, Global name));
       unit_const
@@ -1264,19 +971,19 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       self_backedge b (List.map (compile_atom hooks b) args)
   | Fun _ -> failwith "codegen: Fun must be bound by Let"
   | ReadScalarSlot (rep, id) ->
-      let slot = Hashtbl.find b.mut_vars id in
+      let slot = mutable_slot b id in
       (match rep with
       | Double_scalar -> load_double b slot
       | Integer_scalar kind -> unbox_bint b kind slot)
   | AssignScalar (id, rep, value) ->
-      let slot = Hashtbl.find b.mut_vars id in
+      let slot = mutable_slot b id in
       let value = compile_scalar_operand hooks b rep value in
       emit b (Store (scalar_store (scalar_type rep), value, slot));
       forget_heap_slot b id;
       unit_const
   | Assign (id, rhs) | AssignImm (id, rhs) -> (
       let v = compile_atom hooks b rhs in
-      match Hashtbl.find_opt b.mut_vars id with
+      match mutable_slot_opt b id with
       | Some slot ->
           (match ce with
           | AssignImm _ -> emit b (Store (Storel, v, slot))
@@ -1294,12 +1001,12 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
                (sanitize (Ident.name id))))
 
 let emit_unwind b : t =
-  match b.cur_fn.try_stack with
-  | lcatch :: _ ->
+  match try_handler b with
+  | Some lcatch ->
       close_block b (Jmp lcatch);
       unit_const
-  | [] ->
-      if b.cur_fn.in_init then begin
+  | None ->
+      if in_initializer b then begin
         let ex = fresh_temp b "unex" in
         emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
         emit b
@@ -1330,7 +1037,7 @@ let with_dereferenced_receiver b (ce : Anf.cexpr) f =
   in
   match receiver with
   | Some (Anf.Var id) ->
-      (match Hashtbl.find_opt b.vars id with
+      (match bound_value_opt b id with
       | Some value -> with_known_heap b value f
       | None -> f ())
   | Some (Anf.MutVar slot) -> with_heap_slot b slot f
@@ -1339,7 +1046,7 @@ let with_dereferenced_receiver b (ce : Anf.cexpr) f =
 let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   match e with
   | Halt a -> compile_atom hooks b a
-  | HaltScalar id -> Hashtbl.find b.vars id
+  | HaltScalar id -> bound_value b id
   | Let (id, Fun lf, body) ->
       hooks.compile_fun_binding (compile_aexpr hooks) b tail id lf body
   | Let (id, (App _ as ce), Halt (Var v)) when tail && Ident.same id v ->
@@ -1352,7 +1059,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
         unit_const));
       start_block b done_;
       with_shadowed_vars b [id] (fun () ->
-        Hashtbl.replace b.vars id unit_const;
+        bind_value b id unit_const;
         compile_aexpr hooks b tail on_ok)
   | Let (id, (StringGet (true, _, _) | BytesSet (true, _, _, _)
             | BytesGetN (true, _, _, _) | BytesSetN (true, _, _, _, _)
@@ -1361,10 +1068,10 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       CheckExn (_, on_err, on_ok)) ->
       let on_oob () = ignore (compile_aexpr hooks b tail on_err) in
       let value = compile_cexpr ~on_oob hooks b ~tail:false ce in
-      Hashtbl.replace b.vars id value;
+      bind_value b id value;
       let res = with_dereferenced_receiver b ce (fun () ->
         compile_aexpr hooks b tail on_ok) in
-      Hashtbl.remove b.vars id;
+      forget_value b id;
       res
   | Let (id, ce, body) ->
       let v =
@@ -1372,9 +1079,9 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
         | DirectApp ({ inline_leaf = Some lf; _ }, args) -> inline_leaf hooks b lf args
         | _ -> compile_cexpr hooks b ~tail:false ce
       in
-      if b.cur_fn.term <> None then unit_const
+      if not (block_is_open b) then unit_const
       else begin
-        Hashtbl.replace b.vars id v;
+        bind_value b id v;
         let res =
           match ce, body with
           | (CreateBytes _ | MakeArrayInit _), CheckExn (_, on_err, on_ok) ->
@@ -1383,7 +1090,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
                   with_known_heap b v (fun () -> compile_aexpr hooks b tail on_ok))
           | _ -> with_dereferenced_receiver b ce (fun () ->
               compile_aexpr hooks b tail body) in
-        Hashtbl.remove b.vars id;
+        forget_value b id;
         res
       end
   | MutLet (id, ce, body) ->
@@ -1394,19 +1101,19 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
         | ScalarValue (rep, _) -> scalar_store (scalar_type rep)
         | _ -> Storel in
       emit b (Store (store, v, slot));
-      Hashtbl.replace b.mut_vars id slot;
+      bind_slot b id slot;
       let res = with_dereferenced_receiver b ce (fun () ->
         compile_aexpr hooks b tail body) in
-      Hashtbl.remove b.mut_vars id;
+      forget_slot b id;
       res
   | LetJoin (id, rhs, body) ->
       let v = compile_aexpr hooks b false rhs in
       forget_heap_slots b;
-      if b.cur_fn.term <> None then unit_const
+      if not (block_is_open b) then unit_const
       else begin
-        Hashtbl.replace b.vars id v;
+        bind_value b id v;
         let res = compile_aexpr hooks b tail body in
-        Hashtbl.remove b.vars id;
+        forget_value b id;
         res
       end
   | LetRec (bindings, body) ->
@@ -1419,21 +1126,16 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   | StaticCatch (body, id, binders, handler, result_rep) ->
       let result_ty = Option.fold ~none:Long ~some:scalar_type result_rep in
       staticcatch hooks b tail result_ty id binders body handler
-  | StaticRaise (id, args) -> (
-      match Hashtbl.find_opt b.cur_fn.handlers id with
-      | Some h ->
-          let vs = List.map (compile_atom hooks b) args in
-          h.hpreds <- (b.cur_fn.open_label, vs) :: h.hpreds;
-          close_block b (Jmp h.hlabel);
-          unit_const
-      | None -> failwith "codegen: uncaught static raise")
+  | StaticRaise (id, args) ->
+      jump_static_handler b id (fun () -> List.map (compile_atom hooks b) args);
+      unit_const
   | While (cond, body) ->
       forget_heap_slots b;
       let lcond = fresh_label b "wcond" in
       close_block b (Jmp lcond);
       start_block b lcond;
       let cv_tagged = compile_aexpr hooks b false cond in
-      if b.cur_fn.term = None then begin
+      if block_is_open b then begin
         let lbody = fresh_label b "wbody" in
         let ldone = fresh_label b "wdone" in
         let cv = fresh_temp b "wcmp" in
@@ -1441,7 +1143,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
         close_block b (Br (cv, lbody, ldone));
         start_block b lbody;
         ignore (compile_aexpr hooks b false body);
-        if b.cur_fn.term = None then close_block b (Jmp lcond);
+        if block_is_open b then close_block b (Jmp lcond);
         start_block b ldone
       end;
       unit_const
@@ -1456,7 +1158,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       in
       let enter = fresh_temp b "forenter" in
       emit b (Cmp (enter_op, Long, enter, sv, ev));
-      let lpre = b.cur_fn.open_label in
+      let lpre = open_label b in
       let lbody = fresh_label b "fbody" in
       let lstep = fresh_label b "fstep" in
       let lnext = fresh_label b "fnext" in
@@ -1466,11 +1168,9 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       close_block b (Br (enter, lbody, ldone));
       start_block b lbody;
       emit b (Phi (Long, iv, [ (lpre, sv); (lnext, next_i) ]));
-      let indices = b.cur_fn.untagged_indices in
-      Hashtbl.add indices id iv;
-      Fun.protect ~finally:(fun () -> Hashtbl.remove indices id)
+      with_untagged_index b id iv
         (fun () -> ignore (compile_aexpr hooks b false body));
-      if b.cur_fn.term = None then close_block b (Jmp lstep);
+      if block_is_open b then close_block b (Jmp lstep);
       start_block b lstep;
       let more = fresh_temp b "formore" in
       emit b (Cmp (cont_op, Long, more, iv, ev));
@@ -1495,7 +1195,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
             emit_arc_if_heap b `Release (compile_atom hooks b (Var id));
             emit_releases body
         | ReleaseMut (id, body) ->
-            (match Hashtbl.find_opt b.mut_vars id with
+            (match mutable_slot_opt b id with
             | Some _ ->
                 emit_arc_if_heap b `Release (compile_atom hooks b (MutVar id))
             | None -> ());
@@ -1503,7 +1203,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
         | rest -> rest
       in
       let body =
-        if b.inline_single_thread_rc && not b.cur_fn.compact_arc && ends_in_raise cleanup
+        if (inline_rc b) && not (compact_arc b) && ends_in_raise cleanup
         then with_compact_arc b (fun () -> emit_releases cleanup)
         else emit_releases cleanup
       in
@@ -1513,12 +1213,12 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       let tok = fresh_temp b "rtok" in
       emit b
         (Call (Long, tok, { fn = Global "arc_drop_reuse"; args = [ (Long, v) ] }));
-      Hashtbl.replace b.vars tok_id tok;
+      bind_value b tok_id tok;
       let res = compile_aexpr hooks b tail body in
-      Hashtbl.remove b.vars tok_id;
+      forget_value b tok_id;
       res
   | FreeReuse (tok_id, body) ->
-      let tok = Hashtbl.find b.vars tok_id in
+      let tok = bound_value b tok_id in
       emit b
         (Call_void { fn = Global "arc_free_reuse"; args = [ (Long, tok) ] });
       compile_aexpr hooks b tail body
@@ -1531,7 +1231,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
               vars;
             List.iter
               (fun mid ->
-                match Hashtbl.find_opt b.mut_vars mid with
+                match mutable_slot_opt b mid with
                 | Some slot ->
                     let v = fresh_temp b "shmut" in
                     emit b (Load (Loadl, Long, v, slot));
@@ -1540,7 +1240,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
               muts;
             List.iter
               (fun tid ->
-                shadow_call b "arc_fiber_push_reuse" (Hashtbl.find b.vars tid))
+                shadow_call b "arc_fiber_push_reuse" (bound_value b tid))
               rtoks);
       compile_aexpr hooks b tail body
   | ShadowPop (n_vals, n_reuse, body) ->
@@ -1561,11 +1261,9 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       let ljoin = fresh_label b (if tail then "ret" else "tryj") in
       let res = fresh_temp b (if tail then "res" else "tryv") in
       let preds = ref [] in
-      b.cur_fn.try_stack <- lcatch :: b.cur_fn.try_stack;
-      let bv = compile_aexpr hooks b tail body in
-      b.cur_fn.try_stack <- List.tl b.cur_fn.try_stack;
-      if b.cur_fn.term = None then begin
-        preds := (b.cur_fn.open_label, bv) :: !preds;
+      let bv = with_try_handler b lcatch (fun () -> compile_aexpr hooks b tail body) in
+      if block_is_open b then begin
+        preds := (open_label b, bv) :: !preds;
         close_block b (Jmp ljoin)
       end;
       start_block b lcatch;
@@ -1573,11 +1271,11 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
       emit b
         (Call_void { fn = Global "ocamlcc_set_exn"; args = [ (Long, Int 0L) ] });
-      Hashtbl.replace b.vars exn_id ex;
+      bind_value b exn_id ex;
       let hv = compile_aexpr hooks b tail handler in
-      Hashtbl.remove b.vars exn_id;
-      if b.cur_fn.term = None then begin
-        preds := (b.cur_fn.open_label, hv) :: !preds;
+      forget_value b exn_id;
+      if block_is_open b then begin
+        preds := (open_label b, hv) :: !preds;
         close_block b (Jmp ljoin)
       end;
       (match !preds with
@@ -1598,7 +1296,7 @@ and inline_leaf hooks b (lf : Anf.lfunction) args =
   in
   let params = List.map fst lf.params in
   with_shadowed_vars b (bindings params lf.body) (fun () ->
-    List.iter2 (Hashtbl.replace b.vars) params args;
+    List.iter2 (bind_value b) params args;
     compile_aexpr hooks b false lf.body)
 
 and compile_check_exn hooks b exception_kind on_err on_ok =
@@ -1613,10 +1311,10 @@ and compile_check_exn hooks b exception_kind on_err on_ok =
   in
   if exception_kind = Anf.Finalizer_raise then
     guard "ocamlcc_automatic_finalizer_raised"
-  else if not b.inline_single_thread_rc then
+  else if not (inline_rc b) then
     guard "ocamlcc_exn_active";
   let ex = fresh_temp b "exchk" in
-  if b.inline_single_thread_rc then
+  if (inline_rc b) then
     emit b (Load (Loadl, Long, ex, Global "ocamlcc_exn_slot"))
   else
     emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
@@ -1625,7 +1323,7 @@ and compile_check_exn hooks b exception_kind on_err on_ok =
   close_block b (Br (has_ex, lerr, lok));
   start_block b lerr;
   with_compact_arc b (fun () -> ignore (compile_aexpr hooks b false on_err));
-  if b.cur_fn.term = None then ignore (emit_unwind b);
+  if block_is_open b then ignore (emit_unwind b);
   start_block b lok;
   on_ok ()
 
@@ -1641,14 +1339,14 @@ and compile_if hooks b tail result_ty (cond : Anf.atom) th el =
   let preds = ref [] in
   start_block b lthen;
   let tv = compile_aexpr hooks b tail th in
-  if b.cur_fn.term = None then begin
-    preds := (b.cur_fn.open_label, tv) :: !preds;
+  if block_is_open b then begin
+    preds := (open_label b, tv) :: !preds;
     close_block b (Jmp lepi)
   end;
   start_block b lelse;
   let ev = compile_aexpr hooks b tail el in
-  if b.cur_fn.term = None then begin
-    preds := (b.cur_fn.open_label, ev) :: !preds;
+  if block_is_open b then begin
+    preds := (open_label b, ev) :: !preds;
     close_block b (Jmp lepi)
   end;
   (match !preds with
@@ -1666,8 +1364,8 @@ and compile_switch hooks b tail (scrut : Anf.atom) (sw : Anf.switch_cases) =
   let preds = ref [] in
   let emit_arm arm =
     let v = compile_aexpr hooks b tail arm in
-    if b.cur_fn.term = None then begin
-      preds := (b.cur_fn.open_label, v) :: !preds;
+    if block_is_open b then begin
+      preds := (open_label b, v) :: !preds;
       close_block b (Jmp lepi)
     end
   in
@@ -1745,8 +1443,8 @@ and compile_stringswitch hooks b tail (scrut : Anf.atom) cases fail =
   let preds = ref [] in
   let emit_arm arm =
     let v = compile_aexpr hooks b tail arm in
-    if b.cur_fn.term = None then begin
-      preds := (b.cur_fn.open_label, v) :: !preds;
+    if block_is_open b then begin
+      preds := (open_label b, v) :: !preds;
       close_block b (Jmp lepi)
     end
   in
@@ -1778,7 +1476,7 @@ and compile_stringswitch hooks b tail (scrut : Anf.atom) cases fail =
           let sym = string_data b lit in
           let lit_ptr = fresh_temp b "sslit" in
           emit b (Binop (Add, Long, lit_ptr, Global sym, Int 16L));
-          let lpre = b.cur_fn.open_label in
+          let lpre = open_label b in
           let lloop = fresh_label b "ssloop" in
           let lstep = fresh_label b "ssstep" in
           let lcmp = fresh_label b "sscmp" in
@@ -1825,25 +1523,20 @@ and compile_stringswitch hooks b tail (scrut : Anf.atom) cases fail =
       res
 
 and staticcatch hooks b tail result_ty id binder_idents body handler =
-  let h =
-    { hlabel = fresh_label b "catch";
-      hbinders = binder_idents;
-      hpreds = [] }
+  let handler_label = fresh_label b "catch" in
+  let v, sites =
+    with_static_handler b id handler_label (fun () -> compile_aexpr hooks b tail body)
   in
-  Hashtbl.replace b.cur_fn.handlers id h;
-  let v = compile_aexpr hooks b tail body in
-  Hashtbl.remove b.cur_fn.handlers id;
   let ljoin = fresh_label b "catchjoin" in
   let res = fresh_temp b "catch" in
   let preds = ref [] in
   let merge value =
-    preds := (b.cur_fn.open_label, value) :: !preds;
+    preds := (open_label b, value) :: !preds;
     close_block b (Jmp ljoin)
   in
-  if b.cur_fn.term = None then merge v;
-  if h.hpreds <> [] then begin
-    let sites = List.rev h.hpreds in
-    start_block b h.hlabel;
+  if block_is_open b then merge v;
+  if sites <> [] then begin
+    start_block b handler_label;
     List.iteri
       (fun idx bid ->
         let bt = fresh_temp b "henv" in
@@ -1856,11 +1549,11 @@ and staticcatch hooks b tail result_ty id binder_idents body handler =
             sites
         in
         emit b (Phi (Long, bt, args));
-        Hashtbl.replace b.vars bid bt)
-      h.hbinders;
+        bind_value b bid bt)
+      binder_idents;
     let hv = compile_aexpr hooks b tail handler in
-    List.iter (fun bid -> Hashtbl.remove b.vars bid) h.hbinders;
-    if b.cur_fn.term = None then merge hv
+    List.iter (fun bid -> forget_value b bid) binder_idents;
+    if block_is_open b then merge hv
   end;
   match !preds with
   | [] -> unit_const

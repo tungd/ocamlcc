@@ -13,10 +13,9 @@ let () =
       Codegen_ctx.emit b (Qbe_il.Copy (Long, Temp "y", Int 2L));
       Codegen_ctx.close_ret b (Some (Int 2L)));
   let ok_normal =
-    b.cur_fn.open_label = "outer_start"
-    && List.length b.cur_fn.insts = 1
-    && b.cur_fn.blocks = []
-    && b.cur_fn.in_init = true
+    Codegen_ctx.open_label b = "outer_start"
+    && Codegen_ctx.block_is_open b
+    && Codegen_ctx.in_initializer b
   in
   (try
      Codegen_ctx.with_fn_state b ~self:None ~cur_group:(Some "g")
@@ -24,12 +23,14 @@ let () =
          Codegen_ctx.emit b (Qbe_il.Copy (Long, Temp "z", Int 3L));
          failwith "boom")
    with Failure _ -> ());
+  Codegen_ctx.close_ret b (Some (Qbe_il.Temp "x"));
   let ok_exn =
-    b.cur_fn.open_label = "outer_start"
-    && List.length b.cur_fn.insts = 1
-    && b.cur_fn.cur_group = None
-    && b.cur_fn.entry_label = "start"
-    && b.cur_fn.in_init = true
+    Codegen_ctx.current_group b = None
+    && Codegen_ctx.in_initializer b
+    && Codegen_ctx.finish_blocks b =
+       [{ Qbe_il.label = "outer_start";
+          insts = [Qbe_il.Copy (Long, Temp "x", Int 1L)];
+          term = Ret (Some (Temp "x")) }]
   in
   (* SCC check: mutual cycle [a <-> b] + standalone [c] *)
   let a = Ident.create_local "a" in

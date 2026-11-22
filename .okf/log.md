@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Encapsulate the Codegen builder, scope static labels, and extract numeric lowering. Move block rewrites into QBE IL and consolidate the export summary codec. See [compiler pipeline](/concepts/compiler-pipeline.md#code-generation-interfaces).
+
 - 2026-11-22 (codex/1) — Separate ARC program facts and borrowed views from ownership emission. Preserve outer static handler ownership across nested catches with a lexical exception frame. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-22 (codex/1) — Isolate ANF lowering state per compilation. Extract the Lambda optimizer, shared ANF model, and scalar selection pass, and consolidate boxed integer operations by width and operation. Build the new modules in each bootstrap stage. See [ANF lowering](/concepts/compiler-pipeline.md#anf-lowering).

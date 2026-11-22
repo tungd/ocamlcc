@@ -455,3 +455,13 @@
  (name arc_static_scope_test)
  (modules arc_static_scope_test)
  (libraries ocamlcc compiler-libs.common))
+
+(test
+ (name qbe_optimize_test)
+ (modules qbe_optimize_test)
+ (libraries ocamlcc))
+
+(test
+ (name export_summary_version_test)
+ (modules export_summary_version_test)
+ (libraries ocamlcc))

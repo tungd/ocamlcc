@@ -15,7 +15,7 @@ let free_vars_of (b : Codegen_ctx.t) ?self_id (lf : Anf.lfunction) :
          not (Ident.Set.mem v params)
          && (match self_id with Some s -> not (Ident.same s v) | None -> true)
          &&
-         match Hashtbl.find_opt b.funs v with
+         match Codegen_ctx.function_info_opt b v with
          | Some info -> info.has_closure
          | None -> true)
   |> Ident.Set.elements

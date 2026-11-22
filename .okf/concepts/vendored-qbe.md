@@ -33,6 +33,12 @@ and `extern $sym` PIC addressing (`:got:`/`:got_lo12:` on ELF arm64,
 `@gotpcrel`/`@plt` on ELF amd64, `@gotpage`/`@gotpageoff` on Apple arm64,
 `la` on rv64).
 
+# CFG optimization
+
+`Qbe_il.optimize_blocks` rewrites local branch conditions and splits wide
+phi predecessor sets. The function takes blocks and a fresh-name supply
+and returns the rewritten blocks and the resulting supply.
+
 # Implementation status
 
 Today the pipeline shells out to `build/qbe/qbe` (1.3, phi-node IL).

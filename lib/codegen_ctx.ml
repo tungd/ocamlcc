@@ -25,7 +25,6 @@ type fn_info = {
    predecessor block and argument values for the handler's phis. *)
 type handler = {
   hlabel : string;
-  hbinders : Ident.t list;
   mutable hpreds : (string * t list) list; (* reversed *)
 }
 
@@ -37,7 +36,6 @@ type fn_state = {
   mutable start_allocs : inst list; (* reversed, hoisted to @start *)
   mutable term : term option;
   mutable blocks : block list; (* reversed, closed blocks *)
-  mutable fn_params : (ty * string) list;
   handlers : (int, handler) Hashtbl.t;
   known_heap : (string, unit) Hashtbl.t;
   mutable known_heap_slots : Ident.Set.t;
@@ -79,7 +77,6 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
     start_allocs = [];
     term = None;
     blocks = [];
-    fn_params = [];
     handlers = Hashtbl.create 8;
     known_heap = Hashtbl.create 16;
     known_heap_slots = Ident.Set.empty;
@@ -132,6 +129,82 @@ let with_shadowed_vars b ids f =
           | None -> Hashtbl.remove b.vars vid)
         saved)
     f
+
+let bind_value b id value = Hashtbl.replace b.vars id value
+let bound_value b id = Hashtbl.find b.vars id
+let bound_value_opt b id = Hashtbl.find_opt b.vars id
+let forget_value b id = Hashtbl.remove b.vars id
+
+let bind_slot b id slot = Hashtbl.replace b.mut_vars id slot
+let mutable_slot b id = Hashtbl.find b.mut_vars id
+let mutable_slot_opt b id = Hashtbl.find_opt b.mut_vars id
+let forget_slot b id = Hashtbl.remove b.mut_vars id
+
+let function_info b id = Hashtbl.find b.funs id
+let function_info_opt b id = Hashtbl.find_opt b.funs id
+let declare_function b id info = Hashtbl.replace b.funs id info
+let forget_function b id = Hashtbl.remove b.funs id
+let record_function b id info = Hashtbl.replace b.emitted_funs id info
+let emitted_function b id = Hashtbl.find_opt b.emitted_funs id
+
+let closure_wrapper b id make =
+  match Hashtbl.find_opt b.clos_wrappers id with
+  | Some symbol -> symbol
+  | None ->
+      let symbol = make () in
+      Hashtbl.replace b.clos_wrappers id symbol;
+      symbol
+
+let fresh_group_name b =
+  let name = Printf.sprintf "ocamlcc_%s_group%d" b.prefix b.group_counter in
+  b.group_counter <- b.group_counter + 1;
+  name
+
+let declare_group b name members = Hashtbl.replace b.groups name members
+let with_uncompiled_group b name compile =
+  if not (Hashtbl.mem b.compiled_groups name) then begin
+    Hashtbl.replace b.compiled_groups name ();
+    compile (Hashtbl.find b.groups name)
+  end
+
+let next_data_name b base =
+  let name = Printf.sprintf "%s.%d" base b.data_counter in
+  b.data_counter <- b.data_counter + 1;
+  name
+
+let module_prefix b = b.prefix
+let add_function b func = b.funcs <- func :: b.funcs
+let add_data b data = b.datas <- data :: b.datas
+
+let finish_module b ~initializers =
+  { funcs = List.rev_append b.funcs initializers; datas = List.rev b.datas }
+
+let open_label b = b.cur_fn.open_label
+let block_is_open b = b.cur_fn.term = None
+let inline_rc b = b.inline_single_thread_rc
+let compact_arc b = b.cur_fn.compact_arc
+let in_initializer b = b.cur_fn.in_init
+let self b = b.cur_fn.self
+let current_group b = b.cur_fn.cur_group
+let poll_tick b = b.cur_fn.poll_tick
+let set_poll_tick b tick = b.cur_fn.poll_tick <- tick
+
+let try_handler b =
+  match b.cur_fn.try_stack with
+  | label :: _ -> Some label
+  | [] -> None
+let with_try_handler b label f =
+  let frame = b.cur_fn in
+  let saved = frame.try_stack in
+  frame.try_stack <- label :: saved;
+  Fun.protect ~finally:(fun () -> frame.try_stack <- saved) f
+
+let known_heap_slot b id = Ident.Set.mem id b.cur_fn.known_heap_slots
+let untagged_index b id = Hashtbl.find_opt b.cur_fn.untagged_indices id
+let with_untagged_index b id index f =
+  let indices = b.cur_fn.untagged_indices in
+  Hashtbl.add indices id index;
+  Fun.protect ~finally:(fun () -> Hashtbl.remove indices id) f
 
 (* QBE identifiers allow alphanumerics, '.', '_' and '$'. *)
 let sanitize name =
@@ -221,255 +294,6 @@ let emit_start_alloc b dst bytes =
   b.cur_fn.start_allocs <-
     Alloc8 (dst, Int (Int64.of_int bytes)) :: b.cur_fn.start_allocs
 
-(* QBE's parser caps phi incoming edges at NPred = 63 (vendor/qbe/parse.c).
-   Split any block with wide phis into a balanced tree of trampoline blocks
-   of at most [max_phi_preds] predecessors each so arbitrary-width OCaml
-   switches compile cleanly under unmodified upstream QBE. *)
-let max_phi_preds = 50
-
-let block_has_wide_phi (blk : Qbe_il.block) =
-  List.exists
-    (function
-      | Phi (_, _, args) -> List.length args > max_phi_preds
-      | _ -> false)
-    blk.insts
-
-let chunk_list k xs =
-  let rec go cur cur_n acc = function
-    | [] ->
-        let acc = if cur = [] then acc else List.rev cur :: acc in
-        List.rev acc
-    | x :: rest ->
-        if cur_n = k then go [ x ] 1 (List.rev cur :: acc) rest
-        else go (x :: cur) (cur_n + 1) acc rest
-  in
-  go [] 0 [] xs
-
-let rec split_wide_phis b (blocks : Qbe_il.block list) : Qbe_il.block list =
-  match List.find_opt block_has_wide_phi blocks with
-  | None -> blocks
-  | Some (target : Qbe_il.block) ->
-      let target_lbl = target.label in
-      let phis, non_phis =
-        List.partition (function Phi _ -> true | _ -> false) target.insts
-      in
-      let seen = Hashtbl.create 64 in
-      let pred_order = ref [] in
-      List.iter
-        (function
-          | Phi (_, _, args) ->
-              List.iter
-                (fun (lbl, _) ->
-                  if not (Hashtbl.mem seen lbl) then begin
-                    Hashtbl.replace seen lbl ();
-                    pred_order := lbl :: !pred_order
-                  end)
-                args
-          | _ -> ())
-        phis;
-      let chunks = chunk_list max_phi_preds (List.rev !pred_order) in
-      let pred_to_split = Hashtbl.create 64 in
-      let split_specs =
-        List.map
-          (fun chunk ->
-            let slbl = fresh_label b "phisplit" in
-            let member = Hashtbl.create (List.length chunk) in
-            List.iter
-              (fun plbl ->
-                Hashtbl.replace pred_to_split plbl slbl;
-                Hashtbl.replace member plbl ())
-              chunk;
-            (slbl, member))
-          chunks
-      in
-      let new_phi_args = Array.make (List.length phis) [] in
-      let split_blocks =
-        List.map
-          (fun (slbl, member) ->
-            let insts = ref [] in
-            List.iteri
-              (fun idx inst ->
-                match inst with
-                | Phi (ty, _, args) -> (
-                    let sub_args =
-                      List.filter (fun (lbl, _) -> Hashtbl.mem member lbl) args
-                    in
-                    match sub_args with
-                    | [] -> ()
-                    | [ (_, v) ] ->
-                        let tmp = fresh_temp b "phisp" in
-                        insts := Copy (ty, tmp, v) :: !insts;
-                        new_phi_args.(idx) <- (slbl, tmp) :: new_phi_args.(idx)
-                    | _ ->
-                        let tmp = fresh_temp b "phisp" in
-                        insts := Phi (ty, tmp, sub_args) :: !insts;
-                        new_phi_args.(idx) <- (slbl, tmp) :: new_phi_args.(idx))
-                | _ -> ())
-              phis;
-            { label = slbl; insts = List.rev !insts; term = Jmp target_lbl })
-          split_specs
-      in
-      let reduced_phis =
-        List.mapi
-          (fun idx inst ->
-            match inst with
-            | Phi (ty, dst, _) -> Phi (ty, dst, List.rev new_phi_args.(idx))
-            | other -> other)
-          phis
-      in
-      let rewrite_edge from_lbl dst_lbl =
-        if String.equal dst_lbl target_lbl then
-          match Hashtbl.find_opt pred_to_split from_lbl with
-          | Some slbl -> slbl
-          | None -> dst_lbl
-        else dst_lbl
-      in
-      let rewrite_term from_lbl = function
-        | Jmp l -> Jmp (rewrite_edge from_lbl l)
-        | Br (c, t, f) ->
-            Br (c, rewrite_edge from_lbl t, rewrite_edge from_lbl f)
-        | (Ret _ | Hlt) as term -> term
-      in
-      let blocks' =
-        List.concat_map
-          (fun blk ->
-            let term = rewrite_term blk.label blk.term in
-            if String.equal blk.label target_lbl then
-              split_blocks
-              @ [ { blk with insts = reduced_phis @ non_phis; term } ]
-            else [ { blk with term } ])
-          blocks
-      in
-      split_wide_phis b blocks'
-
-let temp_used_once blocks =
-  let counts = Hashtbl.create 32 in
-  let use = function
-    | Temp id ->
-        let n = Option.value ~default:0 (Hashtbl.find_opt counts id) in
-        Hashtbl.replace counts id (n + 1)
-    | Int _ | Global _ | Extern _ -> ()
-  in
-  let use_inst = function
-    | Binop (_, _, _, a, b) | Cmp (_, _, _, a, b)
-    | Fcmp (_, _, _, a, b) | Store (_, a, b) -> use a; use b
-    | Neg (_, _, a) | Cast (_, _, a) | Extsw (_, a) | Sltof (_, _, a)
-    | Dtosi (_, _, a) | Copy (_, _, a) | Load (_, _, _, a)
-    | Alloc8 (_, a) -> use a
-    | Phi (_, _, edges) -> List.iter (fun (_, arg) -> use arg) edges
-    | Call (_, _, call) | Call_void call ->
-        use call.fn;
-        List.iter (fun (_, arg) -> use arg) call.args
-  in
-  List.iter (fun (block : Qbe_il.block) ->
-    List.iter use_inst block.insts;
-    match block.term with
-    | Br (cond, _, _) -> use cond
-    | Ret value -> Option.iter use value
-    | Hlt | Jmp _ -> ()) blocks;
-  fun id -> Hashtbl.find_opt counts id = Some 1
-
-(* Branch directly from the arms of a short circuit when the joined value
-   is used only as a test. Visit the outer joins first so the new tests
-   can also be pushed into inner joins. *)
-let shortcut_boolean_joins b blocks =
-  let by_label = Hashtbl.create 32 in
-  let incoming = Hashtbl.create 32 in
-  let phi_sources = Hashtbl.create 32 in
-  let count map label = Option.value ~default:0 (Hashtbl.find_opt map label) in
-  let change map label n = Hashtbl.replace map label (count map label + n) in
-  let edges n = function
-    | Jmp label -> change incoming label n
-    | Br (_, yes, no) -> change incoming yes n; change incoming no n
-    | Ret _ | Hlt -> ()
-  in
-  List.iter (fun (block : Qbe_il.block) ->
-    Hashtbl.add by_label block.label block;
-    edges 1 block.term;
-    List.iter (function
-      | Phi (_, _, args) -> List.iter (fun (label, _) -> change phi_sources label 1) args
-      | _ -> ()) block.insts) blocks;
-  let used_once = lazy (temp_used_once blocks) in
-  List.iter (fun (original : Qbe_il.block) ->
-    let block = Hashtbl.find by_label original.label in
-    match block.insts, block.term with
-    | [Phi (Long, Temp value, (_ :: _ as args));
-       Cmp (Ne, Long, Temp test, Temp tested, Int 1L)],
-      Br (Temp condition, yes, no)
-      when tested = value && test = condition
-        && count phi_sources block.label = 0
-        && List.length args = count incoming block.label
-        && Lazy.force used_once value
-        (* Newly introduced tests are local to their terminator. *)
-        && (block != original || Lazy.force used_once test)
-        && List.for_all (fun (label, _) ->
-          (Hashtbl.find by_label label).term = Jmp block.label) args ->
-        edges (-1) block.term;
-        List.iter (fun (label, arg) ->
-          let pred = Hashtbl.find by_label label in
-          let pred = match arg with
-            | Int n -> { pred with term = Jmp (if n = 1L then no else yes) }
-            | _ ->
-                let test = fresh_temp b "cond" in
-                { pred with insts = pred.insts @ [Cmp (Ne, Long, test, arg, Int 1L)];
-                            term = Br (test, yes, no) }
-          in
-          change phi_sources label (-1);
-          edges 1 pred.term;
-          Hashtbl.replace by_label label pred) args;
-        Hashtbl.remove by_label block.label
-    | _ -> ()) (List.rev blocks);
-  List.filter_map (fun (block : Qbe_il.block) -> Hashtbl.find_opt by_label block.label) blocks
-
-(* Lower a comparison followed by retagging and an immediate branch directly
-   to a branch on its 0/1 result. A phi, return, or any other use in a
-   successor can still require the tagged value. *)
-let fuse_tagged_branches blocks =
-  let booleans = Hashtbl.create 32 in
-  let rec record = function
-    | Cmp (_, _, result, _, _)
-      :: Binop (Shl, Long, shifted, raw, Int 1L)
-      :: Binop (Add, Long, Temp tag, shift, Int 1L) :: rest
-      when raw = result && shift = shifted ->
-        Hashtbl.replace booleans tag (raw, shifted);
-        record rest
-    | _ :: rest -> record rest
-    | [] -> ()
-  in
-  List.iter (fun (block : Qbe_il.block) -> record block.insts) blocks;
-  let uses = lazy (temp_used_once blocks) in
-  let used_once = function
-    | Temp id -> Lazy.force uses id
-    | _ -> false
-  in
-  let dead = Hashtbl.create 16 in
-  let rewrite (block : Qbe_il.block) =
-    match block.term with
-    | Br (cond, yes, no) ->
-        (match List.rev block.insts with
-        | Cmp (Ne, Long, test, (Temp tag as tagged), Int 1L) :: earlier
-          when test = cond ->
-            (match Hashtbl.find_opt booleans tag with
-            | Some (raw, (Temp shift as shifted)) when used_once test ->
-                if used_once tagged && used_once shifted then begin
-                  Hashtbl.replace dead tag ();
-                  Hashtbl.replace dead shift ()
-                end;
-                { block with insts = List.rev earlier; term = Br (raw, yes, no) }
-            | _ -> block)
-        | _ -> block)
-    | _ -> block
-  in
-  if Hashtbl.length booleans = 0 then blocks
-  else
-    let blocks = List.map rewrite blocks in
-    let live_inst = function
-      | Binop (_, _, Temp dst, _, _) -> not (Hashtbl.mem dead dst)
-      | _ -> true
-    in
-    List.map (fun (block : Qbe_il.block) ->
-      { block with insts = List.filter live_inst block.insts }) blocks
-
 let finish_blocks b =
   let allocs = List.rev b.cur_fn.start_allocs in
   let blocks = List.rev b.cur_fn.blocks in
@@ -483,7 +307,13 @@ let finish_blocks b =
           else blk)
         blocks
   in
-  split_wide_phis b (fuse_tagged_branches (shortcut_boolean_joins b blocks))
+  let names : Qbe_il.Names.t =
+    { temp_counter = b.temp_counter; label_counter = b.label_counter }
+  in
+  let blocks, names = Qbe_il.optimize_blocks names blocks in
+  b.temp_counter <- names.temp_counter;
+  b.label_counter <- names.label_counter;
+  blocks
 
 let close_block b term =
   match b.cur_fn.term with
@@ -494,6 +324,58 @@ let close_block b term =
         :: b.cur_fn.blocks;
       b.cur_fn.insts <- [];
       b.cur_fn.term <- Some term
+
+let jump_to_entry b values =
+  b.cur_fn.tail_sites <- (b.cur_fn.open_label, values) :: b.cur_fn.tail_sites;
+  close_block b (Jmp b.cur_fn.entry_label)
+
+let insert_header_phis b header_label binder_names start_values =
+  if binder_names <> [] then begin
+    let sites = List.rev b.cur_fn.tail_sites in
+    let phis =
+      List.mapi
+        (fun i (ty, name) ->
+          let args =
+            ("start", List.nth start_values i)
+            :: List.filter_map
+                 (fun (lbl, vs) ->
+                   match List.nth_opt vs i with
+                   | Some v -> Some (lbl, v)
+                   | None -> None)
+                 sites
+          in
+          Phi (ty, Temp name, args))
+        binder_names
+    in
+    b.cur_fn.blocks <-
+      List.map
+        (fun blk ->
+          if blk.label = header_label then { blk with insts = phis @ blk.insts }
+          else blk)
+        b.cur_fn.blocks
+  end
+
+let with_static_handler b id label f =
+  let handlers = b.cur_fn.handlers in
+  let previous = Hashtbl.find_opt handlers id in
+  let handler = { hlabel = label; hpreds = [] } in
+  Hashtbl.replace handlers id handler;
+  Fun.protect
+    ~finally:(fun () ->
+      match previous with
+      | Some outer -> Hashtbl.replace handlers id outer
+      | None -> Hashtbl.remove handlers id)
+    (fun () ->
+      let value = f () in
+      value, List.rev handler.hpreds)
+
+let jump_static_handler b id values =
+  match Hashtbl.find_opt b.cur_fn.handlers id with
+  | Some handler ->
+      let vs = values () in
+      handler.hpreds <- (b.cur_fn.open_label, vs) :: handler.hpreds;
+      close_block b (Jmp handler.hlabel)
+  | None -> failwith "codegen: uncaught static raise"
 
 let start_block b label =
   (match b.cur_fn.term with

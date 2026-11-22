@@ -90,3 +90,11 @@ type data = {
 type module_ = { funcs : func list; datas : data list }
 
 val to_string : ?pic:bool -> ?name:(string -> string) -> module_ -> string
+
+module Names : sig
+  type t = { temp_counter : int; label_counter : int }
+end
+
+val optimize_blocks : Names.t -> block list -> block list * Names.t
+(** Simplify branch conditions and split wide phi nodes. Take the fresh-name
+    counters from the caller and return their updated values. *)

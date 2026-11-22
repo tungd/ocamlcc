@@ -51,9 +51,8 @@ The pipeline has four stages[^design-doc]:
    and exception cleanup using these facts and the local rewrites in
    `Arc_views`.
 3. **Code generation** — `Codegen` (split across `codegen_ctx.ml`,
-   `codegen_analysis.ml`, `codegen_expr.ml`, `codegen_fn.ml`, and `codegen.ml`,
-   with per-function state isolated via `Codegen_ctx.with_fn_state`) lowers ANF
-   to the
+   `codegen_analysis.ml`, `codegen_scalar.ml`, `codegen_expr.ml`,
+   `codegen_fn.ml`, and `codegen.ml`) lowers ANF to the
    [QBE IL](/concepts/vendored-qbe.md) model in `Qbe_il`; QBE turns SSA into
    target assembly (including void `arc_retain_val` calls on `GetGlobal`,
    exception/intermediate-closure cleanup on direct over-application,
@@ -81,6 +80,18 @@ in-process export collection, or sealed link symbols for separately built
 objects. The CLI and driver pass export facts and CMI paths directly from the
 result into publication. An optional summary loader reads external metadata
 against the CMI selected by the frontend.
+
+# Code generation interfaces
+
+`Codegen_ctx` owns the mutable builder and per-function state. It scopes
+nested function emission, static handler labels, try handlers, and raw loop
+indices. `Codegen_scalar` lowers boxed and unboxed numeric operators and
+Bigarray scalar accesses. `Qbe_il.optimize_blocks` simplifies branches and
+splits wide phis using caller-provided fresh-name counters.
+
+Export summary rows share a codec for object and archive sidecars. Writers
+emit v5. Loaders check the object or archive and CMI digests before using
+the facts. Older rows without an exception field are read as raising.
 
 # ANF lowering
 
@@ -207,7 +218,7 @@ Pattern compilation in translmod produces two shapes:
   12`) and dispatch via a comparison chain, sharing a single `swfail` block
   when `sw_failaction` is present and merging arms with `phi` nodes. Any
   block with > 50 incoming `phi` edges is automatically split by
-  `Codegen_ctx.split_wide_phis` into a trampoline tree so arbitrarily wide
+  `Qbe_il.optimize_blocks` into a trampoline tree so arbitrarily wide
   switches stay below QBE's `NPred = 63` parser cap without modifying
   vendored QBE.
 - **`Lstaticcatch`/`Lstaticraise`** — static exits for or-patterns and

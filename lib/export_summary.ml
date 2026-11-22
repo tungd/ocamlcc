@@ -1,30 +1,105 @@
-let archive_version = "ocamlcc-opt-v5"
-let object_version = "ocamlcc-exports-v5"
+let archive_format = "ocamlcc-opt"
+let object_format = "ocamlcc-exports"
+let current_version = 5
+
+let versioned format version = format ^ "-v" ^ string_of_int version
 let digest path = Digest.to_hex (Digest.file path)
 
 let read = Sys_util.read_file
 let write = Sys_util.write_atomic
 
-let rows ~cmi_digest exports =
-  let buffer = Buffer.create 256 in
-  List.iter (fun (path, (fn : Anf.imported_function)) ->
-    let path = String.concat "." (List.map string_of_int path) in
-    let raises = match fn.raises with
-      | No_raise -> "false"
-      | Finalizer_raise -> "finalizer"
-      | May_raise -> "true" in
-    Printf.bprintf buffer "%s %s %s %s %d %b %b %s"
-      fn.unit_name cmi_digest path fn.symbol fn.arity fn.yields fn.returns_immediate raises;
-    Option.iter (fun (symbol, flags) ->
-      Printf.bprintf buffer " %s " symbol;
-      List.iter (fun flag -> Buffer.add_char buffer (if flag then '1' else '0')) flags)
-      fn.borrowed_entry;
-    Option.iter (function
-      | Anf.Unicode_test -> Buffer.add_string buffer " unicode-test"
-      | Unicode_check -> Buffer.add_string buffer " unicode-check") fn.unicode_validation;
-    Buffer.add_char buffer '\n')
-    exports;
-  Buffer.contents buffer
+let has_header format ~digest header =
+  let suffix = " " ^ digest in
+  List.exists (fun version -> header = versioned format version ^ suffix)
+    [current_version; 4; 3; 2; 1]
+
+module Rows = struct
+  let unicode_test = "unicode-test"
+  let unicode_check = "unicode-check"
+
+  let encode ~cmi_digest exports =
+    let buffer = Buffer.create 256 in
+    List.iter (fun (path, (fn : Anf.imported_function)) ->
+      let path = String.concat "." (List.map string_of_int path) in
+      let raises = match fn.raises with
+        | No_raise -> "false"
+        | Finalizer_raise -> "finalizer"
+        | May_raise -> "true" in
+      Printf.bprintf buffer "%s %s %s %s %d %b %b %s"
+        fn.unit_name cmi_digest path fn.symbol fn.arity fn.yields fn.returns_immediate raises;
+      Option.iter (fun (symbol, flags) ->
+        Printf.bprintf buffer " %s " symbol;
+        List.iter (fun flag -> Buffer.add_char buffer (if flag then '1' else '0')) flags)
+        fn.borrowed_entry;
+      Option.iter (function
+        | Anf.Unicode_test -> Buffer.add_string buffer (" " ^ unicode_test)
+        | Unicode_check -> Buffer.add_string buffer (" " ^ unicode_check)) fn.unicode_validation;
+      Buffer.add_char buffer '\n')
+      exports;
+    Buffer.contents buffer
+
+  let identifier_char = function
+    | 'a'..'z' | 'A'..'Z' | '0'..'9' | '_' -> true
+    | _ -> false
+
+  let unit_name_valid s = s <> "" && String.for_all identifier_char s
+  let entry_valid s =
+    s <> "" && String.for_all (function '.' | '$' -> true | c -> identifier_char c) s
+
+  let nonnegative s =
+    let n = int_of_string s in
+    if n < 0 then invalid_arg "negative export index or arity";
+    n
+
+  let decode lines =
+    let units = Hashtbl.create 32 in
+    let add row =
+      let fields = String.split_on_char ' ' row in
+      let fields, unicode_validation = match List.rev fields with
+        | tag :: rest when tag = unicode_test -> List.rev rest, Some Anf.Unicode_test
+        | tag :: rest when tag = unicode_check -> List.rev rest, Some Anf.Unicode_check
+        | _ -> fields, None in
+      let fields, worker = match fields with
+        | [unit_name; digest; path; entry; arity; yields; immediate; raises; worker; mask] ->
+            [unit_name; digest; path; entry; arity; yields; immediate; raises], Some (worker, mask)
+        | fields when List.compare_length_with fields 7 = 0 -> fields @ ["true"], None
+        | fields -> fields, None in
+      match fields with
+      | [""] -> ()
+      | [unit_name; cmi_digest; path; entry; arity; yields; immediate; raises]
+        when unit_name_valid unit_name && entry_valid entry ->
+          let path = List.map nonnegative (String.split_on_char '.' path) in
+          let arity = nonnegative arity and yields = bool_of_string yields in
+          let returns_immediate = bool_of_string immediate in
+          if Option.is_some unicode_validation &&
+             (unit_name <> "Stdlib__Uchar" || arity <> 1 || not returns_immediate) then
+            invalid_arg "invalid Unicode validation summary";
+          let borrowed_entry = Option.map (fun (symbol, mask) ->
+            if yields || not (entry_valid symbol) || symbol = entry
+               || String.length mask <> arity || not (String.contains mask '1')
+            then invalid_arg "invalid borrowed entry";
+            let flags = List.init arity (fun i -> match mask.[i] with
+              | '0' -> false | '1' -> true | _ -> invalid_arg "invalid borrow mask") in
+            symbol, flags) worker in
+          let fn : Anf.imported_function =
+            { unit_name; symbol = entry; arity; yields; borrowed_entry;
+              raises = (match raises with
+                | "false" -> No_raise | "finalizer" -> Finalizer_raise | "true" -> May_raise
+                | _ -> invalid_arg "invalid exception effect");
+              returns_immediate; unicode_validation; inline_leaf = None; inline_lambda = None }
+          in
+          let exports = match Hashtbl.find_opt units unit_name with
+            | None -> []
+            | Some (known_digest, exports) ->
+                if known_digest <> cmi_digest || List.mem_assoc path exports then
+                  invalid_arg "inconsistent export summary";
+                exports in
+          Hashtbl.replace units unit_name (cmi_digest, (path, fn) :: exports)
+      | _ -> invalid_arg "invalid export summary"
+    in
+    List.iter add lines;
+    units
+end
 
 (* A CMI describes layout, not callee behavior. An older caller that imported
    direct-call facts must fail to link against a different implementation. *)
@@ -33,7 +108,7 @@ let seal il exports =
   match exports with
   | [] -> ssa, []
   | _ ->
-      let stamp = Digest.to_hex (Digest.string (ssa ^ rows ~cmi_digest:"-" exports)) in
+      let stamp = Digest.to_hex (Digest.string (ssa ^ Rows.encode ~cmi_digest:"-" exports)) in
       let names = Hashtbl.create (List.length exports) in
       let rename symbol =
         let stamped = symbol ^ "__" ^ stamp in
@@ -47,16 +122,16 @@ let seal il exports =
       Qbe_il.to_string ~name il, exports
 
 let write_unit ~prefix exports =
-  write (prefix ^ ".opt") (rows ~cmi_digest:(digest (prefix ^ ".cmi")) exports)
+  write (prefix ^ ".opt") (Rows.encode ~cmi_digest:(digest (prefix ^ ".cmi")) exports)
 
 let write_object ~prefix ~obj body =
-  let header = Printf.sprintf "%s %s\n%s\n" object_version (digest obj) (Filename.basename obj) in
+  let header = Printf.sprintf "%s %s\n%s\n" (versioned object_format current_version) (digest obj) (Filename.basename obj) in
   write (prefix ^ ".exports") (header ^ body)
 
 let publish_object ~unit_name ~cmi ~obj exports =
   let prefix = Filename.concat (Filename.dirname obj) (String.uncapitalize_ascii unit_name) in
   let interface = read cmi in
-  let body = rows ~cmi_digest:(Digest.to_hex (Digest.string interface)) exports in
+  let body = Rows.encode ~cmi_digest:(Digest.to_hex (Digest.string interface)) exports in
   write (prefix ^ ".cmi") interface;
   write_object ~prefix ~obj body
 
@@ -73,82 +148,17 @@ let write_archive ~archive ~units =
     if Sys.file_exists obj then write_object ~prefix ~obj body;
     body) units in
   write (archive ^ ".opt")
-    (Printf.sprintf "%s %s\n%s" archive_version (digest archive) (String.concat "" body))
+    (Printf.sprintf "%s %s\n%s" (versioned archive_format current_version) (digest archive) (String.concat "" body))
 
 let find_archive dir =
   ["libocamlstdlib.a"; "libocamlstdlib_compat.a"]
   |> List.map (Filename.concat dir)
   |> List.find_opt Sys.file_exists
 
-let identifier_char = function
-  | 'a'..'z' | 'A'..'Z' | '0'..'9' | '_' -> true
-  | _ -> false
-
-let unit_name_valid s = s <> "" && String.for_all identifier_char s
-let entry_valid s =
-  s <> "" && String.for_all (function '.' | '$' -> true | c -> identifier_char c) s
-
-let nonnegative s =
-  let n = int_of_string s in
-  if n < 0 then invalid_arg "negative export index or arity";
-  n
-
-let parse_rows lines =
-  let units = Hashtbl.create 32 in
-  let add row =
-    let fields = String.split_on_char ' ' row in
-    let fields, unicode_validation = match List.rev fields with
-      | "unicode-test" :: rest -> List.rev rest, Some Anf.Unicode_test
-      | "unicode-check" :: rest -> List.rev rest, Some Anf.Unicode_check
-      | _ -> fields, None in
-    let fields, worker = match fields with
-      | [unit_name; digest; path; entry; arity; yields; immediate; raises; worker; mask] ->
-          [unit_name; digest; path; entry; arity; yields; immediate; raises], Some (worker, mask)
-      | fields when List.compare_length_with fields 7 = 0 -> fields @ ["true"], None
-      | fields -> fields, None in
-    match fields with
-    | [""] -> ()
-    | [unit_name; cmi_digest; path; entry; arity; yields; immediate; raises]
-      when unit_name_valid unit_name && entry_valid entry ->
-        let path = List.map nonnegative (String.split_on_char '.' path) in
-        let arity = nonnegative arity and yields = bool_of_string yields in
-        let returns_immediate = bool_of_string immediate in
-        if Option.is_some unicode_validation &&
-           (unit_name <> "Stdlib__Uchar" || arity <> 1 || not returns_immediate) then
-          invalid_arg "invalid Unicode validation summary";
-        let borrowed_entry = Option.map (fun (symbol, mask) ->
-          if yields || not (entry_valid symbol) || symbol = entry
-             || String.length mask <> arity || not (String.contains mask '1')
-          then invalid_arg "invalid borrowed entry";
-          let flags = List.init arity (fun i -> match mask.[i] with
-            | '0' -> false | '1' -> true | _ -> invalid_arg "invalid borrow mask") in
-          symbol, flags) worker in
-        let fn : Anf.imported_function =
-          { unit_name; symbol = entry; arity; yields; borrowed_entry;
-            raises = (match raises with
-              | "false" -> No_raise | "finalizer" -> Finalizer_raise | "true" -> May_raise
-              | _ -> invalid_arg "invalid exception effect");
-            returns_immediate; unicode_validation; inline_leaf = None; inline_lambda = None }
-        in
-        let exports = match Hashtbl.find_opt units unit_name with
-          | None -> []
-          | Some (known_digest, exports) ->
-              if known_digest <> cmi_digest || List.mem_assoc path exports then
-                invalid_arg "inconsistent export summary";
-              exports in
-        Hashtbl.replace units unit_name (cmi_digest, (path, fn) :: exports)
-    | _ -> invalid_arg "invalid export summary"
-  in
-  List.iter add lines;
-  units
-
 let read_archive archive =
   match String.split_on_char '\n' (read (archive ^ ".opt")) with
-  | header :: lines
-    when let suffix = " " ^ digest archive in
-         List.exists (fun version -> header = version ^ suffix)
-           [archive_version; "ocamlcc-opt-v4"; "ocamlcc-opt-v3"; "ocamlcc-opt-v2"; "ocamlcc-opt-v1"] ->
-      Some (parse_rows lines)
+  | header :: lines when has_header archive_format ~digest:(digest archive) header ->
+      Some (Rows.decode lines)
   | _ -> None
 
 let read_object cmi =
@@ -156,11 +166,8 @@ let read_object cmi =
   match String.split_on_char '\n' (read sidecar) with
   | header :: obj :: lines
     when obj <> "" && obj <> "." && obj <> ".." && Filename.basename obj = obj
-      && (let suffix = " " ^ digest (Filename.concat (Filename.dirname cmi) obj) in
-          List.exists (fun version -> header = version ^ suffix)
-            [object_version; "ocamlcc-exports-v4"; "ocamlcc-exports-v3";
-             "ocamlcc-exports-v2"; "ocamlcc-exports-v1"]) ->
-      Some (parse_rows lines)
+      && has_header object_format ~digest:(digest (Filename.concat (Filename.dirname cmi) obj)) header ->
+      Some (Rows.decode lines)
   | _ -> None
 
 let optional f =

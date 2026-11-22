@@ -20,12 +20,12 @@ let load_pointer b addr =
    cached environment and the ordinary owned arguments. *)
 let export_captured b mod_value path target arity =
   let name =
-    "ocamlcc_direct_" ^ b.prefix ^ "_"
+    "ocamlcc_direct_" ^ (module_prefix b) ^ "_"
     ^ String.concat "_" (List.map string_of_int path)
   in
   let slot = name ^ "_env" in
-  b.datas <- { name = slot; export = false; align = Some 8;
-               items = [D_long 0L] } :: b.datas;
+  add_data b { name = slot; export = false; align = Some 8;
+               items = [D_long 0L] };
   let clos =
     List.fold_left (fun owner index ->
       load_pointer b (ptr_offset b owner (8 * index) "slot")) mod_value path
@@ -40,8 +40,8 @@ let export_captured b mod_value path target arity =
       let res = fresh_temp b "res" in
       emit b (Call (Long, res, { fn = Global target; args }));
       close_ret b (Some res);
-      b.funcs <- { name; export = true; retty = Some Long; params;
-                   blocks = finish_blocks b } :: b.funcs);
+      add_function b { name; export = true; retty = Some Long; params;
+                   blocks = finish_blocks b });
   name
 
 let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
@@ -52,7 +52,7 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
   let defs = Codegen_analysis.collect_pure_defs program.code in
   List.iter
     (fun ((id, lf) : Ident.t * Anf.lfunction) ->
-      Hashtbl.replace b.funs id
+      declare_function b id
         { global = alloc_global_name b id;
           arity = List.length lf.params;
           tag = None;
@@ -75,10 +75,7 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
   List.iter
     (fun comp ->
       if List.length comp >= 2 then begin
-        let gname =
-          Printf.sprintf "ocamlcc_%s_group%d" b.prefix b.group_counter
-        in
-        b.group_counter <- b.group_counter + 1;
+        let gname = fresh_group_name b in
         let members =
           List.map
             (fun id ->
@@ -87,7 +84,7 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
               | None -> assert false)
             comp
         in
-        Hashtbl.replace b.groups gname members;
+        declare_group b gname members;
         let group_arity =
           List.fold_left
             (fun acc ((_, lf) : Ident.t * Anf.lfunction) ->
@@ -96,8 +93,8 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
         in
         List.iteri
           (fun i (id, _) ->
-            let info = Hashtbl.find b.funs id in
-            Hashtbl.replace b.funs id
+            let info = function_info b id in
+            declare_function b id
               { info with
                 global = gname;
                 tag = Some (Int64.of_int (i + 1));
@@ -109,12 +106,10 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
   let global_sym = "ocamlcc_global_" ^ mod_sym in
   let init_sym = "ocamlcc_init_" ^ mod_sym in
   let deps = Codegen_analysis.collect_globals mod_sym program.code in
-  b.datas <-
-    { name = global_sym;
+  add_data b { name = global_sym;
       export = true;
       align = Some 8;
-      items = [ D_long 0L ] }
-    :: b.datas;
+      items = [ D_long 0L ] };
   start_block b "start";
   let should_init = fresh_temp b "doinit" in
   emit b
@@ -151,9 +146,9 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
   let mod_val = Codegen_expr.compile_aexpr Codegen_fn.hooks b false program.code in
   let unit_name = Ident.name program.module_ident in
   let exports = List.filter_map (fun (path, id) ->
-    match Hashtbl.find_opt b.emitted_funs id with
+    match emitted_function b id with
     | None -> None
-    | Some (_, true, _) when b.cur_fn.term <> None -> None
+    | Some (_, true, _) when not (block_is_open b) -> None
     | Some (target, has_closure, arity) ->
         let symbol =
           if has_closure then export_captured b mod_val path target arity else target
@@ -162,7 +157,7 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
         let inline_leaf = inline_leaf id in
         let inline_lambda = Ident.Map.find_opt id program.inline_bodies in
         let borrowed_entry = Option.bind (borrowed id) (fun (worker, flags) ->
-          match Hashtbl.find_opt b.emitted_funs worker with
+          match emitted_function b worker with
           | Some (symbol, false, worker_arity) when arity = worker_arity -> Some (symbol, flags)
           | _ -> None) in
         Some (path, { Anf.unit_name; symbol; arity; yields; raises; returns_immediate;
@@ -170,7 +165,7 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
                       unicode_validation = unicode_validation id }))
     exported
   in
-  if b.cur_fn.term = None then begin
+  if block_is_open b then begin
     emit b
       (Call_void
          { fn = Global "ocamlcc_init_finish";
@@ -199,12 +194,11 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
           Call_void { fn = Global "arc_mutator_leave"; args = [ (Word, Temp "entered") ] } ];
         term = Ret None }] }
   in
-  let funcs =
-    if emit_entry then
-      List.rev (entry_point [mod_sym] :: init_func :: init_body :: b.funcs)
-    else List.rev (init_func :: init_body :: b.funcs)
+  let initializers =
+    if emit_entry then [init_body; init_func; entry_point [mod_sym]]
+    else [init_body; init_func]
   in
-  { funcs; datas = List.rev b.datas }, exports
+  finish_module b ~initializers, exports
 
 let compile_program ?emit_entry program =
   fst (compile_with_exports ?emit_entry ~exported:[] ~effects:(fun _ -> true, false, Anf.May_raise)

@@ -15,7 +15,7 @@ let () =
       code; value_kinds = Ident.Map.empty; inline_bodies = Ident.Map.empty }
   in
   let result = Arc_pass.run program in
-  match result.code with
+  (match result.code with
   | Let (_, _, StaticCatch (LetJoin (_, _, exit), _, _, _, _)) ->
       let rec require_live = function
         | Release (id, _) when Ident.same id owner ->
@@ -25,4 +25,5 @@ let () =
         | _ -> failwith "expected an exit to the outer handler"
       in
       require_live exit
-  | _ -> failwith "expected a nested static catch"
+  | _ -> failwith "expected a nested static catch");
+  ignore (Codegen.compile_program result)
