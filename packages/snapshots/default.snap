@@ -1,0 +1,77 @@
+# Curated package snapshot
+schema 1
+
+pkg cmdliner 1.3.0
+  url https://erratique.ch/software/cmdliner/releases/cmdliner-1.3.0.tbz
+  sha256 8e8180f573b440f6a7a8c208dab2cae4a82384fec732d22784d1bb6e64168cbb
+  root cmdliner-1.3.0
+  tree 045b4e32b7ce6c25e064821666db158b114ce1e13e66afdb22eb80e13afb6208
+  wrapped false
+  license ISC
+  export Cmdliner
+  file cmdliner.ml <= src/cmdliner.ml
+  file cmdliner.mli <= src/cmdliner.mli
+  file cmdliner_arg.ml <= src/cmdliner_arg.ml
+  file cmdliner_arg.mli <= src/cmdliner_arg.mli
+  file cmdliner_base.ml <= src/cmdliner_base.ml
+  file cmdliner_base.mli <= src/cmdliner_base.mli
+  file cmdliner_cline.ml <= src/cmdliner_cline.ml
+  file cmdliner_cline.mli <= src/cmdliner_cline.mli
+  file cmdliner_cmd.ml <= src/cmdliner_cmd.ml
+  file cmdliner_cmd.mli <= src/cmdliner_cmd.mli
+  file cmdliner_docgen.ml <= src/cmdliner_docgen.ml
+  file cmdliner_docgen.mli <= src/cmdliner_docgen.mli
+  file cmdliner_eval.ml <= src/cmdliner_eval.ml
+  file cmdliner_eval.mli <= src/cmdliner_eval.mli
+  file cmdliner_exit.ml <= src/cmdliner_exit.ml
+  file cmdliner_exit.mli <= src/cmdliner_exit.mli
+  file cmdliner_info.ml <= src/cmdliner_info.ml
+  file cmdliner_info.mli <= src/cmdliner_info.mli
+  file cmdliner_manpage.ml <= src/cmdliner_manpage.ml
+  file cmdliner_manpage.mli <= src/cmdliner_manpage.mli
+  file cmdliner_msg.ml <= src/cmdliner_msg.ml
+  file cmdliner_msg.mli <= src/cmdliner_msg.mli
+  file cmdliner_term.ml <= src/cmdliner_term.ml
+  file cmdliner_term.mli <= src/cmdliner_term.mli
+  file cmdliner_term_deprecated.ml <= src/cmdliner_term_deprecated.ml
+  file cmdliner_trie.ml <= src/cmdliner_trie.ml
+  file cmdliner_trie.mli <= src/cmdliner_trie.mli
+
+pkg crunch 4.1.0
+  dep cmdliner
+  dep crunch-unix
+  dep ptime
+  url https://github.com/mirage/ocaml-crunch/releases/download/v4.1.0/crunch-4.1.0.tbz
+  sha256 b7775d6fb6e6094a8c31fdbf2127501d99ed8ceeac40271055dd52c79a3e17e7
+  root crunch-4.1.0
+  tree 58b876c2f5a37971f3a9d2aba70edaa7ae955545743ab56d443f1bf2ac0a60f8
+  wrapped false
+  executable ocaml-crunch
+  license ISC
+  export Crunch
+  file crunch.ml <= src/crunch.ml
+  file crunch.mli <= src/crunch.mli
+  file main.ml <= src/main.ml
+  file realpath.ml <= src/realpath.unix.ml
+
+pkg crunch-unix 0.1
+  dep ptime
+  local ports/crunch-unix
+  tree aa783f9007406132b2374abf17e9561b7e9dc33c542a2dd432dfa2b7dfb92705
+  wrapped false
+  license MIT
+  export Unix
+  file unix.ml <= unix.ml
+  file unix.mli <= unix.mli
+  file unix_stubs.c <= unix_stubs.c
+
+pkg ptime 1.2.0
+  url https://erratique.ch/software/ptime/releases/ptime-1.2.0.tbz
+  sha256 9616747fdf490ec36e8024cab27ee01e3a0af577d8a23226638fa4034de73ab0
+  root ptime-1.2.0
+  tree 28aad28c1cc5646cc1d076a77329473ba865186a86e6fc605704d9849ffc3489
+  wrapped false
+  license ISC
+  export Ptime
+  file ptime.ml <= src/ptime.ml
+  file ptime.mli <= src/ptime.mli

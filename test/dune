@@ -485,3 +485,9 @@
  (name sha256_test)
  (modules sha256_test)
  (libraries ocamlcc ocpkg_core unix))
+
+(test
+ (name ocpkg_format_test)
+ (modules ocpkg_format_test)
+ (libraries ocpkg_core)
+ (action (run %{test} %{dep:../packages/snapshots/default.snap})))

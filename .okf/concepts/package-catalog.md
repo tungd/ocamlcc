@@ -35,6 +35,15 @@ package companion's canonical encoding. It orders paths by component and
 includes the file digest and executable bit for each regular file.
 Symlinks and special files are rejected.
 
+# Text formats
+
+`ocpkg.mod` declares the project kind, entry point, source paths, and direct
+requirements. `ocpkg.lock` records the selected catalog digest and resolved
+recipes in sorted package order. The native tool reads the line-based
+`packages/snapshots/default.snap` catalog derived from the Crunch snapshot.
+Package names, relative paths, compilation inputs, and SHA-256 values are
+validated before they enter the parsed model.
+
 # Model
 
 - Snapshot: immutable package selection, dependencies, source SHA-256 digests,
