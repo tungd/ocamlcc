@@ -47,7 +47,7 @@ value arc_unix_errno(value name)
     const char *symbol = (const char *)(uintptr_t)name;
 #define CHECK(code) if (!strcmp(symbol, #code)) return integer(code)
     CHECK(EACCES); CHECK(EAGAIN); CHECK(EBADF); CHECK(EBUSY); CHECK(ECHILD); CHECK(EINTR);
-    CHECK(EINVAL); CHECK(EIO); CHECK(EMFILE); CHECK(ENFILE); CHECK(ENOENT);
+    CHECK(EEXIST); CHECK(EINVAL); CHECK(EIO); CHECK(EMFILE); CHECK(ENFILE); CHECK(ENOENT);
     CHECK(ENOMEM); CHECK(ENOSYS); CHECK(EPERM); CHECK(EPIPE); CHECK(ESRCH);
     CHECK(ETIMEDOUT); CHECK(EWOULDBLOCK);
 #undef CHECK
@@ -66,6 +66,54 @@ value arc_unix_error_message(value error)
     return text(message);
 }
 
+static int set_cloexec(int fd, int enabled)
+{
+    int flags = fcntl(fd, F_GETFD);
+    if (flags < 0)
+        return -1;
+    return fcntl(fd, F_SETFD, enabled ? flags | FD_CLOEXEC : flags & ~FD_CLOEXEC);
+}
+
+value arc_unix_check_fd(value fd)
+{
+    int64_t raw = fd >> 1;
+    if (raw < 0 || raw > INT_MAX)
+        return integer(-EBADF);
+    return integer(fcntl((int)raw, F_GETFD) < 0 ? -errno : raw);
+}
+
+value arc_unix_openfile(value path, value flags, value permissions)
+{
+    /* Order matches Unix.Open_flag.encode. */
+    const int native_flags[] = {
+        O_WRONLY, O_RDWR, O_NONBLOCK, O_APPEND, O_CREAT, O_TRUNC, O_EXCL,
+        O_NOCTTY, O_CLOEXEC
+    };
+    unsigned mask = (unsigned)number(flags);
+    if ((mask & 3u) == 3u)
+        return integer(-EINVAL);
+    if (mask & 512u)
+        mask &= ~256u;
+    int native = O_RDONLY;
+    for (size_t i = 0; i < sizeof native_flags / sizeof *native_flags; i++)
+        if (mask & (1u << i))
+            native |= native_flags[i];
+    int fd = open((const char *)(uintptr_t)path, native, (mode_t)number(permissions));
+    return integer(fd < 0 ? -errno : fd);
+}
+
+value arc_unix_dup(value descriptor, value cloexec)
+{
+    int fd = number(descriptor);
+    int copy = number(cloexec) ? fcntl(fd, F_DUPFD_CLOEXEC, 0) : dup(fd);
+    return integer(copy < 0 ? -errno : copy);
+}
+
+value arc_unix_set_cloexec(value descriptor, value cloexec)
+{
+    return integer(set_cloexec(number(descriptor), number(cloexec)) < 0 ? -errno : 0);
+}
+
 value arc_unix_pipe(value cloexec)
 {
     int fds[2];
@@ -75,8 +123,7 @@ value arc_unix_pipe(value cloexec)
 #else
     if (pipe(fds) < 0)
         return boxed(1, integer(errno));
-    if (number(cloexec) && (fcntl(fds[0], F_SETFD, FD_CLOEXEC) < 0 ||
-                           fcntl(fds[1], F_SETFD, FD_CLOEXEC) < 0)) {
+    if (number(cloexec) && (set_cloexec(fds[0], 1) < 0 || set_cloexec(fds[1], 1) < 0)) {
         int error = errno;
         close(fds[0]);
         close(fds[1]);

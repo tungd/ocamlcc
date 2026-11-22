@@ -80,6 +80,13 @@ calls and clean up partially configured pipes. Linux sets close-on-exec
 atomically using `pipe2`. macOS sets it with `fcntl` after creating the pipe.
 The separate Crunch port continues to provide its own `Unix` module.
 
+`Unix.File_descr.adopt` checks an open native descriptor and transfers
+ownership without making a copy. It pairs with `to_int`, which only borrows
+the integer. `openfile` supports the file creation and access flags used by
+the daemon. `dup ~cloexec:true` duplicates the handle with close-on-exec set
+atomically. `set_close_on_exec` and `clear_close_on_exec` control inheritance
+on existing handles.
+
 The process interface exposes `getpid`, `kill` and `waitpid` with
 `Unix.Wait_flag.t` and `Unix.Process_status.t`. The native adapter translates
 `Sys.sig*` constants in both directions and preserves the POSIX nonblocking
@@ -96,7 +103,8 @@ previous signal actions and closes the descriptor, including on exceptions.
 Other platforms report `ENOSYS` for this signal source.
 
 `ninja -j1 ocpkg_arc_unix` exercises a close-on-exec pipe, nonblocking reads,
-offset byte transfers, end of file, and error translation. The package
+offset byte transfers, end of file, file creation and append, native
+descriptor adoption, duplication, and inheritance flags. The package
 fixture also checks running, stopped, signaled, and exited children and
 macOS signal readiness through the Fiber scheduler.
 

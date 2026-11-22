@@ -4,12 +4,15 @@ module File_descr : sig
   type t
   val to_int : t -> int
   (** Borrow the descriptor number. Ownership remains with the caller. *)
+
+  val adopt : int -> t
+  (** Take ownership of an open native descriptor without duplicating it. *)
 end
 
 type file_descr = File_descr.t
 
 type error =
-  | EACCES | EAGAIN | EBADF | EBUSY | ECHILD | EINTR | EINVAL | EIO | EMFILE
+  | EACCES | EAGAIN | EBADF | EBUSY | ECHILD | EINTR | EEXIST | EINVAL | EIO | EMFILE
   | ENFILE | ENOENT | ENOMEM | ENOSYS | EPERM | EPIPE | ESRCH | ETIMEDOUT
   | EWOULDBLOCK | EUNKNOWNERR of int
 
@@ -26,11 +29,26 @@ val stdout : file_descr
 val stderr : file_descr
 val pipe : ?cloexec:bool -> unit -> file_descr * file_descr
 val close : file_descr -> unit
+val dup : ?cloexec:bool -> file_descr -> file_descr
+val set_close_on_exec : file_descr -> unit
+val clear_close_on_exec : file_descr -> unit
 val set_nonblock : file_descr -> unit
 val clear_nonblock : file_descr -> unit
 val read : file_descr -> bytes -> int -> int -> int
 val write : file_descr -> bytes -> int -> int -> int
 val gettimeofday : unit -> float
+
+module Open_flag : sig
+  type t =
+    | O_RDONLY | O_WRONLY | O_RDWR | O_NONBLOCK | O_APPEND | O_CREAT
+    | O_TRUNC | O_EXCL | O_NOCTTY | O_CLOEXEC | O_KEEPEXEC
+end
+
+type open_flag = Open_flag.t =
+  | O_RDONLY | O_WRONLY | O_RDWR | O_NONBLOCK | O_APPEND | O_CREAT
+  | O_TRUNC | O_EXCL | O_NOCTTY | O_CLOEXEC | O_KEEPEXEC
+
+val openfile : string -> Open_flag.t list -> int -> File_descr.t
 
 module Wait_flag : sig
   type t = WNOHANG | WUNTRACED

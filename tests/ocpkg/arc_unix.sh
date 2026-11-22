@@ -70,6 +70,37 @@ external clean_up_child : int -> unit = "clean_up_child"
 external install_term_handler : unit -> bool = "install_term_handler"
 external term_signals : unit -> int = "term_signals"
 
+let test_files () =
+  let path = "arc-unix-file" in
+  let fd = Unix.openfile path
+      [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC] 0o600 in
+  let adopted = Unix.File_descr.adopt (Unix.File_descr.to_int fd) in
+  assert (cloexec adopted);
+  let duplicate = Unix.dup ~cloexec:true adopted in
+  Unix.close adopted;
+  assert (cloexec duplicate);
+  Unix.clear_close_on_exec duplicate;
+  assert (not (cloexec duplicate));
+  Unix.set_close_on_exec duplicate;
+  assert (cloexec duplicate);
+  assert (Unix.write duplicate (Bytes.of_string "ab") 0 2 = 2);
+  Unix.close duplicate;
+  assert (match Unix.File_descr.adopt (Unix.File_descr.to_int duplicate) with
+    | exception Unix.Unix_error (Unix.EBADF, "adopt", "") -> true
+    | _ -> false);
+  assert (match Unix.openfile path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL] 0o600 with
+    | exception Unix.Unix_error (Unix.EEXIST, "open", found) -> found = path
+    | _ -> false);
+  let fd = Unix.openfile path [Unix.O_WRONLY; Unix.O_APPEND] 0 in
+  assert (not (cloexec fd));
+  assert (Unix.write fd (Bytes.of_string "c") 0 1 = 1);
+  Unix.close fd;
+  let fd = Unix.openfile path [Unix.O_RDONLY] 0 in
+  let buffer = Bytes.make 3 '.' in
+  assert (Unix.read fd buffer 0 3 = 3 && Bytes.to_string buffer = "abc");
+  Unix.close fd;
+  Sys.remove path
+
 let with_child f =
   let reader, writer = Unix.pipe ~cloexec:true () in
   let pid = start_child reader writer in
@@ -166,6 +197,8 @@ let () =
   assert (Unix.Error.message Unix.EBADF = Unix.error_message Unix.EBADF);
   assert (Unix.gettimeofday () > 0.);
   print_endline "ARC Unix descriptors: PASS";
+  test_files ();
+  print_endline "ARC Unix file descriptors: PASS";
   test_children ();
   print_endline "ARC Unix child status: PASS";
   test_signal_events ()
