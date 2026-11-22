@@ -450,3 +450,8 @@
  (name anf_isolation_test)
  (modules anf_isolation_test)
  (libraries ocamlcc compiler-libs.common))
+
+(test
+ (name arc_static_scope_test)
+ (modules arc_static_scope_test)
+ (libraries ocamlcc compiler-libs.common))

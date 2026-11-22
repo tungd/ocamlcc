@@ -45,9 +45,11 @@ The pipeline has four stages[^design-doc]:
    functors, GADTs, and polymorphic variants all arrive pre-desugared:
    frontend fidelity is free, and unsupported constructs are rejected
    downstream by `Anf`/`Codegen` with a descriptive error.
-2. **Middle-end (pure OCaml)** — ANF conversion (`lib/anf.ml`), fixed-point
-   yield-effect inference and the [Perceus ARC](/concepts/perceus-arc.md) +
-   shadow-stack fiber + error-return exception pass (`lib/arc_pass.ml`).
+2. **Middle-end (pure OCaml)** — Lambda optimization and ANF conversion feed
+   `Arc_analysis`, which computes call effects and representation facts.
+   `Arc_pass` inserts [Perceus ARC](/concepts/perceus-arc.md), shadow-stack
+   and exception cleanup using these facts and the local rewrites in
+   `Arc_views`.
 3. **Code generation** — `Codegen` (split across `codegen_ctx.ml`,
    `codegen_analysis.ml`, `codegen_expr.ml`, `codegen_fn.ml`, and `codegen.ml`,
    with per-function state isolated via `Codegen_ctx.with_fn_state`) lowers ANF

@@ -41,6 +41,8 @@ OCAMLCC_MODULES: list[tuple[str, bool, bool]] = [
     ("anf_scalar", True, True),
     ("lambda_opt", True, True),
     ("anf", True, True),
+    ("arc_analysis", True, True),
+    ("arc_views", True, True),
     ("arc_pass", True, True),
     ("codegen_ctx", False, True),
     ("codegen_analysis", False, True),

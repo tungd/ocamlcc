@@ -61,7 +61,7 @@ build/bin/ocamlcc dump-lambda examples/hello.ml                 # dump Lambda IR
 | Path | Contents |
 |------|----------|
 | `bin/` | CLI entry point (`build`, `compile`, `compile-mli`, `bindgen`, `dump-lambda`) |
-| `lib/` | `Qbe_il`, `Frontend`, `Anf`, `Arc_pass`, `Ccalls`, `C_bindgen`, `Driver`, `Codegen`, `Builtins`, `Pipeline` |
+| `lib/` | `Qbe_il`, `Frontend`, `Lambda_opt`, `Anf`, `Anf_ir`, `Anf_scalar`, `Arc_analysis`, `Arc_views`, `Arc_pass`, `Ccalls`, `C_bindgen`, `Driver`, `Codegen`, `Builtins`, `Pipeline` |
 | `runtime/` | `pal.h/.c`, `arc.h/.c`, `fiber.h/.c`, `builtins.c` |
 | `vendor/qbe/` | vendored QBE source (see [vendored-qbe]) |
 | `examples/` | example programs |

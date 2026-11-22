@@ -78,3 +78,4 @@ POSIX/libm/Bigarray primitives).
 
 The bootstrap source order includes `Sys_util` and builds `Bounds`,
 `Anf_ir`, `Anf_scalar`, and `Lambda_opt` ahead of the ANF converter.
+`Arc_analysis` and `Arc_views` then build before the ownership transformer.

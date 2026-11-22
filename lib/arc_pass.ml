@@ -19,8 +19,10 @@
    - A [MutLet] slot is released exactly once, where it leaves scope: the
      function-exit [Halt], a [Raise] path, or a [StaticRaise] to a narrower
      handler. [Halt]s that flow into a [LetJoin] rhs / [While] / [For]
-     continuation are not scope exits; [env.no_release_muts] defers those
+     continuation are not scope exits; [Scope.no_release_muts] defers those
      slots to the continuation that still owns them. *)
+
+open Arc_analysis
 
 module IntSet = Set.Make (Int)
 
@@ -29,475 +31,112 @@ type borrowed_entry = {
   borrow : bool list;
 }
 
+module Scope = struct
+  type t = {
+    owned : Ident.Set.t;
+    borrowed : Ident.Set.t;
+    frame_borrowed : Ident.Set.t;
+    view_owners : Ident.Set.t Ident.Map.t;
+    slot_snapshots : Ident.t Ident.Map.t;
+    imm : Ident.Set.t;
+    muts : Ident.Set.t;
+    (* These slots are still owned by the continuation after a join or loop. *)
+    no_release_muts : Ident.Set.t;
+  }
+
+  let empty =
+    { owned = Ident.Set.empty; borrowed = Ident.Set.empty;
+      frame_borrowed = Ident.Set.empty; view_owners = Ident.Map.empty;
+      slot_snapshots = Ident.Map.empty; imm = Ident.Set.empty;
+      muts = Ident.Set.empty; no_release_muts = Ident.Set.empty }
+end
+
+module Exn_frame = struct
+  module Labels = Map.Make (Int)
+
+  module Handler = struct
+    type t = {
+      owned : Ident.Set.t;
+      live : Ident.Set.t;
+      muts : Ident.Set.t;
+    }
+  end
+
+  type t = {
+    handlers : Handler.t Labels.t;
+    try_owned : Ident.Set.t;
+    try_muts : Ident.Set.t;
+    try_depth : int;
+    (* [Halt] at a join or loop exit still needs checks for its continuation. *)
+    in_tail : bool;
+  }
+
+  let root =
+    { handlers = Labels.empty; try_owned = Ident.Set.empty;
+      try_muts = Ident.Set.empty; try_depth = 0; in_tail = true }
+
+  let handler label frame = Labels.find_opt label frame.handlers
+
+  let with_handler label target frame =
+    { frame with handlers = Labels.add label target frame.handlers }
+
+  let non_tail frame = { frame with in_tail = false }
+
+  let protect ~owned ~muts frame =
+    { frame with try_owned = owned; try_muts = muts;
+                 try_depth = frame.try_depth + 1; in_tail = false }
+end
+
 type state = {
-  owned : Ident.Set.t;
-  borrowed : Ident.Set.t;
-  frame_borrowed : Ident.Set.t;
-  view_owners : Ident.Set.t Ident.Map.t;
-  slot_snapshots : Ident.t Ident.Map.t;
-  imm : Ident.Set.t;
-  typed_imm : Ident.Set.t;
-  pure : Ident.Set.t;
-  known_funs : int Ident.Map.t;
-  yielding_funs : Ident.Set.t;
-  raising_funs : Ident.Set.t;
-  ordinary_raising_funs : Ident.Set.t;
-  imm_funs : int Ident.Map.t;
+  facts : Program_facts.t;
+  scope : Scope.t;
+  exn : Exn_frame.t;
   borrowed_entries : borrowed_entry Ident.Map.t;
-  exported : Ident.Set.t;
   exported_workers : (Ident.t, borrowed_entry) Hashtbl.t;
-  muts : Ident.Set.t;
-  (* Mutable slots that stay in scope after the current join point or loop
-     exit ([LetJoin] rhs, [While]/[For] condition and body). Their single
-     [ReleaseMut] is emitted by the continuation that still uses them, so
-     [Halt] must skip them: [ReleaseMut env.muts - env.no_release_muts]. *)
-  no_release_muts : Ident.Set.t;
-  handlers : (int, Ident.Set.t * Ident.Set.t * Ident.Set.t) Hashtbl.t;
-  try_owned : Ident.Set.t;
-  try_muts : Ident.Set.t;
-  try_depth : int;
-  (* True only at a function/toplevel tail return position. [Halt]s ending a
-     [LetJoin] rhs, [TryWith] body, or loop flow into a join/handler and must
-     not elide [CheckExn] or [ShadowPush]/[ShadowPop]. *)
-  in_tail : bool;
 }
 
 let is_borrowed (env : state) (id : Ident.t) : bool =
-  Ident.Set.mem id env.borrowed || Ident.Set.mem id env.frame_borrowed
-  || Ident.Map.mem id env.view_owners
+  Ident.Set.mem id env.scope.borrowed || Ident.Set.mem id env.scope.frame_borrowed
+  || Ident.Map.mem id env.scope.view_owners
 
 (* The false edge of ANF's conditional tests for the tagged zero, even
    when the scrutinee may be a constructor block on the other edge. *)
 let false_edge env = function
-  | Anf.Var id -> { env with imm = Ident.Set.add id env.imm }
+  | Anf.Var id -> { env with scope = { env.scope with imm = Ident.Set.add id env.scope.imm } }
   | _ -> env
 
-let atom_is_imm ~pure imm (a : Anf.atom) =
-  match a with
-  | Int _ | Char _ | Unit | String _ | Float _ | Int32 _ | Int64 _
-  | Nativeint _ | ConstFloatArray _ | ConstBlock _ ->
-      true
-  | Var id -> Ident.Set.mem id imm || Ident.Set.mem id pure
-  | MutVar id -> Ident.Set.mem id imm
-  | ModuleSlot (_, kind) -> kind = Lambda.Pintval
-  | BorrowedField _ -> false
+let is_imm_atom env = atom_is_imm ~pure:env.facts.pure env.scope.imm
 
-let is_imm_atom env = atom_is_imm ~pure:env.pure env.imm
+let is_imm_cexpr env = cexpr_is_imm ~pure:env.facts.pure ~imm_funs:env.facts.imm_funs env.scope.imm
 
-let is_imm_binop : Anf.binop -> bool = function
-  | Add | Sub | Mul | Div | Mod | And | Or | Xor | Lsl | Lsr | Asr | Cmp _
-  | Compare_ints | Isout | Fcmp _ | Compare_floats | Bint_cmp _
-  | Compare_bints _ ->
-      true
-  | Float_arithmetic _ | Bint_arith _ | Bint_shift _ ->
-      false
+let handler_immediates env =
+  Arc_analysis.handler_immediates ~typed_imm:env.facts.typed_imm ~pure:env.facts.pure
+    ~imm_funs:env.facts.imm_funs env.scope.imm
 
-let is_imm_unop : Anf.unop -> bool = function
-  | Neg | Not | Offset _ | Isint | String_length | Array_length
-  | Int_of_float | Int_of_bint _ ->
-      true
-  | Float_of_int | Fneg | Fabs | Bint_of_int _ | Bint_cvt _ | Bint_neg _ ->
-      false
-
-let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
-  match ce with
-  | Atom a -> atom_is_imm ~pure imm a
-  | Binop (op, _, _) -> is_imm_binop op
-  | Unop (op, _) -> is_imm_unop op
-  | IntSelect _ | Field (_, Immediate_field, _) | ArrayGet (_, Lambda.Pintarray, _, _)
-  | SetField _ | FloatField _ | SetFloatField _ | SetBoxedFloatField _ | OffsetRef _ | StringGet _
-  | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ | AssignImm _
-  | ReadScalarSlot _ | AssignScalar _ | StoreModuleSlot _ | ImportDependency _ ->
-      true
-  | BytesGetN (_, 2, _, _) -> true
-  | BytesGetN _ | BswapBint _ -> false
-  | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
-  | FloatArrayGet _ | FloatArraySet _ | FloatOfInt _ | IntOfFloat _
-  | FloatSign _ | FloatCompare _ | KeepAlive _ -> true
-  | MakeBlock (_, _, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
-  | PollFinalizers | LoopPollDue _ -> true
-  | Ccall (name, _) -> Ccalls.returns_imm name
-  | NativeCcall (prim, _) ->
-      not (Primitive.equal_native_repr prim.prim_native_repr_res Same_as_ocaml_repr)
-  | DirectApp (target, _) -> target.returns_immediate
-  | App (Var fn, args) -> (
-      match Ident.Map.find_opt fn imm_funs with
-      | Some arity -> List.length args = arity
-      | None -> false)
-  | MakeBlock _ | AllocReuse _ | MakeArray _ | Field _ | BoxScalar _
-  | BigarrayAccess _ | ArrayGet _ | CreateBytes _ | MakeArrayInit _ | App _
-  | GetGlobal _ | Fun _ | Recur _ ->
-      false
-
-let is_imm_cexpr env = cexpr_is_imm ~pure:env.pure ~imm_funs:env.imm_funs env.imm
-
-let imm_params_of (lf : Anf.lfunction) : Ident.Set.t =
-  List.fold_left
-    (fun s (p, vk) ->
-      match vk with Lambda.Pintval -> Ident.Set.add p s | _ -> s)
-    (Ident.Set.of_list (List.map fst lf.loop_scalars)) lf.params
-
-let set_imm imm id proven =
-  if proven then Ident.Set.add id imm else Ident.Set.remove id imm
-
-(* Static catches consume local exits in their body. Track each argument
-   independently, intersecting the facts supplied by all incoming exits. *)
-let observe_exit imm_args args =
-  let incoming = List.map imm_args args in
-  function
-  | None -> Some incoming
-  | Some previous when List.length previous = List.length incoming ->
-      Some (List.map2 ( && ) previous incoming)
-  | Some _ -> Some []
-
-let binders_imm typed_imm binders observed =
-  let typed = Ident.Set.inter typed_imm (Ident.Set.of_list binders) in
-  match observed with
-  | Some kinds when List.length kinds = List.length binders ->
-      List.fold_left2
-        (fun imm id inferred -> if inferred then Ident.Set.add id imm else imm)
-        typed binders kinds
-  | _ -> typed
-
-(* A mutable slot can use the immediate convention for its whole scope
-   only if every write is immediate and the slot is local to this frame. *)
-let scan_immediates ~typed_imm ~pure ~imm_funs ?(exits = []) ?mutable_slot imm e =
-  let ce_imm = cexpr_is_imm ~pure ~imm_funs in
-  let bind imm id inferred = set_imm imm id (inferred || Ident.Set.mem id typed_imm) in
-  let check_closure (lf : Anf.lfunction) =
-    Option.iter
-      (fun (slot, valid) ->
-        if Ident.Set.mem slot (Anf.free_vars lf.body) then valid := false)
-      mutable_slot
-  in
-  let observe_binding imm = function
-    | Anf.Assign (slot, rhs) | AssignImm (slot, rhs) ->
-        Option.iter
-          (fun (watched, valid) ->
-            if Ident.same slot watched && not (atom_is_imm ~pure imm rhs)
-            then valid := false)
-          mutable_slot
-    | Fun lf -> check_closure lf
-    | _ -> ()
-  in
-  let rec scan exits imm = function
-    | Anf.Halt a -> atom_is_imm ~pure imm a
-    | HaltScalar _ | Raise _ | Unwind -> true
-    | StaticRaise (hid, args) ->
-        Option.iter
-          (fun observed -> observed := observe_exit (atom_is_imm ~pure imm) args !observed)
-          (List.assoc_opt hid exits);
-        true
-    | Let (id, ce, body) ->
-        observe_binding imm ce;
-        scan exits (bind imm id (ce_imm imm ce)) body
-    | MutLet (id, ce, body) ->
-        observe_binding imm ce;
-        scan exits (bind imm id false) body
-    | LetJoin (id, rhs, body) ->
-        let immediate = scan exits imm rhs in
-        scan exits (bind imm id immediate) body
-    | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (_, a, b) ->
-        let immediate = scan exits imm a in
-        scan exits imm b && immediate
-    | TryWith (a, exn, b) ->
-        let immediate = scan exits imm a in
-        scan exits (Ident.Set.remove exn imm) b && immediate
-    | StaticCatch (body, hid, binders, handler, _) ->
-        let observed = ref None in
-        let immediate = scan ((hid, observed) :: exits) imm body in
-        let handler_imm =
-          Ident.Set.union
-            (Ident.Set.diff imm (Ident.Set.of_list binders))
-            (binders_imm typed_imm binders !observed)
-        in
-        scan exits handler_imm handler && immediate
-    | Switch (_, sw) -> scan_arms exits imm (sw.consts @ sw.blocks) sw.fail
-    | StringSwitch (_, cases, fail) -> scan_arms exits imm cases fail
-    | While (cond, body) ->
-        ignore (scan exits imm cond);
-        ignore (scan exits imm body);
-        true
-    | For (idx, _, _, _, body) ->
-        ignore (scan exits (Ident.Set.add idx imm) body);
-        true
-    | LetRec (bindings, body) ->
-        List.iter (fun (rb : Anf.rec_binding) -> check_closure rb.def) bindings;
-        scan exits imm body
-    | Retain (_, body) | Release (_, body) | ReleaseMut (_, body)
-    | DropReuse (_, _, body) | FreeReuse (_, body)
-    | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
-        scan exits imm body
-  and scan_arms : 'a. _ -> _ -> ('a * Anf.aexpr) list -> _ -> bool =
-    fun exits imm arms fail ->
-      let immediate =
-        List.fold_left (fun acc (_, arm) -> scan exits imm arm && acc) true arms
-      in
-      Option.fold ~none:true ~some:(scan exits imm) fail && immediate
-  in
-  scan exits imm e
-
-let aexpr_returns_imm ~typed_imm ~pure ~imm_funs imm e =
-  scan_immediates ~typed_imm ~pure ~imm_funs imm e
-
-let handler_immediates env hid binders body =
-  match binders with
-  | [] -> Ident.Set.empty
-  | _ ->
-      let observed = ref None in
-      ignore (scan_immediates ~typed_imm:env.typed_imm ~pure:env.pure ~imm_funs:env.imm_funs
-                ~exits:[hid, observed] env.imm body);
-      binders_imm env.typed_imm binders !observed
-
-let mutlet_is_imm env slot init body =
-  if Ident.Set.mem slot env.typed_imm then true
-  else if not (is_imm_cexpr env init) then false
-  else
-    let valid = ref true in
-    ignore (scan_immediates ~typed_imm:env.typed_imm ~pure:env.pure ~imm_funs:env.imm_funs
-              ~mutable_slot:(slot, valid) (Ident.Set.add slot env.imm) body);
-    !valid
+let mutlet_is_imm env =
+  Arc_analysis.mutlet_is_imm ~typed_imm:env.facts.typed_imm ~pure:env.facts.pure
+    ~imm_funs:env.facts.imm_funs env.scope.imm
 
 let specialize_ownership env = function
   | Anf.MakeBlock (tag, Scan_if_managed, args) when List.for_all (is_imm_atom env) args ->
       Anf.MakeBlock (tag, Scan_none, args)
-  | Anf.Assign (slot, rhs) when Ident.Set.mem slot env.imm -> Anf.AssignImm (slot, rhs)
+  | Anf.Assign (slot, rhs) when Ident.Set.mem slot env.scope.imm -> Anf.AssignImm (slot, rhs)
   | ce -> ce
-
-let compute_imm_funs ~typed_imm ~pure (e : Anf.aexpr) : int Ident.Map.t =
-  let funs = ref [] in
-  let rec collect = function
-    | Anf.Let (id, Fun lf, body) ->
-        funs := (id, lf) :: !funs;
-        collect lf.body;
-        collect body
-    | Let (_, _, body) | MutLet (_, _, body) -> collect body
-    | LetRec (rbs, body) ->
-        List.iter
-          (fun (rb : Anf.rec_binding) ->
-            funs := (rb.id, rb.def) :: !funs;
-            collect rb.def.body)
-          rbs;
-        collect body
-    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b)
-    | CheckExn (_, a, b) | While (a, b) | StaticCatch (a, _, _, b, _)
-    | TryWith (a, _, b) ->
-        collect a;
-        collect b
-    | For (_, _, _, _, body) | Retain (_, body) | Release (_, body)
-    | ReleaseMut (_, body) | DropReuse (_, _, body) | FreeReuse (_, body)
-    | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
-        collect body
-    | Switch (_, sw) ->
-        List.iter (fun (_, arm) -> collect arm) sw.consts;
-        List.iter (fun (_, arm) -> collect arm) sw.blocks;
-        Option.iter collect sw.fail
-    | StringSwitch (_, cases, fail) ->
-        List.iter (fun (_, arm) -> collect arm) cases;
-        Option.iter collect fail
-    | Halt _ | HaltScalar _ | StaticRaise _ | Raise _ | Unwind -> ()
-  in
-  collect e;
-  let rec fix imm_funs =
-    let next, changed =
-      List.fold_left
-        (fun (acc, ch) (id, (lf : Anf.lfunction)) ->
-          if Ident.Map.mem id acc then (acc, ch)
-          else if lf.return = Lambda.Pintval
-                  || aexpr_returns_imm ~typed_imm ~pure ~imm_funs (imm_params_of lf) lf.body
-          then (Ident.Map.add id (List.length lf.params) acc, true)
-          else (acc, ch))
-        (imm_funs, false) !funs
-    in
-    if changed then fix next else next
-  in
-  fix Ident.Map.empty
-
-let rec atom_vars (a : Anf.atom) : Ident.Set.t =
-  match a with
-  | Var id | MutVar id -> Ident.Set.singleton id
-  | BorrowedField (_, owner) -> atom_vars owner
-  | Int _ | Char _ | String _ | Float _ | Int32 _ | Int64 _ | Nativeint _
-  | ConstFloatArray _ | ConstBlock _ | Unit | ModuleSlot _ ->
-      Ident.Set.empty
-
-let atoms_vars (xs : Anf.atom list) : Ident.Set.t =
-  List.fold_left (fun s a -> Ident.Set.union s (atom_vars a)) Ident.Set.empty xs
-
-let split_borrowed flags args =
-  List.combine flags args
-  |> List.partition_map (function true, a -> Either.Left a | false, a -> Either.Right a)
-
-let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
-  match ce with
-  | Atom a -> (Ident.Set.empty, [ a ])
-  | Binop (_, a, b) | IntSelect (_, a, b) | LoopPollDue (a, b) ->
-      (Ident.Set.union (atom_vars a) (atom_vars b), [])
-  | Unop (_, a) -> (atom_vars a, [])
-  | MakeBlock (_, _, args) | AllocReuse (_, _, _, args) | MakeArray (_, args) ->
-      (Ident.Set.empty, args)
-  | Field (_, _, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
-  | Bswap16 a | BswapBint (_, a) ->
-      (atom_vars a, [])
-  | SetField (_, Lambda.Pointer, a, rhs) -> (atom_vars a, [ rhs ])
-  | SetField (_, Immediate, a, rhs) -> (Ident.Set.union (atom_vars a) (atom_vars rhs), [])
-  | SetFloatField (_, owner, v) | SetBoxedFloatField (_, owner, v) ->
-      (Anf.scalar_operand_vars (atom_vars owner) v, [])
-  | StringGet (_, a, b) | BytesGetN (_, _, a, b) | ArrayGet (_, _, a, b) ->
-      (Ident.Set.union (atom_vars a) (atom_vars b), [])
-  | BytesSet (_, a, b, c) | BytesSetN (_, _, a, b, c) ->
-      ( Ident.Set.union (atom_vars a) (Ident.Set.union (atom_vars b) (atom_vars c)),
-        [] )
-  | ArraySet (_, _, arr, idx, v) ->
-      (Ident.Set.union (atom_vars arr) (atom_vars idx), [ v ])
-  | MakeArrayInit (len, init) -> (atom_vars len, [ init ])
-  | App (fn, args) -> (atom_vars fn, args)
-  | DirectApp ({ borrowed_entry = Some (_, flags); _ }, args) ->
-      let borrowed, consumed = split_borrowed flags args in
-      (atoms_vars borrowed, consumed)
-  | DirectApp (_, args) | Recur args -> (Ident.Set.empty, args)
-  | KeepAlive args -> (atoms_vars args, [])
-  | Builtin (_, _, a) -> (atom_vars a, [])
-  | ScalarValue (_, a) | BoxScalar (_, a) | IntOfFloat a | FloatSign (_, a) ->
-      (Anf.scalar_operand_vars Ident.Set.empty a, [])
-  | FloatOfInt a -> (atom_vars a, [])
-  | IntegerOfInt (_, value) -> (atom_vars value, [])
-  | IntOfInteger (_, value) | IntegerConvert (_, _, value)
-  | IntegerNeg (_, value) -> (Anf.scalar_operand_vars Ident.Set.empty value, [])
-  | IntegerShift (_, _, value, count) ->
-      (Anf.scalar_operand_vars (atom_vars count) value, [])
-  | FloatArrayGet (_, a, i) | ScalarLoad (_, a, i) -> (atoms_vars [a; i], [])
-  | FloatArraySet (_, a, i, v) | ScalarStore (_, a, i, v) -> (Anf.scalar_operand_vars (atoms_vars [a; i]) v, [])
-  | FloatBinop (_, a, b) | FloatCompare (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> (Anf.scalar_operand_vars (Anf.scalar_operand_vars Ident.Set.empty a) b, [])
-  | BigarrayAccess (_, args) | Ccall (_, args) | NativeCcall (_, args) -> (atoms_vars args, [])
-  | GetGlobal _ | ImportDependency _ | PollFinalizers -> (Ident.Set.empty, [])
-  | StoreModuleSlot (_, a) -> (Ident.Set.empty, [ a ])
-  | Assign (_, rhs) | AssignImm (_, rhs) -> (Ident.Set.empty, [ rhs ])
-  | ReadScalarSlot (_, slot) -> (Ident.Set.singleton slot, [])
-  | AssignScalar (slot, _, value) ->
-      (Anf.scalar_operand_vars (Ident.Set.singleton slot) value, [])
-  | Fun _ -> (Ident.Set.empty, [])
-
-let pointer_parameters (lf : Anf.lfunction) =
-  if lf.loop_scalars <> [] then Ident.Set.empty else
-  List.fold_left
-    (fun set (id, kind) ->
-      if kind = Lambda.Pintval then set else Ident.Set.add id set)
-    Ident.Set.empty lf.params
-
-let borrow_flags (lf : Anf.lfunction) read_only =
-  List.map (fun (param, _) -> Ident.Set.mem param read_only) lf.params
 
 let borrowed_flags env id =
   Option.map (fun entry -> entry.borrow) (Ident.Map.find_opt id env.borrowed_entries)
 
-(* A private entry may borrow parameters read locally or forwarded to other
-   borrowed arguments. Capturing a parameter makes the closure an owner. *)
-let read_only_parameters ~borrowed (lf : Anf.lfunction) =
-  let remove_uses params args = Ident.Set.diff params (atoms_vars args) in
-  let cexpr params = function
-    | Anf.App (Var fn, args) ->
-        let params = Ident.Set.remove fn params in
-        (match borrowed fn with
-         | Some flags when List.length flags = List.length args ->
-             List.fold_left2
-               (fun params borrows arg ->
-                 if borrows then params else Ident.Set.diff params (atom_vars arg))
-               params flags args
-         | _ -> remove_uses params args)
-    | App (fn, args) -> remove_uses params (fn :: args)
-    | Ccall _ | NativeCcall _ -> params
-    | Fun lf -> Ident.Set.diff params (Anf.free_vars lf.body)
-    | (SetField (_, Lambda.Pointer, target, _)
-      | SetBoxedFloatField (_, target, _)
-      | ArraySet (_, (Lambda.Paddrarray | Lambda.Pgenarray), target, _, _)) as ce ->
-        let remaining = remove_uses params (snd (atom_operands ce)) in
-        (* The caller keeps a sole borrowed parameter alive. With multiple
-           borrowed parameters, an overwrite may retire a sibling's owner. *)
-        if Ident.Set.cardinal remaining <= 1 then remaining
-        else Ident.Set.inter remaining (atom_vars target)
-    | ce -> remove_uses params (snd (atom_operands ce))
-  in
-  let rec scan params expr =
-    if Ident.Set.is_empty params then params
-    else
-      match expr with
-      | Anf.Let (_, ce, body) | MutLet (_, ce, body) -> scan (cexpr params ce) body
-      | LetRec (defs, body) ->
-          let uncaptured = List.fold_left (fun params (rb : Anf.rec_binding) ->
-            Ident.Set.diff params (Anf.free_vars rb.def.body)) params defs in
-          scan uncaptured body
-      | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b)
-      | While (a, b) | TryWith (a, _, b) | StaticCatch (a, _, _, b, _) ->
-          scan (scan params a) b
-      | For (_, _, _, _, body) -> scan params body
-      | Switch (_, sw) -> cases params (sw.consts @ sw.blocks) sw.fail
-      | StringSwitch (_, arms, fallback) -> cases params arms fallback
-      | Halt a | Raise a -> remove_uses params [ a ]
-      | StaticRaise (_, args) -> remove_uses params args
-      | HaltScalar _ | Unwind -> params
-      | _ -> Ident.Set.empty
-  and cases : 'a. Ident.Set.t -> ('a * Anf.aexpr) list -> Anf.aexpr option -> Ident.Set.t =
-    fun params arms fallback ->
-      let params = List.fold_left (fun left (_, arm) -> scan left arm) params arms in
-      Option.fold ~none:params ~some:(scan params) fallback
-  in
-  scan (pointer_parameters lf) lf.body
-
-let recursive_borrows env (bindings : Anf.rec_binding list) =
-  let infer f =
-    List.fold_left
-      (fun map (rb : Anf.rec_binding) ->
-        let flags =
-          if Ident.Set.mem rb.id env.yielding_funs then
-            borrow_flags rb.def Ident.Set.empty
-          else f rb.def
-        in
-        Ident.Map.add rb.id flags map)
-      Ident.Map.empty bindings
-  in
-  let rec solve assumptions =
-    let borrowed id =
-      match Ident.Map.find_opt id assumptions with
-      | Some _ as flags -> flags
-      | None -> borrowed_flags env id
-    in
-    let next = infer (fun lf -> borrow_flags lf (read_only_parameters ~borrowed lf)) in
-    if Ident.Map.equal ( = ) assumptions next then next else solve next
-  in
-  solve (infer (fun lf -> borrow_flags lf (pointer_parameters lf)))
-
 let add_borrowed_entry env id borrow =
   let worker = Ident.create_local (Ident.name id ^ "_borrowed") in
   let entry = { worker; borrow } in
-  if Ident.Set.mem id env.exported then Hashtbl.replace env.exported_workers id entry;
-  let imm_funs =
-    match Ident.Map.find_opt id env.imm_funs with
-    | Some arity -> Ident.Map.add worker arity env.imm_funs
-    | None -> env.imm_funs
-  in
-  let inherit_effect set =
-    if Ident.Set.mem id set then Ident.Set.add worker set else set
-  in
+  if Ident.Set.mem id env.facts.exported then Hashtbl.replace env.exported_workers id entry;
+  let facts = Program_facts.with_worker ~original:id ~worker ~arity:(List.length borrow) env.facts in
   worker,
-  { env with
-    raising_funs = inherit_effect env.raising_funs;
-    ordinary_raising_funs = inherit_effect env.ordinary_raising_funs;
-    known_funs = Ident.Map.add worker (List.length borrow) env.known_funs;
-    pure = Ident.Set.add worker env.pure;
-    imm_funs;
-    borrowed_entries = Ident.Map.add id entry env.borrowed_entries }
+  { env with facts; borrowed_entries = Ident.Map.add id entry env.borrowed_entries }
 
-let can_borrow_arguments env live flags args =
-  let valid borrow a =
-    not borrow || is_imm_atom env a
-    || match a with
-       | Anf.Var id ->
-           is_borrowed env id || Ident.Set.mem id live
-       | MutVar _ | BorrowedField _ -> true
-       | _ -> false
-  in
-  List.compare_lengths flags args = 0 && List.for_all2 valid flags args
+let can_borrow_arguments env =
+  Arc_views.can_borrow_arguments ~is_immediate:(is_imm_atom env)
+    ~is_borrowed:(is_borrowed env)
 
 let borrowed_call env live = function
   | Anf.App (Var fn, args) -> (
@@ -513,274 +152,6 @@ let select_imported_entry env live = function
       Anf.DirectApp ({ target with borrowed_entry = None }, args)
   | ce -> ce
 
-(* Fuse a field into borrowed operands while keeping its receiver live.
-   A mutable projection has a single consumer and can cross only read-only
-   computations, such as the arithmetic and joins used to form an index. *)
-let fuse_field_read env ~stable id index owner body =
-  let open Anf in
-  let uses atom = Ident.Set.mem id (atom_vars atom) in
-  let live expr = Ident.Set.mem id (Anf.free_vars expr) in
-  let rec substitute = function
-    | Var v when Ident.same v id -> BorrowedField (index, owner)
-    | BorrowedField (i, base) -> BorrowedField (i, substitute base)
-    | atom -> atom
-  in
-  let scalar = function
-    | Boxed_scalar a -> Boxed_scalar (substitute a)
-    | Raw_scalar _ as v -> v in
-  let through_call live flags args rebuild =
-    if List.compare_lengths flags args <> 0 then None
-    else
-      let args = List.map2 (fun borrow arg -> if borrow then substitute arg else arg) flags args in
-      if can_borrow_arguments env live flags args then Some (rebuild args) else None
-  in
-  let reader next ce =
-    (* The callee can run finalizers or mutate through aliases. Across the
-       call, only a projection from a stable, directly owned base can lend
-       its owner. A nested receiver may itself come from a mutable field. *)
-    let stable_receiver = stable && match owner with Var _ -> true | _ -> false in
-    match ce with
-    | App ((Var fn as callee), args)
-      when stable_receiver && not (Ident.Set.mem fn env.yielding_funs) ->
-        Option.bind (borrowed_flags env fn) (fun flags ->
-          through_call (Anf.free_vars next) flags args (fun args -> App (callee, args)))
-    | DirectApp (({ borrowed_entry = Some (_, flags); yields = false; _ } as target), args)
-      when stable_receiver ->
-        through_call (Anf.free_vars next) flags args (fun args -> DirectApp (target, args))
-    | FloatBinop (op, a, b) -> Some (FloatBinop (op, scalar a, scalar b))
-    | FloatCompare (op, a, b) -> Some (FloatCompare (op, scalar a, scalar b))
-    | Field (i, kind, base) -> Some (Field (i, kind, substitute base))
-    | FloatField (i, base) -> Some (FloatField (i, substitute base))
-    | Unop (((String_length | Array_length | Isint | Int_of_float) as op), base) ->
-        Some (Unop (op, substitute base))
-    | Binop ((Cmp _ as op), a, b) ->
-        Some (Binop (op, substitute a, substitute b))
-    | ArrayGet (safe, kind, arr, i) ->
-        Some (ArrayGet (safe, kind, substitute arr, i))
-    | ArraySet (safe, kind, arr, i, v) ->
-        Some (ArraySet (safe, kind, substitute arr, substitute i, v))
-    | StringGet (safe, str, i) -> Some (StringGet (safe, substitute str, i))
-    | BytesGetN (safe, width, str, i) ->
-        Some (BytesGetN (safe, width, substitute str, i))
-    | BytesSet (safe, str, i, v) ->
-        Some (BytesSet (safe, substitute str, substitute i, v))
-    | BytesSetN (safe, width, str, i, v) ->
-        Some (BytesSetN (safe, width, substitute str, substitute i, v))
-    | _ -> None
-  in
-  let can_cross = function
-    | Atom _ | Field _
-    | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr | Cmp _), _, _)
-    | Unop ((String_length | Array_length | Isint), _)
-    | ArrayGet (false, (Lambda.Pintarray | Lambda.Paddrarray), _, _)
-    | StringGet (false, _, _) -> true
-    | _ -> false
-  in
-  let can_delay_snapshot = function
-    | Atom (Var _ | Int _ | Char _ | Unit)
-    | Unop (Isint, _)
-    | Field (_, (Immediate_field | Immutable_field), _)
-    | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr | Cmp _), _, _) -> true
-    | _ -> false
-  in
-  let rec index_expression = function
-    | Halt _ -> true
-    | Let (_, ce, next) -> can_delay_snapshot ce && index_expression next
-    | If (_, yes, no) | LetJoin (_, yes, no) ->
-        index_expression yes && index_expression no
-    | _ -> false
-  in
-  let use_in ce =
-    let borrowed, consumed = atom_operands ce in
-    Ident.Set.mem id borrowed || List.exists uses consumed
-  in
-  let switch_read scrut arms fail =
-    uses scrut
-    && not (List.exists (fun (_, arm) -> live arm) arms)
-    && not (Option.fold ~none:false ~some:live fail)
-  in
-  let rec fuse = function
-    | Let (result, ce, next) when use_in ce -> (
-        match reader next ce with
-        | Some ce' when not (use_in ce') ->
-            let next =
-              if not (live next) then Some next
-              else if (if stable then can_cross ce else can_delay_snapshot ce) then fuse next
-              else None
-            in
-            Option.map (fun next -> Let (result, ce', next)) next
-        | _ -> None)
-    | Let (result, ce, next) when (if stable then can_cross ce else can_delay_snapshot ce) ->
-        Option.map (fun next -> Let (result, ce, next)) (fuse next)
-    | LetJoin (result, rhs, next) when not (live next) ->
-        Option.map (fun rhs -> LetJoin (result, rhs, next)) (fuse rhs)
-    | LetJoin (result, rhs, next) when not stable && index_expression rhs && not (live rhs) ->
-        Option.map (fun next -> LetJoin (result, rhs, next)) (fuse next)
-    | If (cond, yes, no) when uses cond && not (live yes || live no) ->
-        Some (If (substitute cond, yes, no))
-    | If (cond, yes, no) when not stable ->
-        (* A constructor test can lead to a payload read on either edge.
-           Each path must preserve the field until its last projected use. *)
-        let arm expr = if live expr then fuse expr else Some expr in
-        (match arm yes, arm no with
-         | Some yes, Some no -> Some (If (substitute cond, yes, no))
-         | _ -> None)
-    | ScalarIf (rep, cond, yes, no) when uses cond && not (live yes || live no) ->
-        Some (ScalarIf (rep, substitute cond, yes, no))
-    | Switch (scrut, sw)
-      when switch_read scrut (sw.consts @ sw.blocks) sw.fail ->
-        Some (Switch (substitute scrut, sw))
-    | StringSwitch (scrut, arms, fail) when switch_read scrut arms fail ->
-        Some (StringSwitch (substitute scrut, arms, fail))
-    | _ -> None
-  in
-  fuse body
-
-(* A view may read or update the object reached through an immutable
-   projection. It cannot transfer the pointer or expose it to a closure or
-   call with an unknown ownership convention. *)
-let field_is_read_only_in_loop id body =
-  let open Anf in
-  let uses a = Ident.Set.mem id (atom_vars a) in
-  let closure_uses lf = Ident.Set.mem id (Anf.free_vars lf.body) in
-  let read_in_loop = ref false in
-  let note inside used = if inside && used then read_in_loop := true in
-  let safe_ce inside ce =
-    let read, take = atom_operands ce in
-    let reads_view = Ident.Set.mem id read in
-    note inside reads_view;
-    not (List.exists uses take)
-    && match ce with
-       | Fun lf -> not (closure_uses lf)
-       | App _ | DirectApp _ | Ccall _ | NativeCcall _ -> not reads_view
-       | _ -> true
-  in
-  let rec scan inside = function
-    | Halt a | Raise a -> not (uses a)
-    | HaltScalar _ | Unwind -> true
-    | StaticRaise (_, args) -> not (List.exists uses args)
-    | Let (_, ce, body) | MutLet (_, ce, body) -> safe_ce inside ce && scan inside body
-    | LetRec (defs, body) ->
-        List.for_all (fun (rb : Anf.rec_binding) -> not (closure_uses rb.def)) defs
-        && scan inside body
-    | LetJoin (_, a, b) | TryWith (a, _, b) | StaticCatch (a, _, _, b, _) ->
-        scan inside a && scan inside b
-    | If (cond, yes, no) | ScalarIf (_, cond, yes, no) ->
-        note inside (uses cond);
-        scan inside yes && scan inside no
-    | While (cond, body) -> scan true cond && scan true body
-    | For (_, lo, hi, _, body) ->
-        note inside (uses lo || uses hi);
-        scan true body
-    | Switch (scrut, sw) ->
-        note inside (uses scrut);
-        cases inside sw.consts sw.fail && cases inside sw.blocks None
-    | StringSwitch (scrut, arms, fail) ->
-        note inside (uses scrut);
-        cases inside arms fail
-    | _ -> false
-  and cases : 'a. bool -> ('a * aexpr) list -> aexpr option -> bool =
-    fun inside arms fail ->
-      List.for_all (fun (_, arm) -> scan inside arm) arms
-      && Option.fold ~none:true ~some:(scan inside) fail
-  in
-  scan false body && !read_in_loop
-
-(* A snapshot can share the slot's owner if every use precedes a possible
-   overwrite on its path. A loop may revisit a read after any of its writes. *)
-let read_only_slot_snapshot slot id body =
-  let open Anf in
-  let uses atom = Ident.Set.mem id (atom_vars atom) in
-  let no_access = Some (false, false) in
-  let merge ~ordered a b =
-    match a, b with
-    | Some (read_a, write_a), Some (read_b, write_b)
-      when not (ordered && write_a && read_b) ->
-        Some (read_a || read_b, write_a || write_b)
-    | _ -> None
-  in
-  let sequence = merge ~ordered:true and alternate = merge ~ordered:false in
-  let operation ce =
-    let borrowed, consumed = atom_operands ce in
-    if List.exists uses consumed then None
-    else
-      match ce with
-      | Fun lf when Ident.Set.mem id (Anf.free_vars lf.body) -> None
-      | Assign (target, _) | AssignImm (target, _) | AssignScalar (target, _, _) ->
-          Some (Ident.Set.mem id borrowed, Ident.same target slot)
-      | _ -> Some (Ident.Set.mem id borrowed, false)
-  in
-  let reads atom = Some (uses atom, false) in
-  let repeated = function Some (true, true) -> None | access -> access in
-  let rec scan = function
-    | Halt a | Raise a -> if uses a then None else no_access
-    | StaticRaise (_, args) -> if List.exists uses args then None else no_access
-    | HaltScalar _ | Unwind -> no_access
-    | Let (_, ce, body) | MutLet (_, ce, body) -> sequence (operation ce) (scan body)
-    | LetJoin (_, a, b) | TryWith (a, _, b) | StaticCatch (a, _, _, b, _) ->
-        sequence (scan a) (scan b)
-    | LetRec (defs, body) ->
-        if List.exists (fun (rb : rec_binding) -> Ident.Set.mem id (free_vars rb.def.body)) defs
-        then None else scan body
-    | If (cond, yes, no) | ScalarIf (_, cond, yes, no) ->
-        sequence (reads cond) (alternate (scan yes) (scan no))
-    | While (cond, body) -> repeated (sequence (scan cond) (scan body))
-    | For (_, lo, hi, _, body) ->
-        sequence (Some (uses lo || uses hi, false)) (repeated (scan body))
-    | Switch (scrutinee, sw) ->
-        sequence (reads scrutinee) (alternate (cases sw.consts sw.fail) (cases sw.blocks None))
-    | StringSwitch (scrutinee, arms, fail) ->
-        sequence (reads scrutinee) (cases arms fail)
-    | _ -> None
-  and cases : 'a. ('a * aexpr) list -> aexpr option -> (bool * bool) option =
-    fun arms fail ->
-      List.fold_left (fun acc (_, arm) -> alternate acc (scan arm))
-        (Option.fold ~none:no_access ~some:scan fail) arms
-  in
-  Option.is_some (scan body)
-
-(* Every branch must leave the result owned by the same slot. A lazy option
-   can also establish ownership of the result through its immutable payload. *)
-let mutable_slot_result snapshots body =
-  let open Anf in
-  let read_slot snapshots = function
-    | MutVar slot -> Some slot
-    | Var value -> Ident.Map.find_opt value snapshots
-    | _ -> None in
-  let keep construct = Option.map (fun (slot, field, body) -> slot, field, construct body) in
-  let rec scan snapshots = function
-    | Halt value -> Option.map (fun slot -> slot, None, Halt Unit) (read_slot snapshots value)
-    | Let (id, (Assign (slot, Var value) as assign), Halt (Var result))
-      when Ident.same value result ->
-        Some (slot, None, Let (id, assign, Halt Unit))
-    | Let (box, (MakeBlock (0, _, [Var value]) as make),
-        Let (id, (Assign (slot, Var stored) as assign), Halt (Var result)))
-      when Ident.same box stored && Ident.same value result ->
-        Some (slot, Some 0, Let (box, make, Let (id, assign, Halt Unit)))
-    | Let (id, Field (0, Immutable_field, owner), Halt (Var result))
-      when Ident.same id result ->
-        Option.map (fun slot -> slot, Some 0, Halt Unit) (read_slot snapshots owner)
-    | Let (id, ce, body) ->
-        let snapshots =
-          match ce with
-          | Atom value -> Option.fold ~none:snapshots
-              ~some:(fun slot -> Ident.Map.add id slot snapshots) (read_slot snapshots value)
-          | Assign (slot, _) | AssignImm (slot, _) | AssignScalar (slot, _, _) ->
-              Ident.Map.filter (fun _ owner -> not (Ident.same owner slot)) snapshots
-          | _ -> snapshots in
-        keep (fun body -> Let (id, ce, body)) (scan snapshots body)
-    | LetJoin (id, rhs, body) ->
-        keep (fun body -> LetJoin (id, rhs, body)) (scan Ident.Map.empty body)
-    | If (cond, yes, no) ->
-        (match scan snapshots yes, scan snapshots no with
-         | Some (slot, field, yes), Some (other, other_field, no)
-           when Ident.same slot other && field = other_field ->
-             Some (slot, field, If (cond, yes, no))
-         | _ -> None)
-    | _ -> None
-  in
-  scan snapshots body
-
 let rec restore_borrowed pairs consumed =
   match pairs, consumed with
   | [], [] -> []
@@ -788,155 +159,10 @@ let rec restore_borrowed pairs consumed =
   | (false, _) :: rest, a :: remaining -> a :: restore_borrowed rest remaining
   | _ -> assert false
 
-let is_yielding_ccall name = (Ccalls.find name).Ccalls.yields
-
-let operation_can_raise ~finalizers known raising = function
-  | Anf.App (Var fn, args) ->
-      (match Ident.Map.find_opt fn known with
-       | Some arity when List.compare_length_with args arity = 0 -> Ident.Set.mem fn raising
-       | _ -> true)
-  | App _ -> true
-  | DirectApp (target, _) ->
-      target.raises = May_raise || (finalizers && target.raises = Finalizer_raise)
-  | Binop ((Div | Mod), _, Int n) when n <> 0 -> false
-  | Binop ((Div | Mod | Bint_arith (_, (Div_int | Rem_int))), _, _)
-  | IntegerBinop (_, (Div_int | Rem_int), _, _) -> true
-  | StringGet (true, _, _)
-  | BytesSet (true, _, _, _)
-  | BytesGetN (true, _, _, _)
-  | BytesSetN (true, _, _, _, _)
-  | ArrayGet (true, _, _, _)
-  | FloatArrayGet (true, _, _) | FloatArraySet (true, _, _, _)
-  | ArraySet (true, _, _, _, _)
-  | CreateBytes _ | MakeArrayInit _ ->
-      true
-  (* The current Bigarray helpers check bounds even for unsafe accesses. *)
-  | BigarrayAccess _ | ScalarLoad _ | ScalarStore _ -> true
-  | PollFinalizers | Ccall ("ocamlcc_poll_finalizers", []) -> finalizers
-  | Ccall (name, _) -> (Ccalls.find name).Ccalls.raises
-  | NativeCcall (prim, _) -> prim.prim_alloc
-  | _ -> false
-
-let call_can_suspend known yielding = function
-  | Anf.Ccall (name, _) -> is_yielding_ccall name
-  | DirectApp (target, _) -> target.yields
-  | App (Var fn, args) ->
-      (match Ident.Map.find_opt fn known with
-      | Some arity ->
-          List.length args > arity || Ident.Set.mem fn yielding
-      | None -> true)
-  | App _ -> true
-  | _ -> false
-
-let is_yielding_ce env = call_can_suspend env.known_funs env.yielding_funs
-
-let can_raise_with operation =
-  let rec scan (e : Anf.aexpr) =
-    match e with
-    | Halt _ | HaltScalar _ | Unwind | StaticRaise _ -> false
-    | Raise _ -> true
-    | Let (_, ce, body) | MutLet (_, ce, body) ->
-        operation ce || scan body
-    | LetRec (_, body)
-    | Retain (_, body)
-    | Release (_, body)
-    | ReleaseMut (_, body)
-    | DropReuse (_, _, body)
-    | FreeReuse (_, body)
-    | ShadowPush (_, _, _, body)
-    | ShadowPop (_, _, body) ->
-        scan body
-    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (_, a, b) | While (a, b) ->
-        scan a || scan b
-    | For (_, _, _, _, body) -> scan body
-    | Switch (_, sw) ->
-        List.exists (fun (_, arm) -> scan arm) sw.consts
-        || List.exists (fun (_, arm) -> scan arm) sw.blocks
-        || Option.fold ~none:false ~some:scan sw.fail
-    | StringSwitch (_, cases, fail) ->
-        List.exists (fun (_, arm) -> scan arm) cases
-        || Option.fold ~none:false ~some:scan fail
-    | StaticCatch (body, _, _, handler, _) ->
-        scan body || scan handler
-    | TryWith (_, _, handler) -> scan handler
-  in
-  scan
-
-let compute_call_info (e : Anf.aexpr) =
-  let funs : (Ident.t * Anf.lfunction) list ref = ref [] in
-  let rec collect = function
-    | Anf.Let (id, Fun lf, body) ->
-        funs := (id, lf) :: !funs;
-        collect lf.body;
-        collect body
-    | Let (_, _, body) | MutLet (_, _, body) | For (_, _, _, _, body)
-    | Retain (_, body) | Release (_, body) | ReleaseMut (_, body)
-    | DropReuse (_, _, body) | FreeReuse (_, body)
-    | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
-        collect body
-    | LetRec (bindings, body) ->
-        List.iter
-          (fun (rb : Anf.rec_binding) ->
-            funs := (rb.id, rb.def) :: !funs;
-            collect rb.def.body)
-          bindings;
-        collect body
-    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (_, a, b) | While (a, b)
-    | StaticCatch (a, _, _, b, _) | TryWith (a, _, b) ->
-        collect a;
-        collect b
-    | Switch (_, sw) ->
-        List.iter (fun (_, arm) -> collect arm) sw.consts;
-        List.iter (fun (_, arm) -> collect arm) sw.blocks;
-        Option.iter collect sw.fail
-    | StringSwitch (_, cases, fail) ->
-        List.iter (fun (_, arm) -> collect arm) cases;
-        Option.iter collect fail
-    | Halt _ | HaltScalar _ | StaticRaise _ | Raise _ | Unwind -> ()
-  in
-  collect e;
-  let known =
-    List.fold_left (fun acc (id, (lf : Anf.lfunction)) ->
-      Ident.Map.add id (List.length lf.params) acc) Ident.Map.empty !funs
-  in
-  let ce_yields = call_can_suspend known in
-  let rec body_yields yielding = function
-    | Anf.Let (_, ce, body) | MutLet (_, ce, body) ->
-        ce_yields yielding ce || body_yields yielding body
-    | LetRec (_, body) | For (_, _, _, _, body)
-    | Retain (_, body) | Release (_, body) | ReleaseMut (_, body)
-    | DropReuse (_, _, body) | FreeReuse (_, body)
-    | ShadowPush (_, _, _, body) | ShadowPop (_, _, body) ->
-        body_yields yielding body
-    | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b) | CheckExn (_, a, b) | While (a, b)
-    | StaticCatch (a, _, _, b, _) | TryWith (a, _, b) ->
-        body_yields yielding a || body_yields yielding b
-    | Switch (_, sw) ->
-        List.exists (fun (_, arm) -> body_yields yielding arm) sw.consts
-        || List.exists (fun (_, arm) -> body_yields yielding arm) sw.blocks
-        || Option.fold ~none:false ~some:(body_yields yielding) sw.fail
-    | StringSwitch (_, cases, fail) ->
-        List.exists (fun (_, arm) -> body_yields yielding arm) cases
-        || Option.fold ~none:false ~some:(body_yields yielding) fail
-    | Halt _ | HaltScalar _ | StaticRaise _ | Raise _ | Unwind -> false
-  in
-  let solve body_has_effect =
-    let rec fix effects =
-      let next = List.fold_left (fun acc (id, (lf : Anf.lfunction)) ->
-        if Ident.Set.mem id acc || not (body_has_effect acc lf.body) then acc
-        else Ident.Set.add id acc) effects !funs
-      in
-      if Ident.Set.equal effects next then next else fix next
-    in
-    fix Ident.Set.empty
-  in
-  let body_raises ~finalizers raising =
-    can_raise_with (operation_can_raise ~finalizers known raising) in
-  known, solve body_yields, solve (body_raises ~finalizers:true),
-  solve (body_raises ~finalizers:false)
+let is_yielding_ce env = call_can_suspend env.facts.known_funs env.facts.yielding
 
 let ce_may_raise env =
-  operation_can_raise ~finalizers:true env.known_funs env.raising_funs
+  operation_can_raise ~finalizers:true env.facts.known_funs env.facts.raising
 
 let exception_check env ce =
   (* Dispatch itself already sits behind the due check. The sticky guard
@@ -944,7 +170,7 @@ let exception_check env ce =
      is an automatic poll, including one that drained the registry. *)
   match ce with
   | Anf.PollFinalizers | Ccall ("ocamlcc_poll_finalizers", []) -> Anf.May_raise
-  | _ when operation_can_raise ~finalizers:false env.known_funs env.ordinary_raising_funs ce ->
+  | _ when operation_can_raise ~finalizers:false env.facts.known_funs env.facts.ordinary_raising ce ->
       May_raise
   | _ -> Finalizer_raise
 let can_raise env = can_raise_with (ce_may_raise env)
@@ -995,105 +221,28 @@ let handler_live_vars (env : state) (e : Anf.aexpr) : Ident.Set.t =
   let ids = reachable_raises e in
   IntSet.fold
     (fun id acc ->
-      match Hashtbl.find_opt env.handlers id with
-      | Some (ho, _, _) -> Ident.Set.union acc ho
+      match Exn_frame.handler id env.exn with
+      | Some handler -> Ident.Set.union acc handler.owned
       | None -> acc)
     ids Ident.Set.empty
 
 let keep_view_owners env vars =
-  if Ident.Map.is_empty env.view_owners then vars
+  if Ident.Map.is_empty env.scope.view_owners then vars
   else
     Ident.Set.fold (fun id live ->
-      match Ident.Map.find_opt id env.view_owners with
+      match Ident.Map.find_opt id env.scope.view_owners with
       | Some owners -> Ident.Set.union owners live
       | None -> live) vars vars
 
 let live_with_handlers (env : state) (e : Anf.aexpr) : Ident.Set.t =
   keep_view_owners env (Ident.Set.union (Anf.free_vars e) (handler_live_vars env e))
 
-(* Each live reuse token is shadowed until the protected call returns.
-   Already-inserted token cleanups may wrap the same error-side pop. *)
-let rec add_reuse_to_pop = function
-  | Anf.ShadowPop (nv, nr, body) -> Some (Anf.ShadowPop (nv, nr + 1, body))
-  | FreeReuse (tok, body) ->
-      Option.map (fun body -> Anf.FreeReuse (tok, body)) (add_reuse_to_pop body)
-  | _ -> None
-
-let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
-    Anf.aexpr option =
-  match e with
-  | Let (res, MakeBlock (tag, scan, (_ :: _ as args)), next) when not in_shadow ->
-      Some (Let (res, AllocReuse ({ primary = tok; fallback = None }, tag, scan, args), next))
-  | Let (res, (AllocReuse (reuse, tag, scan, args) as ce), next) -> (
-      match inject_reuse ~in_shadow tok next with
-      | Some next -> Some (Let (res, ce, next))
-      | None when not in_shadow && Option.is_none reuse.fallback ->
-          Some (Let (res, AllocReuse ({ reuse with fallback = Some tok }, tag, scan, args), next))
-      | None -> None)
-  | Let (x, ((Atom _ | Binop _ | IntSelect _ | Unop _ | Field _ | SetField _
-             | FloatField _ | SetFloatField _ | SetBoxedFloatField _ | OffsetRef _
-             | StringGet _ | BytesSet _ | BytesGetN _ | BytesSetN _ | Bswap16 _ | BswapBint _ | ArrayGet _ | ArraySet _
-             | CreateBytes _ | MakeArrayInit _ | MakeArray _ | App _ | DirectApp _
-             | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
-             | FloatArrayGet _ | FloatArraySet _ | FloatSign _ | FloatCompare _
-             | FloatOfInt _ | IntOfFloat _ | BoxScalar _
-             | ScalarLoad _ | ScalarStore _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
-             | Builtin _ | BigarrayAccess _ | Ccall _ | NativeCcall _ | GetGlobal _ | Assign _ | AssignImm _
-             | ReadScalarSlot _ | AssignScalar _
-             | MakeBlock (_, _, [])) as ce), body) -> (
-      match inject_reuse ~in_shadow tok body with
-      | Some body' -> Some (Let (x, ce, body'))
-      | None -> None)
-  | CheckExn (exception_kind, on_err, on_ok) ->
-      let on_err = if in_shadow then add_reuse_to_pop on_err else Some on_err in
-      Option.bind on_err (fun on_err ->
-          Option.map
-            (fun on_ok -> Anf.CheckExn (exception_kind, FreeReuse (tok, on_err), on_ok))
-            (inject_reuse ~in_shadow tok on_ok))
-  | LetJoin (id, rhs, body) when not in_shadow ->
-      Option.map (fun rhs -> Anf.LetJoin (id, rhs, body)) (inject_reuse tok rhs)
-  | DropReuse (v, prior, body) ->
-      Option.map (fun body -> Anf.DropReuse (v, prior, body)) (inject_reuse ~in_shadow tok body)
-  | FreeReuse (prior, body) ->
-      Option.map (fun body -> Anf.FreeReuse (prior, body)) (inject_reuse ~in_shadow tok body)
-  | Retain (x, body) -> (
-      match inject_reuse ~in_shadow tok body with
-      | Some body' -> Some (Retain (x, body'))
-      | None -> None)
-  | Release (x, body) -> (
-      match inject_reuse ~in_shadow tok body with
-      | Some body' -> Some (Release (x, body'))
-      | None -> None)
-  | ReleaseMut (x, body) -> (
-      match inject_reuse ~in_shadow tok body with
-      | Some body' -> Some (ReleaseMut (x, body'))
-      | None -> None)
-  | ShadowPush (vs, ms, rtoks, body) when not in_shadow -> (
-      match inject_reuse ~in_shadow:true tok body with
-      | Some body' -> Some (ShadowPush (vs, ms, tok :: rtoks, body'))
-      | None -> None)
-  | ShadowPop (nv, nr, body) -> (
-      match inject_reuse ~in_shadow:false tok body with
-      | Some body' ->
-          let nr' = if in_shadow then nr + 1 else nr in
-          Some (ShadowPop (nv, nr', body'))
-      | None -> None)
-  | If (c, th, el) when not in_shadow -> (
-      match
-        (inject_reuse ~in_shadow tok th, inject_reuse ~in_shadow tok el)
-      with
-      | Some th', Some el' -> Some (If (c, th', el'))
-      | Some th', None -> Some (If (c, th', FreeReuse (tok, el)))
-      | None, Some el' -> Some (If (c, FreeReuse (tok, th), el'))
-      | None, None -> None)
-  | _ -> None
-
 let rec emit_drops_list (vars : Ident.t list) (cont : Anf.aexpr) : Anf.aexpr =
   match vars with
   | [] -> cont
   | v :: rest -> (
       let tok = Ident.create_local "reuse" in
-      match inject_reuse tok cont with
+      match Arc_views.inject_reuse tok cont with
       | Some cont' ->
           emit_drops_list rest (Anf.DropReuse (v, tok, cont'))
       | None -> Anf.Release (v, emit_drops_list rest cont))
@@ -1101,7 +250,7 @@ let rec emit_drops_list (vars : Ident.t list) (cont : Anf.aexpr) : Anf.aexpr =
 let emit_drops (env : state) (vars : Ident.Set.t) (cont : Anf.aexpr) : Anf.aexpr =
   let to_drop =
     Ident.Set.filter
-      (fun v -> not (Ident.Set.mem v env.imm || Ident.Set.mem v env.pure))
+      (fun v -> not (Ident.Set.mem v env.scope.imm || Ident.Set.mem v env.facts.pure))
       vars
     |> Ident.Set.elements
   in
@@ -1111,7 +260,7 @@ let emit_plain_drops (env : state) (vars : Ident.Set.t) (cont : Anf.aexpr) :
     Anf.aexpr =
   Ident.Set.fold
     (fun v acc ->
-      if Ident.Set.mem v env.imm || Ident.Set.mem v env.pure then acc
+      if Ident.Set.mem v env.scope.imm || Ident.Set.mem v env.facts.pure then acc
       else Anf.Release (v, acc))
     vars cont
 
@@ -1132,7 +281,7 @@ let prepare_consumed (env : state) ~(borrowed_also : Ident.Set.t)
             mat_binds := (tmp, a) :: !mat_binds;
             Anf.Var tmp
         | Var id ->
-            if not (Ident.Set.mem id env.imm || Ident.Set.mem id env.pure) then
+            if not (Ident.Set.mem id env.scope.imm || Ident.Set.mem id env.facts.pure) then
               Hashtbl.replace counts id
                 (1 + Option.value ~default:0 (Hashtbl.find_opt counts id));
             a
@@ -1140,7 +289,7 @@ let prepare_consumed (env : state) ~(borrowed_also : Ident.Set.t)
       atoms
   in
   let retains = ref [] in
-  let next_owned = ref env.owned in
+  let next_owned = ref env.scope.owned in
   Hashtbl.iter
     (fun id n ->
       let still_alive =
@@ -1171,9 +320,9 @@ let prepare_consumed (env : state) ~(borrowed_also : Ident.Set.t)
 
 let unwind_cleanup (env : state) (live_vars : Ident.Set.t)
     (live_muts : Ident.Set.t) : Anf.aexpr =
-  let all_vars = Ident.Set.union live_vars env.frame_borrowed in
-  let drop_vars = Ident.Set.diff all_vars env.try_owned in
-  let drop_muts = Ident.Set.diff live_muts env.try_muts in
+  let all_vars = Ident.Set.union live_vars env.scope.frame_borrowed in
+  let drop_vars = Ident.Set.diff all_vars env.exn.try_owned in
+  let drop_muts = Ident.Set.diff live_muts env.exn.try_muts in
   emit_plain_drops env drop_vars (emit_mut_releases drop_muts Anf.Unwind)
 
 let emit_shadowed_call (env : state) ~(ce : Anf.cexpr) ~(ce_may_raise : bool)
@@ -1183,12 +332,12 @@ let emit_shadowed_call (env : state) ~(ce : Anf.cexpr) ~(ce_may_raise : bool)
   let svars, smuts =
     if can_suspend then
       let vs =
-        Ident.Set.union rem_after_before env.frame_borrowed
+        Ident.Set.union rem_after_before env.scope.frame_borrowed
         |> Ident.Set.filter (fun v ->
-               not (Ident.Set.mem v env.imm || Ident.Set.mem v env.pure))
+               not (Ident.Set.mem v env.scope.imm || Ident.Set.mem v env.facts.pure))
         |> Ident.Set.elements
       in
-      (vs, Ident.Set.elements env.muts)
+      (vs, Ident.Set.elements env.scope.muts)
     else ([], [])
   in
   let n_shadow = List.length svars + List.length smuts in
@@ -1197,7 +346,7 @@ let emit_shadowed_call (env : state) ~(ce : Anf.cexpr) ~(ce_may_raise : bool)
   in
   let after_ce =
     if ce_may_raise && not is_pure_tail then
-      let on_err = unwind_cleanup env rem_after_before env.muts in
+      let on_err = unwind_cleanup env rem_after_before env.scope.muts in
       Anf.CheckExn (exception_check env ce, wrap_pop on_err, wrap_pop body_cont)
     else wrap_pop body_cont
   in
@@ -1216,33 +365,33 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
              scope here (muts introduced inside this region). *)
           let cont =
             emit_mut_releases
-              (Ident.Set.diff env.muts env.no_release_muts)
+              (Ident.Set.diff env.scope.muts env.scope.no_release_muts)
               cont
           in
           emit_drops env remaining_owned cont)
   | HaltScalar _ ->
-      let cont = emit_mut_releases (Ident.Set.diff env.muts env.no_release_muts) e in
-      emit_drops env env.owned cont
+      let cont = emit_mut_releases (Ident.Set.diff env.scope.muts env.scope.no_release_muts) e in
+      emit_drops env env.scope.owned cont
   | Raise a ->
       prepare_consumed env ~borrowed_also:Ident.Set.empty
-        ~live_after:env.try_owned [ a ] (fun remaining_owned atoms' ->
+        ~live_after:env.exn.try_owned [ a ] (fun remaining_owned atoms' ->
           let a' = match atoms' with [ x ] -> x | _ -> assert false in
           let drop_vars =
             Ident.Set.diff
-              (Ident.Set.union remaining_owned env.frame_borrowed)
-              env.try_owned
+              (Ident.Set.union remaining_owned env.scope.frame_borrowed)
+              env.exn.try_owned
           in
-          let drop_muts = Ident.Set.diff env.muts env.try_muts in
+          let drop_muts = Ident.Set.diff env.scope.muts env.exn.try_muts in
           emit_plain_drops env drop_vars
             (emit_mut_releases drop_muts (Anf.Raise a')))
   | Unwind | CheckExn _ | Retain _ | Release _ | ReleaseMut _
   | DropReuse _ | FreeReuse _ | ShadowPush _ | ShadowPop _ ->
       e
   | Let (id, Fun lf, body) ->
-      if Ident.Set.mem id env.pure then
+      if Ident.Set.mem id env.facts.pure then
         let lf' = transform_fun env ~self_id:None ~has_closure:false lf in
         let read_only =
-          if Ident.Set.mem id env.yielding_funs then Ident.Set.empty
+          if Ident.Set.mem id env.facts.yielding then Ident.Set.empty
           else read_only_parameters ~borrowed:(borrowed_flags env) lf
         in
         let body' =
@@ -1250,7 +399,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           else
             let worker, env_body = add_borrowed_entry env id (borrow_flags lf read_only) in
             let body' = transform_aexpr env_body body in
-            let exported = Ident.Set.mem id env.exported in
+            let exported = Ident.Set.mem id env.facts.exported in
             if exported || Ident.Set.mem worker (Anf.free_vars body') then
               let worker_def =
                 transform_fun env ~self_id:None ~has_closure:false
@@ -1265,13 +414,13 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           Anf.free_vars lf.body
           |> Ident.Set.filter (fun v ->
                  not (List.exists (Ident.same v) (Anf.bound_parameters lf))
-                 && not (Ident.Set.mem v env.pure))
+                 && not (Ident.Set.mem v env.facts.pure))
         in
         let cap_atoms = List.map (fun v -> Anf.Var v) (Ident.Set.elements cap) in
         let lf' = transform_fun env ~self_id:None ~has_closure:true lf in
         let base_live = Ident.Set.remove id (live_with_handlers env body) in
         let live_after =
-          if can_raise env body then Ident.Set.union base_live env.try_owned
+          if can_raise env body then Ident.Set.union base_live env.exn.try_owned
           else base_live
         in
         prepare_consumed env ~borrowed_also:Ident.Set.empty ~live_after
@@ -1281,19 +430,20 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
               Ident.Set.add id (Ident.Set.diff remaining_owned dead_before)
             in
             let body' =
-              transform_aexpr { env with owned = owned_body } body
+              transform_aexpr { env with scope = { env.scope with owned = owned_body } } body
             in
             emit_drops env dead_before (Let (id, Fun lf', body')))
   | Let (id, (Field (index, ((Immutable_field | Mutable_field) as kind),
                      ((Var _ | BorrowedField _) as owner)) as ce), body) -> (
       let stable = kind = Immutable_field in
-      match fuse_field_read env ~stable id index owner body with
+      match Arc_views.fuse_field_read ~can_borrow:(can_borrow_arguments env)
+        ~borrowed_flags:(borrowed_flags env) ~yielding:env.facts.yielding ~stable id index owner body with
       | Some fused -> transform_aexpr env fused
-      | None when stable && field_is_read_only_in_loop id body ->
+      | None when stable && Arc_views.field_is_read_only_in_loop id body ->
           transform_view env id (Anf.BorrowedField (index, owner)) body
       | None -> transform_let env id ce body)
   | Let (id, Atom ((MutVar slot | BorrowedField (_, MutVar slot)) as source), body)
-    when Ident.Set.mem slot env.muts && read_only_slot_snapshot slot id body ->
+    when Ident.Set.mem slot env.scope.muts && Arc_views.read_only_slot_snapshot slot id body ->
       transform_view env id source body
   | Let (id, ce, body) -> transform_let env id ce body
   | MutLet (id, ce, body) ->
@@ -1306,7 +456,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       let borrowed_in_ce = keep_view_owners env borrowed_in_ce in
       let live_before_ce =
         Ident.Set.union base_live_body
-          (if ce_may_raise || can_raise env body then env.try_owned
+          (if ce_may_raise || can_raise env body then env.exn.try_owned
            else Ident.Set.empty)
       in
       let live_after = Ident.Set.union live_before_ce borrowed_in_ce in
@@ -1318,15 +468,16 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           let rem_after_before = Ident.Set.diff remaining_owned dead_before in
           let live_for_after_ce =
             Ident.Set.union base_live_body
-              (if can_raise env body then env.try_owned else Ident.Set.empty)
+              (if can_raise env body then env.exn.try_owned else Ident.Set.empty)
           in
           let dead_after = Ident.Set.diff rem_after_before live_for_after_ce in
           let live_for_body = Ident.Set.diff rem_after_before dead_after in
           let env_body =
             { env with
-              owned = live_for_body;
-              imm = set_imm env.imm id immediate;
-              muts = if immediate then env.muts else Ident.Set.add id env.muts }
+              scope = { env.scope with
+                owned = live_for_body;
+                imm = set_imm env.scope.imm id immediate;
+                muts = if immediate then env.scope.muts else Ident.Set.add id env.scope.muts } }
           in
           let body' = transform_aexpr env_body body in
           let body_with_dead_after = emit_drops env dead_after body' in
@@ -1337,9 +488,9 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           in
           emit_drops env dead_before node)
   | LetJoin (id, rhs, body) -> (
-      match mutable_slot_result env.slot_snapshots rhs with
+      match Arc_views.mutable_slot_result env.scope.slot_snapshots rhs with
       | Some (slot, field, rhs)
-        when Ident.Set.mem slot env.muts && read_only_slot_snapshot slot id body ->
+        when Ident.Set.mem slot env.scope.muts && Arc_views.read_only_slot_snapshot slot id body ->
           let ignored = Ident.create_local "slot_join" in
           let source = match field with
             | None -> Anf.MutVar slot
@@ -1354,7 +505,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
       in
       let all_pure =
         List.for_all
-          (fun (rb : Anf.rec_binding) -> Ident.Set.mem rb.id env.pure)
+          (fun (rb : Anf.rec_binding) -> Ident.Set.mem rb.id env.facts.pure)
           bindings
       in
       if all_pure then
@@ -1367,7 +518,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
               |> Ident.Set.filter (fun v ->
                      not (List.exists (Ident.same v) (Anf.bound_parameters rb.def))
                      && not (Ident.Set.mem v rec_ids)
-                     && not (Ident.Set.mem v env.pure))
+                     && not (Ident.Set.mem v env.facts.pure))
               |> Ident.Set.elements)
             bindings
         in
@@ -1382,9 +533,10 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
             (fun (rb : Anf.rec_binding) cap_outer ->
               let env_fun =
                 { env with
-                  borrowed =
-                    Ident.Set.union env.borrowed
-                      (Ident.Set.union rec_ids (Ident.Set.of_list cap_outer)) }
+                  scope = { env.scope with
+                    borrowed =
+                    Ident.Set.union env.scope.borrowed
+                      (Ident.Set.union rec_ids (Ident.Set.of_list cap_outer)) } }
               in
               { rb with
                 def =
@@ -1396,7 +548,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           Ident.Set.diff (live_with_handlers env body) rec_ids
         in
         let live_after =
-          if can_raise env body then Ident.Set.union base_live env.try_owned
+          if can_raise env body then Ident.Set.union base_live env.exn.try_owned
           else base_live
         in
         prepare_consumed env ~borrowed_also:Ident.Set.empty ~live_after
@@ -1407,7 +559,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
                 (Ident.Set.diff remaining_owned dead_before)
             in
             let body' =
-              transform_aexpr { env with owned = owned_body } body
+              transform_aexpr { env with scope = { env.scope with owned = owned_body } } body
             in
             emit_drops env dead_before (LetRec (bindings', body')))
   | If (cond, th, el) ->
@@ -1436,103 +588,107 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
           binders
       in
       let fv_handler =
-        if can_raise env handler then Ident.Set.union base_fh env.try_owned
+        if can_raise env handler then Ident.Set.union base_fh env.exn.try_owned
         else base_fh
       in
-      let handler_owned = Ident.Set.inter env.owned fv_handler in
+      let handler_owned = Ident.Set.inter env.scope.owned fv_handler in
       let handler_owned_list =
         List.fold_left
           (fun acc b -> if Ident.Set.mem b immediate then acc else Ident.Set.add b acc)
           handler_owned binders
       in
-      let target_live = Ident.Set.union handler_owned env.frame_borrowed in
-      Hashtbl.replace env.handlers hid (handler_owned, target_live, env.muts);
-      let body' = transform_aexpr env body in
-      Hashtbl.remove env.handlers hid;
+      let target_live = Ident.Set.union handler_owned env.scope.frame_borrowed in
+      let target =
+        { Exn_frame.Handler.owned = handler_owned;
+          live = target_live; muts = env.scope.muts }
+      in
+      let exn = Exn_frame.with_handler hid target env.exn in
+      let body' = transform_aexpr { env with exn } body in
       let dead_at_handler = Ident.Set.diff handler_owned fv_handler in
       let handler' =
         transform_aexpr
           { env with
-            owned = Ident.Set.diff handler_owned_list dead_at_handler;
-            imm = Ident.Set.union (Ident.Set.diff env.imm (Ident.Set.of_list binders)) immediate }
+            scope = { env.scope with
+              owned = Ident.Set.diff handler_owned_list dead_at_handler;
+              imm = Ident.Set.union (Ident.Set.diff env.scope.imm (Ident.Set.of_list binders)) immediate } }
           handler
       in
       StaticCatch (body', hid, binders, emit_drops env dead_at_handler handler', result_rep)
   | StaticRaise (hid, args) ->
       let target_owned, target_live, target_muts =
-        match Hashtbl.find_opt env.handlers hid with
-        | Some triple -> triple
-        | None -> (Ident.Set.empty, env.frame_borrowed, env.muts)
+        match Exn_frame.handler hid env.exn with
+        | Some { owned; live; muts } -> owned, live, muts
+        | None -> (Ident.Set.empty, env.scope.frame_borrowed, env.scope.muts)
       in
       prepare_consumed env ~borrowed_also:Ident.Set.empty
         ~live_after:target_owned args (fun remaining_owned args' ->
           let dead_vars =
             Ident.Set.diff
-              (Ident.Set.union remaining_owned env.frame_borrowed)
+              (Ident.Set.union remaining_owned env.scope.frame_borrowed)
               target_live
           in
-          let dead_muts = Ident.Set.diff env.muts target_muts in
+          let dead_muts = Ident.Set.diff env.scope.muts target_muts in
           emit_drops env dead_vars
             (emit_mut_releases dead_muts (StaticRaise (hid, args'))))
   | TryWith (body, exn_id, handler) ->
       let outer_needed =
-        if can_raise env handler then env.try_owned else Ident.Set.empty
+        if can_raise env handler then env.exn.try_owned else Ident.Set.empty
       in
       let fv_handler =
         Ident.Set.remove exn_id
           (Ident.Set.union (live_with_handlers env handler) outer_needed)
       in
-      let catch_owned = Ident.Set.inter env.owned fv_handler in
+      let catch_owned = Ident.Set.inter env.scope.owned fv_handler in
       let body_env =
-        { env with
-          try_owned = Ident.Set.union catch_owned env.frame_borrowed;
-          try_muts = env.muts;
-          try_depth = env.try_depth + 1;
-          in_tail = false }
+        { env with exn = Exn_frame.protect
+            ~owned:(Ident.Set.union catch_owned env.scope.frame_borrowed)
+            ~muts:env.scope.muts env.exn }
       in
       let body' = transform_aexpr body_env body in
       let handler_env =
-        { env with owned = Ident.Set.add exn_id catch_owned }
+        { env with scope = { env.scope with owned = Ident.Set.add exn_id catch_owned } }
       in
       let handler' = transform_aexpr handler_env handler in
       TryWith (body', exn_id, handler')
   | While (cond, body) ->
       let loop_env =
         { env with
-          owned = Ident.Set.empty;
-          frame_borrowed = Ident.Set.union env.frame_borrowed env.owned;
-          no_release_muts = env.muts;
-          in_tail = false }
+          scope = { env.scope with
+            owned = Ident.Set.empty;
+            frame_borrowed = Ident.Set.union env.scope.frame_borrowed env.scope.owned;
+            no_release_muts = env.scope.muts };
+          exn = Exn_frame.non_tail env.exn }
       in
       let cond' = transform_aexpr loop_env cond in
       let body' = transform_aexpr loop_env body in
-      if Ident.Set.is_empty env.owned && Ident.Set.is_empty env.muts then
+      if Ident.Set.is_empty env.scope.owned && Ident.Set.is_empty env.scope.muts then
         While (cond', body')
       else
         let u = Ident.create_local "wend" in
-        let dead_muts = Ident.Set.diff env.muts env.no_release_muts in
+        let dead_muts = Ident.Set.diff env.scope.muts env.scope.no_release_muts in
         let cont =
-          emit_drops env env.owned
+          emit_drops env env.scope.owned
             (emit_mut_releases dead_muts (Halt (Var u)))
         in
         LetJoin (u, While (cond', body'), cont)
   | For (idx, s, e, dir, body) ->
       let loop_env =
         { env with
-          owned = Ident.Set.empty;
-          frame_borrowed = Ident.Set.union env.frame_borrowed env.owned;
-          imm = Ident.Set.add idx env.imm;
-          no_release_muts = env.muts;
-          in_tail = false }
+          scope = { env.scope with
+            owned = Ident.Set.empty;
+            frame_borrowed = Ident.Set.union env.scope.frame_borrowed env.scope.owned;
+            imm = Ident.Set.add idx env.scope.imm;
+            no_release_muts = env.scope.muts };
+          exn = Exn_frame.non_tail env.exn }
       in
       let body' = transform_aexpr loop_env body in
-      if Ident.Set.is_empty env.owned && Ident.Set.is_empty env.muts then
+      if Ident.Set.is_empty env.scope.owned && Ident.Set.is_empty env.scope.muts then
         For (idx, s, e, dir, body')
       else
         let u = Ident.create_local "fend" in
-        let dead_muts = Ident.Set.diff env.muts env.no_release_muts in
+        let dead_muts = Ident.Set.diff env.scope.muts env.scope.no_release_muts in
         let cont =
-          emit_drops env env.owned
+          emit_drops env env.scope.owned
             (emit_mut_releases dead_muts (Halt (Var u)))
         in
         LetJoin (u, For (idx, s, e, dir, body'), cont)
@@ -1543,46 +699,49 @@ and transform_view env id source body =
      The view check ensures any use of this alias precedes an overwrite. *)
   let slot_snapshots =
     match source with
-    | Anf.MutVar slot -> Ident.Map.add id slot env.slot_snapshots
-    | _ -> env.slot_snapshots in
+    | Anf.MutVar slot -> Ident.Map.add id slot env.scope.slot_snapshots
+    | _ -> env.scope.slot_snapshots in
   let env =
-    { env with view_owners = Ident.Map.add id owners env.view_owners;
-               slot_snapshots } in
+    { env with
+      scope = { env.scope with
+        view_owners = Ident.Map.add id owners env.scope.view_owners;
+        slot_snapshots } } in
   let live = Ident.Set.union owners (live_with_handlers env body) in
-  let live = if can_raise env body then Ident.Set.union live env.try_owned else live in
-  let dead = Ident.Set.diff env.owned live in
-  let body = transform_aexpr { env with owned = Ident.Set.diff env.owned dead } body in
+  let live = if can_raise env body then Ident.Set.union live env.exn.try_owned else live in
+  let dead = Ident.Set.diff env.scope.owned live in
+  let body = transform_aexpr { env with scope = { env.scope with owned = Ident.Set.diff env.scope.owned dead } } body in
   emit_drops env dead (Let (id, Atom source, body))
 
 and transform_join env id rhs body : Anf.aexpr =
   let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
   let live_body_only =
-    if can_raise env body then Ident.Set.union base_live_body env.try_owned
+    if can_raise env body then Ident.Set.union base_live_body env.exn.try_owned
     else base_live_body
   in
   let live_rhs =
     Ident.Set.union (live_with_handlers env rhs)
-      (if can_raise env rhs then env.try_owned else Ident.Set.empty)
+      (if can_raise env rhs then env.exn.try_owned else Ident.Set.empty)
   in
-  let shared = Ident.Set.inter env.owned live_body_only in
-  let owned_rhs_only = Ident.Set.diff env.owned live_body_only in
+  let shared = Ident.Set.inter env.scope.owned live_body_only in
+  let owned_rhs_only = Ident.Set.diff env.scope.owned live_body_only in
   let dead_before = Ident.Set.diff owned_rhs_only live_rhs in
   let owned_for_rhs = Ident.Set.diff owned_rhs_only dead_before in
   let env_rhs =
     { env with
-      owned = owned_for_rhs;
-      frame_borrowed = Ident.Set.union env.frame_borrowed shared;
-      no_release_muts = env.muts;
-      in_tail = false }
+      scope = { env.scope with
+        owned = owned_for_rhs;
+        frame_borrowed = Ident.Set.union env.scope.frame_borrowed shared;
+        no_release_muts = env.scope.muts };
+      exn = Exn_frame.non_tail env.exn }
   in
   let rhs' = transform_aexpr env_rhs rhs in
   let imm =
-    if Ident.Set.mem id env.typed_imm || Anf.returns_scalar rhs
-       || aexpr_returns_imm ~typed_imm:env.typed_imm ~pure:env.pure ~imm_funs:env.imm_funs env.imm rhs
-    then Ident.Set.add id env.imm
-    else Ident.Set.remove id env.imm
+    if Ident.Set.mem id env.facts.typed_imm || Anf.returns_scalar rhs
+       || aexpr_returns_imm ~typed_imm:env.facts.typed_imm ~pure:env.facts.pure ~imm_funs:env.facts.imm_funs env.scope.imm rhs
+    then Ident.Set.add id env.scope.imm
+    else Ident.Set.remove id env.scope.imm
   in
-  let env_body = { env with owned = Ident.Set.add id shared; imm } in
+  let env_body = { env with scope = { env.scope with owned = Ident.Set.add id shared; imm } } in
   let body' = transform_aexpr env_body body in
   emit_drops env dead_before (LetJoin (id, rhs', body'))
 
@@ -1605,7 +764,7 @@ and transform_let env id ce body =
   let borrowed_in_ce = keep_view_owners env borrowed_in_ce in
   let live_before_ce =
     Ident.Set.union base_live_body
-      (if ce_may_raise || can_raise env body then env.try_owned
+      (if ce_may_raise || can_raise env body then env.exn.try_owned
        else Ident.Set.empty)
   in
   let live_after = Ident.Set.union live_before_ce borrowed_in_ce in
@@ -1619,31 +778,32 @@ and transform_let env id ce body =
       let rem_after_before = Ident.Set.diff remaining_owned dead_before in
       let live_for_after_ce =
         Ident.Set.union base_live_body
-          (if can_raise env body then env.try_owned else Ident.Set.empty)
+          (if can_raise env body then env.exn.try_owned else Ident.Set.empty)
       in
       let dead_after = Ident.Set.diff rem_after_before live_for_after_ce in
       let live_for_body = Ident.Set.diff rem_after_before dead_after in
-      let is_imm = Ident.Set.mem id env.typed_imm || is_imm_cexpr env ce in
+      let is_imm = Ident.Set.mem id env.facts.typed_imm || is_imm_cexpr env ce in
       let env_body =
         { env with
-          owned = Ident.Set.add id live_for_body;
-          imm =
-            (if is_imm then Ident.Set.add id env.imm
-             else Ident.Set.remove id env.imm) }
+          scope = { env.scope with
+            owned = Ident.Set.add id live_for_body;
+            imm =
+            (if is_imm then Ident.Set.add id env.scope.imm
+             else Ident.Set.remove id env.scope.imm) } }
       in
       let body' = transform_aexpr env_body body in
       let body_with_dead_after = emit_drops env dead_after body' in
       let is_pure_tail =
-        env.in_tail
+        env.exn.in_tail
         &&
         match body with
         | Halt (Var v) when Ident.same id v ->
-            env.try_depth = 0
+            env.exn.try_depth = 0
             && Ident.Set.is_empty
                  (Ident.Set.diff
-                    (Ident.Set.union rem_after_before env.frame_borrowed)
-                    env.try_owned)
-            && Ident.Set.is_empty (Ident.Set.diff env.muts env.try_muts)
+                    (Ident.Set.union rem_after_before env.scope.frame_borrowed)
+                    env.exn.try_owned)
+            && Ident.Set.is_empty (Ident.Set.diff env.scope.muts env.exn.try_muts)
             && Ident.Set.is_empty dead_after
         | _ -> false
       in
@@ -1657,15 +817,15 @@ and transform_let env id ce body =
 and transform_branch (env : state) (arm : Anf.aexpr) : Anf.aexpr =
   let base_live = live_with_handlers env arm in
   let live =
-    if can_raise env arm then Ident.Set.union base_live env.try_owned
+    if can_raise env arm then Ident.Set.union base_live env.exn.try_owned
     else base_live
   in
-  let dead = Ident.Set.diff env.owned live in
-  let arm' = transform_aexpr { env with owned = Ident.Set.diff env.owned dead } arm in
+  let dead = Ident.Set.diff env.scope.owned live in
+  let arm' = transform_aexpr { env with scope = { env.scope with owned = Ident.Set.diff env.scope.owned dead } } arm in
   emit_drops env dead arm'
 
 and transform_pure_group env (bindings : Anf.rec_binding list) body =
-  let plan = recursive_borrows env bindings in
+  let plan = recursive_borrows ~yielding:env.facts.yielding ~borrowed:(borrowed_flags env) bindings in
   let env, workers =
     List.fold_left
       (fun (env, workers) (rb : Anf.rec_binding) ->
@@ -1679,7 +839,7 @@ and transform_pure_group env (bindings : Anf.rec_binding list) body =
                 if borrow then Ident.Set.add param acc else acc)
               Ident.Set.empty rb.def.params flags
           in
-          env, (worker, params, { rb.def with private_entry = not (Ident.Set.mem rb.id env.exported) }) :: workers)
+          env, (worker, params, { rb.def with private_entry = not (Ident.Set.mem rb.id env.facts.exported) }) :: workers)
       (env, []) bindings
   in
   let bindings =
@@ -1719,12 +879,12 @@ and transform_fun (env : state) ~self_id ~has_closure
   in
   let free = Anf.free_vars lf.body in
   let borrowed =
-    if not has_closure then env.borrowed
+    if not has_closure then env.scope.borrowed
     else
       let captured =
         Ident.Set.filter
           (fun v ->
-            not (Ident.Set.mem v params_set) && not (Ident.Set.mem v env.pure))
+            not (Ident.Set.mem v params_set) && not (Ident.Set.mem v env.facts.pure))
           free
       in
       let captured =
@@ -1732,30 +892,20 @@ and transform_fun (env : state) ~self_id ~has_closure
         | Some s -> Ident.Set.add s captured
         | None -> captured
       in
-      Ident.Set.union env.borrowed captured
+      Ident.Set.union env.scope.borrowed captured
   in
   let owned_params = Ident.Set.diff params_set borrowed_params in
-  let fn_env =
-    { env with
-      owned = owned_params;
-      borrowed = Ident.Set.union borrowed borrowed_params;
-      frame_borrowed = Ident.Set.empty;
-      view_owners = Ident.Map.empty;
-      slot_snapshots = Ident.Map.empty;
-      muts = Ident.Set.empty;
-      no_release_muts = Ident.Set.empty;
-      handlers = Hashtbl.create 8;
-      imm = Ident.Set.union (Ident.Set.diff env.imm params_set) (imm_params_of lf);
-      try_owned = Ident.Set.empty;
-      try_muts = Ident.Set.empty;
-      try_depth = 0;
-      in_tail = true }
+  let scope =
+    { Scope.empty with
+      owned = owned_params; borrowed = Ident.Set.union borrowed borrowed_params;
+      imm = Ident.Set.union (Ident.Set.diff env.scope.imm params_set) (imm_params_of lf) }
   in
+  let fn_env = { env with scope; exn = Exn_frame.root } in
   let live_body = Anf.free_vars lf.body in
   let dead_params = Ident.Set.diff owned_params live_body in
   let body' =
     transform_aexpr
-      { fn_env with owned = Ident.Set.diff owned_params dead_params }
+      { fn_env with scope = { fn_env.scope with owned = Ident.Set.diff owned_params dead_params } }
       lf.body
   in
   { lf with body = emit_drops fn_env dead_params body' }
@@ -1780,52 +930,17 @@ and rebuild_cexpr (ce : Anf.cexpr) (atoms' : Anf.atom list) : Anf.cexpr =
   | _ -> ce
 
 let run_with_effects ?(exported = []) (prog : Anf.program) =
-  let pure =
-    Anf.pure_defs prog.code |> List.map fst |> Ident.Set.of_list
-  in
-  let known_funs, yielding_funs, raising_funs, ordinary_raising_funs =
-    compute_call_info prog.code in
-  let typed_imm =
-    Ident.Map.fold
-      (fun id kind acc -> if kind = Lambda.Pintval then Ident.Set.add id acc else acc)
-      prog.value_kinds Ident.Set.empty
-  in
-  let imm_funs = compute_imm_funs ~typed_imm ~pure prog.code in
+  let facts = Program_facts.analyze ~exported prog in
+  let exported_workers = Hashtbl.create 16 in
   let init_env =
-    { owned = Ident.Set.empty;
-      borrowed = Ident.Set.empty;
-      frame_borrowed = Ident.Set.empty;
-      view_owners = Ident.Map.empty;
-      slot_snapshots = Ident.Map.empty;
-      imm = Ident.Set.empty;
-      typed_imm;
-      pure;
-      known_funs;
-      yielding_funs;
-      raising_funs;
-      ordinary_raising_funs;
-      imm_funs;
-      borrowed_entries = Ident.Map.empty;
-      exported = List.fold_left (fun ids (_, id) -> Ident.Set.add id ids) Ident.Set.empty exported;
-      exported_workers = Hashtbl.create 16;
-      muts = Ident.Set.empty;
-      no_release_muts = Ident.Set.empty;
-      handlers = Hashtbl.create 8;
-      try_owned = Ident.Set.empty;
-      try_muts = Ident.Set.empty;
-      try_depth = 0;
-      in_tail = true }
-  in
-  let effects id =
-    let raises =
-      if Ident.Set.mem id ordinary_raising_funs then Anf.May_raise
-      else if Ident.Set.mem id raising_funs then Finalizer_raise
-      else No_raise in
-    Ident.Set.mem id yielding_funs, Ident.Map.mem id imm_funs, raises
+    { facts; scope = Scope.empty; exn = Exn_frame.root;
+      borrowed_entries = Ident.Map.empty; exported_workers }
   in
   let code = transform_aexpr init_env prog.code in
-  let workers id = Option.map (fun entry -> entry.worker, entry.borrow)
-      (Hashtbl.find_opt init_env.exported_workers id) in
-  { prog with code }, effects, workers
+  let workers id =
+    Option.map (fun entry -> entry.worker, entry.borrow)
+      (Hashtbl.find_opt exported_workers id)
+  in
+  { prog with code }, Program_facts.effects facts, workers
 
 let run prog = let prog, _, _ = run_with_effects prog in prog
