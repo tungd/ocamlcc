@@ -10,6 +10,19 @@
 #include <sys/resource.h>
 #include <zstd.h>
 
+#ifdef __linux__
+/* The ARC compiler uses the native stack for deeply nested IR traversals. */
+__attribute__((constructor)) static void reserve_compiler_stack(void)
+{
+    const rlim_t requested = 64u * 1024u * 1024u;
+    struct rlimit limit;
+    if (getrlimit(RLIMIT_STACK, &limit) != 0 || limit.rlim_cur >= requested)
+        return;
+    limit.rlim_cur = limit.rlim_max < requested ? limit.rlim_max : requested;
+    (void)setrlimit(RLIMIT_STACK, &limit);
+}
+#endif
+
 static int64_t tag_int(int64_t n) { return (int64_t)(((uint64_t)n << 1) | 1u); }
 
 int64_t caml_zstd_initialize(int64_t ignored)

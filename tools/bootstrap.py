@@ -584,6 +584,8 @@ def build_stage(
     # 5. Link the compiler executable
     bin_path = stage_dir / "occ"
     sys_libs = ["-lm", "-pthread"]
+    # Darwin reserves the initial stack from the Mach-O executable header.
+    stack_flags = ["-Wl,-stack_size,0x4000000"] if platform.system() == "Darwin" else []
     link_cmd = [
         "cc",
         *[str(o) for o in occ_objs],
@@ -595,6 +597,7 @@ def build_stage(
         str(rt_archive),
         *zstd_libs,
         *sys_libs,
+        *stack_flags,
         "-o",
         str(bin_path),
     ]

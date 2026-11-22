@@ -55,6 +55,12 @@ stack while compiling the generated compiler-libs parser when those branches
 shared the recursive dispatch frames. Replaying the same parser command
 succeeded after the split at the default macOS stack size.
 
+The native bootstrap compiler reserves a 64 MiB main stack on macOS.
+Its Linux compiler-only startup code raises the soft stack limit up to
+64 MiB within the existing hard limit. Compiling the compiler's C-call
+registry can exceed the default stack during ANF conversion. Executables
+that use the standalone ARC runtime keep their platform stack settings.
+
 # Compiler-only stubs & zstd isolation
 
 Matching upstream OCaml, `libzstd` is never compiled into or linked with

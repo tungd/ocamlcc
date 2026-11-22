@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Give the self-hosted compiler a larger native stack for deep ANF conversions. The ordinary ARC runtime keeps its platform stack limits. See [native compiler stack use](/concepts/self-hosting.md#native-compiler-stack-use).
+
 - 2026-11-22 (codex/1) — Keep ARC and QBE expression dispatcher frames small enough for the generated parser in a self-hosted build. Report native compiler signals in bootstrap diagnostics. See [native compiler stack use](/concepts/self-hosting.md#native-compiler-stack-use).
 
 - 2026-11-22 (codex/1) — Move ordered unit compilation and C header generation out of the driver. Keep output selection and build orchestration in a 263-line Driver. See [driver modules](/concepts/build-pipeline.md#driver-modules).
