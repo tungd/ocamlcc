@@ -1,0 +1,67 @@
+name: Toolchain release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: ubuntu-24.04
+            target: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang libcurl4-openssl-dev pkg-config python3
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja coreutils
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 5.5.x
+      - run: opam install -y dune
+      - name: Build and smoke-test the distribution
+        run: opam exec -- ninja -j1 ocpkg_test dist_smoke ocpkg_catalog
+      - uses: actions/upload-artifact@v4
+        with:
+          name: occ-${{ matrix.target }}
+          path: build/dist/occ-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    if: github.repository == 'tungd/ocamlcc'
+    needs: bundle
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: occ-*
+          path: release
+          merge-multiple: true
+      - name: Generate release checksums
+        working-directory: release
+        run: sha256sum occ-darwin-arm64.tar.gz occ-linux-x86_64.tar.gz occ-linux-arm64.tar.gz > SHA256SUMS
+      - name: Publish tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/*.tar.gz release/SHA256SUMS tools/install.sh --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes release/*.tar.gz release/SHA256SUMS tools/install.sh
+          fi

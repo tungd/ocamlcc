@@ -36,13 +36,50 @@ C
 case "$(uname -s)" in Darwin) shared=libcounter.dylib;; *) shared=libcounter.so;; esac
 for flavor in shared static; do
     case "$flavor" in shared) library=$shared;; static) library=libcounter.a;; esac
-    "$runner" build --target host "--$flavor" -o "$library"
-    cc -I "$PWD" host.c "$PWD/$library" -lm -pthread -o "$flavor-host"
+    "$runner" build --target host "--$flavor" --emit-header "public headers/libcounter.h" -o "$library"
+    cc -I "$PWD/public headers" host.c "$PWD/$library" -lm -pthread -o "$flavor-host"
     test "$("./$flavor-host")" = 42
-    "$runner" build --target host "--$flavor" -v -o "$library" > "$flavor.out" 2> "$flavor.log"
+    "$runner" build --target host "--$flavor" --emit-header "public headers/libcounter.h" -v -o "$library" > "$flavor.out" 2> "$flavor.log"
     if grep -q '^+ ' "$flavor.log"; then
         cat "$flavor.log" >&2
         exit 1
     fi
 done
 echo 'native ocpkg library outputs: PASS'
+
+mkdir -p native support src-bin
+printf 'external value : unit -> int = "fixture_value"\n' > native/fixture.ml
+printf 'int support_value(void);\n' > native/fixture.h
+cat > native/fixture.c <<'C'
+#include <stdint.h>
+#include <fixture.h>
+int64_t fixture_value(int64_t arg) {
+    (void)arg;
+    return (support_value() + OFFSET) * 2 + 1;
+}
+C
+printf 'int support_value(void) { return 41; }\n' > support/value.c
+cc -c support/value.c -o support/value.o
+ar rcs support/libocpkgfixture.a support/value.o
+cat >> fixture.snap <<'SNAP'
+pkg fixture 1
+  local native
+  tree 31810d40246d18c6925da30b33116ff703522e1407587337c7370c23509946f1
+  file fixture.ml <= fixture.ml
+  file fixture.c <= fixture.c
+  file fixture.h <= fixture.h
+  cflag -DOFFSET=1
+  ldflag -L./support
+  ldflag -locpkgfixture
+SNAP
+cat > ocpkg.mod <<'MOD'
+module native
+entry src-bin/main.ml
+source src-bin
+snapshot fixture.snap
+MOD
+printf 'let () = print_int (Fixture.value ())\n' > src-bin/main.ml
+"$runner" add fixture
+mv fixture.snap fixture.old.snap
+test "$("$runner" run)" = 42
+echo 'native ocpkg recipe C and linker flags: PASS'

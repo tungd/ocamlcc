@@ -5,19 +5,43 @@ builds projects offline. The catalog pins release archives by SHA-256 and
 records the digest of each extracted source tree. The default cache lives in
 `~/.cache/ocpkg`. Set `OCPKG_CACHE` to choose another cache.
 
-Use `ocpkg init` to create a project. `ocpkg add NAME [VERSION]` pins and
-vendors a package from the snapshot. Commit `ocpkg.mod` and `ocpkg.lock`
-alongside the project sources. `ocpkg vendor --offline` restores packages
-from the archive cache, and `ocpkg verify` detects edited, added, or missing
-files and rejects symlinks in vendored trees. `ocpkg tidy` updates the lock
-from the manifest. `ocpkg query` lists the locked closure.
+Use `ocpkg init` to create a project. `ocpkg add NAME[@VERSION] ...` pins and
+vendors packages from the snapshot. `ocpkg remove NAME ...` drops direct
+requirements and unused vendor trees. `ocpkg upgrade [NAME ...]` refreshes
+the selected direct dependencies or all direct dependencies when given no
+names. `ocpkg tidy` regenerates the lock from the manifest and the current
+snapshot. `ocpkg query` lists the locked closure.
+
+Commit `ocpkg.mod` and `ocpkg.lock` alongside the project sources. The lock
+contains the recipes used by `build`, `run`, `test`, and `vendor --offline`,
+so installing a newer toolchain snapshot leaves the locked selection usable.
+Offline vendoring restores missing packages from cached archives or the
+local sources recorded by the lock. `ocpkg verify` recomputes vendor tree
+hashes and rejects symlinks in vendored trees.
 
 `ocpkg build` uses the local vendor tree. It keeps compiled dependency
 archives and export metadata in the shared cache and workspace units in
-`.ocpkg/cache/unit/`. `ocpkg run -- args` runs the application. `ocpkg test`
-runs the test entries declared in the manifest. The
-[package catalog concept](../.okf/concepts/package-catalog.md) describes the
-formats and build inputs.
+`.ocpkg/cache/unit/`. Warm builds reuse SHA-256 digests for files whose stat
+metadata matches. `ocpkg build --verify-cache` rehashes the inputs and
+cached artifacts it checks. `ocpkg clean` clears local build artifacts, and
+`ocpkg clean --global` clears the shared compiled artifacts, stat index, and
+downloaded archives. `ocpkg version` prints the tool version.
+
+`ocpkg run -- args` runs the application. `ocpkg test [NAME ...] -- args`
+forwards arguments to the selected tests and prints the result count. Use
+`ocpkg build --static --emit-header PATH` for C bindings, or
+`ocpkg build --xcframework` on macOS with the Xcode iOS SDKs to package
+device and simulator libraries. Recipes can list staged C sources and
+headers, repeat `cflag` for compiler arguments, and repeat `ldflag` for
+executable and shared-library linker arguments. Each directive contains a
+single argument. [Package formats and build inputs](../.okf/concepts/package-catalog.md)
+
+## Daily-use packages
+
+The default snapshot also includes Astring, Base64, Bytesrw, Fmt, Jsonm,
+Logs, Re, and Uutf. `ninja -j1 ocpkg_catalog` vendors these packages into a
+clean workspace, builds an executable using their public APIs, and runs its
+manifest test. Fmt and Logs include their core libraries.
 
 ## Crunch 4.1.0
 

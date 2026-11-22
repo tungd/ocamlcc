@@ -29,7 +29,7 @@ links into the concepts below.
 
 | [/concepts/stdlib-compatibility.md](/concepts/stdlib-compatibility.md) | stable | Upstream stdlib overlays and native test execution. |
 
-| [/concepts/package-catalog.md](/concepts/package-catalog.md) | draft | Curated package sources, vendoring and generated rules; ocaml-crunch MVP. |
+| [/concepts/package-catalog.md](/concepts/package-catalog.md) | draft | Locked package recipes, verified vendoring, incremental builds, and standalone bundles. |
 | [/concepts/self-hosting.md](/concepts/self-hosting.md) | draft | Stage 0 -> Stage 1 -> Stage 2 self-hosted bootstrap and compiler-only stubs. |
 
 ## Maintenance

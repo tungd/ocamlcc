@@ -5,7 +5,12 @@ build_dir=build
 dist="$build_dir/dist"
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 arch=$(uname -m)
+case "$arch" in aarch64) arch=arm64 ;; esac
 output="$dist/occ-$os-$arch.tar.gz"
+if [ "${1:-}" = --path ]; then
+    printf '%s\n' "$output"
+    exit 0
+fi
 mkdir -p "$dist"
 stage=$(mktemp -d "$dist/.stage.XXXXXXXX")
 trap 'rm -rf "$stage"' EXIT
@@ -24,6 +29,15 @@ cp -R packages/ports/crunch-unix "$lib/ports/"
 mkdir -p "$prefix/share/doc/occ"
 install -m 644 vendor/qbe/LICENSE "$prefix/share/doc/occ/qbe-LICENSE"
 install -m 644 vendor/ocaml-stdlib/LICENSE "$prefix/share/doc/occ/ocaml-LICENSE"
+(
+    cd "$prefix"
+    if command -v sha256sum >/dev/null 2>&1; then
+        find bin lib/occ -type f -exec sha256sum {} +
+    else
+        find bin lib/occ -type f -exec shasum -a 256 {} +
+    fi
+) > "$stage/toolchain.sha256"
+mv "$stage/toolchain.sha256" "$lib/toolchain.sha256"
 COPYFILE_DISABLE=1 tar -C "$prefix" -czf "$stage/bundle.tar.gz" .
 mv "$stage/bundle.tar.gz" "$output"
 printf '%s\n' "$output"

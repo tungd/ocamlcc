@@ -78,5 +78,6 @@ let () =
     let catalog = In_channel.with_open_bin Sys.argv.(1) In_channel.input_all in
     let packages = require (parse_snapshot catalog) in
     let names = List.map (fun package -> Package_name.to_string package.package.name) packages in
-    assert (names = ["cmdliner"; "crunch"; "crunch-unix"; "ptime"])
+    assert (names = ["astring"; "base64"; "bytesrw"; "cmdliner"; "crunch"; "crunch-unix";
+                     "fmt"; "jsonm"; "logs"; "ptime"; "re"; "uutf"])
   end

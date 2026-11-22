@@ -32,7 +32,7 @@ cat > src/main.ml <<'ML'
 let () = Printf.printf "%d\n" (Answer.answer + 1)
 ML
 cat > test/checks.ml <<'ML'
-let () = assert (Answer.answer = 41); print_endline "test passed"
+let () = assert (Answer.answer = 41); assert (Sys.argv.(1) = "--forwarded"); print_endline "test passed"
 ML
 "$runner" tidy
 "$runner" vendor --offline
@@ -53,5 +53,8 @@ test "$(grep -c '^compile ' changed.log)" -eq 1
 grep -q 'src/main.ml$' changed.log
 test "$("./app output")" = 43
 test "$("$runner" run)" = 43
-test "$("$runner" test checks)" = 'test passed'
+"$runner" test checks -- --forwarded > checks.out
+grep -Fx 'test passed' checks.out
+grep -Fx 'PASS checks' checks.out
+grep -Fx '1 passed, 0 failed (1 tests)' checks.out
 echo 'workspace incremental compilation: PASS'

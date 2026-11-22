@@ -15,9 +15,15 @@ val archive :
   fetch:fetch -> offline:bool -> cache:string -> Ocpkg_format.archive ->
   (string, string) result
 
-val verify : vendor:string -> Ocpkg_format.recipe list -> (unit, string) result
+val verify : ?index:Digest_index.t -> vendor:string -> Ocpkg_format.recipe list -> (unit, string) result
 
 val vendor :
   fetch:fetch -> offline:bool -> cache:string -> vendor:string ->
   project_root:string -> catalog_root:string ->
   Ocpkg_format.recipe list -> (unit, string) result
+
+val reconcile :
+  fetch:fetch -> cache:string -> directory:string -> project_root:string ->
+  catalog_root:string -> previous:Ocpkg_format.recipe list ->
+  next:Ocpkg_format.recipe list -> (unit -> (unit, string) result) ->
+  (unit, string) result

@@ -122,8 +122,9 @@ let archive ~fetch ~offline ~cache (source : archive) =
 
 let path_for root recipe = Filename.concat root (show (package_name recipe))
 
-let changed recipe path =
-  let+ current = Sha256.tree_hash path in
+let changed ?index recipe path =
+  let tree = Option.fold ~none:(fun path -> Sha256.tree_hash path) ~some:Digest_index.tree index in
+  let+ current = tree path in
   not (Sha256.equal recipe.tree current)
 
 let checked_vendor root =
@@ -131,12 +132,12 @@ let checked_vendor root =
   | Some {Unix.st_kind = Unix.S_DIR; _} -> Ok ()
   | _ -> Error ("vendor must be a directory: " ^ root)
 
-let verify ~vendor recipes =
+let verify ?index ~vendor recipes =
   filesystem (fun () ->
     let* () = if recipes = [] then Ok () else checked_vendor vendor in
     each (fun recipe ->
       let path = path_for vendor recipe in
-      let* changed = changed recipe path in
+      let* changed = changed ?index recipe path in
       if changed then Error ("vendored source changed: " ^ path)
       else Ok ()) recipes)
 
@@ -216,3 +217,64 @@ let vendor ~fetch ~offline ~cache ~vendor ~project_root ~catalog_root recipes =
       in
       let* () = each publish recipes in
       verify ~vendor recipes))
+
+let reconcile ~fetch ~cache ~directory ~project_root ~catalog_root ~previous ~next commit =
+  filesystem (fun () ->
+    mkdir_p directory;
+    let* () = checked_vendor directory in
+    lock_vendor directory (fun () ->
+      let find source recipe = List.find_opt (fun item -> package_name item = package_name recipe) source in
+      let obsolete = List.filter (fun recipe ->
+        match find next recipe with
+        | Some replacement -> not (Sha256.equal recipe.tree replacement.tree)
+        | None -> true) previous in
+      let known_old recipe = Option.is_some (find obsolete recipe) in
+      let check_old recipe =
+        let path = path_for directory recipe in
+        match stat path with
+        | None -> Ok ()
+        | Some _ ->
+            (match changed recipe path with
+            | Ok false -> Ok ()
+            | _ -> Error ("refusing to overwrite changed vendor directory: " ^ path)) in
+      let* () = each check_old obsolete in
+      let staged = List.filter (fun recipe ->
+        known_old recipe || stat (path_for directory recipe) = None) next in
+      let* () = verify ~vendor:directory (List.filter (fun recipe ->
+          not (List.exists (fun item -> package_name item = package_name recipe) staged)) next) in
+      let scratch = Filename.temp_dir ~temp_dir:directory ".update-" "" in
+      let rollback_complete = ref true in
+      Fun.protect ~finally:(fun () -> if !rollback_complete then rm_rf scratch) (fun () ->
+        let incoming = Filename.concat scratch "incoming" in
+        let* () = vendor ~fetch ~offline:false ~cache ~vendor:incoming ~project_root ~catalog_root staged in
+        let* () = each check_old obsolete in
+        let backup = Filename.concat scratch "backup" in
+        Unix.mkdir backup 0o700;
+        let moved = ref [] in
+        let installed = ref [] in
+        let committed = ref false in
+        Fun.protect ~finally:(fun () ->
+          if not !committed then begin
+            rollback_complete := false;
+            List.iter (fun (source, destination) -> Unix.rename destination source) !installed;
+            List.iter (fun (source, destination) -> Unix.rename destination source) !moved;
+            rollback_complete := true
+          end) (fun () ->
+          List.iter (fun recipe ->
+            let source = path_for directory recipe in
+            if stat source <> None then begin
+              let destination = path_for backup recipe in
+              Unix.rename source destination;
+              moved := (source, destination) :: !moved
+            end) obsolete;
+          let* () = each (fun recipe ->
+            let source = path_for incoming recipe in
+            let destination = path_for directory recipe in
+            match stat destination with
+            | Some _ -> Error ("refusing to overwrite vendor directory: " ^ destination)
+            | None ->
+                Unix.rename source destination;
+                installed := (source, destination) :: !installed;
+                Ok ()) staged in
+          let+ () = commit () in
+          committed := true))))

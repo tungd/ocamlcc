@@ -14,5 +14,5 @@ type output = {
 
 val compile :
   tools:Pkg_toolchain.t -> scope:scope -> wrapping:Ocpkg_format.wrapping ->
-  exports:string list -> ?cache:string -> sources:string list -> c_sources:string list ->
+  exports:string list -> ?cache:string -> ?cflags:string list -> sources:string list -> c_sources:string list ->
   directory:string -> unit -> (output, string) result

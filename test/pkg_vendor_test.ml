@@ -21,7 +21,7 @@ let specimen name_ tree =
   { package = {name = name name_; version = "1"};
     dependencies = []; source = Local (rel "source"); tree; wrapping = Flat;
     files = [require (Comp_input.create ~name:"main.ml" ~source:"main.ml")];
-    exports = []; executable = None; license = None }
+    exports = []; executable = None; license = None; cflags = []; ldflags = [] }
 
 let archive_file path members =
   let make_header (path, kind, body, size) =
@@ -61,7 +61,7 @@ let () =
     reject "dependency cycle" (Pkg_vendor.resolve ~catalog:[app; lib] [app.package]);
     reject "missing package" (Pkg_vendor.resolve ~catalog:[app] [app.package]);
     reject "duplicate package" (Pkg_vendor.resolve ~catalog:[app; app] [app.package]));
-  test "deterministic offline lock and changed recipes" (fun root ->
+  test "offline lock survives catalog revisions" (fun root ->
     let source = Filename.concat root "source" in
     Unix.mkdir source 0o755;
     Sys_util.write_file (Filename.concat source "main.ml") "let () = ()\n";
@@ -74,15 +74,17 @@ let () =
     Sys_util.write_file snapshot (print_snapshot [app]);
     let catalog = Pkg_project.catalog workspace |> require in
     let lock = Pkg_project.make_lock workspace catalog |> require in
-    let other = {app with files = [require (Comp_input.create ~name:"main.ml" ~source:"other.ml")]} in
+    let other = {app with package = {app.package with version = "2"}} in
     Pkg_project.write_lock workspace lock |> require;
     let contents = Sys_util.read_file (Filename.concat root "ocpkg.lock") in
     assert (contents = print_lock (Pkg_project.read_lock workspace |> require));
     Pkg_project.write_lock workspace {lock with packages = [other]} |> require;
-    reject "do not match" (Pkg_project.read_lock workspace);
+    reject "pinned at 2" (Pkg_project.read_lock workspace);
     Pkg_project.write_lock workspace lock |> require;
     Sys_util.write_file snapshot ((print_snapshot [app]) ^ "\n");
-    reject "snapshot recipes changed" (Pkg_project.read_lock workspace));
+    assert (contents = print_lock (Pkg_project.read_lock workspace |> require));
+    Sys.remove snapshot;
+    assert (contents = print_lock (Pkg_project.read_lock workspace |> require)));
   test "vendored edits, extra files and changed local recipe" (fun root ->
     let source = Filename.concat root "source" in
     Unix.mkdir source 0o755;

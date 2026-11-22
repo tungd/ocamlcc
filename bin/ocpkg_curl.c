@@ -1,6 +1,7 @@
 #include <curl/curl.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <caml/alloc.h>
@@ -28,13 +29,21 @@ static size_t write_archive(char *bytes, size_t size, size_t count, void *data)
     return written;
 }
 
+CAMLprim value ocpkg_curl_init(value unit)
+{
+    CAMLparam1(unit);
+    CURLcode status = curl_global_init(CURL_GLOBAL_DEFAULT);
+    if (status == CURLE_OK) {
+        atexit(curl_global_cleanup);
+        CAMLreturn(caml_copy_string(""));
+    }
+    CAMLreturn(caml_copy_string(curl_easy_strerror(status)));
+}
+
 CAMLprim value ocpkg_curl_download(value url, value filename)
 {
     CAMLparam2(url, filename);
-    CURLcode status = curl_global_init(CURL_GLOBAL_DEFAULT);
-    if (status != CURLE_OK)
-        CAMLreturn(caml_copy_string(curl_easy_strerror(status)));
-
+    CURLcode status;
     CURL *curl = curl_easy_init();
     FILE *file = NULL;
     const char *error = "";
@@ -63,7 +72,8 @@ CAMLprim value ocpkg_curl_download(value url, value filename)
     SET_OPTION(CURLOPT_REDIR_PROTOCOLS_STR, "https");
     SET_OPTION(CURLOPT_FOLLOWLOCATION, 1L);
     SET_OPTION(CURLOPT_FAILONERROR, 1L);
-    SET_OPTION(CURLOPT_TIMEOUT, 30L);
+    SET_OPTION(CURLOPT_CONNECTTIMEOUT, 15L);
+    SET_OPTION(CURLOPT_TIMEOUT, 120L);
     SET_OPTION(CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)MAX_DOWNLOAD);
     SET_OPTION(CURLOPT_WRITEFUNCTION, write_archive);
     SET_OPTION(CURLOPT_WRITEDATA, &output);
@@ -81,6 +91,5 @@ done:
     if (file != NULL && fclose(file) != 0 && error[0] == '\0')
         error = "could not write archive";
     if (curl != NULL) curl_easy_cleanup(curl);
-    curl_global_cleanup();
     CAMLreturn(caml_copy_string(error));
 }

@@ -1,7 +1,7 @@
 (library
  (name ocamlcc)
  (wrapped false)
- (modules (:standard \ sha256 ocpkg_format pkg_archive pkg_vendor pkg_project http_fetch build_cache pkg_toolchain pkg_compile workspace))
+ (modules (:standard \ sha256 ocpkg_format pkg_archive pkg_vendor pkg_project http_fetch digest_index build_cache pkg_toolchain pkg_compile workspace))
  (libraries compiler-libs.common unix))
 
 ;; Keep standalone generated C headers in sync with the runtime view ABI.
@@ -18,7 +18,8 @@
 (library
  (name ocpkg_core)
  (wrapped false)
- (modules sha256 ocpkg_format pkg_archive pkg_vendor pkg_project build_cache pkg_toolchain pkg_compile workspace)
+ (modules sha256 ocpkg_format pkg_archive pkg_vendor pkg_project digest_index build_cache pkg_toolchain pkg_compile workspace)
+ (foreign_stubs (language c) (names digest_stat))
  (libraries ocamlcc unix))
 
 

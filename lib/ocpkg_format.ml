@@ -82,6 +82,8 @@ type recipe = {
   files : Comp_input.t list;
   exports : string list;
   executable : Package_name.t option;
+  cflags : string list;
+  ldflags : string list;
   license : string option;
 }
 type lock = { catalog : Rel_path.t; digest : Sha256.t; packages : recipe list }
@@ -281,7 +283,7 @@ let module_name line value =
 let read_recipe ~allow_replacement line package fields =
   let fields = List.map (fun (line, tokens) -> line, List.hd tokens, List.tl tokens) fields in
   let valid = ["dep"; "url"; "sha256"; "root"; "local"; "replacement"; "tree"; "wrapped";
-               "file"; "export"; "executable"; "license"] in
+               "file"; "export"; "executable"; "license"; "cflag"; "ldflag"] in
   List.iter (fun (line, key, _) -> if not (List.mem key valid) then
       invalid line ("invalid package directive: " ^ key)) fields;
   let values key read =
@@ -345,7 +347,7 @@ let read_recipe ~allow_replacement line package fields =
   let license = optional "license" as_text in
   { package; dependencies = List.sort Package_name.compare dependencies; source; tree;
     wrapping; files = List.sort (fun a b -> String.compare (Comp_input.name a) (Comp_input.name b)) files;
-    exports; executable; license }
+    exports; executable; license; cflags = many "cflag" as_text; ldflags = many "ldflag" as_text }
 
 let read_packages ~allow_replacement rows =
   let rec read acc = function
@@ -398,6 +400,8 @@ let print_recipe buffer recipe =
   text "wrapped" (match recipe.wrapping with Flat -> "false" | Wrapped name -> name);
   Option.iter (fun name -> text "executable" (Package_name.to_string name)) recipe.executable;
   Option.iter (text "license") recipe.license;
+  List.iter (text "cflag") recipe.cflags;
+  List.iter (text "ldflag") recipe.ldflags;
   List.sort String.compare recipe.exports |> List.iter (text "export");
   List.sort (fun a b -> String.compare (Comp_input.name a) (Comp_input.name b)) recipe.files
   |> List.iter (fun file ->

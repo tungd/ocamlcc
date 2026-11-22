@@ -100,7 +100,7 @@ let link (request : Request.t) =
       let* objects, flags = visibility request exports in
       link_c_driver ["-shared"] objects flags
 
-let xcframework ~verbose ~work_dir ~output ~header libraries =
+let xcframework ?header_dirs ~verbose ~work_dir ~output ~header libraries =
   if Sys.file_exists output then rm_rf output;
   let headers =
     match header with
@@ -111,7 +111,14 @@ let xcframework ~verbose ~work_dir ~output ~header libraries =
         write_file (Filename.concat dir (Filename.basename source)) (read_file source);
         ["-headers"; dir]
   in
-  let libraries = List.concat_map (fun file -> ["-library"; file] @ headers) libraries in
+  let libraries =
+    match header_dirs with
+    | None -> List.concat_map (fun file -> ["-library"; file] @ headers) libraries
+    | Some dirs ->
+        List.concat (List.map2 (fun file dir ->
+          ["-library"; file] @ Option.fold ~none:[] ~some:(fun dir -> ["-headers"; dir]) dir)
+          libraries dirs)
+  in
   let args = ["-create-xcframework"] @ libraries @ ["-output"; output] in
   let stdout_file = if verbose then None else Some "/dev/null" in
   let+ () = run_cmd ~verbose ?stdout_file "xcodebuild" args in

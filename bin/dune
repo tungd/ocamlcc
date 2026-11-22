@@ -18,7 +18,7 @@
  (public_name ocpkg)
  (package ocamlcc)
  (name ocpkg_main)
- (modules ocpkg_main)
+ (modules ocpkg_main ocpkg_version)
  (libraries ocamlcc ocpkg_core ocpkg_http)
  (foreign_stubs (language c) (names ocpkg_curl))
  (link_flags (:include curl_link_flags.sexp)))
@@ -28,3 +28,10 @@
  (action
   (with-stdout-to %{target}
    (run sh %{dep:../tools/curl-link-flags.sh}))))
+
+
+(rule
+ (target ocpkg_version.ml)
+ (deps ../ocamlcc.opam)
+ (action (with-stdout-to %{target}
+  (echo "let value = \"%{version:ocamlcc}\""))))

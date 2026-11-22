@@ -1,6 +1,52 @@
 # Curated package snapshot
 schema 1
 
+pkg astring 0.8.5
+  url https://erratique.ch/software/astring/releases/astring-0.8.5.tbz
+  sha256 865692630c07c3ab87c66cdfc2734c0fdfc9c34a57f8e89ffec7c7d15e7a70fa
+  root astring-0.8.5
+  tree e81afaf4c26b554879fcbc67e539ecf2a3dc616c9e9ec96282baef3e0d8fd1bf
+  wrapped false
+  export Astring
+  license "ISC"
+  file astring.ml <= src/astring.ml
+  file astring.mli <= src/astring.mli
+  file astring_base.ml <= src/astring_base.ml
+  file astring_char.ml <= src/astring_char.ml
+  file astring_escape.ml <= src/astring_escape.ml
+  file astring_string.ml <= src/astring_string.ml
+  file astring_sub.ml <= src/astring_sub.ml
+  file astring_unsafe.ml <= src/astring_unsafe.ml
+
+pkg base64 3.5.1
+  url https://github.com/mirage/ocaml-base64/releases/download/v3.5.1/base64-3.5.1.tbz
+  sha256 d8fedaa59bd12feae7acc08b5928dd478aac523f4ca8d240470d2500651c65ed
+  root base64-3.5.1
+  tree 59a5e6acb8fd7b2541860f8e4e819027fee1b9d37c86c06d14bfa36ae9b64688
+  wrapped Base64
+  export Base64
+  license "ISC"
+  file base64.ml <= src/base64.ml
+  file base64.mli <= src/base64.mli
+  file unsafe.ml <= src/unsafe_stable.ml
+
+pkg bytesrw 0.1.0
+  url https://erratique.ch/software/bytesrw/releases/bytesrw-0.1.0.tbz
+  sha256 d9cc6ff9940fb0d3732b1119b95961099d282b818012d899b1860abd0c478593
+  root bytesrw-0.1.0
+  tree 85b00439f5fa0bc6e71146b955b67b0bb53e88ace0f88dd919bf40821b3be311
+  wrapped false
+  export Bytesrw
+  license "ISC"
+  file bytesrw.ml <= src/bytesrw.ml
+  file bytesrw.mli <= src/bytesrw.mli
+  file bytesrw_fmt.ml <= src/bytesrw_fmt.ml
+  file bytesrw_fmt.mli <= src/bytesrw_fmt.mli
+  file bytesrw_hex.ml <= src/bytesrw_hex.ml
+  file bytesrw_hex.mli <= src/bytesrw_hex.mli
+  file bytesrw_utf.ml <= src/bytesrw_utf.ml
+  file bytesrw_utf.mli <= src/bytesrw_utf.mli
+
 pkg cmdliner 1.3.0
   url https://erratique.ch/software/cmdliner/releases/cmdliner-1.3.0.tbz
   sha256 8e8180f573b440f6a7a8c208dab2cae4a82384fec732d22784d1bb6e64168cbb
@@ -65,6 +111,40 @@ pkg crunch-unix 0.1
   file unix.mli <= unix.mli
   file unix_stubs.c <= unix_stubs.c
 
+pkg fmt 0.9.0
+  url https://erratique.ch/software/fmt/releases/fmt-0.9.0.tbz
+  sha256 f1fb20805a22dd75a137d72704a370e7789cf6bdf63948e6817d1c226c141261
+  root fmt-0.9.0
+  tree 95133a1f91228683fa700701faf387f1fcbac71697a0d604d02fc70f4905db02
+  wrapped false
+  export Fmt
+  license "ISC"
+  file fmt.ml <= src/fmt.ml
+  file fmt.mli <= src/fmt.mli
+
+pkg jsonm 1.0.2
+  dep uutf
+  url https://erratique.ch/software/jsonm/releases/jsonm-1.0.2.tbz
+  sha256 ea29239feb4053201df3e1e6d27c2ce123882ac4658e1c8bea9958be118a7bd6
+  root jsonm-1.0.2
+  tree 2fd5edadcf99b1135c8dc8af96d7041d004b1460bddcf66a98fc775ba9efa2f4
+  wrapped false
+  export Jsonm
+  license "ISC"
+  file jsonm.ml <= src/jsonm.ml
+  file jsonm.mli <= src/jsonm.mli
+
+pkg logs 0.7.0
+  url https://erratique.ch/software/logs/releases/logs-0.7.0.tbz
+  sha256 86f4a02807eb1a297aae44977d9f61e419c31458a5d7b23c6f55575e8e69d5ca
+  root logs-0.7.0
+  tree 65355e150f330af6c3b576dc05e723dba72786e3a1d3c58846837cd973b6e120
+  wrapped false
+  export Logs
+  license "ISC"
+  file logs.ml <= src/logs.ml
+  file logs.mli <= src/logs.mli
+
 pkg ptime 1.2.0
   url https://erratique.ch/software/ptime/releases/ptime-1.2.0.tbz
   sha256 9616747fdf490ec36e8024cab27ee01e3a0af577d8a23226638fa4034de73ab0
@@ -75,3 +155,70 @@ pkg ptime 1.2.0
   export Ptime
   file ptime.ml <= src/ptime.ml
   file ptime.mli <= src/ptime.mli
+
+pkg re 1.12.0
+  url https://github.com/ocaml/ocaml-re/releases/download/1.12.0/re-1.12.0.tbz
+  sha256 a01f2bf22f72c2f4ababd8d3e7635e35c1bf6bc5a41ad6d5a007454ddabad1d4
+  root re-1.12.0
+  tree 804a5cfcb8a014067c8af452d7de50f89abfd3569c76d79dd34f7f22cc814d8b
+  wrapped Re
+  export Re
+  license "LGPL-2.1-or-later WITH OCaml-LGPL-linking-exception"
+  file ast.ml <= lib/ast.ml
+  file ast.mli <= lib/ast.mli
+  file automata.ml <= lib/automata.ml
+  file automata.mli <= lib/automata.mli
+  file bit_vector.ml <= lib/bit_vector.ml
+  file bit_vector.mli <= lib/bit_vector.mli
+  file category.ml <= lib/category.ml
+  file category.mli <= lib/category.mli
+  file color_map.ml <= lib/color_map.ml
+  file color_map.mli <= lib/color_map.mli
+  file compile.ml <= lib/compile.ml
+  file compile.mli <= lib/compile.mli
+  file core.ml <= lib/core.ml
+  file core.mli <= lib/core.mli
+  file cset.ml <= lib/cset.ml
+  file cset.mli <= lib/cset.mli
+  file emacs.ml <= lib/emacs.ml
+  file emacs.mli <= lib/emacs.mli
+  file fmt.ml <= lib/fmt.ml
+  file fmt.mli <= lib/fmt.mli
+  file glob.ml <= lib/glob.ml
+  file glob.mli <= lib/glob.mli
+  file group.ml <= lib/group.ml
+  file group.mli <= lib/group.mli
+  file import.ml <= lib/import.ml
+  file mark_infos.ml <= lib/mark_infos.ml
+  file mark_infos.mli <= lib/mark_infos.mli
+  file parse_buffer.ml <= lib/parse_buffer.ml
+  file parse_buffer.mli <= lib/parse_buffer.mli
+  file pcre.ml <= lib/pcre.ml
+  file pcre.mli <= lib/pcre.mli
+  file perl.ml <= lib/perl.ml
+  file perl.mli <= lib/perl.mli
+  file pmark.ml <= lib/pmark.ml
+  file pmark.mli <= lib/pmark.mli
+  file posix.ml <= lib/posix.ml
+  file posix.mli <= lib/posix.mli
+  file posix_class.ml <= lib/posix_class.ml
+  file posix_class.mli <= lib/posix_class.mli
+  file re.ml <= lib/re.ml
+  file replace.ml <= lib/replace.ml
+  file replace.mli <= lib/replace.mli
+  file search.ml <= lib/search.ml
+  file str.ml <= lib/str.ml
+  file str.mli <= lib/str.mli
+  file view.ml <= lib/view.ml
+  file view.mli <= lib/view.mli
+
+pkg uutf 1.0.4
+  url https://erratique.ch/software/uutf/releases/uutf-1.0.4.tbz
+  sha256 a7a578e6af9149a8894e18e3b4759c8565937a69c6c9ace7a30bbf0484619ca8
+  root uutf-1.0.4
+  tree c997b82134b350d63e0bd7ee8df6667a45cf8f0e3f902fe9d704afef8f546d30
+  wrapped false
+  export Uutf
+  license "ISC"
+  file uutf.ml <= src/uutf.ml
+  file uutf.mli <= src/uutf.mli

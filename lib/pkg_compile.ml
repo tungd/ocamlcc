@@ -108,7 +108,7 @@ let artifact_key ~tools ~scope ~layout available (step : Dep_graph.Step.t) =
   in
   Ok key
 
-let compile ~tools ~scope ~wrapping ~exports ?cache ~sources ~c_sources ~directory () =
+let compile ~tools ~scope ~wrapping ~exports ?cache ?(cflags = []) ~sources ~c_sources ~directory () =
   mkdir_p directory;
   let layout, prelude, ending =
     match wrapping with
@@ -169,30 +169,30 @@ let compile ~tools ~scope ~wrapping ~exports ?cache ~sources ~c_sources ~directo
           Export_summary.write_unit_object (prefix ^ ".opt");
           Ok ()
     in
-    let* hit = match cache with
+    let* artifact_directory, hit = match cache with
       | None ->
-          let+ () = write output_dir in false
+          let+ () = write output_dir in (output_dir, false)
       | Some store ->
           let* key = artifact_key ~tools ~scope ~layout available step in
-          let+ entry = Build_cache.ensure ~store ~key write in
+          let+ entry = Build_cache.ensure ~index:tools.index ~store ~key write in
           copy_artifacts entry.directory output_dir;
-          entry.hit
+          entry.directory, entry.hit
     in
     let prefix = Filename.concat output_dir file_prefix in
-    Ok (modname, prefix, hit)
+    Ok (modname, prefix, Filename.concat artifact_directory (file_prefix ^ ".o"), hit)
   in
   let local_summaries = Export_summary.Loader.create () in
   let rec compile_steps available imports output = function
     | [] -> Ok output
     | (step : Dep_graph.Step.t) :: rest ->
-        let* modname, prefix, hit = compile_unit available imports step in
+        let* modname, prefix, object_file, hit = compile_unit available imports step in
         let available = Names.add modname (prefix ^ ".cmi") available in
         let output = {output with
           compiled = output.compiled + (if hit then 0 else 1);
           hits = output.hits + (if hit then 1 else 0) } in
         let output = match step.kind with
           | `Mli -> output
-          | `Ml -> {output with objects = (prefix ^ ".o") :: output.objects;
+          | `Ml -> {output with objects = object_file :: output.objects;
                                 units = modname :: output.units}
         in
         let imports = match step.kind with
@@ -209,13 +209,13 @@ let compile ~tools ~scope ~wrapping ~exports ?cache ~sources ~c_sources ~directo
     | [] -> Ok {output with objects = List.rev output.objects; units = List.rev output.units}
     | file :: rest ->
         let basename = Printf.sprintf "c%d_%s.o" index (Filename.remove_extension (Filename.basename file)) in
-        let obj = Filename.concat directory basename in
         let build path =
           if tools.verbose then Printf.eprintf "compile %s\n%!" file;
-          Pkg_toolchain.compile_c tools ~flags:runtime_flags file (Filename.concat path basename)
+          Pkg_toolchain.compile_c tools
+            ~flags:(("-I" ^ Filename.dirname file) :: runtime_flags @ cflags) file (Filename.concat path basename)
         in
-        let* hit = match cache with
-          | None -> let+ () = build directory in false
+        let* artifact_directory, hit = match cache with
+          | None -> let+ () = build directory in (directory, false)
           | Some store ->
               let headers =
                 let dir = Filename.dirname file in
@@ -224,11 +224,11 @@ let compile ~tools ~scope ~wrapping ~exports ?cache ~sources ~c_sources ~directo
               in
               let* digests = Build_cache.fingerprints (file :: headers) in
               let key = Build_cache.key (["toolchain", Sha256.to_hex tools.fingerprint; "output", basename] @ digests) in
-              let+ entry = Build_cache.ensure ~store ~key build in
+              let+ entry = Build_cache.ensure ~index:tools.index ~store ~key build in
               copy_artifacts entry.directory directory;
-              entry.hit
+              entry.directory, entry.hit
         in
-        let output = {output with objects = obj :: output.objects;
+        let output = {output with objects = Filename.concat artifact_directory basename :: output.objects;
           compiled = output.compiled + (if hit then 0 else 1);
           hits = output.hits + (if hit then 1 else 0) } in
         compile_native (index + 1) output rest

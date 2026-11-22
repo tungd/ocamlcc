@@ -154,7 +154,7 @@ rule dune_ocpkg
   description = DUNE ocpkg
   pool = console
 
-build $builddir/bin/ocpkg: dune_ocpkg bin/ocpkg_main.ml bin/ocpkg_curl.c tools/curl-link-flags.sh bin/dune lib/dune dune-project dune lib/sha256.ml lib/sha256.mli lib/ocpkg_format.ml lib/ocpkg_format.mli lib/pkg_archive.ml lib/pkg_archive.mli lib/pkg_vendor.ml lib/pkg_vendor.mli lib/pkg_project.ml lib/pkg_project.mli lib/http_fetch.ml lib/http_fetch.mli lib/build_cache.ml lib/build_cache.mli lib/pkg_toolchain.ml lib/pkg_toolchain.mli lib/pkg_compile.ml lib/pkg_compile.mli lib/workspace.ml lib/workspace.mli | $builddir/bin/occ
+build $builddir/bin/ocpkg: dune_ocpkg bin/ocpkg_main.ml bin/ocpkg_curl.c ocamlcc.opam tools/curl-link-flags.sh bin/dune lib/dune dune-project dune lib/sha256.ml lib/sha256.mli lib/ocpkg_format.ml lib/ocpkg_format.mli lib/pkg_archive.ml lib/pkg_archive.mli lib/pkg_vendor.ml lib/pkg_vendor.mli lib/pkg_project.ml lib/pkg_project.mli lib/http_fetch.ml lib/http_fetch.mli lib/digest_index.ml lib/digest_index.mli lib/digest_stat.c lib/build_cache.ml lib/build_cache.mli lib/pkg_toolchain.ml lib/pkg_toolchain.mli lib/pkg_compile.ml lib/pkg_compile.mli lib/workspace.ml lib/workspace.mli | $builddir/bin/occ
 
 rule occ_compat
   command = ln -sf occ $out
@@ -607,3 +607,23 @@ rule dist_bundle
   pool = console
 
 build dist: dist_bundle tools/dist.sh packages/snapshots/default.snap packages/ports/crunch-unix/unix.ml packages/ports/crunch-unix/unix.mli packages/ports/crunch-unix/unix_stubs.c vendor/qbe/LICENSE vendor/ocaml-stdlib/LICENSE | $builddir/bin/occ $builddir/bin/ocpkg $builddir/qbe/qbe $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a $stdlibdir/libocamlstdlib.a $stdlibdir/libocamlstdlib.a.opt $builddir/stdlib.sources
+
+rule run_ocpkg_test
+  command = sh $in $builddir/bin/ocpkg
+  description = TEST $in
+  pool = console
+
+build ocpkg_native_cli: run_ocpkg_test tests/ocpkg/native_cli.sh | $builddir/bin/ocpkg
+build ocpkg_workspace_incremental: run_ocpkg_test tests/ocpkg/workspace_incremental.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
+build ocpkg_wrapped_packages: run_ocpkg_test tests/ocpkg/wrapped_packages.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
+build ocpkg_native_library: run_ocpkg_test tests/ocpkg/native_library.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
+build ocpkg_test: phony ocpkg_native_cli ocpkg_workspace_incremental ocpkg_wrapped_packages ocpkg_native_library
+
+build ocpkg_catalog: run_ocpkg_test tests/ocpkg/catalog_daily.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a packages/snapshots/default.snap
+
+rule run_dist_smoke
+  command = sh tests/ocpkg/dist_smoke.sh "$$(sh tools/dist.sh --path)" "$$(mktemp -d)"
+  description = TEST relocated distribution
+  pool = console
+
+build dist_smoke: run_dist_smoke tests/ocpkg/dist_smoke.sh | dist

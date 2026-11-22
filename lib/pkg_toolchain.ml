@@ -11,6 +11,7 @@ type t = {
   cflags : string list;
   verbose : bool;
   cache : string;
+  index : Digest_index.t;
 }
 
 let self () =
@@ -60,10 +61,10 @@ let copy_into directory source =
   let target = Filename.concat directory (Filename.basename source) in
   write_file target (read_file source)
 
-let pack_stdlib ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose =
+let pack_stdlib ~index ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose =
   let store = Filename.concat cache "stdlib" in
   let+ entry =
-    Build_cache.ensure ~store ~key:fingerprint (fun destination ->
+    Build_cache.ensure ~index ~store ~key:fingerprint (fun destination ->
       let work = Filename.temp_dir "occ-stdlib-" "" in
       Fun.protect ~finally:(fun () -> rm_rf work) (fun () ->
         let* plan = Stdlib_build.prepare ~disabled:false ~prefer_prebuilt:false ~prefer_archive:false
@@ -79,11 +80,10 @@ let pack_stdlib ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbo
         Ok ())) in
   entry.directory
 
-let prepare ~target:name ~single_thread ~cflags ~verbose =
+let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose =
   let* target = Target.resolve name in
   let* qbe = Target.qbe None in
   let* commands = Target.toolchain target in
-  let* cache = Pkg_project.cache_dir () in
   let* compiler = compiler_binary () |> require "occ" in
   let host = Target.is_host target in
   let prebuilt =
@@ -107,7 +107,7 @@ let prepare ~target:name ~single_thread ~cflags ~verbose =
         (Target.prebuilt_runtime ~single_thread None)
     else []
   in
-  let* digests = Build_cache.fingerprints (compiler :: self () :: qbe :: stdlib_inputs @ rt_sources @ rt_objects) in
+  let* digests = Build_cache.fingerprints ~index (compiler :: self () :: qbe :: stdlib_inputs @ rt_sources @ rt_objects) in
   let options =
     ["schema", "1"; "target", target.name; "qbe-target", target.qbe_target;
      "rc", string_of_bool single_thread; "cc", commands.cc_prog; "ar", commands.ar_prog]
@@ -119,22 +119,22 @@ let prepare ~target:name ~single_thread ~cflags ~verbose =
     match stdlib, stdlib_inputs with
     | Some directory, _ -> Ok directory
     | None, [stdlib_source] ->
-        pack_stdlib ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose
+        pack_stdlib ~index ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose
     | _ -> Error "cannot locate standard library"
   in
   let* fingerprint = match prebuilt with
     | Some _ -> Ok fingerprint
     | None ->
-        let+ artifacts = Build_cache.fingerprints (matching_files stdlib [".cmi"; ".a"; ".a.opt"]) in
+        let+ artifacts = Build_cache.fingerprints ~index (matching_files stdlib [".cmi"; ".a"; ".a.opt"]) in
         Build_cache.key (("source toolchain", Sha256.to_hex fingerprint) :: artifacts)
   in
-  Ok {target; commands; qbe; stdlib; fingerprint; single_thread; cflags; verbose; cache}
+  Ok {target; commands; qbe; stdlib; fingerprint; single_thread; cflags; verbose; cache; index}
 
 let runtime tools ~include_main =
   let key = Build_cache.key
       ["toolchain", Sha256.to_hex tools.fingerprint; "main", string_of_bool include_main] in
   let store = Filename.concat tools.cache "runtime" in
-  let+ entry = Build_cache.ensure ~store ~key (fun directory ->
+  let+ entry = Build_cache.ensure ~index:tools.index ~store ~key (fun directory ->
     let work = Filename.temp_dir "occ-runtime-" "" in
     Fun.protect ~finally:(fun () -> rm_rf work) (fun () ->
       let* inputs = Runtime_build.link_inputs

@@ -45,6 +45,14 @@ let root_catalog () =
       if Sys.file_exists path then Some path else None
   | None -> Target.search_upwards "packages/snapshots/default.snap"
 
+let catalog_root (workspace : t) =
+  let snapshot = workspace.manifest.snapshot in
+  if Rel_path.to_string snapshot = "default" then
+    match Target.installed_toolchain () with
+    | Some path -> path
+    | None -> Option.value (Target.search_upwards "packages") ~default:workspace.root
+  else Filename.dirname (Rel_path.resolve ~root:workspace.root snapshot)
+
 let catalog (workspace : t) =
   io (fun () ->
     let snapshot = workspace.manifest.snapshot in
@@ -57,8 +65,7 @@ let catalog (workspace : t) =
     | Some path ->
         let contents = read_file path in
         let* recipes = Result.map_error (fun msg -> path ^ ": " ^ msg) (parse_snapshot contents) in
-        let parent = Filename.dirname path in
-        let root = if Rel_path.to_string snapshot = "default" then Filename.dirname parent else parent in
+        let root = catalog_root workspace in
         Ok {root; digest = Sha256.string contents; recipes})
 
 let cache_dir () =
@@ -78,18 +85,29 @@ let make_lock (workspace : t) catalog =
       ~replacements:workspace.manifest.replacements closure in
   {catalog = workspace.manifest.snapshot; digest = catalog.digest; packages}
 
-let read_lock (workspace : t) =
-  io (fun () ->
-    let path = lock_path workspace.root in
+let read_lock ?missing (workspace : t) =
+  let path = lock_path workspace.root in
+  let validate () =
     let* saved = decode path parse_lock in
-    let* catalog = catalog workspace in
-    if saved.catalog <> workspace.manifest.snapshot || not (Sha256.equal saved.digest catalog.digest)
-    then Error "snapshot recipes changed; regenerate the lock explicitly"
+    let manifest = workspace.manifest in
+    if saved.catalog <> manifest.snapshot then Error "lock snapshot selection does not match the manifest"
     else
-      let* expected = make_lock workspace catalog in
-      if print_lock expected <> print_lock saved then
-        Error "locked packages do not match the manifest and snapshot"
-      else Ok expected)
+      let* packages = Pkg_vendor.resolve ~catalog:saved.packages manifest.requirements in
+      let replacement (recipe : recipe) =
+        match recipe.source with
+        | Replacement path -> Some (recipe.package.name, path)
+        | Archive _ | Local _ -> None
+      in
+      let sorted = List.sort compare in
+      if List.length packages <> List.length saved.packages ||
+         sorted (List.filter_map replacement packages) <> sorted manifest.replacements
+      then Error "locked packages or replacements do not match the manifest"
+      else Ok {saved with packages} in
+  io (fun () ->
+    match Unix.lstat path with
+    | _ -> validate ()
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
+        match missing with Some lock -> Ok lock | None -> Error ("cannot find " ^ path))
 
 let write_lock (workspace : t) lock =
   io (fun () ->
@@ -116,11 +134,35 @@ let initialize ~name =
       let* source = Rel_path.of_string "src" in
       let manifest = { (project name) with entry = Some entry; source_dirs = [source] } in
       let workspace = {root; manifest} in
-      let* catalog = catalog workspace in
-      let* lock = make_lock workspace catalog in
+      let lock = {catalog = manifest.snapshot; digest = Sha256.string ""; packages = []} in
       let entry = Rel_path.resolve ~root entry in
       mkdir_p (Filename.dirname entry);
       if not (Sys.file_exists entry) then write_if_changed entry "let () = print_endline \"Hello from OCaml!\"\n";
       let* () = write_manifest workspace in
       let+ () = write_lock workspace lock in
       workspace)
+
+let write_dependencies (workspace : t) lock =
+  io (fun () ->
+    let path = lock_path workspace.root in
+    let original = if existing_file path then Some (read_file path) else None in
+    let* () = write_lock workspace lock in
+    match write_manifest workspace with
+    | Ok () -> Ok ()
+    | Error _ as error ->
+        (match original with
+         | Some contents -> write_if_changed path contents
+         | None -> Sys.remove path);
+        error)
+
+let with_dependency_update (workspace : t) f =
+  io (fun () ->
+    let directory = Filename.concat workspace.root ".ocpkg" in
+    mkdir_p directory;
+    let lock = Filename.concat directory "dependencies.lock" in
+    let fd = Unix.openfile lock [Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC] 0o600 in
+    Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+      Unix.lockf fd Unix.F_LOCK 0;
+      let+ manifest = decode (manifest_path workspace.root) parse_manifest in
+      f {workspace with manifest})
+    |> Result.join)

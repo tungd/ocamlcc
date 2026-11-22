@@ -169,7 +169,7 @@ let add_json_path buffer path =
   encode 0;
   Buffer.add_char buffer '"'
 
-let tree_hash root =
+let tree_hash ?(file = file) root =
   protect_io (fun () ->
     if (Unix.lstat root).st_kind <> Unix.S_DIR then failwith ("not a source directory: " ^ root);
     let hash = Hash.create () in
@@ -190,7 +190,10 @@ let tree_hash root =
             if !first then first := false else Buffer.add_char row ',';
             Buffer.add_char row '[';
             add_json_path row relative;
-            Printf.bprintf row ",%b,\"%s\"]" (stat.st_perm land 0o111 <> 0) (digest_file full_path);
+            let digest = match file full_path with
+              | Ok digest -> digest
+              | Error message -> failwith message in
+            Printf.bprintf row ",%b,\"%s\"]" (stat.st_perm land 0o111 <> 0) digest;
             Hash.append_string hash (Buffer.contents row)
         | _ -> failwith ("unsupported source entry: " ^ full_path)
       ) entries

@@ -47,6 +47,9 @@ MOD
 cat > src/main.ml <<'ML'
 let () = Printf.printf "%d\n" (Alpha.More.next () + Beta.Util.value)
 ML
+"$runner" tidy
+"$runner" vendor --offline
+mv fixture.snap fixture.old.snap
 "$runner" vendor --offline
 test "$("$runner" run)" = 42
 find "$OCPKG_CACHE/pkg" -name '*.a.opt' | sort > summaries

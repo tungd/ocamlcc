@@ -15,9 +15,15 @@ type t = {
   arch : string;
 }
 
-let detect_host_target () : t =
-  let os_s = match capture_cmd "uname" [ "-s" ] with Ok s -> s | Error _ -> "Linux" in
-  let arch_s = match capture_cmd "uname" [ "-m" ] with Ok s -> s | Error _ -> "x86_64" in
+let host_target = lazy (
+  let os_s, arch_s =
+    match capture_cmd "uname" ["-sm"] with
+    | Ok value ->
+        (match String.split_on_char ' ' value with
+         | [os; arch] -> os, arch
+         | _ -> "Linux", "x86_64")
+    | Error _ -> "Linux", "x86_64"
+  in
   match (os_s, arch_s) with
   | "Darwin", ("arm64" | "aarch64") ->
       { name = "arm64_apple"; qbe_target = "arm64_apple"; os = Darwin; arch = "arm64" }
@@ -28,7 +34,9 @@ let detect_host_target () : t =
   | _, "riscv64" ->
       { name = "rv64"; qbe_target = "rv64"; os = Linux; arch = "riscv64" }
   | _ ->
-      { name = "amd64_sysv"; qbe_target = "amd64_sysv"; os = Linux; arch = "x86_64" }
+      { name = "amd64_sysv"; qbe_target = "amd64_sysv"; os = Linux; arch = "x86_64" })
+
+let detect_host_target () = Lazy.force host_target
 
 let resolve (s : string) : (t, string) result =
   match String.lowercase_ascii (String.trim s) with

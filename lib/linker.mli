@@ -25,5 +25,6 @@ val compile_many :
 val link : Request.t -> (string, string) result
 
 val xcframework :
+  ?header_dirs:string option list ->
   verbose:bool -> work_dir:string -> output:string -> header:string option ->
   string list -> (string, string) result

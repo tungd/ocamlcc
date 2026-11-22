@@ -54,6 +54,8 @@ type recipe = {
   files : Comp_input.t list;
   exports : string list;
   executable : Package_name.t option;
+  cflags : string list;
+  ldflags : string list;
   license : string option;
 }
 

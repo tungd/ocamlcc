@@ -90,6 +90,13 @@ to a directory of your choice and add its `bin/` directory to `PATH`.
 `occ` and `ocpkg` find QBE, the stdlib, the ARC runtime profiles, and the
 package snapshot under `lib/occ/` relative to the executable.
 
+Tagged releases are configured to publish macOS ARM64, Linux x86-64, and
+Linux ARM64 archives. Download `install.sh` from the release and run
+`sh install.sh [tag] [prefix]` to download and verify the matching archive.
+The installer defaults to the latest release and `~/.local/occ`. Add the
+installation's `bin/` directory to `PATH`.
+[GitHub releases](https://github.com/tungd/ocamlcc/releases)
+
 ```sh
 ocpkg init my-app
 ocpkg add cmdliner
@@ -97,9 +104,10 @@ ocpkg build
 ocpkg run
 ```
 
-`add`, `get`, and `vendor` can download locked sources. Use
-`vendor --offline` to require cached archives. Builds use vendored
-sources and content-addressed caches.
+`add`, `upgrade`, and `vendor` can download package sources. Use
+`vendor --offline` to restore packages from local sources or cached
+archives. Builds use the recipes in `ocpkg.lock` and the verified vendor
+tree, so a newer snapshot can be installed independently of a project.
 [Package commands and compatibility checks](packages/README.md)
 
 ## Upstream standard library

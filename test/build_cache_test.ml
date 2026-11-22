@@ -34,3 +34,21 @@ let () =
     in
     assert (Result.is_error (Build_cache.ensure ~store:cache ~key:broken interrupted));
     assert (not (Build_cache.ensure ~store:cache ~key:broken build |> require).hit))
+
+let () =
+  let root = Filename.temp_dir "ocpkg-stat-" "" in
+  Fun.protect ~finally:(fun () -> Sys_util.rm_rf root) (fun () ->
+    let input = Filename.concat root "source" in
+    Sys_util.write_file input "original";
+    let stat = Unix.stat input in
+    let digest ~verify =
+      Digest_index.with_index ~cache:root ~workspace:root ~verify
+        (fun index -> Digest_index.file index input |> require)
+    in
+    let original = digest ~verify:false in
+    assert (Sha256.equal original (digest ~verify:false));
+    Sys_util.write_file input "modified";
+    Unix.utimes input stat.st_atime stat.st_mtime;
+    let modified = digest ~verify:false in
+    assert (not (Sha256.equal original modified));
+    assert (Sha256.equal modified (digest ~verify:true)))

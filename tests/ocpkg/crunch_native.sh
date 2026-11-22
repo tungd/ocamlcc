@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+timeout_cmd=$(command -v timeout || command -v gtimeout)
 
 runner=$1
 case "$runner" in /*) ;; *) runner="$PWD/$runner";; esac
@@ -19,7 +20,7 @@ run() {
     log="$work/logs/$job.log"
     start=$(date +%s)
     status=0
-    timeout 180 "$@" > "$log" 2>&1 || status=$?
+    "$timeout_cmd" 180 "$@" > "$log" 2>&1 || status=$?
     printf 'command %s exit=%s expected=%s seconds=%s log=%s\n' \
         "$job" "$status" "$expected" "$(( $(date +%s) - start ))" "$log" >> "$receipt"
     if [ "$status" -ne "$expected" ]; then
@@ -49,6 +50,7 @@ require (
 )
 MOD
 
+run tidy 0 "$runner" tidy
 run vendor 0 "$runner" vendor
 run build 0 "$runner" build -v -o "$work/ocaml-crunch"
 binary="$work/ocaml-crunch"

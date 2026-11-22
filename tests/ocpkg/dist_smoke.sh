@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+timeout_cmd=$(command -v timeout || command -v gtimeout)
 bundle=$1
 case "$bundle" in /*) ;; *) bundle="$PWD/$bundle";; esac
 work=$2
@@ -19,11 +20,19 @@ run() {
     shift
     log="$work/$stage.log"
     result=0
-    timeout 180 "$@" > "$log" 2>&1 || result=$?
+    "$timeout_cmd" 180 "$@" > "$log" 2>&1 || result=$?
     printf '%s exit=%s log=%s\n' "$stage" "$result" "$log" | tee -a "$work/receipt.txt"
     if [ "$result" -ne 0 ]; then tail -30 "$log" >&2; exit "$result"; fi
 }
 
+(
+    cd "$prefix"
+    if command -v sha256sum >/dev/null 2>&1; then
+        run toolchain-checksums sha256sum -c lib/occ/toolchain.sha256
+    else
+        run toolchain-checksums shasum -a 256 -c lib/occ/toolchain.sha256
+    fi
+)
 run init ocpkg init sample
 run add ocpkg add cmdliner
 cat > src/main.ml <<'ML'

@@ -8,11 +8,12 @@ type t = {
   cflags : string list;
   verbose : bool;
   cache : string;
+  index : Digest_index.t;
 }
 
 val compiler_binary : unit -> string option
 val prepare :
-  target:string -> single_thread:bool -> cflags:string list -> verbose:bool ->
+  index:Digest_index.t -> cache:string -> target:string -> single_thread:bool -> cflags:string list -> verbose:bool ->
   (t, string) result
 
 val runtime : t -> include_main:bool -> (string list, string) result

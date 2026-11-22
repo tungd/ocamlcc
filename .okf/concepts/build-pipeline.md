@@ -6,7 +6,7 @@ tags: [build, ninja, dune, qbe]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-22
+  at: 2026-11-23
 sources:
   - id: build-ninja
     resource: ../build.ninja
@@ -37,10 +37,19 @@ One checked-in `build.ninja` drives everything[^build-ninja]:
 tests by redirecting `$builddir/$name > $builddir/$name.out` before `diff` so
 non-zero exit codes never fail silently; `ninja asan_test` runs key runtime-heavy
 examples under ASan+UBSan; `dune runtest` runs the compiler unit, IR, and
-negative diagnostic tests in `test/`; `.github/workflows/ci.yml` runs all
-three suites on both Linux (epoll) and macOS (kqueue). All outputs stay under
-the gitignored `build/` directory — nothing is ever written into `vendor/qbe`
-or `_build` by ninja itself.
+negative diagnostic tests in `test/`. `.github/workflows/ci.yml` runs the
+compiler and runtime suites on both Linux (epoll) and macOS (kqueue).
+The Linux job installs the libcurl development headers, `pkg-config`, and
+Python 3. Both jobs run `ninja -j1 ocpkg_test dist_smoke ocpkg_catalog` to
+verify the CLI, relocated archive, and daily-use catalog APIs. Ninja's
+build products stay under the gitignored `build/` directory.
+
+The tagged release workflow runs the package and distribution tests for
+macOS ARM64, Linux x86-64, and Linux ARM64 before publishing the archives,
+`SHA256SUMS`, and the installer. The publish job runs only in `tungd/ocamlcc`.
+`tools/dist.sh --path` supplies the canonical archive path to the smoke
+test, including `occ-linux-arm64.tar.gz` on hosts that report `aarch64`.
+[Verified bundle behavior](/concepts/package-catalog.md#standalone-bundle)
 
 # Decisions and gotchas
 

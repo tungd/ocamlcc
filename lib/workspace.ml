@@ -8,9 +8,12 @@ type options = {
   output : string option;
   single_thread : bool;
   verbose : bool;
+  verify_cache : bool;
+  xcframework : bool;
+  emit_header : string option;
 }
 
-let defaults = {target = "host"; kind = None; output = None; single_thread = false; verbose = false}
+let defaults = {target = "host"; kind = None; output = None; single_thread = false; verbose = false; verify_cache = false; xcframework = false; emit_header = None}
 
 type pack = {
   recipe : recipe;
@@ -60,7 +63,7 @@ let prepare_package tools ~vendor ~prior recipe =
         @ List.map (fun key -> "dependency", Sha256.to_hex key) scope.package_keys)
   in
   let store = Filename.concat tools.cache "pkg" in
-  let* entry = Build_cache.ensure ~store ~key (fun directory ->
+  let* entry = Build_cache.ensure ~index:tools.Pkg_toolchain.index ~store ~key (fun directory ->
     let source_root = Filename.concat vendor (package_name recipe) in
     let staging = Filename.temp_dir "ocpkg-package-" "" in
     Fun.protect ~finally:(fun () -> rm_rf staging) (fun () ->
@@ -71,7 +74,7 @@ let prepare_package tools ~vendor ~prior recipe =
           target) recipe.files in
       let* output =
         Pkg_compile.compile ~tools ~scope ~wrapping:recipe.wrapping ~exports:recipe.exports
-          ~sources:(module_sources files) ~c_sources:(native_sources files) ~directory ()
+          ~cflags:recipe.cflags ~sources:(module_sources files) ~c_sources:(native_sources files) ~directory ()
       in
       let archive = package_archive directory recipe in
       let* () = Pkg_toolchain.archive tools archive output.objects in
@@ -86,7 +89,7 @@ let prepare_package tools ~vendor ~prior recipe =
   let units = read_file (Filename.concat directory "units") |> String.split_on_char '\n'
               |> List.filter (fun unit -> unit <> "") in
   let archive = package_archive directory recipe in
-  let* outputs = Build_cache.fingerprints [archive; archive ^ ".opt"] in
+  let* outputs = Build_cache.fingerprints ~index:tools.index [archive; archive ^ ".opt"] in
   let id = Build_cache.key (("recipe", Sha256.to_hex key) :: outputs) in
   Ok {recipe; id; directory; archive; units}
 
@@ -161,7 +164,7 @@ let output_name tools kind name =
 let entry_point tools store modules =
   let key = Build_cache.key (["toolchain", Sha256.to_hex tools.Pkg_toolchain.fingerprint; "entry", "1"]
       @ List.map (fun name -> "module", name) modules) in
-  let+ entry = Build_cache.ensure ~store ~key (fun directory ->
+  let+ entry = Build_cache.ensure ~index:tools.Pkg_toolchain.index ~store ~key (fun directory ->
     let ssa = Filename.concat directory "entry.ssa" in
     let obj = Filename.concat directory "entry.o" in
     let entry = Codegen.entry_point modules in
@@ -170,15 +173,15 @@ let entry_point tools store modules =
     Sys.remove ssa) in
   Filename.concat entry.directory "entry.o"
 
-let digest_objects paths =
-  let+ digests = Build_cache.fingerprints paths in
+let digest_objects index paths =
+  let+ digests = Build_cache.fingerprints ~index paths in
   List.map (fun (_, digest) -> "object", digest) digests
 
-let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_objects =
+let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_objects ~dependency_ldflags =
   let mode = match kind with
     | Exe -> Linker.Executable | Static -> Static | Shared -> Shared None
   in
-  let ldflags = workspace.Pkg_project.manifest.ldflags in
+  let ldflags = dependency_ldflags @ workspace.Pkg_project.manifest.ldflags in
   let explicit_install_name =
     List.exists (fun flag ->
       String.split_on_char ',' flag |> List.exists (fun part ->
@@ -190,7 +193,7 @@ let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_object
         ["-Xlinker"; "-install_name"; "-Xlinker"; output] @ ldflags
     | _ -> ldflags
   in
-  let* fingerprints = digest_objects (user_objects @ internal_objects) in
+  let* fingerprints = digest_objects tools.index (user_objects @ internal_objects) in
   let key = Build_cache.key
       (["toolchain", Sha256.to_hex tools.Pkg_toolchain.fingerprint;
         "mode", (match kind with Exe -> "exe" | Static -> "static" | Shared -> "shared");
@@ -201,7 +204,7 @@ let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_object
   let receipt = Filename.concat link_receipt (Sha256.to_hex key) in
   let hit =
     Sys.file_exists receipt && Sys.file_exists output &&
-    match Sha256.file output with
+    match Digest_index.file tools.index output with
     | Ok digest -> String.trim (read_file receipt) = Sha256.to_hex digest
     | Error _ -> false
   in
@@ -221,12 +224,18 @@ let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_object
       output)
   end
 
-let app_shims tools scope workspace ~cache ~output ~compiled_dir =
-  match workspace.Pkg_project.manifest.public_mli with
-  | [] -> Ok []
-  | rel_paths ->
-      let files = List.map (Rel_path.resolve ~root:workspace.root) rel_paths in
-      let header = Filename.basename (Filename.remove_extension output ^ ".h") in
+let app_shims tools scope (workspace : Pkg_project.t) options ~sources ~cache ~output ~compiled_dir =
+  let files =
+    match workspace.manifest.public_mli, options.emit_header with
+    | [], Some _ -> List.filter (fun path -> Filename.check_suffix path ".mli") sources
+    | paths, _ -> List.map (Rel_path.resolve ~root:workspace.root) paths
+  in
+  match files, options.emit_header with
+  | [], None -> Ok []
+  | [], Some _ -> Error "--emit-header requires at least one .mli input"
+  | files, emit_header ->
+      let output = Option.value ~default:(Filename.remove_extension output ^ ".h") emit_header in
+      let header = Filename.basename output in
       let interfaces = List.map (fun path -> Pipeline.module_name_of_file path, path) files in
       let include_dirs = compiled_dir :: tools.Pkg_toolchain.stdlib :: scope.Pkg_compile.visible in
       let* digests = Build_cache.fingerprints (files @ files_with_suffix compiled_dir ".cmi") in
@@ -234,7 +243,7 @@ let app_shims tools scope workspace ~cache ~output ~compiled_dir =
       let dependencies = List.map (fun key -> "dependency", Sha256.to_hex key) scope.package_keys in
       let key = Build_cache.key (["toolchain", Sha256.to_hex tools.fingerprint; "header", header]
           @ dependencies @ digests) in
-      let+ entry = Build_cache.ensure ~store:cache ~key (fun directory ->
+      let+ entry = Build_cache.ensure ~index:tools.Pkg_toolchain.index ~store:cache ~key (fun directory ->
         let* generated = C_bindgen.generate_headers ~include_dirs ~nopervasives:false ~nostdlib:true
             ~work_dir:directory ~output:(Filename.concat directory header) interfaces in
         let pic = if tools.target.os = Windows then [] else ["-fPIC"] in
@@ -246,15 +255,20 @@ let app_shims tools scope workspace ~cache ~output ~compiled_dir =
       mkdir_p destination;
       List.iter (fun path ->
         write_if_changed (Filename.concat destination (Filename.basename path)) (read_file path))
-        (files_with_suffix entry.directory ".h");
+        (files_with_suffix entry.directory ".h"
+         |> fun paths ->
+           let primary = Filename.concat entry.directory header in
+           if List.mem primary paths then paths else primary :: paths);
       files_with_suffix entry.directory ".o"
 
 let build_target (workspace : Pkg_project.t) (options : options) selected_test =
   let kind = Option.value ~default:workspace.manifest.kind options.kind in
   let single_thread = options.single_thread || workspace.manifest.single_thread_rc in
+  let* cache = Pkg_project.cache_dir () in
+  Digest_index.with_index ~cache ~workspace:workspace.root ~verify:options.verify_cache (fun index ->
   let* lock = Pkg_project.read_lock workspace in
-  let* () = Pkg_vendor.verify ~vendor:(Pkg_project.vendor_dir workspace) lock.packages in
-  let* tools = Pkg_toolchain.prepare ~target:options.target ~single_thread
+  let* () = Pkg_vendor.verify ~index ~vendor:(Pkg_project.vendor_dir workspace) lock.packages in
+  let* tools = Pkg_toolchain.prepare ~index ~cache ~target:options.target ~single_thread
       ~cflags:workspace.manifest.cflags ~verbose:options.verbose in
   let* packs = prepare_dependencies tools workspace lock in
   let catalog_exe =
@@ -293,7 +307,7 @@ let build_target (workspace : Pkg_project.t) (options : options) selected_test =
       in
       if tools.verbose then
         Printf.eprintf "%d fresh units, %d cached units\n%!" app.compiled app.hits;
-      let* shims = app_shims tools scope workspace ~cache ~output ~compiled_dir in
+      let* shims = app_shims tools scope workspace options ~sources ~cache ~output ~compiled_dir in
       let modules = List.concat_map (fun pack -> pack.units) packs @ app.units in
       let* entry = match kind with
         | Exe -> let+ obj = entry_point tools cache modules in [obj]
@@ -307,7 +321,8 @@ let build_target (workspace : Pkg_project.t) (options : options) selected_test =
       let include_main = kind = Exe in
       let* runtime = Pkg_toolchain.runtime tools ~include_main in
       let internal_objects = Pkg_toolchain.stdlib_link_inputs tools ~archive:include_main @ runtime in
-      link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_objects)
+      let dependency_ldflags = List.concat_map (fun pack -> pack.recipe.ldflags) (List.rev packs) in
+      link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_objects ~dependency_ldflags))
 
 let protect f =
   try f () with
@@ -316,33 +331,95 @@ let protect f =
   | Unix.Unix_error (code, op, path) ->
       Error (Printf.sprintf "%s %s: %s" op path (Unix.error_message code))
 
-let build workspace options = protect (fun () -> build_target workspace options None)
+let build_xcframework (workspace : Pkg_project.t) options =
+  let name = Package_name.to_string workspace.manifest.project in
+  let default = Filename.concat workspace.root (".ocpkg/bin/" ^ name ^ ".xcframework") in
+  let output = Option.value ~default options.output in
+  let output = if Filename.is_relative output then Filename.concat (Sys.getcwd ()) output else output in
+  mkdir_p (Filename.dirname output);
+  let temporary = Filename.temp_dir ~temp_dir:(Filename.dirname output) ".xcframework-" "" in
+  Fun.protect ~finally:(fun () -> rm_rf temporary) (fun () ->
+    let sources = inputs workspace None in
+    let headers = workspace.manifest.public_mli <> [] || options.emit_header <> None ||
+      List.exists (fun path -> Filename.check_suffix path ".mli") sources in
+    let header_basename = Option.fold ~none:(name ^ ".h") ~some:Filename.basename options.emit_header in
+    let slice target name =
+      let path = Filename.concat temporary (name ^ ".a") in
+      let directory = if headers then Some (Filename.concat temporary name) else None in
+      let emit_header = Option.map (fun dir -> Filename.concat dir header_basename) directory in
+      let options = {options with target; kind = Some Static; output = Some path; emit_header} in
+      let+ library = build_target workspace options None in
+      library, directory
+    in
+    let* device, device_headers = slice "ios-arm64" "device" in
+    let* simulator, simulator_headers = slice "ios-sim-arm64" "simulator" in
+    let staged = Filename.concat temporary (Filename.basename output) in
+    let* _ = Linker.xcframework ~verbose:options.verbose ~work_dir:temporary ~output:staged ~header:None
+      ~header_dirs:[device_headers; simulator_headers] [device; simulator] in
+    let previous = Filename.concat temporary ".previous" in
+    let had_previous = Sys.file_exists output in
+    if had_previous && not (Sys.file_exists (Filename.concat output "Info.plist")) then
+      Error ("output is not an XCFramework: " ^ output)
+    else begin
+      if had_previous then Unix.rename output previous;
+      (try Unix.rename staged output with error ->
+        if had_previous then Unix.rename previous output;
+        raise error);
+      (match options.emit_header, device_headers with
+       | Some destination, Some directory ->
+           mkdir_p (Filename.dirname destination);
+           Array.iter (fun file ->
+             write_if_changed (Filename.concat (Filename.dirname destination) file)
+               (read_file (Filename.concat directory file))) (Sys.readdir directory)
+       | _ -> ());
+      Ok output
+    end)
+
+let is_xcframework options = options.xcframework || options.target = "ios-xcframework"
+
+let build workspace options =
+  protect (fun () ->
+    if is_xcframework options then build_xcframework workspace options
+    else build_target workspace options None)
 
 let run workspace options args =
   protect (fun () ->
-    let* output = build workspace {options with kind = Some Exe} in
-    Unix.chdir workspace.Pkg_project.root;
-    Unix.execv output (Array.of_list (output :: args)))
+    if is_xcframework options then Error "run requires an executable target"
+    else
+      let* output = build workspace {options with kind = Some Exe} in
+      Unix.chdir workspace.Pkg_project.root;
+      Unix.execv output (Array.of_list (output :: args)))
 
-let test workspace options selectors =
+let test workspace options selectors args =
   protect (fun () ->
-    let tests = workspace.Pkg_project.manifest.tests in
-    let choose value =
-      List.find_opt (fun (test : test) -> Package_name.to_string test.name = value) tests
-    in
-    let rec select chosen = function
-      | [] -> Ok (List.rev chosen)
-      | name :: rest ->
-          match choose name with
-          | None -> Error ("unknown test: " ^ name)
-          | Some test -> select (test :: chosen) rest
-    in
-    let* tests = if selectors = [] then Ok tests else select [] selectors in
-    let rec run = function
-      | [] -> Ok ()
-      | test :: rest ->
-          let* path = build_target workspace {options with kind = Some Exe; output = None} (Some test) in
-          let* () = run_cmd ~verbose:options.verbose path [] in
-          run rest
-    in
-    run tests)
+    if is_xcframework options then Error "test requires an executable target"
+    else
+      let tests = workspace.Pkg_project.manifest.tests in
+      let choose value =
+        List.find_opt (fun (test : test) -> Package_name.to_string test.name = value) tests
+      in
+      let rec select chosen = function
+        | [] -> Ok (List.rev chosen)
+        | name :: rest ->
+            match choose name with
+            | None -> Error ("unknown test: " ^ name)
+            | Some test -> select (test :: chosen) rest
+      in
+      let* tests = if selectors = [] then Ok tests else select [] selectors in
+      Unix.chdir workspace.root;
+      let rec run passed failed = function
+        | [] ->
+            Printf.printf "%d passed, %d failed (%d tests)\n%!" passed failed (passed + failed);
+            if failed = 0 then Ok () else Error "test failures"
+        | test :: rest ->
+            let name = Package_name.to_string test.name in
+            let result =
+              let* path = build_target workspace {options with kind = Some Exe; output = None} (Some test) in
+              run_cmd ~verbose:options.verbose path args in
+            match result with
+            | Ok () -> Printf.printf "PASS %s\n%!" name; run (passed + 1) failed rest
+            | Error message ->
+                Printf.eprintf "FAIL %s: %s\n%!" name message;
+                run passed (failed + 1) rest
+      in
+      run 0 0 tests)
