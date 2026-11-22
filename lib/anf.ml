@@ -489,9 +489,7 @@ and conv_simple env ?(result_kind = Lambda.Pgenval) (id : Ident.t)
           conv_atoms env args (fun vs -> emit_cexpr (Ccall ("caml_greaterequal", vs)))
       | "caml_restore_raw_backtrace", [ ex; bt ] ->
           conv_expr env ex (fun _ -> conv_expr env bt (fun _ -> emit_cexpr (Atom (Int 0))))
-      | sym, args
-        when pd.Primitive.prim_arity = List.length args
-             && List.length args <= 6 -> (
+      | sym, args when pd.Primitive.prim_arity = List.length args -> (
           (* C externals: [caml_*] primitives must be registered with their
              C ABI in [Ccalls] (unknown ones are rejected — they are
              compiler/runtime implementation details, not a user ABI);
