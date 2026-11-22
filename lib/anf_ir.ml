@@ -89,6 +89,12 @@ type integer_relation = Predicate of Lambda.integer_comparison | Three_way
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
+module Byte_store = struct
+  type t = Uint16 of atom | Int32 of scalar_operand | Int64 of scalar_operand
+
+  let width = function Uint16 _ -> 2 | Int32 _ -> 4 | Int64 _ -> 8
+end
+
 type field_kind = Immediate_field | Immutable_field | Mutable_field
 type block_scan = Scan_all | Scan_if_managed | Scan_none
 
@@ -111,7 +117,7 @@ type cexpr =
   | StringGet of bool * atom * atom
   | BytesSet of bool * atom * atom * atom
   | BytesGetN of bool * int * atom * atom
-  | BytesSetN of bool * int * atom * atom * atom
+  | BytesSetN of bool * atom * atom * Byte_store.t
   | Bswap16 of atom
   | BswapBint of Lambda.boxed_integer * atom
   | ArrayGet of bool * Lambda.array_kind * atom * atom
@@ -256,6 +262,11 @@ let scalar_operand_vars acc = function
   | Boxed_scalar a -> atom_vars acc a
   | Raw_scalar id -> Ident.Set.add id acc
 
+let byte_store_vars ?(include_raw = true) acc = function
+  | Byte_store.Uint16 a -> atom_vars acc a
+  | Int32 (Raw_scalar _) | Int64 (Raw_scalar _) when not include_raw -> acc
+  | Int32 v | Int64 v -> scalar_operand_vars acc v
+
 let bound_parameters (lf : lfunction) =
   List.map fst lf.params @ List.map (fun (_, (_, owner)) -> owner) lf.loop_scalars
 
@@ -295,7 +306,9 @@ let cexpr_vars ?(include_raw = true) free_aexpr acc ce =
   | ArrayGet (_, _, a, b)
   | MakeArrayInit (a, b) ->
       atom_vars (atom_vars acc a) b
-  | BytesSet (_, a, b, c) | BytesSetN (_, _, a, b, c) | ArraySet (_, _, a, b, c) ->
+  | BytesSetN (_, a, b, word) ->
+      byte_store_vars ~include_raw (atom_vars (atom_vars acc a) b) word
+  | BytesSet (_, a, b, c) | ArraySet (_, _, a, b, c) ->
       atom_vars (atom_vars (atom_vars acc a) b) c
   | App (fn, args) ->
       List.fold_left atom_vars (atom_vars acc fn) args

@@ -71,6 +71,7 @@ module Lower_env = struct
     slots : Lambda.value_kind Ident.Map.t;
     printing : Builtins.table option;
     selectors : Builtins.int_selection_table Lazy.t option;
+    byte_store : Lambda.lambda -> Builtins.byte_store option;
   }
 end
 
@@ -191,6 +192,10 @@ and conv_bigstring env symbol width unsafe args k =
   let checked = Int (if unsafe then 0 else 1) in
   conv_atoms env args (fun args -> k (Ccall (symbol, args @ [Int width; checked])))
 
+and conv_byte_store env safe word b i v k =
+  conv_expr env b (fun b -> conv_expr env i (fun i -> conv_expr env v (fun v ->
+    k (BytesSetN (safe, b, i, word v)))))
+
 and conv_fun env ?self (lf : Lambda.lfunction) : lfunction =
   match lf.kind with
   | Curried ->
@@ -309,12 +314,20 @@ and conv_simple env ?(result_kind = Lambda.Pgenval) (id : Ident.t)
                   Let (meth, Ccall ("ocamlcc_public_method", [receiver; label]),
                     emit_cexpr (App (Var meth, receiver :: args))))))
   | Lapply { ap_func; ap_args; ap_inlined; _ } -> (
-      let { Lower_env.printing; selectors; _ } = env in
+      let { Lower_env.printing; selectors; byte_store; _ } = env in
       let select = Option.bind selectors (fun table -> Builtins.resolve_int_selection table ap_func) in
-      match select, ap_args with
-      | Some op, [ lhs; rhs ] ->
+      let store = if ap_inlined = Never_inline then None else byte_store ap_func in
+      match select, store, ap_args with
+      | Some op, _, [ lhs; rhs ] ->
           conv_expr env lhs (fun a ->
               conv_expr env rhs (fun b -> emit_cexpr (IntSelect (op, a, b))))
+      | _, Some store, [ b; i; v ] ->
+          let word v = match store with
+            | Builtins.Word32 -> Byte_store.Int32 (Boxed_scalar v)
+            | Word64 -> Byte_store.Int64 (Boxed_scalar v)
+          in
+          Let (Ident.create_local "import", ImportDependency "Stdlib__Bytes",
+            conv_byte_store env true word b i v emit_cexpr)
       | _ -> (
           match Option.bind printing (fun table -> Builtins.resolve ~table ap_func) with
           | Some { symbol; arg_kind } -> (
@@ -612,17 +625,11 @@ and conv_simple env ?(result_kind = Lambda.Pgenval) (id : Ident.t)
         | [ sa; ia ] -> emit_cexpr (BytesGetN (not unsafe, 8, sa, ia))
         | _ -> assert false)
   | Lprim (Pbytes_set_16 unsafe, [ b; i; v ], _) ->
-      conv_atoms env [ b; i; v ] (function
-        | [ ba; ia; va ] -> emit_cexpr (BytesSetN (not unsafe, 2, ba, ia, va))
-        | _ -> assert false)
+      conv_byte_store env (not unsafe) (fun v -> Byte_store.Uint16 v) b i v emit_cexpr
   | Lprim (Pbytes_set_32 unsafe, [ b; i; v ], _) ->
-      conv_atoms env [ b; i; v ] (function
-        | [ ba; ia; va ] -> emit_cexpr (BytesSetN (not unsafe, 4, ba, ia, va))
-        | _ -> assert false)
+      conv_byte_store env (not unsafe) (fun v -> Byte_store.Int32 (Boxed_scalar v)) b i v emit_cexpr
   | Lprim (Pbytes_set_64 unsafe, [ b; i; v ], _) ->
-      conv_atoms env [ b; i; v ] (function
-        | [ ba; ia; va ] -> emit_cexpr (BytesSetN (not unsafe, 8, ba, ia, va))
-        | _ -> assert false)
+      conv_byte_store env (not unsafe) (fun v -> Byte_store.Int64 (Boxed_scalar v)) b i v emit_cexpr
   | Lprim (Pbigstring_load_16 unsafe, ([ _; _ ] as args), _) ->
       conv_bigstring env "ocamlcc_bigstring_get" 2 unsafe args emit_cexpr
   | Lprim (Pbigstring_load_32 unsafe, ([ _; _ ] as args), _) ->
@@ -817,8 +824,13 @@ let lower ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = []
         ~collect_exports program.code
     in
     let env =
+      let byte_store =
+        Option.fold ~none:(fun _ -> None)
+          ~some:(fun stdlib_dir -> Builtins.byte_store ~include_dirs ~stdlib_dir)
+          stdlib_dir
+      in
       { Lower_env.scalars = optimized.scalars; imports; slots = optimized.slots;
-        printing; selectors }
+        printing; selectors; byte_store }
     in
     let anf =
       Anf_scalar.run

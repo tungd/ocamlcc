@@ -104,6 +104,12 @@ let rec specialize_scalar_chain bindings tail =
       | Value (ScalarStore (access, arr, index, v)) ->
           let rep = Option.get (scalar_rep access.kind) in
           Variables.atom (Variables.atom boxed arr) index, demand rep scalar v
+      | Value (BytesSetN (_, bytes, index, word)) ->
+          let boxed = Variables.atom (Variables.atom boxed bytes) index in
+          (match word with
+           | Uint16 v -> Variables.atom boxed v, scalar
+           | Int32 v -> boxed, demand (Integer_scalar Pint32) scalar v
+           | Int64 v -> boxed, demand (Integer_scalar Pint64) scalar v)
       | Value (FloatArraySet (_, arr, index, v)) ->
           Variables.atom (Variables.atom boxed arr) index, demand Double_scalar scalar v
       | Value (SetFloatField (_, owner, v) | SetBoxedFloatField (_, owner, v)) ->
@@ -141,6 +147,10 @@ let rec specialize_scalar_chain bindings tail =
           Value (AssignScalar (slot, rep, operand value))
       | Value (ScalarStore (access, arr, index, v)) ->
           Value (ScalarStore (access, arr, index, operand v))
+      | Value (BytesSetN (safe, bytes, index, Int32 v)) ->
+          Value (BytesSetN (safe, bytes, index, Int32 (operand v)))
+      | Value (BytesSetN (safe, bytes, index, Int64 v)) ->
+          Value (BytesSetN (safe, bytes, index, Int64 (operand v)))
       | Value (FloatBinop (op, lhs, rhs)) -> Value (FloatBinop (op, operand lhs, operand rhs))
       | Value (FloatCompare (op, lhs, rhs)) -> Value (FloatCompare (op, operand lhs, operand rhs))
       | Value (FloatArraySet (safe, arr, index, value)) ->
@@ -424,6 +434,7 @@ and specialize_let_chain bindings = function
       let tail = specialize_scalar_bindings tail in
       if List.exists (function
         | _, Value (BoxScalar _ | AssignScalar _ | ScalarStore _ | FloatBinop _ | IntegerBinop _
+                   | BytesSetN (_, _, _, (Int32 _ | Int64 _))
                    | ScalarValue _ | IntegerCompare _ | IntOfInteger _
                    | FloatCompare _ | IntOfFloat _ | FloatArraySet _ | SetFloatField _ | SetBoxedFloatField _) -> true
         | _ -> false) bindings

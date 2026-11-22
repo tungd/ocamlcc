@@ -64,8 +64,8 @@ let fuse_field_read ~can_borrow ~borrowed_flags ~yielding ~stable id index owner
         Some (BytesGetN (safe, width, substitute str, i))
     | BytesSet (safe, str, i, v) ->
         Some (BytesSet (safe, substitute str, substitute i, v))
-    | BytesSetN (safe, width, str, i, v) ->
-        Some (BytesSetN (safe, width, substitute str, substitute i, v))
+    | BytesSetN (safe, str, i, word) ->
+        Some (BytesSetN (safe, substitute str, substitute i, word))
     | _ -> None
   in
   let can_cross = function

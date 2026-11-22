@@ -6,7 +6,7 @@ tags: [value-representation, codegen, arc]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-22
+  at: 2026-11-23
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -126,6 +126,22 @@ width through arithmetic, shifts, and conversions. A chain boxes its result
 where an ordinary OCaml value is required. Checked array operations preserve
 bounds exceptions, and boxed-integer division preserves zero-divisor and
 signed overflow behavior.
+
+## Checked byte stores
+
+Selected Stdlib `Bytes` word setters with the native byte order lower to
+checked stores. The compiler resolves the exact standard-library binding and
+honors explicit no-inline calls. A 32-bit or 64-bit scalar used only by a
+store can remain unboxed through conversion and the write. A use that needs
+an OCaml value keeps the ordinary box. The store checks the complete byte
+range before writing, including at unaligned offsets.
+
+On macOS ARM64, two paired eight-second runs of the same 8,388,705-byte
+tterm replay measured 15.53 to 18.60 MiB/s on single-thread ARC.
+Average apply time per iteration fell from 409.16 to 327.42 ms and
+allocation from 605.42 to 473.09 MB. A separate million-store probe
+reported 3,000,026 words before the change and 26 after, including
+measurement overhead.
 
 ## Mutable numeric slots
 

@@ -97,6 +97,12 @@ type integer_relation = Predicate of Lambda.integer_comparison | Three_way
 
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
+module Byte_store : sig
+  type t = Uint16 of atom | Int32 of scalar_operand | Int64 of scalar_operand
+
+  val width : t -> int
+end
+
 type field_kind = Immediate_field | Immutable_field | Mutable_field
 type block_scan = Scan_all | Scan_if_managed | Scan_none
 
@@ -119,7 +125,7 @@ type cexpr =
   | StringGet of bool * atom * atom
   | BytesSet of bool * atom * atom * atom
   | BytesGetN of bool * int * atom * atom
-  | BytesSetN of bool * int * atom * atom * atom
+  | BytesSetN of bool * atom * atom * Byte_store.t
   | Bswap16 of atom
   | BswapBint of Lambda.boxed_integer * atom
   | ArrayGet of bool * Lambda.array_kind * atom * atom
@@ -239,6 +245,7 @@ type program = {
 
 val scalar_rep : Lambda.bigarray_kind -> scalar_rep option
 val scalar_operand_vars : Ident.Set.t -> scalar_operand -> Ident.Set.t
+val byte_store_vars : ?include_raw:bool -> Ident.Set.t -> Byte_store.t -> Ident.Set.t
 val returns_scalar : aexpr -> bool
 val free_vars : aexpr -> Ident.Set.t
 val bound_parameters : lfunction -> Ident.t list

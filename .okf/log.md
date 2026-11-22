@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Keep scalar conversions unboxed through checked Bytes word stores. Verify the generated store, bounds checks, and the exact tterm replay. See [checked byte stores](/concepts/value-representation.md#checked-byte-stores).
+
 - 2026-11-23 (codex/1) — Align the ANF negative suite with supported public sends and wide native externals. Exercise the diagnostic for private self sends. See [stdlib compatibility](/concepts/stdlib-compatibility.md).
 
 - 2026-11-23 (codex/1) — Lower public object sends for unchanged Yojson output. Resolve method labels through the OCaml table layout and reuse ARC closure application. See [stdlib compatibility](/concepts/stdlib-compatibility.md).

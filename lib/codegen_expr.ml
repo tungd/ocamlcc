@@ -675,29 +675,23 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
         let len = string_len_raw b bsv in
         compile_bytes_slice_bounds_guarded b ?on_oob ui len width do_read
       else do_read ()
-  | BytesSetN (safe, width, bs, idx, v) ->
+  | BytesSetN (safe, bs, idx, word) ->
       let bsv = compile_atom hooks b bs in
       let ui = compile_untagged hooks b idx in
-      let vv = compile_atom hooks b v in
       let do_write () =
         let addr = fresh_temp b "bsptr" in
         emit b (Binop (Add, Long, addr, bsv, ui));
-        (match width with
-        | 2 ->
-            let uv = untag b vv in
-            emit b (Store (Storeh, uv, addr))
-        | 4 ->
-            let raw = unbox_bint b Pint32 vv in
-            emit b (Store (Storew, raw, addr))
-        | 8 ->
-            let raw = unbox_bint b Pint64 vv in
-            emit b (Store (Storel, raw, addr))
-        | w -> failwith (Printf.sprintf "unsupported BytesSetN width %d" w));
+        let store, value = match word with
+          | Uint16 v -> Storeh, compile_untagged hooks b v
+          | Int32 v -> Storew, compile_scalar_operand hooks b (Integer_scalar Pint32) v
+          | Int64 v -> Storel, compile_scalar_operand hooks b (Integer_scalar Pint64) v
+        in
+        emit b (Store (store, value, addr));
         unit_const
       in
       if safe then
         let len = string_len_raw b bsv in
-        compile_bytes_slice_bounds_guarded b ?on_oob ui len width do_write
+        compile_bytes_slice_bounds_guarded b ?on_oob ui len (Anf.Byte_store.width word) do_write
       else do_write ()
   | Bswap16 a ->
       let av = compile_atom hooks b a in
@@ -1028,7 +1022,7 @@ let with_dereferenced_receiver b (ce : Anf.cexpr) f =
     | Field (_, _, obj) | SetField (_, _, obj, _) | FloatField (_, obj)
     | SetFloatField (_, obj, _) | StringGet (_, obj, _)
     | BytesSet (_, obj, _, _) | BytesGetN (_, _, obj, _)
-    | BytesSetN (_, _, obj, _, _) | ArrayGet (_, _, obj, _)
+    | BytesSetN (_, obj, _, _) | ArrayGet (_, _, obj, _)
     | ArraySet (true, _, obj, _, _)
     | ArraySet (false, (Pintarray | Pfloatarray), obj, _, _)
     | FloatArrayGet (_, obj, _) | FloatArraySet (_, obj, _, _)
@@ -1056,7 +1050,7 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   | Let (id, PollFinalizers, CheckExn (exception_kind, on_err, on_ok)) ->
       compile_finalizer_poll hooks b tail id exception_kind on_err on_ok
   | Let (id, (StringGet (true, _, _) | BytesSet (true, _, _, _)
-            | BytesGetN (true, _, _, _) | BytesSetN (true, _, _, _, _)
+            | BytesGetN (true, _, _, _) | BytesSetN (true, _, _, _)
             | ArrayGet (true, _, _, _) | ArraySet (true, _, _, _, _)
             | FloatArrayGet (true, _, _) | FloatArraySet (true, _, _, _) as ce),
       CheckExn (_, on_err, on_ok)) ->

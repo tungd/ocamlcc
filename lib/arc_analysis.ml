@@ -263,9 +263,11 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
       (Anf.scalar_operand_vars (atom_vars owner) v, [])
   | StringGet (_, a, b) | BytesGetN (_, _, a, b) | ArrayGet (_, _, a, b) ->
       (Ident.Set.union (atom_vars a) (atom_vars b), [])
-  | BytesSet (_, a, b, c) | BytesSetN (_, _, a, b, c) ->
+  | BytesSet (_, a, b, c) ->
       ( Ident.Set.union (atom_vars a) (Ident.Set.union (atom_vars b) (atom_vars c)),
         [] )
+  | BytesSetN (_, bytes, index, word) ->
+      (Anf.byte_store_vars (Ident.Set.union (atom_vars bytes) (atom_vars index)) word, [])
   | ArraySet (_, _, arr, idx, v) ->
       (Ident.Set.union (atom_vars arr) (atom_vars idx), [ v ])
   | MakeArrayInit (len, init) -> (atom_vars len, [ init ])
@@ -398,7 +400,7 @@ let operation_can_raise ~finalizers known raising = function
   | StringGet (true, _, _)
   | BytesSet (true, _, _, _)
   | BytesGetN (true, _, _, _)
-  | BytesSetN (true, _, _, _, _)
+  | BytesSetN (true, _, _, _)
   | ArrayGet (true, _, _, _)
   | FloatArrayGet (true, _, _) | FloatArraySet (true, _, _, _)
   | ArraySet (true, _, _, _, _)

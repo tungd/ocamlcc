@@ -31,3 +31,10 @@ val resolve_int_selection :
 val array_initializer :
   include_dirs:string list -> stdlib_dir:string -> Lambda.lambda -> bool
 (** Recognize the selected standard library's [Array.init] callee. *)
+
+type byte_store = Word32 | Word64
+
+val byte_store :
+  include_dirs:string list -> stdlib_dir:string -> Lambda.lambda -> byte_store option
+(** Recognize checked word stores in the selected standard library whose
+    requested byte order matches the native store. *)

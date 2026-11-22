@@ -174,8 +174,13 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.StringGet (_, a, b) | Anf.BytesGetN (_, _, a, b)
     | Anf.ArrayGet (_, _, a, b) ->
         count_atom (count_atom acc a) b
-    | Anf.BytesSet (_, a, b, c) | Anf.BytesSetN (_, _, a, b, c) ->
+    | Anf.BytesSet (_, a, b, c) ->
         count_atom (count_atom (count_atom acc a) b) c
+    | Anf.BytesSetN (_, a, b, word) ->
+        let acc = count_atom (count_atom acc a) b in
+        (match word with
+         | Uint16 v | Int32 (Boxed_scalar v) | Int64 (Boxed_scalar v) -> count_atom acc v
+         | Int32 (Raw_scalar _) | Int64 (Raw_scalar _) -> acc)
     | Anf.ArraySet (_, _, a, b, c) ->
         count_atom (count_atom (count_atom acc a) b) c
     | Anf.MakeArrayInit (a, b) -> count_atom (count_atom acc a) b
