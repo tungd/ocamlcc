@@ -156,7 +156,9 @@ The C runtime (`runtime/{arc,slab,cycle,weak,primitives}.c` with `arc_internal.h
 5. `pal_memcpy` / `pal_memset`
 6. Minimal `libm` subset for floating-point intrinsics
 
-Unsupported OCaml language/runtime features (rejected or stubbed): objects/methods (`Lsend`), ephemerons, stack backtraces, OS signal handlers, and `Marshal.Closures`.
+Public object sends use OCaml method tables and ordinary ARC closure application. The minimal `CamlinternalOO` overlay supports instance-variable-only construction.
+
+Unsupported OCaml language/runtime features (rejected or stubbed) include private self dispatch, full class construction, ephemerons, stack backtraces, OS signal handlers, and `Marshal.Closures`.
 
 ## 5. Cross-Compilation & Mobile FFI Workflow
 

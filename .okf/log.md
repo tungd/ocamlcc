@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Lower public object sends for unchanged Yojson output. Resolve method labels through the OCaml table layout and reuse ARC closure application. See [stdlib compatibility](/concepts/stdlib-compatibility.md).
+
 - 2026-11-23 (codex/1) — Route direct stock lexer primitives to the Lexing overlay. Verify raw byte and capture updates, refill, EOF, and position records with generated lexers. See [stdlib compatibility](/concepts/stdlib-compatibility.md).
 
 - 2026-11-23 (codex/1) — Pass all declared arguments to native C externals such as Mirage Crypto's seven-argument AES stub. Exercise a ninth untagged argument in the native FFI test. See [Perceus ARC](/concepts/perceus-arc.md).

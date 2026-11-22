@@ -19,6 +19,7 @@
 #define ARC_TAG_ARRAY       245u
 #define ARC_TAG_PAP         246u
 #define ARC_TAG_CLOSURE     247u
+#define ARC_TAG_OBJECT      248u
 #define ARC_TAG_WEAK        249u
 #define ARC_TAG_FIBER       250u
 #define ARC_TAG_STRING      252u

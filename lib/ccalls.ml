@@ -295,7 +295,8 @@ let table =
     ("caml_gc_tweak_set", abi 2 false false);
     ("caml_gc_tweak_get", abi 1 false false);
     ("caml_gc_tweak_list_active", abi 1 false false);
-    ("caml_get_public_method", abi 2 true false);
+    ("caml_get_public_method", abi 2 false false);
+    ("ocamlcc_public_method", abi 2 true false);
     ("caml_get_continuation_callstack", abi 2 false false);
     (* compiler-libs.common primitives (linked by bootstrap compiler_stubs.c) *)
     ("caml_sys_get_stdlib_dirs", abi 1 false false);

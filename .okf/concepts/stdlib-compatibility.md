@@ -195,6 +195,17 @@ records. The compiler initializes the Lexing module for callers that
 only reference the primitive. The generated fixtures in
 `tests/stdlib/lexing` cover both entry points, including refill, EOF,
 exceptions, and unchanged position records on direct calls.
+
+Public object sends use the tagged labels in the receiver's OCaml method
+table. The compiler retrieves an owned method closure and applies it to
+the receiver and arguments through normal ARC application. Cached sends
+use the same lookup. The minimal `CamlinternalOO` overlay still provides
+instance-variable-only construction. The `object_send` regression
+supplies stock-layout receivers and exercises Yojson's three-argument
+output shape, partial application, and exceptions. The unchanged Yojson
+3.0.0 package matches stock OCaml for chunked parsing, malformed-input
+positions, and `to_output` on a stock-layout receiver.
+
 The Digest overlay (`stdlib/overlay/digest.ml`) implements RFC 1321 MD5 and
 RFC 7693 BLAKE2b (`MD5`, `BLAKE128`, `BLAKE256`, `BLAKE512`) in pure OCaml
 with zero C externals (`ARC_CUSTOM_BLAKE2`, `caml_md5_*`, and `caml_blake2_*`

@@ -2180,8 +2180,46 @@ int64_t caml_ephe_blit_data(int64_t a, int64_t b) { (void)a; (void)b; raise_fail
 
 int64_t caml_get_public_method(int64_t obj, int64_t tag)
 {
-    (void)obj; (void)tag;
-    raise_failure_cstr("CamlinternalOO: method dispatch unsupported", 43u);
+    if (!is_heap_ptr(obj))
+        return 0;
+    const int64_t *self = (const int64_t *)(uintptr_t)obj;
+    const ArcHeader *object = (const ArcHeader *)self - 1;
+    if (object->tag != ARC_TAG_OBJECT || object->byte_size < 2 * sizeof *self ||
+        !is_heap_ptr(self[0]))
+        return 0;
+
+    /* The public prefix is [count; cache mask; method; label; ...]. */
+    const int64_t *methods = (const int64_t *)(uintptr_t)self[0];
+    const ArcHeader *table = (const ArcHeader *)methods - 1;
+    size_t words = table->byte_size / sizeof *methods;
+    if ((table->tag != ARC_TAG_ARRAY && table->tag != 0) || words < 2)
+        return 0;
+    size_t count = (size_t)(methods[0] >> 1);
+    if (!(methods[0] & 1) || count > (words - 2) / 2)
+        return 0;
+
+    size_t low = 0, high = count;
+    while (low < high) {
+        size_t mid = low + (high - low) / 2;
+        if (methods[3 + 2 * mid] < tag)
+            low = mid + 1;
+        else
+            high = mid;
+    }
+    if (low == count || methods[3 + 2 * low] != tag)
+        return 0;
+    int64_t method = methods[2 + 2 * low];
+    arc_retain_val(method);
+    return method;
+}
+
+int64_t ocamlcc_public_method(int64_t obj, int64_t tag)
+{
+    int64_t method = caml_get_public_method(obj, tag);
+    if (is_heap_ptr(method))
+        return method;
+    static const char message[] = "object method unavailable";
+    raise_failure_cstr(message, sizeof message - 1);
     return 1;
 }
 

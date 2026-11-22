@@ -238,7 +238,7 @@ and conv_bind env vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : 
   | Lfunction lf -> Let (id, Fun (conv_fun env lf), k ())
   | Lassign (v, arg) ->
       conv_expr env arg (fun a -> Let (id, mut_assignment env v a, k ()))
-  | Lapply _ | Lprim _ -> (
+  | Lapply _ | Lprim _ | Lsend _ -> (
       match rhs with
       | Lprim (Psequand, _, _)
       | Lprim (Psequor, _, _) ->
@@ -255,7 +255,6 @@ and conv_bind env vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : 
          matcher's tuple-let optimization ([assign_pat]) can leave an
          [Lstaticraise] at the tail of a let chain used as a binding RHS. *)
       conv_atoms env args (fun vs -> StaticRaise (i, vs))
-  | Lsend _ -> raise (Unsupported (describe rhs))
 
 and conv_let env vk id rhs k =
   conv_bind env vk id rhs (fun () ->
@@ -296,6 +295,19 @@ and conv_simple env ?(result_kind = Lambda.Pgenval) (id : Ident.t)
     (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   let emit_cexpr ce = Let (id, ce, k ()) in
   match lam with
+  | Lsend (((Public | Cached) as dispatch), label, receiver, args, _) ->
+      conv_expr env receiver (fun receiver ->
+          conv_expr env label (fun label ->
+              conv_atoms env args (fun values ->
+                  let args =
+                    match dispatch, values with
+                    | Public, _ -> values
+                    | Cached, _cache :: _position :: args -> args
+                    | _ -> raise (Unsupported (describe lam))
+                  in
+                  let meth = Ident.create_local "method" in
+                  Let (meth, Ccall ("ocamlcc_public_method", [receiver; label]),
+                    emit_cexpr (App (Var meth, receiver :: args))))))
   | Lapply { ap_func; ap_args; ap_inlined; _ } -> (
       let { Lower_env.printing; selectors; _ } = env in
       let select = Option.bind selectors (fun table -> Builtins.resolve_int_selection table ap_func) in
@@ -760,10 +772,9 @@ and conv_expr env (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
       conv_expr env start_e (fun sa ->
           conv_expr env stop_e (fun ea ->
               seq_stmt (For (id, sa, ea, dir, with_counted_loop_poll id sa (conv_tail env body))) (k Unit)))
-  | Lapply _ | Lprim _ ->
+  | Lapply _ | Lprim _ | Lsend _ ->
       let id = Ident.create_local "anf" in
       conv_simple env id lam (fun () -> k (Var id))
-  | Lsend _ -> raise (Unsupported (describe lam))
 
 and wrap_or_tail e k =
   (* Avoid duplicating continuations across branches: only inline [Halt]. *)
