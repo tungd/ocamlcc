@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Validate all bootstrap examples with the canonical stdlib archive. Stages 2 and 3 emitted matching SSA and assembly for all 428 compared files. See [self-hosting](/concepts/self-hosting.md).
+
 - 2026-11-22 (codex/1) — Give the self-hosted compiler a larger native stack for deep ANF conversions. The ordinary ARC runtime keeps its platform stack limits. See [native compiler stack use](/concepts/self-hosting.md#native-compiler-stack-use).
 
 - 2026-11-22 (codex/1) — Keep ARC and QBE expression dispatcher frames small enough for the generated parser in a self-hosted build. Report native compiler signals in bootstrap diagnostics. See [native compiler stack use](/concepts/self-hosting.md#native-compiler-stack-use).

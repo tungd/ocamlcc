@@ -779,12 +779,13 @@ def validate_stage2(compiler: Path, stage2_dir: Path, qbe: Path, qbe_target: str
     stdlib_a = stdlib_out / "libocamlstdlib.a"
     rt_a = ROOT / "build" / "rt" / "libocamlrt.a"
 
-    def compile_and_run_single(name: str, extra_flags: list[str], archive: Path | None) -> bool:
+    def compile_and_run_single(name: str) -> bool:
         ssa = val_dir / f"{name}.ssa"
         asm = val_dir / f"{name}.s"
         exe = val_dir / name
         p1 = runner.run(
-            [str(compiler), "compile", *extra_flags, str(ROOT / "examples" / f"{name}.ml"), "-o", str(ssa)]
+            [str(compiler), "compile", "--nostdlib", "-I", str(stdlib_out),
+             str(ROOT / "examples" / f"{name}.ml"), "-o", str(ssa)]
         )
         if p1.returncode != 0:
             print(f"[validate] FAIL compile {name}: {first_err(p1)}", flush=True)
@@ -794,8 +795,7 @@ def validate_stage2(compiler: Path, stage2_dir: Path, qbe: Path, qbe_target: str
             print(f"[validate] FAIL qbe {name}: {first_err(p2)}", flush=True)
             return False
         asm.write_text(p2.stdout, encoding="utf-8")
-        libs = [str(archive)] if archive is not None else []
-        p3 = runner.run(["cc", str(asm), *libs, str(rt_a), "-lm", "-pthread", "-o", str(exe)])
+        p3 = runner.run(["cc", str(asm), str(stdlib_a), str(rt_a), "-lm", "-pthread", "-o", str(exe)])
         if p3.returncode != 0:
             print(f"[validate] FAIL link {name}: {first_err(p3)}", flush=True)
             return False
@@ -806,16 +806,8 @@ def validate_stage2(compiler: Path, stage2_dir: Path, qbe: Path, qbe_target: str
             return False
         return True
 
-    for name, flags, arc in [
-        ("hello", ["--nostdlib", "-I", str(stdlib_out)], None),
-        ("fib", ["--nostdlib", "-I", str(stdlib_out)], None),
-        ("closures", ["--nostdlib", "-I", str(stdlib_out)], stdlib_a),
-        ("exn", ["--nostdlib", "-I", str(stdlib_out)], stdlib_a),
-        ("fiber_test", ["--nostdlib", "-I", str(stdlib_out)], stdlib_a),
-        ("fiber_io", ["--nostdlib", "-I", str(stdlib_out)], stdlib_a),
-        ("primitives_test", ["--nostdlib", "-I", str(stdlib_out)], stdlib_a),
-    ]:
-        if not compile_and_run_single(name, flags, arc):
+    for name in ("hello", "fib", "closures", "exn", "fiber_test", "fiber_io", "primitives_test"):
+        if not compile_and_run_single(name):
             return False
 
     # mod_main via `stage2/ocamlcc build` with Stage-2 stdlib

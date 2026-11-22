@@ -40,9 +40,9 @@ tracing GC):
    stubs (`bootstrap/stubs/compiler_stubs.c` + `-lzstd`). Because `ocamlcc`
    emits left-to-right argument evaluation, the Stage 1 binary runs with
    `ocamlcc`'s own left-to-right semantics.
-3. **Stage 2** — `stage1` compiles the exact same ~193 modules into `stage2/`.
+3. **Stage 2** — `stage1` compiles the same sources into `stage2/`.
 4. **Stage 3 & fixed point (`ninja -j1 bootstrap`)** — `stage2` compiles the
-   same ~193 modules into `stage3/`, verifies **386/386 bit-for-bit `.ssa` and
+   same modules into `stage3/`, verifies **428/428 bit-for-bit `.ssa` and
    `.s` equality** between `stage2` and `stage3`, and validates the Stage 2
    compiler across `hello`, `fib`, `closures`, `exn`, `mod_main`, `fiber_test`,
    `fiber_io`, `primitives_test`, `bindgen`, and ASan checks.
