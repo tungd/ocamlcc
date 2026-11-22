@@ -17,7 +17,7 @@ let () =
     with Not_found -> failwith ("missing in generated QBE: " ^ fragment)
   in
   List.iter require
-    ["call extern $arc_retain("; "call extern $arc_release("; " =l and "; " =l ceql "]
+    ["call extern $arc_retain("; "call extern $arc_release("; " =l and "; " =l cultl "]
 
 let () =
   let il =
@@ -86,6 +86,7 @@ let () =
     external observe : 'a -> unit = "probe_observe"
     external create : int -> bytes = "caml_create_bytes"
     external make : int -> int -> int array = "caml_array_make"
+    external get : int array -> int -> int = "%array_safe_get"
     external to_float : int -> float = "%floatofint"
     external (+) : int -> int -> int = "%addint"
     type 'a choice = Empty | Filled of 'a
@@ -101,6 +102,10 @@ let () =
     let allocated_array size = observe (make size 1)
     let boxed n = observe (to_float n)
     let captured n = let f x = x + n in observe f
+    let dereferenced a i = let x = get a i in observe x; observe a
+    let conditional flag a =
+      (if flag then observe (get a 0) else ()); observe a
+    let loop a n = for i = 0 to n do observe (get a i) done
   |} in
   let il =
     match Pipeline.compile_source ~nopervasives:true ~nostdlib:true ~filename:"heap_guards.ml"
@@ -119,20 +124,34 @@ let () =
   in
   List.iter (fun name ->
     if contains (body name) "@rc_check." then failwith (name ^ ": split tag and null guard");
-    if not (contains (body name) " =l or %rc_tag.") then failwith (name ^ ": missing merged guard"))
-    ["unknown"; "mixed"];
+    if not (contains (body name) " =l cultl 1, %rc_lowbit.") then
+      failwith (name ^ ": missing nullable heap guard"))
+    ["unknown"; "mixed"; "conditional"];
+  let dereferenced = body "dereferenced" in
+  let receiver_pattern = Str.regexp "=l sub \\(%[^ ,]+\\), 8" in
+  let _ = Str.search_forward receiver_pattern dereferenced 0 in
+  let receiver = Str.matched_group 1 dereferenced in
+  let success = Str.search_forward (Str.regexp_string "\n@bnd_ok.") dereferenced 0 in
+  let success = String.sub dereferenced success (String.length dereferenced - success) in
+  if not (contains success ("call extern $arc_release(l " ^ receiver ^ ")")) then
+    failwith "dereferenced: missing receiver release";
+  if contains success ("=l neg " ^ receiver ^ "\n") then
+    failwith "dereferenced: guarded receiver after bounds check";
+  let loop = body "loop" in
+  if not (contains loop "cultl %fori.") then
+    failwith "loop: bounds check did not use raw induction variable";
   List.iter (fun (name, prefix) ->
     let text = body name in
     if not (contains text ("call extern $arc_release(l %" ^ prefix)) then
       failwith (name ^ ": missing release of allocated value");
-    if contains text ("%rc_tag.") then
+    if contains text "%rc_lowbit." then
       failwith (name ^ ": redundant heap guard"))
     [ "fresh", "blk."; "phi", "if."; "allocated_bytes", "bytes.";
       "allocated_array", "arr."; "boxed", "fbox."; "captured", "clos." ];
   let duplicate = body "duplicate_fresh" in
   if not (contains duplicate "call extern $arc_retain(l %blk.") then
     failwith "duplicate_fresh: missing retain of allocated value";
-  if contains duplicate "%rc_tag." then failwith "duplicate_fresh: redundant heap guard"
+  if contains duplicate "%rc_lowbit." then failwith "duplicate_fresh: redundant heap guard"
 
 let () =
   let source = {|

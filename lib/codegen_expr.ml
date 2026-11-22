@@ -1296,6 +1296,26 @@ let emit_unwind b : t =
         unit_const
       end
 
+let with_dereferenced_receiver b (ce : Anf.cexpr) f =
+  let receiver =
+    match ce with
+    | Field (_, _, obj) | SetField (_, _, obj, _) | FloatField (_, obj)
+    | SetFloatField (_, obj, _) | StringGet (_, obj, _)
+    | BytesSet (_, obj, _, _) | BytesGetN (_, _, obj, _)
+    | BytesSetN (_, _, obj, _, _) | ArrayGet (_, _, obj, _)
+    | ArraySet (true, _, obj, _, _)
+    | ArraySet (false, (Pintarray | Pfloatarray), obj, _, _)
+    | FloatArrayGet (_, obj, _) | FloatArraySet (_, obj, _, _)
+    | Unop ((String_length | Array_length), obj) -> Some obj
+    | _ -> None
+  in
+  match receiver with
+  | Some (Anf.Var id) ->
+      (match Hashtbl.find_opt b.vars id with
+      | Some value -> with_known_heap b value f
+      | None -> f ())
+  | _ -> f ()
+
 let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
   match e with
   | Halt a -> compile_atom hooks b a
@@ -1312,7 +1332,8 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       let on_oob () = ignore (compile_aexpr hooks b tail on_err) in
       let value = compile_cexpr ~on_oob hooks b ~tail:false ce in
       Hashtbl.replace b.vars id value;
-      let res = compile_aexpr hooks b tail on_ok in
+      let res = with_dereferenced_receiver b ce (fun () ->
+        compile_aexpr hooks b tail on_ok) in
       Hashtbl.remove b.vars id;
       res
   | Let (id, ce, body) ->
@@ -1330,7 +1351,8 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
               (* Checked allocators return a tagged failure value on error. *)
               compile_check_exn hooks b Anf.May_raise on_err (fun () ->
                   with_known_heap b v (fun () -> compile_aexpr hooks b tail on_ok))
-          | _ -> compile_aexpr hooks b tail body in
+          | _ -> with_dereferenced_receiver b ce (fun () ->
+              compile_aexpr hooks b tail body) in
         Hashtbl.remove b.vars id;
         res
       end
@@ -1343,7 +1365,8 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
         | _ -> Storel in
       emit b (Store (store, v, slot));
       Hashtbl.replace b.mut_vars id slot;
-      let res = compile_aexpr hooks b tail body in
+      let res = with_dereferenced_receiver b ce (fun () ->
+        compile_aexpr hooks b tail body) in
       Hashtbl.remove b.mut_vars id;
       res
   | LetJoin (id, rhs, body) ->
@@ -1391,12 +1414,12 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       end;
       unit_const
   | For (id, start_a, stop_a, dir, body) ->
-      let sv = compile_atom hooks b start_a in
-      let ev = compile_atom hooks b stop_a in
+      let sv = untag b (compile_atom hooks b start_a) in
+      let ev = untag b (compile_atom hooks b stop_a) in
       let enter_op, cont_op, step =
         match dir with
-        | Asttypes.Upto -> (Cmp.Sle, Cmp.Slt, 2L)
-        | Asttypes.Downto -> (Cmp.Sge, Cmp.Sgt, -2L)
+        | Asttypes.Upto -> (Cmp.Sle, Cmp.Slt, 1L)
+        | Asttypes.Downto -> (Cmp.Sge, Cmp.Sgt, -1L)
       in
       let enter = fresh_temp b "forenter" in
       emit b (Cmp (enter_op, Long, enter, sv, ev));
@@ -1410,9 +1433,13 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       close_block b (Br (enter, lbody, ldone));
       start_block b lbody;
       emit b (Phi (Long, iv, [ (lpre, sv); (lnext, next_i) ]));
+      let tagged = retag b iv in
+      let indices = b.cur_fn.untagged_indices in
       with_shadowed_vars b [ id ] (fun () ->
-          Hashtbl.replace b.vars id iv;
-          ignore (compile_aexpr hooks b false body));
+          Hashtbl.replace b.vars id tagged;
+          Hashtbl.add indices tagged iv;
+          Fun.protect ~finally:(fun () -> Hashtbl.remove indices tagged)
+            (fun () -> ignore (compile_aexpr hooks b false body)));
       if b.cur_fn.term = None then close_block b (Jmp lstep);
       start_block b lstep;
       let more = fresh_temp b "formore" in

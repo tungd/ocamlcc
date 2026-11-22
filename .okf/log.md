@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Use a single nullable heap predicate, skip ARC guards after receiver dereferences, and share the raw for-loop index. Tterm paired replay changed by +0.4% plain and -5.7% Unicode (default) and +0.9% plain and -3.2% Unicode (single-thread RC). Parser allocation medians were identical.
+
 - 2026-11-22 (codex/1) — Prove guarded indexes against fixed sizes from the selected Stdlib Array.init and record the Round 4 tterm comparison. See [Perceus ARC](/concepts/perceus-arc.md#round-4-tterm-replay).
 
 - 2026-11-22 (codex/1) — Bypass ARC traversal for unmarked leaf releases and use direct slab size-class lookup. See [Perceus ARC](/concepts/perceus-arc.md).

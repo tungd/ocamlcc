@@ -40,6 +40,7 @@ type fn_state = {
   mutable fn_params : (ty * string) list;
   handlers : (int, handler) Hashtbl.t;
   known_heap : (string, unit) Hashtbl.t;
+  untagged_indices : (Qbe_il.t, Qbe_il.t) Hashtbl.t;
   entry_label : string;
   self : Ident.t option;
   cur_group : string option;
@@ -79,6 +80,7 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
     fn_params = [];
     handlers = Hashtbl.create 8;
     known_heap = Hashtbl.create 16;
+    untagged_indices = Hashtbl.create 4;
     entry_label;
     self;
     cur_group;
@@ -460,9 +462,12 @@ let ptr_offset b base off_bytes base_name =
     dst
 
 let untag b v =
-  let t = fresh_temp b "untag" in
-  emit b (Binop (Sar, Long, t, v, Int 1L));
-  t
+  match Hashtbl.find_opt b.cur_fn.untagged_indices v with
+  | Some index -> index
+  | None ->
+      let t = fresh_temp b "untag" in
+      emit b (Binop (Sar, Long, t, v, Int 1L));
+      t
 
 let retag b v =
   let t = fresh_temp b "retag" in
@@ -663,14 +668,16 @@ let emit_arc_if_heap b operation value =
       else begin
         let done_ = fresh_label b "rc_done" in
         if guarded then begin
-          let odd = fresh_temp b "rc_tag" in
-          let is_null = fresh_temp b "rc_null" in
-          let skip = fresh_temp b "rc_skip" in
+          (* Isolate the low bit. Zero and tagged immediates give 0 and 1;
+             an aligned non-null pointer gives an unsigned value above 1. *)
+          let neg = fresh_temp b "rc_neg" in
+          let lowbit = fresh_temp b "rc_lowbit" in
+          let is_heap = fresh_temp b "rc_is_heap" in
           let heap = fresh_label b "rc_heap" in
-          emit b (Binop (And, Long, odd, value, Int 1L));
-          emit b (Cmp (Eq, Long, is_null, value, Int 0L));
-          emit b (Binop (Or, Long, skip, odd, is_null));
-          close_block b (Br (skip, done_, heap));
+          emit b (Neg (Long, neg, value));
+          emit b (Binop (And, Long, lowbit, value, neg));
+          emit b (Cmp (Ult, Long, is_heap, Int 1L, lowbit));
+          close_block b (Br (is_heap, heap, done_));
           start_block b heap
         end;
         if b.inline_single_thread_rc then
