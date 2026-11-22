@@ -1,6 +1,40 @@
-type file_descr = int
+module File_descr = struct
+  type t = int
 
-type error =
+  let to_int fd = fd
+end
+
+type file_descr = File_descr.t
+
+module Error = struct
+  type t =
+    | EACCES | EAGAIN | EBADF | ECHILD | EINTR | EINVAL | EIO | EMFILE
+    | ENFILE | ENOENT | ENOMEM | ENOSYS | EPERM | EPIPE | ESRCH | ETIMEDOUT
+    | EWOULDBLOCK | EUNKNOWNERR of int
+
+  external number : string -> int = "arc_unix_errno"
+  external native_message : int -> string = "arc_unix_error_message"
+
+  let codes =
+    List.map (fun (name, error) -> number name, error)
+      [ "EACCES", EACCES; "EAGAIN", EAGAIN; "EBADF", EBADF; "ECHILD", ECHILD;
+        "EINTR", EINTR; "EINVAL", EINVAL; "EIO", EIO; "EMFILE", EMFILE;
+        "ENFILE", ENFILE; "ENOENT", ENOENT; "ENOMEM", ENOMEM; "ENOSYS", ENOSYS;
+        "EPERM", EPERM; "EPIPE", EPIPE; "ESRCH", ESRCH; "ETIMEDOUT", ETIMEDOUT;
+        "EWOULDBLOCK", EWOULDBLOCK ]
+
+  let of_number code =
+    Option.value (List.assoc_opt code codes) ~default:(EUNKNOWNERR code)
+
+  let message = function
+    | EUNKNOWNERR code -> native_message code
+    | error ->
+        match List.find_opt (fun (_, known) -> known = error) codes with
+        | Some (code, _) -> native_message code
+        | None -> "Unknown Unix error"
+end
+
+type error = Error.t =
   | EACCES | EAGAIN | EBADF | ECHILD | EINTR | EINVAL | EIO | EMFILE
   | ENFILE | ENOENT | ENOMEM | ENOSYS | EPERM | EPIPE | ESRCH | ETIMEDOUT
   | EWOULDBLOCK | EUNKNOWNERR of int
@@ -8,8 +42,6 @@ type error =
 exception Unix_error of error * string * string
 
 module Native = struct
-  external errno : string -> int = "arc_unix_errno"
-  external message : int -> string = "arc_unix_error_message"
   external pipe : bool -> (file_descr * file_descr, int) result = "arc_unix_pipe"
   external close : file_descr -> int = "arc_unix_close"
   external set_nonblock : file_descr -> bool -> int = "arc_unix_set_nonblock"
@@ -18,26 +50,10 @@ module Native = struct
   external gettimeofday : unit -> (float, int) result = "arc_unix_gettimeofday"
 end
 
-let error_codes =
-  List.map (fun (name, error) -> Native.errno name, error)
-    [ "EACCES", EACCES; "EAGAIN", EAGAIN; "EBADF", EBADF; "ECHILD", ECHILD;
-      "EINTR", EINTR; "EINVAL", EINVAL; "EIO", EIO; "EMFILE", EMFILE;
-      "ENFILE", ENFILE; "ENOENT", ENOENT; "ENOMEM", ENOMEM; "ENOSYS", ENOSYS;
-      "EPERM", EPERM; "EPIPE", EPIPE; "ESRCH", ESRCH; "ETIMEDOUT", ETIMEDOUT;
-      "EWOULDBLOCK", EWOULDBLOCK ]
+let error_message = Error.message
 
-let error_of_number code =
-  Option.value (List.assoc_opt code error_codes) ~default:(EUNKNOWNERR code)
-
-let error_message error =
-  let number =
-    match error with
-    | EUNKNOWNERR number -> number
-    | error -> fst (List.find (fun (_, known) -> known = error) error_codes)
-  in
-  Native.message number
-
-let raise_errno operation code = raise (Unix_error (error_of_number code, operation, ""))
+let raise_errno operation code =
+  raise (Unix_error (Error.of_number code, operation, ""))
 
 let check operation result =
   if result < 0 then raise_errno operation (-result) else result

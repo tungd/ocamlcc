@@ -26,6 +26,7 @@ external cloexec : Unix.file_descr -> bool = "fd_is_cloexec"
 let () =
   let reader, writer = Unix.pipe ~cloexec:true () in
   assert (cloexec reader && cloexec writer);
+  assert (Unix.File_descr.to_int reader <> Unix.File_descr.to_int writer);
   Unix.set_nonblock reader;
   let buffer = Bytes.make 5 '.' in
   assert (match Unix.read reader buffer 1 3 with
@@ -42,6 +43,7 @@ let () =
   assert (match Unix.close reader with
     | exception Unix.Unix_error (Unix.EBADF, "close", "") -> true
     | _ -> false);
+  assert (Unix.Error.message Unix.EBADF = Unix.error_message Unix.EBADF);
   assert (Unix.gettimeofday () > 0.);
   print_endline "ARC Unix descriptors: PASS"
 ML

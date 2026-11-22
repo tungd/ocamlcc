@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Put ARC Unix descriptors and error conversion behind named modules. Expose borrowed descriptor numbers for Fiber waits. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
+
 - 2026-11-23 (codex/1) — Add the ARC Unix package with POSIX descriptors, byte I/O, errors, and the wall clock. Verify a close-on-exec pipe through ocpkg. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
 
 - 2026-11-23 (codex/1) — Relax distant ARM64 conditional branches in QBE. Verify forward and backward edges and the upstream Uucp 17.0.0 block-table reproducer. See [ARM64 conditional branch reach](/concepts/vendored-qbe.md#arm64-conditional-branch-reach).

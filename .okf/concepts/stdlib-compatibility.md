@@ -6,7 +6,7 @@ tags: [stdlib, compatibility, testing, arc]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-21
+  at: 2026-11-23
 sources:
   - id: runner
     resource: tools/stdlib_compat.py
@@ -72,8 +72,10 @@ test outcomes.[^runner]
 
 `ocpkg add arc-unix` provides the POSIX `Unix` descriptor and wall-clock
 operations used by terminal applications on macOS and Linux. The ML interface
-keeps descriptors abstract, checks byte ranges before entering native code,
-and translates POSIX errors into `Unix.Unix_error`. Native stubs own system
+keeps descriptors abstract in `Unix.File_descr`, exposes their borrowed
+integer through `to_int` for `Fiber.fd_wait`, and checks byte ranges before
+entering native code. `Unix.Error` maps POSIX errors to `Unix.Unix_error`.
+Native stubs own system
 calls and clean up partially configured pipes. Linux sets close-on-exec
 atomically using `pipe2`. macOS sets it with `fcntl` after creating the pipe.
 The separate Crunch port continues to provide its own `Unix` module.
