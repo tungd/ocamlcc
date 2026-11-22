@@ -386,10 +386,8 @@ static inline void array_enable_scan(ArcHeader *hdr)
         atomic_fetch_or_explicit(&hdr->scan_fields, 1u, memory_order_relaxed);
 }
 
-static inline int is_cycle_candidate_obj(const ArcHeader *hdr)
+static inline int has_cycle_edges(const ArcHeader *hdr)
 {
-    if (atomic_load_explicit(&hdr->refcount, memory_order_relaxed) == ARC_IMMORTAL)
-        return 0;
     uint16_t tag = hdr->tag;
     if (is_unscanned_leaf_tag(tag))
         return 0;
@@ -400,6 +398,12 @@ static inline int is_cycle_candidate_obj(const ArcHeader *hdr)
     if (tag == (uint16_t)ARC_TAG_PAP)
         return 1;
     return arc_scan_count(hdr) > 0u;
+}
+
+static inline int is_cycle_candidate_obj(const ArcHeader *hdr)
+{
+    return atomic_load_explicit(&hdr->refcount, memory_order_relaxed) != ARC_IMMORTAL &&
+           has_cycle_edges(hdr);
 }
 
 static void ccvec_push(CCVec *v, ArcHeader *h)
@@ -432,17 +436,8 @@ static void ccvec_free(CCVec *v)
     }
 }
 
-static inline void cc_roots_add(ArcHeader *hdr)
+static __attribute__((noinline)) void cc_roots_add_slow(ArcHeader *hdr)
 {
-    /* A mutator holds an owner here. An already buffered candidate stays
-     * registered until a trial excludes the mutators or the object dies. */
-    if ((atomic_load_explicit(&hdr->reserved, memory_order_relaxed) & CC_BUFFERED) != 0u ||
-        !is_cycle_candidate_obj(hdr))
-        return;
-#ifdef OCAMLCC_SINGLE_THREAD_RC
-    if (is_small_immediate_block(hdr))
-        return;
-#endif
     arc_lock(&g_cc_lock);
     if ((atomic_load_explicit(&hdr->reserved, memory_order_relaxed) & CC_BUFFERED) != 0u) {
         arc_unlock(&g_cc_lock);
@@ -460,6 +455,20 @@ static inline void cc_roots_add(ArcHeader *hdr)
             CC_BUFFERED | (idx << CC_INDEX_SHIFT),
         memory_order_relaxed);
     arc_unlock(&g_cc_lock);
+}
+
+static inline __attribute__((always_inline)) void cc_roots_add(ArcHeader *hdr)
+{
+    /* Callers hold an owner and have already rejected immortal objects.
+     * Keep the common eligibility check separate from lock and vector growth. */
+    if ((atomic_load_explicit(&hdr->reserved, memory_order_relaxed) & CC_BUFFERED) != 0u ||
+        !has_cycle_edges(hdr))
+        return;
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+    if (is_small_immediate_block(hdr))
+        return;
+#endif
+    cc_roots_add_slow(hdr);
 }
 
 static inline void cc_roots_remove_locked(ArcHeader *hdr)
@@ -1596,11 +1605,12 @@ static __attribute__((noinline)) void release_subtree_slow(ArcHeader *root,
 
 static inline void release_subtree(ArcHeader *root, int free_root)
 {
-    /* A small block with no child pointers can be retired here as long
-     * as it has no weak registration or previous cycle-root entry. */
+    /* Ordinary blocks with a zero scan count have no owned children,
+     * regardless of their payload size. Only inspect fields on the final drop. */
     uint16_t tag = root->tag;
     if ((tag == ARC_TAG_STRING || tag == ARC_TAG_FLOAT || tag == ARC_TAG_FLOAT_ARRAY ||
-         (is_small_immediate_block(root) &&
+         (tag < ARC_TAG_ARRAY &&
+          (arc_scan_count(root) == 0u || is_small_immediate_block(root)) &&
           (atomic_load_explicit(&root->reserved, memory_order_relaxed) & CC_BUFFERED) == 0u)) &&
         !might_be_weak_target(root)) {
         account_objects(&g_live_objects, -1);
@@ -3323,11 +3333,21 @@ void caml_sys_exit(int64_t code_val)
     ocamlcc_exit_val(code_val);
 }
 
-static inline void mark_obj_array_store(int64_t obj_val, int64_t new_val)
+static inline void mark_obj_pointer_store(int64_t obj_val, int64_t new_val)
 {
+    if (!is_heap_ptr(new_val))
+        return;
     ArcHeader *hdr = (ArcHeader *)(uintptr_t)obj_val - 1;
-    if (is_heap_ptr(new_val) && hdr->tag == ARC_TAG_ARRAY)
+    if (hdr->tag == ARC_TAG_ARRAY) {
         array_enable_scan(hdr);
+    } else if ((hdr->tag < ARC_TAG_ARRAY || hdr->tag == 248u) &&
+               arc_scan_count(hdr) == 0u) {
+        /* Obj and computed atomic stores can add a pointer to an ordinary
+         * block originally constructed with a zero scan count. Preserve the
+         * weak-target hint when restoring the full scan count. */
+        atomic_fetch_or_explicit(&hdr->scan_fields, (uint16_t)(hdr->byte_size / 8u),
+                                 memory_order_relaxed);
+    }
 }
 
 /* ---- Atomics ---- */
@@ -3356,7 +3376,7 @@ int64_t caml_atomic_cas_field(int64_t obj_val, int64_t idx_val,
     int64_t cur = expected_val;
     arc_lock(&atomic_field_lock);
     /* Publish the scan bit before any successful pointer store. */
-    mark_obj_array_store(obj_val, desired_val);
+    mark_obj_pointer_store(obj_val, desired_val);
     int changed = atomic_compare_exchange_strong_explicit(
         slot, &cur, desired_val, memory_order_acq_rel, memory_order_acquire);
     arc_unlock(&atomic_field_lock);
@@ -3371,7 +3391,7 @@ int64_t caml_atomic_exchange_field(int64_t obj_val, int64_t idx_val,
     _Atomic int64_t *slot = ((_Atomic int64_t *)(uintptr_t)obj_val) + idx;
     arc_retain_val(desired_val);
     arc_lock(&atomic_field_lock);
-    mark_obj_array_store(obj_val, desired_val);
+    mark_obj_pointer_store(obj_val, desired_val);
     int64_t old = atomic_exchange_explicit(slot, desired_val, memory_order_acq_rel);
     arc_unlock(&atomic_field_lock);
     return old;
@@ -3995,7 +4015,7 @@ int64_t caml_obj_set_field(int64_t obj_val, int64_t idx_val, int64_t new_val)
     int64_t *fields = (int64_t *)(uintptr_t)obj_val;
     int64_t old_v = fields[idx];
     arc_retain_val(new_val);
-    mark_obj_array_store(obj_val, new_val);
+    mark_obj_pointer_store(obj_val, new_val);
     fields[idx] = new_val;
     arc_release_val(old_v);
     return 1;

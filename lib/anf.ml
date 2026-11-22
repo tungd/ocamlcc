@@ -98,6 +98,7 @@ type integer_shift = Left_shift | Logical_right | Arithmetic_right
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
 type field_kind = Immediate_field | Immutable_field | Mutable_field
+type block_scan = Scan_all | Scan_if_managed | Scan_none
 
 type reuse = { primary : Ident.t; fallback : Ident.t option }
 
@@ -106,8 +107,8 @@ type cexpr =
   | Binop of binop * atom * atom
   | IntSelect of Builtins.int_selection * atom * atom
   | Unop of unop * atom
-  | MakeBlock of int * atom list
-  | AllocReuse of reuse * int * atom list
+  | MakeBlock of int * block_scan * atom list
+  | AllocReuse of reuse * int * block_scan * atom list
   | MakeArray of Lambda.array_kind * atom list
   | Field of int * field_kind * atom
   | SetField of int * Lambda.immediate_or_pointer * atom * atom
@@ -598,10 +599,12 @@ and conv_simple ?(result_kind = Lambda.Pgenval) (id : Ident.t)
   | Lprim (Pbytes_to_string, [ arg ], _)
   | Lprim (Pbytes_of_string, [ arg ], _) ->
       conv_expr arg (fun a -> emit_cexpr (Atom a))
-  | Lprim (Pmakeblock (tag, _, _), args, _) -> (
+  | Lprim (Pmakeblock (tag, mutability, _), args, _) -> (
       match args with
       | [] -> emit_cexpr (Atom Unit)
-      | _ -> conv_atoms args (fun vs -> emit_cexpr (MakeBlock (tag, vs))))
+      | _ ->
+          let scan = if mutability = Immutable then Scan_if_managed else Scan_all in
+          conv_atoms args (fun vs -> emit_cexpr (MakeBlock (tag, scan, vs))))
   | Lprim (Pmakelazyblock ltag, [ arg ], _) ->
       let sym =
         match ltag with
@@ -1059,9 +1062,9 @@ let cexpr_vars ?(include_raw = true) free_aexpr acc ce =
   | Atom a -> atom_vars acc a
   | Binop (_, a, b) | IntSelect (_, a, b) -> atom_vars (atom_vars acc a) b
   | Unop (_, a) -> atom_vars acc a
-  | MakeBlock (_, args) | MakeArray (_, args) ->
+  | MakeBlock (_, _, args) | MakeArray (_, args) ->
       List.fold_left atom_vars acc args
-  | AllocReuse (reuse, _, args) ->
+  | AllocReuse (reuse, _, _, args) ->
       let acc = Ident.Set.add reuse.primary (List.fold_left atom_vars acc args) in
       Option.fold ~none:acc ~some:(fun id -> Ident.Set.add id acc) reuse.fallback
   | Field (_, _, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a

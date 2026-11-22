@@ -1379,6 +1379,24 @@ static void test_small_immediate_retirement(void)
     assert(arc_live_objects() == before);
 }
 
+static void test_unscanned_block_obj_store(void)
+{
+    size_t before = arc_live_objects();
+    int64_t *record = arc_alloc(0, 0, 4u * sizeof(int64_t));
+    for (int i = 0; i < 4; i++)
+        record[i] = tagged(i);
+    int64_t record_val = (int64_t)(uintptr_t)record;
+    int64_t *child = arc_alloc(0, 1, sizeof(int64_t));
+    *child = record_val;
+    arc_retain(record);
+    caml_obj_set_field(record_val, tagged(3), (int64_t)(uintptr_t)child);
+    assert(arc_scan_count((ArcHeader *)record - 1) == 4);
+    arc_release(child);
+    arc_release(record);
+    assert(ocamlcc_arc_collect(1) == tagged(2));
+    assert(arc_live_objects() == before);
+}
+
 static void *exn_hint_worker(void *unused)
 {
     (void)unused;
@@ -1412,6 +1430,7 @@ int main(void)
     test_slab_class_boundaries();
     test_leaf_weak_retirement();
     test_small_immediate_retirement();
+    test_unscanned_block_obj_store();
     test_main_shadow_stack();
     test_bulk_array_ownership();
     test_array_scan_promotion();

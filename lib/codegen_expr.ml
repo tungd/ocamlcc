@@ -776,12 +776,12 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       emit b (Phi (Long, dst, [ (left, lhs); (right, rhs) ]));
       dst
   | Unop (op, a) -> compile_unop hooks b op a
-  | MakeBlock (tag, args) ->
-      emit_block_alloc b tag (List.map (compile_atom hooks b) args)
-  | AllocReuse (reuse, tag, args) ->
+  | MakeBlock (tag, scan, args) ->
+      emit_block_alloc b scan tag (List.map (compile_atom hooks b) args)
+  | AllocReuse (reuse, tag, scan, args) ->
       let primary = Hashtbl.find b.vars reuse.primary in
       let fallback = Option.map (Hashtbl.find b.vars) reuse.fallback in
-      emit_block_alloc b ~reuse:(primary, fallback) tag (List.map (compile_atom hooks b) args)
+      emit_block_alloc b ~reuse:(primary, fallback) scan tag (List.map (compile_atom hooks b) args)
   | MakeArray (kind, args) -> (
       let vs = List.map (compile_atom hooks b) args in
       let n = List.length vs in

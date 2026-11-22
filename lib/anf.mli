@@ -106,6 +106,7 @@ type integer_shift = Left_shift | Logical_right | Arithmetic_right
 type scalar_operand = Boxed_scalar of atom | Raw_scalar of Ident.t
 
 type field_kind = Immediate_field | Immutable_field | Mutable_field
+type block_scan = Scan_all | Scan_if_managed | Scan_none
 
 type reuse = { primary : Ident.t; fallback : Ident.t option }
 
@@ -114,8 +115,8 @@ type cexpr =
   | Binop of binop * atom * atom
   | IntSelect of Builtins.int_selection * atom * atom
   | Unop of unop * atom
-  | MakeBlock of int * atom list
-  | AllocReuse of reuse * int * atom list
+  | MakeBlock of int * block_scan * atom list
+  | AllocReuse of reuse * int * block_scan * atom list
   | MakeArray of Lambda.array_kind * atom list
   | Field of int * field_kind * atom
   | SetField of int * Lambda.immediate_or_pointer * atom * atom

@@ -106,3 +106,22 @@ let () =
           set data i (get data i + length label)
         done;
         while get data 0 < high do set data 0 (get data 0 + 1) done|}
+
+let () =
+  let source = {|
+    type rect = { top : int; bottom : int; left : int; right : int }
+    type mutable_rect = { mutable top : int; bottom : int; left : int; right : int }
+    let rect top bottom left right : rect = { top; bottom; left; right }
+    let mutable_rect top bottom left right : mutable_rect = { top; bottom; left; right }
+  |} in
+  match Pipeline.compile_source ~nopervasives:true ~nostdlib:true
+    ~filename:"immediate_blocks.ml" ~modname:"Immediate_blocks" source with
+  | Error message -> failwith message
+  | Ok il ->
+      let require call =
+        if not (try ignore (Str.search_forward (Str.regexp_string call) il 0); true
+          with Not_found -> false)
+        then failwith ("missing block layout: " ^ call)
+      in
+      require "call extern $arc_alloc(l 0, l 0, l 32)";
+      require "call extern $arc_alloc(l 0, l 4, l 32)"

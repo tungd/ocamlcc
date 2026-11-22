@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Preserve immutable block layout and omit scans for unmanaged fields. Keep the lock-free cycle-root eligibility guard inline and restore scan counts on computed pointer stores.
+
 - 2026-11-22 (codex/1) — Borrowed calls accept stack-slot and immutable projection arguments while preserving owned dispatch for dying values and mutable field snapshots.
 
 - 2026-11-22 (codex/1) — Borrow mutable array projections across read-only index expressions and inline verified Uchar scalar-range fast paths. Tterm paired replay improved 2.5% plain and 10.2% Unicode (default), 4.1% plain and 12.4% Unicode (single-thread RC). Against Round 4 in a fresh stock-paired run, Round 5 improved 4.1% plain and 26.6% Unicode (default), 8.6% plain and 26.4% Unicode (single-thread RC). All 1,758 parser assertions match stock OCaml 5.5.0.

@@ -122,9 +122,9 @@ and dump_ce (ce : Anf.cexpr) : string =
         | Anf.Bint_cvt _ -> "bcvt" | Anf.Bint_neg _ -> "bneg"
       in
       Printf.sprintf "(unop %s %s)" name (dump_atom a)
-  | Anf.MakeBlock (t, args) ->
+  | Anf.MakeBlock (t, _, args) ->
       Printf.sprintf "(blk%d %s)" t (String.concat "," (List.map dump_atom args))
-  | Anf.AllocReuse (reuse, t, args) ->
+  | Anf.AllocReuse (reuse, t, _, args) ->
       let tokens = reuse.primary :: Option.to_list reuse.fallback in
       Printf.sprintf "(reuse %s %d [%s])"
         (String.concat "/" (List.map dump_ident tokens)) t
@@ -159,7 +159,7 @@ let rec count_release_mut id (e : Anf.aexpr) : int =
     | Anf.Atom a -> count_atom acc a
     | Anf.Binop (_, a, b) | Anf.IntSelect (_, a, b) -> count_atom (count_atom acc a) b
     | Anf.Unop (_, a) -> count_atom acc a
-    | Anf.MakeBlock (_, args) | Anf.AllocReuse (_, _, args)
+    | Anf.MakeBlock (_, _, args) | Anf.AllocReuse (_, _, _, args)
     | Anf.MakeArray (_, args) ->
         List.fold_left count_atom acc args
     | Anf.Field (_, _, a) | Anf.FloatField (_, a) | Anf.OffsetRef (_, a)

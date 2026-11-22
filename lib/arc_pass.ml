@@ -116,7 +116,7 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
   | FloatArrayGet _ | FloatArraySet _ | FloatOfInt _ | IntOfFloat _
   | FloatSign _ | FloatCompare _ | KeepAlive _ -> true
-  | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
+  | MakeBlock (_, _, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
   | PollFinalizers -> true
   | Ccall (name, _) -> Ccalls.returns_imm name
   | NativeCcall (prim, _) ->
@@ -260,7 +260,9 @@ let mutlet_is_imm env slot init body =
               ~mutable_slot:(slot, valid) (Ident.Set.add slot env.imm) body);
     !valid
 
-let specialize_assignment env = function
+let specialize_ownership env = function
+  | Anf.MakeBlock (tag, Scan_if_managed, args) when List.for_all (is_imm_atom env) args ->
+      Anf.MakeBlock (tag, Scan_none, args)
   | Anf.Assign (slot, rhs) when Ident.Set.mem slot env.imm -> Anf.AssignImm (slot, rhs)
   | ce -> ce
 
@@ -334,7 +336,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | Binop (_, a, b) | IntSelect (_, a, b) ->
       (Ident.Set.union (atom_vars a) (atom_vars b), [])
   | Unop (_, a) -> (atom_vars a, [])
-  | MakeBlock (_, args) | AllocReuse (_, _, args) | MakeArray (_, args) ->
+  | MakeBlock (_, _, args) | AllocReuse (_, _, _, args) | MakeArray (_, args) ->
       (Ident.Set.empty, args)
   | Field (_, _, a) | FloatField (_, a) | OffsetRef (_, a) | CreateBytes a
   | Bswap16 a | BswapBint (_, a) ->
@@ -745,7 +747,7 @@ let mutable_slot_result snapshots body =
     | Let (id, (Assign (slot, Var value) as assign), Halt (Var result))
       when Ident.same value result ->
         Some (slot, None, Let (id, assign, Halt Unit))
-    | Let (box, (MakeBlock (0, [Var value]) as make),
+    | Let (box, (MakeBlock (0, _, [Var value]) as make),
         Let (id, (Assign (slot, Var stored) as assign), Halt (Var result)))
       when Ident.same box stored && Ident.same value result ->
         Some (slot, Some 0, Let (box, make, Let (id, assign, Halt Unit)))
@@ -1014,13 +1016,13 @@ let rec add_reuse_to_pop = function
 let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
     Anf.aexpr option =
   match e with
-  | Let (res, MakeBlock (tag, (_ :: _ as args)), next) when not in_shadow ->
-      Some (Let (res, AllocReuse ({ primary = tok; fallback = None }, tag, args), next))
-  | Let (res, (AllocReuse (reuse, tag, args) as ce), next) -> (
+  | Let (res, MakeBlock (tag, scan, (_ :: _ as args)), next) when not in_shadow ->
+      Some (Let (res, AllocReuse ({ primary = tok; fallback = None }, tag, scan, args), next))
+  | Let (res, (AllocReuse (reuse, tag, scan, args) as ce), next) -> (
       match inject_reuse ~in_shadow tok next with
       | Some next -> Some (Let (res, ce, next))
       | None when not in_shadow && Option.is_none reuse.fallback ->
-          Some (Let (res, AllocReuse ({ reuse with fallback = Some tok }, tag, args), next))
+          Some (Let (res, AllocReuse ({ reuse with fallback = Some tok }, tag, scan, args), next))
       | None -> None)
   | Let (x, ((Atom _ | Binop _ | IntSelect _ | Unop _ | Field _ | SetField _
              | FloatField _ | SetFloatField _ | SetBoxedFloatField _ | OffsetRef _
@@ -1032,7 +1034,7 @@ let rec inject_reuse ?(in_shadow = false) (tok : Ident.t) (e : Anf.aexpr) :
              | ScalarLoad _ | ScalarStore _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _
              | Builtin _ | BigarrayAccess _ | Ccall _ | NativeCcall _ | GetGlobal _ | Assign _ | AssignImm _
              | ReadScalarSlot _ | AssignScalar _
-             | MakeBlock (_, [])) as ce), body) -> (
+             | MakeBlock (_, _, [])) as ce), body) -> (
       match inject_reuse ~in_shadow tok body with
       | Some body' -> Some (Let (x, ce, body'))
       | None -> None)
@@ -1290,7 +1292,7 @@ let rec transform_aexpr (env : state) (e : Anf.aexpr) : Anf.aexpr =
   | Let (id, ce, body) -> transform_let env id ce body
   | MutLet (id, ce, body) ->
       let immediate = mutlet_is_imm env id ce body in
-      let ce = specialize_assignment env ce in
+      let ce = specialize_ownership env ce in
       let ce_may_raise = ce_may_raise env ce in
       let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
       let ce = select_imported_entry env base_live_body ce in
@@ -1579,7 +1581,7 @@ and transform_join env id rhs body : Anf.aexpr =
   emit_drops env dead_before (LetJoin (id, rhs', body'))
 
 and transform_let env id ce body =
-  let ce = specialize_assignment env ce in
+  let ce = specialize_ownership env ce in
   let ce_may_raise = ce_may_raise env ce in
   let base_live_body = Ident.Set.remove id (live_with_handlers env body) in
   let ce = select_imported_entry env base_live_body ce in
@@ -1755,8 +1757,8 @@ and transform_fun (env : state) ~self_id ~has_closure
 and rebuild_cexpr (ce : Anf.cexpr) (atoms' : Anf.atom list) : Anf.cexpr =
   match (ce, atoms') with
   | Atom _, [ a ] -> Atom a
-  | MakeBlock (tag, _), args -> MakeBlock (tag, args)
-  | AllocReuse (tok, tag, _), args -> AllocReuse (tok, tag, args)
+  | MakeBlock (tag, scan, _), args -> MakeBlock (tag, scan, args)
+  | AllocReuse (tok, tag, scan, _), args -> AllocReuse (tok, tag, scan, args)
   | MakeArray (kind, _), args -> MakeArray (kind, args)
   | SetField (i, repr, arg, _), [ rhs ] -> SetField (i, repr, arg, rhs)
   | ArraySet (s, k, arr, idx, _), [ v ] -> ArraySet (s, k, arr, idx, v)

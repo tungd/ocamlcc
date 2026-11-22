@@ -56,7 +56,7 @@ let () =
   (* 1. Tail-position While with owning MutLet must emit ReleaseMut on normal exit. *)
   let m = Ident.create_local "m" in
   let tail_while =
-    Anf.MutLet (m, MakeBlock (0, [Int 0]), While (Halt (Int 0), Halt Unit))
+    Anf.MutLet (m, MakeBlock (0, Scan_all, [Int 0]), While (Halt (Int 0), Halt Unit))
   in
   let m_id = Ident.create_persistent "M" in
   let prog1 = Arc_pass.run { Anf.module_ident = m_id; code = tail_while;
@@ -68,7 +68,7 @@ let () =
   let idx = Ident.create_local "i" in
   let tail_for =
     Anf.MutLet
-      (m2, MakeBlock (0, [Int 0]), For (idx, Int 0, Int 3, Asttypes.Upto, Halt Unit))
+      (m2, MakeBlock (0, Scan_all, [Int 0]), For (idx, Int 0, Int 3, Asttypes.Upto, Halt Unit))
   in
   let prog2 = Arc_pass.run { Anf.module_ident = m_id; code = tail_for;
                            value_kinds = Ident.Map.empty; inline_bodies = Ident.Map.empty } in
@@ -79,7 +79,7 @@ let () =
   let static_raise_in_while =
     Anf.Let
       ( x,
-        MakeBlock (0, [ Int 1 ]),
+        MakeBlock (0, Scan_all, [ Int 1 ]),
         StaticCatch
           ( While (Halt (Int 1), StaticRaise (7, [])),
             7,

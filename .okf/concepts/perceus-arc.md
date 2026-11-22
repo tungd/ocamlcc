@@ -167,6 +167,14 @@ store keeps its own reference.
 
 ## Immediate-only word arrays
 
+An immutable block whose fields are all tagged or immortal has a zero
+scan count, including after constructor reuse. Its payload size stays
+available for field access and copying. A computed Obj or atomic pointer
+store can restore the full scan count before publishing a managed field.
+Blocks with no scanned fields skip cycle-root registration and ordinary
+leaf retirement bypasses the drop worklist. Registration eligibility stays
+inline, and the lock and root-vector growth run in a separate slow path.
+
 An array allocated from immediate elements starts with a zero scan count.
 The first pointer store enables scanning before publishing the element. The
 mark is sticky and preserves the weak-target bit. Marked arrays scan their

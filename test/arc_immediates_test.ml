@@ -30,7 +30,7 @@ let catch ~mixed handler =
   let r = id "r" in
   let n = id "n" in
   let qty =
-    if mixed then MakeBlock (0, [Int 4])
+    if mixed then MakeBlock (0, Scan_all, [Int 4])
     else Binop (Add, Int 1, Int 3)
   in
   StaticCatch
@@ -41,7 +41,7 @@ let catch ~mixed handler =
 
 let mutable_slot ~mixed =
   let slot = id "slot" and v = id "stored" and read = id "read" in
-  let stored = if mixed then MakeBlock (0, [Int 8]) else Binop (Add, Int 4, Int 4) in
+  let stored = if mixed then MakeBlock (0, Scan_all, [Int 8]) else Binop (Add, Int 4, Int 4) in
   let update =
     Let (v, stored, Let (id "assign", Assign (slot, Var v), Halt Unit))
   in
@@ -172,7 +172,7 @@ let () =
   let fresh = id "fresh" and option = id "option" and allocated = id "allocated" in
   let init =
     Let (fresh, CreateBytes (Int 2),
-      Let (option, MakeBlock (0, [Var fresh]),
+      Let (option, MakeBlock (0, Scan_all, [Var fresh]),
         Let (id "write", Assign (slot, Var option), Halt (Var fresh)))) in
   let choose =
     If (Var snapshot,
