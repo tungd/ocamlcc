@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Add ARC Unix seek, truncation, sync, and POSIX record locks. Test write-lock contention against a separate process and acquisition after it exits. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
+
 - 2026-11-23 (codex/1) — Add ARC Unix filesystem metadata and path operations. Test file and directory permissions, symlink traversal, rename, and path error reporting. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
 
 - 2026-11-23 (codex/1) — Add Unix-domain and IPv4 sockets to ARC Unix. Exercise close-on-exec, Fiber readiness, shutdown and socket pairs through ocpkg. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).

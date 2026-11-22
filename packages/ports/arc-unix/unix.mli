@@ -17,7 +17,8 @@ type error =
   | EADDRINUSE | EADDRNOTAVAIL | EAFNOSUPPORT | EALREADY | ECONNREFUSED
   | ECONNRESET | EINPROGRESS | EISCONN | ENAMETOOLONG | ENOTCONN | ENOTSOCK
   | EPROTONOSUPPORT
-  | EISDIR | ELOOP | ENOSPC | ENOTDIR | ENOTEMPTY | EOVERFLOW | EROFS | EXDEV
+  | EDEADLK | EISDIR | ELOOP | ENOLCK | ENOSPC | ENOTDIR | ENOTEMPTY
+  | EOVERFLOW | EROFS | EXDEV
   | EWOULDBLOCK | EUNKNOWNERR of int
 
 exception Unix_error of error * string * string
@@ -109,6 +110,25 @@ val rename : string -> string -> unit
 val access : string -> Access_permission.t list -> unit
 val realpath : string -> string
 val getuid : unit -> int
+
+module Seek_command : sig
+  type t = SEEK_SET | SEEK_CUR | SEEK_END
+end
+
+type seek_command = Seek_command.t = SEEK_SET | SEEK_CUR | SEEK_END
+
+module Lock_command : sig
+  type t = F_ULOCK | F_LOCK | F_TLOCK | F_TEST | F_RLOCK | F_TRLOCK
+end
+
+type lock_command = Lock_command.t = F_ULOCK | F_LOCK | F_TLOCK | F_TEST | F_RLOCK | F_TRLOCK
+
+val lseek : File_descr.t -> int -> Seek_command.t -> int
+val ftruncate : File_descr.t -> int -> unit
+val fsync : File_descr.t -> unit
+val lockf : File_descr.t -> Lock_command.t -> int -> unit
+(** Lock relative to the current file offset. A zero length extends through
+    future end-of-file. [F_LOCK] and [F_RLOCK] block the calling OS thread. *)
 
 module Socket_domain : sig
   type t = PF_UNIX | PF_INET

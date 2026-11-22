@@ -65,7 +65,8 @@ value arc_unix_errno(value name)
     CHECK(EADDRINUSE); CHECK(EADDRNOTAVAIL); CHECK(EAFNOSUPPORT); CHECK(EALREADY);
     CHECK(ECONNREFUSED); CHECK(ECONNRESET); CHECK(EINPROGRESS); CHECK(EISCONN);
     CHECK(ENAMETOOLONG); CHECK(ENOTCONN); CHECK(ENOTSOCK); CHECK(EPROTONOSUPPORT);
-    CHECK(EISDIR); CHECK(ELOOP); CHECK(ENOSPC); CHECK(ENOTDIR); CHECK(ENOTEMPTY);
+    CHECK(EDEADLK); CHECK(EISDIR); CHECK(ELOOP); CHECK(ENOLCK); CHECK(ENOSPC);
+    CHECK(ENOTDIR); CHECK(ENOTEMPTY);
     CHECK(EOVERFLOW); CHECK(EROFS); CHECK(EXDEV);
 #undef CHECK
     return integer(-1);
@@ -242,6 +243,51 @@ value arc_unix_getuid(value unit)
 {
     (void)unit;
     return integer(getuid());
+}
+
+value arc_unix_lseek(value descriptor, value offset, value origin)
+{
+    const int origins[] = {SEEK_SET, SEEK_CUR, SEEK_END};
+    off_t position = lseek(number(descriptor), (off_t)(offset >> 1), origins[number(origin)]);
+    if (position == (off_t)-1)
+        return boxed(1, integer(errno));
+    if (!ocaml_int_fits(position))
+        return boxed(1, integer(EOVERFLOW));
+    return boxed(0, integer(position));
+}
+
+value arc_unix_ftruncate(value descriptor, value length)
+{
+    return integer(ftruncate(number(descriptor), (off_t)(length >> 1)) < 0 ? -errno : 0);
+}
+
+value arc_unix_fsync(value descriptor)
+{
+    return integer(fsync(number(descriptor)) < 0 ? -errno : 0);
+}
+
+value arc_unix_lockf(value descriptor, value command, value length)
+{
+    /* Match the constructors in Unix.Lock_command. */
+    const struct {
+        short type;
+        int action;
+    } modes[] = {
+        {F_UNLCK, F_SETLK}, {F_WRLCK, F_SETLKW}, {F_WRLCK, F_SETLK},
+        {F_WRLCK, F_GETLK}, {F_RDLCK, F_SETLKW}, {F_RDLCK, F_SETLK}
+    };
+    int option = number(command);
+    int action = modes[option].action;
+    struct flock region = {
+        .l_type = modes[option].type,
+        .l_whence = SEEK_CUR,
+        .l_len = (off_t)(length >> 1)
+    };
+    if (fcntl(number(descriptor), action, &region) < 0)
+        return integer(-errno);
+    if (action == F_GETLK && region.l_type != F_UNLCK)
+        return integer(-EACCES);
+    return integer(0);
 }
 
 value arc_unix_dup(value descriptor, value cloexec)

@@ -93,6 +93,12 @@ supports directory creation and removal, permission changes, renaming,
 unlinking, access checks, current UID, and canonical path resolution.
 Path errors keep the supplied path in `Unix.Unix_error`.
 
+`lseek`, `ftruncate`, and `fsync` work on existing descriptors.
+`Unix.Lock_command.t` exposes POSIX process-owned record locks relative to
+the descriptor's current offset. A zero-length region extends through
+future end-of-file. The daemon uses `F_TLOCK` so a competing owner reports
+contention immediately. `F_LOCK` and `F_RLOCK` block the calling OS thread.
+
 The socket interface supports Unix-domain and IPv4 stream and datagram
 sockets. It exposes `Unix.Sockaddr.t` and keeps IPv4 addresses abstract in
 `Unix.Inet_addr`. It includes listener and client operations, socket pairs,
@@ -124,6 +130,8 @@ descriptor adoption, duplication, and inheritance flags. The package
 fixture also checks Unix-domain and loopback connections, listener and
 client readiness, half-close, datagram pairs, running, stopped, signaled,
 and exited children, and macOS signal readiness through the Fiber scheduler.
+File checks cover symlink-aware metadata, seek and truncation, and record
+lock contention against a separate process.
 
 `stdlib/camlinternalIntFmt.ml` (`--nopervasives`, compiled right after `CamlinternalFormatBasics`) implements integer parsing and formatting (`format_int`, `format_int32`, `format_int64`, `format_nativeint`, `parse_int`, `parse_int32`, `parse_int64`, `parse_nativeint`) in pure OCaml, replacing the C `caml_*format*` / `caml_*_of_string` implementations previously in `runtime/builtins.c`/`runtime/arc.c`. It handles 63-bit signed decimal bounds (`[-(1<<62), (1<<62)-1]`), signed/unsigned base-prefixed literals (`"-0x30"`, `"0x7fffffffffffffff"` -> `-1`, magnitude `<= INT64_MAX`, sign-extending bit 62) matching `Misc.Int_literal_converter.int`, 32/64-bit parsing, and `%[flags][width][.prec][l|ll|L|n][d|i|u|x|X|o]` formatting.[^int-fmt]
 

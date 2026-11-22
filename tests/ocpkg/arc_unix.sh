@@ -67,6 +67,20 @@ int64_t make_symlink(int64_t target, int64_t link) {
     const char *destination = (const char *)(uintptr_t)target;
     return symlink(destination, name) == 0 ? 3 : 1;
 }
+
+int64_t start_lock_owner(int64_t file, int64_t parent, int64_t channel) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        int notify = (int)(channel >> 1);
+        close((int)(parent >> 1));
+        struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
+        if (fcntl((int)(file >> 1), F_SETLK, &lock) < 0 || write(notify, "l", 1) != 1)
+            _exit(1);
+        char release;
+        _exit(read(notify, &release, 1) == 1 ? 0 : 1);
+    }
+    return (int64_t)(((uint64_t)pid << 1) | 1);
+}
 C
 
 cat > src/main.ml <<'ML'
@@ -76,6 +90,8 @@ external clean_up_child : int -> unit = "clean_up_child"
 external install_term_handler : unit -> bool = "install_term_handler"
 external term_signals : unit -> int = "term_signals"
 external symlink : string -> string -> bool = "make_symlink"
+external start_lock_owner : Unix.file_descr -> Unix.file_descr -> Unix.file_descr -> int =
+  "start_lock_owner"
 
 let test_files () =
   let path = "arc-unix-file" in
@@ -139,6 +155,37 @@ let test_metadata () =
     | exception Unix.Unix_error (Unix.ENOENT, "stat", path) -> path = second
     | _ -> false);
   Unix.rmdir directory
+
+let test_file_locking () =
+  let path = "arc-unix-lock" in
+  let fd = Unix.openfile path [Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC] 0o600 in
+  Fun.protect ~finally:(fun () -> Unix.close fd; Unix.unlink path) (fun () ->
+    assert (Unix.write fd (Bytes.of_string "abcd") 0 4 = 4);
+    assert (Unix.lseek fd (-1) Unix.SEEK_END = 3);
+    Unix.ftruncate fd 2;
+    Unix.fsync fd;
+    assert ((Unix.fstat fd).st_size = 2 && Unix.lseek fd 0 Unix.SEEK_CUR = 3);
+    assert (Unix.lseek fd 0 Unix.SEEK_SET = 0);
+    let parent, child = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+    let owner = start_lock_owner fd parent child in
+    Unix.close child;
+    Fun.protect ~finally:(fun () -> Unix.close parent) (fun () ->
+      assert (owner > 0);
+      Fun.protect ~finally:(fun () -> clean_up_child owner) (fun () ->
+        let ready = Bytes.create 1 in
+        assert (Unix.read parent ready 0 1 = 1 && Bytes.get ready 0 = 'l');
+        let locked command =
+          match Unix.lockf fd command 0 with
+          | exception Unix.Unix_error ((Unix.EACCES | Unix.EAGAIN), "lockf", "") -> true
+          | () -> false in
+        assert (locked Unix.F_TEST && locked Unix.F_TLOCK && locked Unix.F_TRLOCK);
+        assert (Unix.write parent (Bytes.of_string "x") 0 1 = 1);
+        assert (Unix.waitpid [] owner = (owner, Unix.WEXITED 0))));
+    Unix.lockf fd Unix.F_TEST 0;
+    Unix.lockf fd Unix.F_LOCK 0;
+    Unix.lockf fd Unix.F_ULOCK 0;
+    Unix.lockf fd Unix.F_RLOCK 0;
+    Unix.lockf fd Unix.F_ULOCK 0)
 
 let with_socket domain f =
   let fd = Unix.socket ~cloexec:true domain Unix.SOCK_STREAM 0 in
@@ -306,6 +353,8 @@ let () =
   print_endline "ARC Unix file descriptors: PASS";
   test_metadata ();
   print_endline "ARC Unix file metadata: PASS";
+  test_file_locking ();
+  print_endline "ARC Unix file locking: PASS";
   test_sockets ();
   print_endline "ARC Unix sockets: PASS";
   test_children ();

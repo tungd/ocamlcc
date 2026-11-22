@@ -5,7 +5,8 @@ module Error = struct
     | EADDRINUSE | EADDRNOTAVAIL | EAFNOSUPPORT | EALREADY | ECONNREFUSED
     | ECONNRESET | EINPROGRESS | EISCONN | ENAMETOOLONG | ENOTCONN | ENOTSOCK
     | EPROTONOSUPPORT
-    | EISDIR | ELOOP | ENOSPC | ENOTDIR | ENOTEMPTY | EOVERFLOW | EROFS | EXDEV
+    | EDEADLK | EISDIR | ELOOP | ENOLCK | ENOSPC | ENOTDIR | ENOTEMPTY
+    | EOVERFLOW | EROFS | EXDEV
     | EWOULDBLOCK | EUNKNOWNERR of int
 
   external number : string -> int = "arc_unix_errno"
@@ -21,7 +22,8 @@ module Error = struct
         "EALREADY", EALREADY; "ECONNREFUSED", ECONNREFUSED; "ECONNRESET", ECONNRESET;
         "EINPROGRESS", EINPROGRESS; "EISCONN", EISCONN; "ENAMETOOLONG", ENAMETOOLONG;
         "ENOTCONN", ENOTCONN; "ENOTSOCK", ENOTSOCK; "EPROTONOSUPPORT", EPROTONOSUPPORT;
-        "EISDIR", EISDIR; "ELOOP", ELOOP; "ENOSPC", ENOSPC; "ENOTDIR", ENOTDIR;
+        "EDEADLK", EDEADLK; "EISDIR", EISDIR; "ELOOP", ELOOP; "ENOLCK", ENOLCK;
+        "ENOSPC", ENOSPC; "ENOTDIR", ENOTDIR;
         "ENOTEMPTY", ENOTEMPTY; "EOVERFLOW", EOVERFLOW; "EROFS", EROFS; "EXDEV", EXDEV;
         "EWOULDBLOCK", EWOULDBLOCK ]
 
@@ -42,7 +44,8 @@ type error = Error.t =
   | EADDRINUSE | EADDRNOTAVAIL | EAFNOSUPPORT | EALREADY | ECONNREFUSED
   | ECONNRESET | EINPROGRESS | EISCONN | ENAMETOOLONG | ENOTCONN | ENOTSOCK
   | EPROTONOSUPPORT
-  | EISDIR | ELOOP | ENOSPC | ENOTDIR | ENOTEMPTY | EOVERFLOW | EROFS | EXDEV
+  | EDEADLK | EISDIR | ELOOP | ENOLCK | ENOSPC | ENOTDIR | ENOTEMPTY
+  | EOVERFLOW | EROFS | EXDEV
   | EWOULDBLOCK | EUNKNOWNERR of int
 
 exception Unix_error of error * string * string
@@ -140,6 +143,18 @@ end
 
 type access_permission = Access_permission.t = R_OK | W_OK | X_OK | F_OK
 
+module Seek_command = struct
+  type t = SEEK_SET | SEEK_CUR | SEEK_END
+end
+
+type seek_command = Seek_command.t = SEEK_SET | SEEK_CUR | SEEK_END
+
+module Lock_command = struct
+  type t = F_ULOCK | F_LOCK | F_TLOCK | F_TEST | F_RLOCK | F_TRLOCK
+end
+
+type lock_command = Lock_command.t = F_ULOCK | F_LOCK | F_TLOCK | F_TEST | F_RLOCK | F_TRLOCK
+
 module Socket_domain = struct
   type t = PF_UNIX | PF_INET
 end
@@ -228,6 +243,10 @@ module Native = struct
   external rename : string -> string -> int = "arc_unix_rename"
   external access : string -> int -> int = "arc_unix_access"
   external realpath : string -> (string, int) result = "arc_unix_realpath"
+  external lseek : file_descr -> int -> Seek_command.t -> (int, int) result = "arc_unix_lseek"
+  external ftruncate : file_descr -> int -> int = "arc_unix_ftruncate"
+  external fsync : file_descr -> int = "arc_unix_fsync"
+  external lockf : file_descr -> Lock_command.t -> int -> int = "arc_unix_lockf"
   external dup : file_descr -> bool -> int = "arc_unix_dup"
   external set_cloexec : file_descr -> bool -> int = "arc_unix_set_cloexec"
   external set_nonblock : file_descr -> bool -> int = "arc_unix_set_nonblock"
@@ -301,6 +320,11 @@ let realpath path =
   get ~argument:path "realpath" (Native.realpath path)
 
 external getuid : unit -> int = "arc_unix_getuid"
+
+let lseek fd offset origin = get "lseek" (Native.lseek fd offset origin)
+let ftruncate fd size = ignore (check "ftruncate" (Native.ftruncate fd size))
+let fsync fd = ignore (check "fsync" (Native.fsync fd))
+let lockf fd command length = ignore (check "lockf" (Native.lockf fd command length))
 
 let inet_addr_any = Inet_addr.any
 let inet_addr_loopback = Inet_addr.loopback
