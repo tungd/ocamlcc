@@ -1,0 +1,79 @@
+open Sys_util
+
+module Request = struct
+  type t = {
+    single_thread : bool;
+    prefer_prebuilt : bool;
+    include_main : bool;
+    prebuilt_dir : string option;
+    source_dir : string option;
+    work_dir : string;
+    toolchain : Target.Toolchain.t;
+    verbose : bool;
+  }
+end
+
+let runtime_parts = [ "slab.c"; "cycle.c"; "weak.c"; "primitives.c" ]
+
+let runtime_units ~split ~include_main =
+  [ "pal.c"; "pal_ctx.S"; "arc.c" ]
+  @ (if split then runtime_parts else [])
+  @ [ "closure.c"; "fiber.c"; "builtins.c" ]
+  @ (if include_main then [ "main_entry.c" ] else [])
+
+let runtime_sources ~include_main dir =
+  runtime_units ~split:true ~include_main |> List.map (Filename.concat dir)
+
+let runtime_objects ~include_main dir =
+  let object_path unit = Filename.concat dir (Filename.remove_extension unit ^ ".o") in
+  (* Accept object directories from the same ABI before the source split. *)
+  let split = List.exists (fun unit -> Sys.file_exists (object_path unit)) runtime_parts in
+  runtime_units ~split ~include_main |> List.map object_path
+
+let compile_runtime_objs ~verbose (tc : Target.Toolchain.t) ~include_main
+    ~single_thread runtime_dir out_dir =
+  mkdir_p out_dir;
+  let srcs = runtime_sources ~include_main runtime_dir in
+  let rec go acc = function
+    | [] -> Ok (List.rev acc)
+    | src :: rest ->
+        let base = Filename.chop_extension (Filename.basename src) in
+        let obj = Filename.concat out_dir (base ^ ".o") in
+        let flags =
+          if Filename.check_suffix src ".S" then []
+          else
+            let flags = ["-std=c11"; "-O2"; "-g"; "-fPIC"; "-I" ^ runtime_dir] in
+            if single_thread && List.mem (Filename.basename src) ("arc.c" :: runtime_parts)
+            then "-DOCAMLCC_SINGLE_THREAD_RC" :: flags else flags
+        in
+        match Linker.compile_source ~verbose tc flags src obj with
+        | Error _ as e -> e
+        | Ok () -> go (obj :: acc) rest
+  in
+  go [] srcs
+
+let link_inputs (request : Request.t) =
+  let { Request.single_thread; prefer_prebuilt; include_main; prebuilt_dir;
+        source_dir; work_dir; toolchain; verbose } = request in
+  let prebuilt =
+    if prefer_prebuilt then Target.prebuilt_runtime ~single_thread prebuilt_dir
+    else None
+  in
+  let archive_name = if single_thread then "libocamlrt_st.a" else "libocamlrt.a" in
+  let select_prebuilt dir =
+    let archive = Filename.concat dir archive_name in
+    if include_main && Sys.file_exists archive && Option.is_none prebuilt_dir
+    then Some [archive]
+    else
+      let objects = runtime_objects ~include_main dir in
+      if List.for_all Sys.file_exists objects then Some objects else None
+  in
+  match Option.bind prebuilt select_prebuilt with
+  | Some inputs -> Ok inputs
+  | None ->
+      match Target.runtime_sources source_dir with
+      | Some dir ->
+          compile_runtime_objs ~verbose toolchain ~include_main ~single_thread dir work_dir
+      | None ->
+          Error (if prefer_prebuilt then "cannot locate runtime/ directory"
+                 else "cannot locate runtime/ directory for cross build")

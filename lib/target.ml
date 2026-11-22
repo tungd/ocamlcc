@@ -116,18 +116,19 @@ let runtime_sources override =
               | Some dir -> Some (Filename.concat dir "runtime")
               | None -> search_upwards "runtime"))
 
-let prebuilt_runtime override =
+let prebuilt_runtime ~single_thread override =
   match override with
-  | Some d -> Some d
+  | Some dir -> Some dir
   | None when Option.is_some (installed_toolchain ()) -> None
   | None ->
+      let dir = if single_thread then "rt-single" else "rt" in
       let sibling =
         Filename.concat
           (Filename.dirname (Filename.dirname Sys.executable_name))
-          "rt"
+          dir
       in
       if Sys.file_exists sibling then Some sibling
-      else search_upwards "build/rt"
+      else search_upwards (Filename.concat "build" dir)
 
 let stdlib_sources override =
   match override with

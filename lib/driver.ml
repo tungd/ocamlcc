@@ -110,42 +110,6 @@ let infer_kind cfg =
 let resolve_toolchain cfg =
   Target.toolchain ?cc_path:cfg.cc_path ?ar_path:cfg.ar_path ?sysroot:cfg.sysroot
 
-let runtime_parts = [ "slab.c"; "cycle.c"; "weak.c"; "primitives.c" ]
-
-let runtime_units ~split ~include_main =
-  [ "pal.c"; "pal_ctx.S"; "arc.c" ]
-  @ (if split then runtime_parts else [])
-  @ [ "closure.c"; "fiber.c"; "builtins.c" ]
-  @ (if include_main then [ "main_entry.c" ] else [])
-
-let runtime_sources ~include_main dir =
-  runtime_units ~split:true ~include_main |> List.map (Filename.concat dir)
-
-let runtime_objects ~include_main dir =
-  let object_path unit = Filename.concat dir (Filename.remove_extension unit ^ ".o") in
-  (* Accept object directories from the same ABI before the source split. *)
-  let split = List.exists (fun unit -> Sys.file_exists (object_path unit)) runtime_parts in
-  runtime_units ~split ~include_main |> List.map object_path
-
-let compile_runtime_objs ~verbose (tc : Target.Toolchain.t) ~include_main runtime_dir
-    out_dir =
-  mkdir_p out_dir;
-  let srcs = runtime_sources ~include_main runtime_dir in
-  let rec go acc = function
-    | [] -> Ok (List.rev acc)
-    | src :: rest ->
-        let base = Filename.chop_extension (Filename.basename src) in
-        let obj = Filename.concat out_dir (base ^ ".o") in
-        let flags =
-          if Filename.check_suffix src ".S" then []
-          else [ "-std=c11"; "-O2"; "-g"; "-fPIC"; "-I" ^ runtime_dir ]
-        in
-        match Linker.compile_source ~verbose tc flags src obj with
-        | Error _ as e -> e
-        | Ok () -> go (obj :: acc) rest
-  in
-  go [] srcs
-
 let stdlib_ordered_units =
   [ "camlinternalFormatBasics.ml";
     "camlinternalIntFmt.ml";
@@ -581,32 +545,14 @@ let rec build_single cfg ~(target : target_spec) ~(kind : output_kind)
                                         unit_objs @ shim_objs @ c_objs @ obj_inputs
                                       in
                                       let rt_objs_res =
-                                        if is_host_default_toolchain cfg target
-                                        then
-                                          match Target.prebuilt_runtime cfg.prebuilt_rt_dir with
-                                          | Some d
-                                            when Sys.file_exists
-                                                   (Filename.concat d "arc.o") ->
-                                              Ok (runtime_objects ~include_main d)
-                                          | _ -> (
-                                              match Target.runtime_sources cfg.runtime_dir with
-                                              | Some rdir ->
-                                                  compile_runtime_objs ~verbose
-                                                    tc ~include_main rdir
-                                                    (Filename.concat work_dir
-                                                       "rt")
-                                              | None ->
-                                                  Error
-                                                    "cannot locate runtime/ directory")
-                                        else
-                                          match Target.runtime_sources cfg.runtime_dir with
-                                          | Some rdir ->
-                                              compile_runtime_objs ~verbose tc
-                                                ~include_main rdir
-                                                (Filename.concat work_dir "rt")
-                                          | None ->
-                                              Error
-                                                "cannot locate runtime/ directory for cross build"
+                                        let single_thread = cfg.inline_single_thread_rc in
+                                        let prefer_prebuilt = is_host_default_toolchain cfg target in
+                                        Runtime_build.link_inputs
+                                          { single_thread; prefer_prebuilt; include_main;
+                                            prebuilt_dir = cfg.prebuilt_rt_dir;
+                                            source_dir = cfg.runtime_dir;
+                                            work_dir = Filename.concat work_dir "rt";
+                                            toolchain = tc; verbose }
                                       in
                                       match rt_objs_res with
                                       | Error _ as e -> e

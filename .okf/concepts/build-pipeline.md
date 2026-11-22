@@ -125,6 +125,11 @@ The default, single-thread, ASan and TSan archives include separate ARC,
 slab, cycle, weak and primitive objects. The driver uses the same source
 list to build a runtime for a different target or an installed toolchain.
 
+The compiler uses the thread-safe ARC profile by default. Pass
+`--single-thread-rc` to `build` to enable inline single-thread ARC and select
+`libocamlrt_st.a` or build matching target objects. The driver test exercises
+the prebuilt archive and the compiled-from-source path.
+
 # Shared filesystem and process operations
 
 `Sys_util` owns binary file IO, temporary file publication, directory

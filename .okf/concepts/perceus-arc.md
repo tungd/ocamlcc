@@ -54,11 +54,17 @@ They share implementation details through `arc_internal.h`. The public
   its recorded size class. Allocations through 256 total bytes use a
   table indexed by the size rounded up to 16 bytes. In the default runtime, the allocator lock protects the shared full and partial lists and per-slab freelists. Empty slabs return to PAL when their class has another slab, preserving one warm slab. Slots preserve 16-byte alignment.
 - **Per-thread magazines in the default runtime.** A thread can cache up to 16 small slots per size class, including slots from different slabs. Local hits use a thread-local pointer and bypass the shared lock and pthread key lookup. A refill takes a batch under the lock. A spill returns half the magazine under one lock acquisition and unmaps retired slabs after unlocking. Cached slots pin their own slab until returned and are excluded from the live-object and allocation-word counters. The pthread key destructor drains the magazines at thread exit. The shared path handles threads that cannot create a cache and releases from later thread destructors. Native tests check reuse across slabs and reclamation after thread exit.
-- **Optional single-thread ARC.** `ninja -j1 single_thread_runtime` produces `build/rt-single/libocamlrt.a` and the objects for `ocamlcc build --runtime-objects-dir build/rt-single`. The first OS thread to enter through a generated binding, the mutator gate, module initialization, or standalone collection owns this runtime for its lifetime. Those entry points reject a different thread. Callers of raw C runtime APIs must use the owner thread. That thread updates the slab lists and freelists without locking and uses load/store updates for reference counts and allocation counters. The counters still support atomic snapshots and the header and C signatures are shared with the default profile. `ninja -j1 test_single_thread_rc` checks array ownership, weak upgrades, reuse, allocation accounting, slab reclamation, and rejection of a second entrant.
-- **Inline single-thread ARC.** Pass `--inline-single-thread-rc` to
-  `ocamlcc build --runtime-objects-dir build/rt-single` after building the
-  single-thread runtime. The option also works with `ocamlcc compile` when
-  the resulting object is linked against that runtime. Generated module
+- **Optional single-thread ARC.** `ocamlcc build --single-thread-rc` selects
+  inline ARC and the matching runtime. A host executable can link
+  `build/rt-single/libocamlrt_st.a` from `ninja -j1 single_thread_runtime`.
+  The driver builds the same profile from runtime sources when it needs
+  target objects. The first OS thread to enter through a generated binding,
+  the mutator gate, module initialization, or standalone collection owns
+  this runtime for its lifetime. Those entry points reject a different
+  thread. Raw C runtime calls use the owner thread. Native checks exercise
+  array ownership, weak upgrades, reuse, and second-thread rejection.
+- **Inline single-thread ARC.** Low-level `ocamlcc compile
+  --inline-single-thread-rc` emits a module for the single-thread runtime. Generated module
   initializers use a single-thread entry symbol, which makes runtime-profile
   mismatches visible during executable linking. Mortal heap retains
   update the header directly. Shared releases inline the decrement when

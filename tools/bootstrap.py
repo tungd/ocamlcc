@@ -55,6 +55,7 @@ OCAMLCC_MODULES: list[tuple[str, bool, bool]] = [
     ("c_bindgen", True, True),
     ("target", True, True),
     ("linker", True, True),
+    ("runtime_build", True, True),
     ("dep_graph", True, True),
     ("driver", True, True),
     ("main", False, False),

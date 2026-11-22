@@ -24,6 +24,6 @@ val toolchain :
 
 val qbe : string option -> (string, string) result
 val runtime_sources : string option -> string option
-val prebuilt_runtime : string option -> string option
+val prebuilt_runtime : single_thread:bool -> string option -> string option
 val stdlib_sources : string option -> string option
 val prebuilt_stdlib : string option -> string option

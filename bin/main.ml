@@ -10,7 +10,7 @@
 let usage =
   "usage: ocamlcc build [--target t] [--shared|--static|--exe|-c|-S] \
    [--emit-header h] [-I dir] [--nostdlib] [--nopervasives] [--no-main] \
-   [--qbe path] [--cc path] [--sysroot path] [--runtime-objects-dir dir] [--inline-single-thread-rc] \
+   [--qbe path] [--cc path] [--sysroot path] [--single-thread-rc] \
    [-v] <files...> -o <out>\n\
    \       ocamlcc compile [-I dir] [--nostdlib] [--nopervasives] [--emit-cmi] \
    [--cmi-prefix p] [--mod] [--emit-opt] [--stdlib-dir dir] [--inline-single-thread-rc] <file.ml> [-o <out.ssa>]\n\
@@ -127,7 +127,7 @@ let parse_opts args =
     | "--sysroot" :: p :: rest -> go { opts with sysroot = Some p } rest
     | "--runtime-dir" :: p :: rest ->
         go { opts with runtime_dir = Some p } rest
-    | "--inline-single-thread-rc" :: rest ->
+    | ("--single-thread-rc" | "--inline-single-thread-rc") :: rest ->
         go { opts with inline_single_thread_rc = true } rest
     | "--runtime-objects-dir" :: p :: rest ->
         go { opts with runtime_objects_dir = Some p } rest
