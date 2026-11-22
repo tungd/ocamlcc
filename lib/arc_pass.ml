@@ -391,7 +391,7 @@ let borrowed_flags env id =
   Option.map (fun entry -> entry.borrow) (Ident.Map.find_opt id env.borrowed_entries)
 
 (* A private entry may borrow parameters read locally or forwarded to other
-   borrowed arguments. A worker duplicates no nested function identities. *)
+   borrowed arguments. Capturing a parameter makes the closure an owner. *)
 let read_only_parameters ~borrowed (lf : Anf.lfunction) =
   let remove_uses params args = Ident.Set.diff params (atoms_vars args) in
   let cexpr params = function
@@ -406,7 +406,7 @@ let read_only_parameters ~borrowed (lf : Anf.lfunction) =
          | _ -> remove_uses params args)
     | App (fn, args) -> remove_uses params (fn :: args)
     | Ccall _ | NativeCcall _ -> params
-    | Fun _ -> Ident.Set.empty
+    | Fun lf -> Ident.Set.diff params (Anf.free_vars lf.body)
     | (SetField (_, Lambda.Pointer, target, _)
       | SetBoxedFloatField (_, target, _)
       | ArraySet (_, (Lambda.Paddrarray | Lambda.Pgenarray), target, _, _)) as ce ->
@@ -422,6 +422,10 @@ let read_only_parameters ~borrowed (lf : Anf.lfunction) =
     else
       match expr with
       | Anf.Let (_, ce, body) | MutLet (_, ce, body) -> scan (cexpr params ce) body
+      | LetRec (defs, body) ->
+          let uncaptured = List.fold_left (fun params (rb : Anf.rec_binding) ->
+            Ident.Set.diff params (Anf.free_vars rb.def.body)) params defs in
+          scan uncaptured body
       | LetJoin (_, a, b) | If (_, a, b) | ScalarIf (_, _, a, b)
       | While (a, b) | TryWith (a, _, b) | StaticCatch (a, _, _, b, _) ->
           scan (scan params a) b

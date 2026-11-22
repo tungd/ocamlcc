@@ -67,10 +67,15 @@ let publish_object ~unit_name ~cmi ~obj exports =
   write (prefix ^ ".cmi") interface;
   write_object ~prefix ~obj body
 
+let read_unit unit = Filename.chop_suffix unit ".opt", read unit
+
+let write_unit_object unit =
+  let prefix, body = read_unit unit in
+  write_object ~prefix ~obj:(prefix ^ ".o") body
+
 let write_archive ~archive ~units =
   let body = List.map (fun unit ->
-    let body = read unit in
-    let prefix = Filename.chop_suffix unit ".opt" in
+    let prefix, body = read_unit unit in
     let obj = prefix ^ ".o" in
     if Sys.file_exists obj then write_object ~prefix ~obj body;
     body) units in

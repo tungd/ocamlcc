@@ -1934,9 +1934,15 @@ let inline_local_calls code =
                 callbacks := Ident.Set.add id !callbacks)
               def.params call.ap_args;
             (* [conv_atoms] evaluates arguments from left to right. Use
-               strict bindings so effects are preserved even for unused formals. *)
-            let body = List.fold_right2 (fun (id, kind) arg body ->
-              Llet (Strict, kind, id, arg, body)) def.params call.ap_args body in
+               strict bindings for any argument that needs evaluation or has
+               a representation annotation. Value aliases need no extra owner. *)
+            let aliases, body = List.fold_right2 (fun (id, kind) arg (aliases, body) ->
+              match kind, arg with
+              | Pgenval, Lvar source when not (Ident.Set.mem id !callbacks) ->
+                  Ident.Map.add id source aliases, body
+              | _ -> aliases, Llet (Strict, kind, id, arg, body))
+              def.params call.ap_args (Ident.Map.empty, body) in
+            let body = if Ident.Map.is_empty aliases then body else Lambda.rename aliases body in
             let body = visit (depth + 1) defs body in
             (match imported with
              | None -> body

@@ -318,7 +318,11 @@ let define_pure_function compile_aexpr b id (lf : Anf.lfunction)
         Hashtbl.replace b.compiled_groups gname ();
         compile_group compile_aexpr b gname (Hashtbl.find b.groups gname)
       end
-  | None -> ignore (compile_function compile_aexpr b id lf ~has_closure:false ~env:[])
+  | None ->
+      (* An owning function and its borrowed worker can share a nested
+         static binding. Its original identity selects a single symbol. *)
+      if not (Hashtbl.mem b.emitted_funs id) then
+        ignore (compile_function compile_aexpr b id lf ~has_closure:false ~env:[])
 
 let compile_fun_binding compile_aexpr b tail id (lf : Anf.lfunction) body =
   match Hashtbl.find_opt b.funs id with

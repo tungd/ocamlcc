@@ -19,6 +19,7 @@ let usage =
    \       ocamlcc bindgen [-I dir] [--nostdlib] [--nopervasives] \
    [--shim <out.c>] <file.mli> [-o <out.h>]\n\
    \       ocamlcc archive-opt <archive.a> <unit.opt>...\n\
+   \       ocamlcc object-opt <unit.opt>\n\
    \       ocamlcc dump-lambda [-I dir] [--nostdlib] [--nopervasives] <file.ml>"
 
 type cli_opts = {
@@ -226,6 +227,15 @@ let archive_opt opts =
          2)
   | _ -> prerr_endline usage; 2
 
+let object_opt opts =
+  match opts.inputs with
+  | [unit] when Filename.check_suffix unit ".opt" ->
+      (try Export_summary.write_unit_object unit; 0
+       with Sys_error msg ->
+         prerr_endline ("ocamlcc: error: " ^ msg);
+         2)
+  | _ -> prerr_endline usage; 2
+
 let compile_mli opts =
   match single_input opts with
   | None ->
@@ -371,6 +381,7 @@ let () =
           | "build" -> build opts
           | "compile" -> compile opts
           | "archive-opt" -> archive_opt opts
+          | "object-opt" -> object_opt opts
           | "compile-mli" -> compile_mli opts
           | "bindgen" -> bindgen opts
           | "dump-lambda" -> dump_lambda opts

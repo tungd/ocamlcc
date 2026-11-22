@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Publish compatibility stdlib object summaries during assembly and retain borrowed candidates across nested definitions and inlined value aliases. Tterm paired replay changed +5.8% plain and -5.9% Unicode (default), -1.9% plain and -8.4% Unicode (single-thread RC). Parser allocation medians were identical.
+
 - 2026-11-22 (codex/1) — Fuse finalizer poll fast paths, throttle bounded self-tail loops, and branch directly from single-use short-circuit joins. Tterm paired replay improved 3.2% plain and 1.8% Unicode (default), 3.9% plain and 4.0% Unicode (single-thread RC).
 
 - 2026-11-22 (codex/1) — Use a single nullable heap predicate, skip ARC guards after receiver dereferences, and share the raw for-loop index. Tterm paired replay changed by +0.4% plain and -5.7% Unicode (default) and +0.9% plain and -3.2% Unicode (single-thread RC). Parser allocation medians were identical.

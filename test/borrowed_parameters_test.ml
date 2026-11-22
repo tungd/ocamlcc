@@ -53,6 +53,32 @@ let () =
     external ( + ) : int -> int -> int = "%addint"
     external ( - ) : int -> int -> int = "%subint"
     external ( = ) : int -> int -> bool = "%eq"
+    let[@inline never] read text n =
+      let[@inline never] bump n = n + 1 in
+      let rec count k = if k = 0 then bump k else count (k - 1) in
+      length text + count n
+    let keep text n = read text n + length text
+    let[@inline never] read_captured text n =
+      let[@inline never] inner n = length text + n in inner n
+    let keep_captured text n = read_captured text n + length text
+  |} in
+  require (function_body il "keep") "$ocamlcc_Borrow_params_read_borrowed(";
+  forbid (function_body il "read_borrowed") "arc_release";
+  forbid il "$ocamlcc_Borrow_params_read_captured_borrowed(";
+  let helper = Str.regexp "function l \\$ocamlcc_Borrow_params_\\(bump\\|count\\)(" in
+  let rec count pos n =
+    match Str.search_forward helper il pos with
+    | index -> count (index + 1) (n + 1)
+    | exception Not_found -> n
+  in
+  if count 0 0 <> 2 then failwith "nested static functions must be defined once"
+
+let () =
+  let il = compile {|
+    external length : string -> int = "%string_length"
+    external ( + ) : int -> int -> int = "%addint"
+    external ( - ) : int -> int -> int = "%subint"
+    external ( = ) : int -> int -> bool = "%eq"
     let[@inline never] width text = length text
     let[@inline never] forward text = width text
     let[@inline never] use_forward text = forward text + length text

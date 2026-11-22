@@ -2,7 +2,10 @@
    free-variable filtering, and external module dependency collection. *)
 
 let collect_pure_defs (e : Anf.aexpr) : (Ident.t * Anf.lfunction) list =
-  Anf.pure_defs e
+  let seen = Hashtbl.create 16 in
+  List.filter (fun (id, _) ->
+    if Hashtbl.mem seen id then false
+    else begin Hashtbl.add seen id (); true end) (Anf.pure_defs e)
 
 let free_vars_of (b : Codegen_ctx.t) ?self_id (lf : Anf.lfunction) :
     Ident.t list =

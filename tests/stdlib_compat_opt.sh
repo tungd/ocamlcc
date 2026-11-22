@@ -14,6 +14,14 @@ for fn in array_fill array_sub fill_bytes blit_bytes; do
 done
 grep -Eq 'ocamlcc_Stdlib__Bytes_set_uint8_borrowed__' "$stdlib/stdlib__bytes.exports"
 
+# Later units can import both the Stdlib raise helpers and earlier bulk
+# providers in the same build of the archive.
+for unit in array bytes; do
+    grep -Eq 'call extern \$ocamlcc_Stdlib_invalid_arg__' "$stdlib/stdlib__$unit.ssa"
+    grep -Eq '_fill__[^ ]+ 4 false [^ ]+ [^ ]+ [^ ]+ 100[01]$' "$stdlib/stdlib__$unit.opt"
+done
+grep -Eq '_set_utf_8_uchar__[^ ]+ 3 false [^ ]+ [^ ]+ [^ ]+ 10[01]$' "$stdlib/stdlib__bytes.opt"
+
 # Uchar.to_int is exposed as the immediate identity in the compatibility CMI.
 awk '
     /function l \$ocamlcc_Stdlib__Bytes_set_utf_8_uchar(_borrowed)?__/ { body = 1; found = 1 }

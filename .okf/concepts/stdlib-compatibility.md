@@ -39,8 +39,11 @@ sources:
 ---
 
 
-The compatibility build publishes direct-call metadata in
-`libocamlstdlib_compat.a.opt` and per-unit `.exports` files for loose objects.
+The compatibility build publishes each loose object's `.exports` file after
+assembly so later units can import its digest-checked call and ownership facts.
+This lets the bulk clients call `Stdlib.invalid_arg` directly on their error
+paths and advertise their borrowed entries. The final archive publishes the
+same facts in `libocamlstdlib_compat.a.opt`.
 See [persisted export summaries](/concepts/build-pipeline.md#persisted-export-summaries).
 
 # Build and test

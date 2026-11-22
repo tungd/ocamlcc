@@ -954,6 +954,12 @@ def compile_stdlib(
             mli_status[base] = (True, "")
 
     archive = out_dir / "libocamlstdlib_compat.a"
+    # During the build only successfully assembled units may supply facts.
+    # Publish the archive summary after the loose-object phase finishes.
+    archive.unlink(missing_ok=True)
+    archive.with_suffix(".a.opt").unlink(missing_ok=True)
+    for sidecar in out_dir.glob("*.exports"):
+        sidecar.unlink()
 
     def publish_archive(objects: list[Path]) -> None:
         archive.unlink(missing_ok=True)
@@ -991,7 +997,7 @@ def compile_stdlib(
                 str(out_dir),
                 "--mod",
                 "--emit-opt",
-                *(["--stdlib-dir", str(out_dir)] if base in ("array", "bytes", "string") else []),
+                "--stdlib-dir", str(out_dir),
                 *([] if mli_path is not None else ["--emit-cmi"]),
                 "--cmi-prefix",
                 str(cmi_prefix),
@@ -1022,10 +1028,10 @@ def compile_stdlib(
                     else:
                         as_ok = True
                         built_objs.append(obj_path)
-                        if base == "camlinternalBulkOps":
-                            # The three bulk clients can bind to this object
-                            # before the complete archive is assembled.
-                            publish_archive([obj_path])
+                        summary = run_cmd([str(ocamlcc), "object-opt",
+                                           str(obj_path.with_suffix(".opt"))])
+                        if summary.returncode != 0:
+                            raise RuntimeError(extract_first_error(summary.stderr, summary.stdout))
 
         results.append(
             ModuleResult(
