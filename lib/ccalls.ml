@@ -223,6 +223,8 @@ let table =
     ("caml_ba_set_1", abi 3 true false);
     ("caml_ba_set_2", abi 4 true false);
     ("caml_ba_set_3", abi 5 true false);
+    ("ocamlcc_bigstring_get", abi 4 true false);
+    ("ocamlcc_bigstring_set", abi 5 true false);
     ("caml_ba_num_dims", abi 1 true false);
     ("caml_ba_kind", abi 1 true false);
     ("caml_ba_layout", abi 1 true false);
@@ -338,6 +340,7 @@ let returns_imm = function
   | "ocamlcc_zstd_compress_bytes" | "ocamlcc_zstd_decompress_bytes"
   | "caml_ba_dim" | "caml_ba_num_dims" | "caml_ba_kind" | "caml_ba_layout"
   | "caml_ba_set_1" | "caml_ba_set_2" | "caml_ba_set_3" | "caml_ba_set_generic"
+  | "ocamlcc_bigstring_set"
   | "caml_terminfo_rows" | "caml_zstd_initialize" ->
       true
   | _ -> false

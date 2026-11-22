@@ -295,6 +295,7 @@ static int64_t ba_get(int64_t v, int n, const int64_t *idx)
     ArcBigarray *a = (void *)(uintptr_t)v; size_t offset;
     return ba_offset(a, n, idx, &offset) ? ba_read(a, offset) : 1;
 }
+
 static int64_t ba_set(int64_t v, int n, const int64_t *idx, int64_t value)
 {
     ArcBigarray *a = (void *)(uintptr_t)v; size_t offset;
@@ -367,6 +368,73 @@ int64_t caml_ba_get_3(int64_t a, int64_t i, int64_t j, int64_t k) { int64_t idx[
 int64_t caml_ba_set_1(int64_t a, int64_t i, int64_t v) { return ba_set(a, 1, &i, v); }
 int64_t caml_ba_set_2(int64_t a, int64_t i, int64_t j, int64_t v) { int64_t idx[] = {i,j}; return ba_set(a, 2, idx, v); }
 int64_t caml_ba_set_3(int64_t a, int64_t i, int64_t j, int64_t k, int64_t v) { int64_t idx[] = {i,j,k}; return ba_set(a, 3, idx, v); }
+
+static uint8_t *bigstring_address(int64_t buffer, int64_t index,
+                                  int64_t width, int64_t checked)
+{
+    ArcBigarray *a = (ArcBigarray *)(uintptr_t)buffer;
+    int64_t offset = index >> 1;
+    if ((checked >> 1) && (offset < 0 || offset > a->dims[0] - width)) {
+        ocamlcc_raise_invalid_arg_oob();
+        return NULL;
+    }
+    return a->data + offset;
+}
+
+int64_t ocamlcc_bigstring_get(int64_t buffer, int64_t index,
+                              int64_t byte_width, int64_t checked)
+{
+    int64_t width = byte_width >> 1;
+    const uint8_t *data = bigstring_address(buffer, index, width, checked);
+    if (data == NULL)
+        return 1;
+    switch (width) {
+    case 2: {
+        uint16_t bits;
+        pal_memcpy(&bits, data, sizeof bits);
+        return tag_int(bits);
+    }
+    case 4: {
+        int32_t bits;
+        pal_memcpy(&bits, data, sizeof bits);
+        return ocamlcc_alloc_custom(ARC_CUSTOM_INT32, (uint64_t)(int64_t)bits);
+    }
+    case 8: {
+        uint64_t bits;
+        pal_memcpy(&bits, data, sizeof bits);
+        return ocamlcc_alloc_custom(ARC_CUSTOM_INT64, bits);
+    }
+    default: pal_abort();
+    }
+}
+
+int64_t ocamlcc_bigstring_set(int64_t buffer, int64_t index, int64_t value,
+                              int64_t byte_width, int64_t checked)
+{
+    int64_t width = byte_width >> 1;
+    uint8_t *data = bigstring_address(buffer, index, width, checked);
+    if (data == NULL)
+        return 1;
+    switch (width) {
+    case 2: {
+        uint16_t bits = (uint16_t)(value >> 1);
+        pal_memcpy(data, &bits, sizeof bits);
+        break;
+    }
+    case 4: {
+        uint32_t bits = (uint32_t)unbox_custom_i64(value);
+        pal_memcpy(data, &bits, sizeof bits);
+        break;
+    }
+    case 8: {
+        uint64_t bits = (uint64_t)unbox_custom_i64(value);
+        pal_memcpy(data, &bits, sizeof bits);
+        break;
+    }
+    default: pal_abort();
+    }
+    return 1;
+}
 int64_t caml_ba_num_dims(int64_t v) { return tag_int(((ArcBigarray *)(uintptr_t)v)->ndims); }
 int64_t caml_ba_kind(int64_t v) { return tag_int(((ArcBigarray *)(uintptr_t)v)->kind); }
 int64_t caml_ba_layout(int64_t v) { return tag_int(((ArcBigarray *)(uintptr_t)v)->layout); }

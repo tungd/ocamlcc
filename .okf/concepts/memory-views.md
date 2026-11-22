@@ -6,7 +6,7 @@ tags: [memory, bigarray, ffi, compiler, performance]
 status: draft
 generated:
   by: codex/1
-  at: 2026-11-19T03:35:08Z
+  at: 2026-11-23
 sources:
   - id: scope
     resource: Conversation on 2026-11-18 about ARC, Bigarray, memory views, and desktop target scope
@@ -26,6 +26,9 @@ sources:
   - id: lowering-test
     resource: ../../test/bigarray_lowering_test.ml
     title: Bigarray access metadata before and after ARC
+  - id: bigstring-test
+    resource: ../../tests/stdlib/bigstring/main.ml
+    title: Native-endian loads and stores on Bigarray byte views
   - id: codegen
     resource: ../../lib/codegen_expr.ml
     title: Boxed scalar arithmetic and C calls
@@ -100,6 +103,16 @@ bytes even if its allocator reserves a nonzero physical allocation.
 Do not add an eager `dispose` operation that frees storage beneath live views.
 Users control critical-path allocation by constructing and retaining reusable
 buffers and views before the loop, then releasing ownership at a chosen point.
+
+## Bigarray byte access
+
+The stock `%caml_bigstring_*` primitives read and write 16-, 32-, and 64-bit
+words at byte offsets in a C-layout Array1 of bytes. The runtime copies each
+word in native byte order, including at unaligned offsets. Checked forms
+test the entire word against the current view length and raise
+`Invalid_argument` before an out-of-bounds access. Unsafe forms require
+the caller to supply a valid range. Subviews share the owner's bytes,
+so stores are visible from the owner.[^bigstring-test]
 
 ## C access to OCaml buffers
 
@@ -414,6 +427,7 @@ policies can be added separately when a concrete integration needs them.
 [^runtime]: `ArcBigarray`, `ArcBigarrayBuffer`, `release_subtree`, and mutator-gate hooks in `runtime/arc.c`.
 [^lowering]: `Pbigarrayref`/`Pbigarrayset` lowering in `lib/anf.ml` preserves kind, layout, rank and access mode in generic and specialized access nodes.
 [^lowering-test]: `test/bigarray_lowering_test.ml` checks typed and polymorphic source programs through `Arc_pass.run`.
+[^bigstring-test]: `tests/stdlib/bigstring/main.ml` exercises all widths on an unaligned, shared subview with stock and ARC runtimes.
 [^codegen]: `lib/codegen_expr.ml` emits QBE double operands and helper calls for specialized float64 stores and the boxed value ABI for general operations.
 [^bindgen]: `lib/c_bindgen.ml` defines the supported C types, opaque ownership helpers, and generated exception/mutator handling.
 [^tests]: `tests/stdlib_runtime.c` and `tests/stdlib/bigarray/main.ml` exercise existing shared-backing lifetime and source-level behavior.

@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Compile stock Bigstring loads and stores for unchanged Digestif. Exercise native byte order, unaligned subviews, and checked bounds. See [Bigarray byte access](/concepts/memory-views.md#bigarray-byte-access).
+
 - 2026-11-23 (codex/1) — Support scoped allocating C primitives and inline custom values for unchanged Zarith sources. Exercise GMP, mixed integer comparison, exception propagation, and temporary ARC ownership. See [allocating C primitives](/concepts/package-catalog.md#allocating-c-primitives).
 
 - 2026-11-23 (codex/1) — Route ARC Unix signals through eventfd on Linux. Exercise Fiber readiness, handler restoration, and SIGTERM in a subprocess launched within the signal scope. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).

@@ -187,6 +187,10 @@ and conv_atoms env (lams : Lambda.lambda list) (k : atom list -> aexpr) : aexpr 
   | [] -> k []
   | x :: xs -> conv_expr env x (fun a -> conv_atoms env xs (fun rest -> k (a :: rest)))
 
+and conv_bigstring env symbol width unsafe args k =
+  let checked = Int (if unsafe then 0 else 1) in
+  conv_atoms env args (fun args -> k (Ccall (symbol, args @ [Int width; checked])))
+
 and conv_fun env ?self (lf : Lambda.lfunction) : lfunction =
   match lf.kind with
   | Curried ->
@@ -609,6 +613,18 @@ and conv_simple env ?(result_kind = Lambda.Pgenval) (id : Ident.t)
       conv_atoms env [ b; i; v ] (function
         | [ ba; ia; va ] -> emit_cexpr (BytesSetN (not unsafe, 8, ba, ia, va))
         | _ -> assert false)
+  | Lprim (Pbigstring_load_16 unsafe, ([ _; _ ] as args), _) ->
+      conv_bigstring env "ocamlcc_bigstring_get" 2 unsafe args emit_cexpr
+  | Lprim (Pbigstring_load_32 unsafe, ([ _; _ ] as args), _) ->
+      conv_bigstring env "ocamlcc_bigstring_get" 4 unsafe args emit_cexpr
+  | Lprim (Pbigstring_load_64 unsafe, ([ _; _ ] as args), _) ->
+      conv_bigstring env "ocamlcc_bigstring_get" 8 unsafe args emit_cexpr
+  | Lprim (Pbigstring_set_16 unsafe, ([ _; _; _ ] as args), _) ->
+      conv_bigstring env "ocamlcc_bigstring_set" 2 unsafe args emit_cexpr
+  | Lprim (Pbigstring_set_32 unsafe, ([ _; _; _ ] as args), _) ->
+      conv_bigstring env "ocamlcc_bigstring_set" 4 unsafe args emit_cexpr
+  | Lprim (Pbigstring_set_64 unsafe, ([ _; _; _ ] as args), _) ->
+      conv_bigstring env "ocamlcc_bigstring_set" 8 unsafe args emit_cexpr
   | Lprim (Pctconst c, _, _) ->
       let atom =
         match c with
