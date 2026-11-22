@@ -86,9 +86,19 @@ The process interface exposes `getpid`, `kill` and `waitpid` with
 result as `(0, WEXITED 0)`. A fiber can reap all ready children with
 `WNOHANG` without blocking the scheduler.
 
+On macOS, `Unix.Signal_events.with_events` temporarily owns delivery of
+SIGINT, SIGTERM, and SIGCHLD for the process. Use it from the single
+scheduler thread. Await the
+borrowed kqueue descriptor with `Fiber.fd_wait`, then drain `next` until it
+returns `None`. A `Child_exit` event can cover multiple child statuses, so
+reap with `waitpid [WNOHANG]` until no status is ready. The scope restores the
+previous signal actions and closes the descriptor, including on exceptions.
+Other platforms report `ENOSYS` for this signal source.
+
 `ninja -j1 ocpkg_arc_unix` exercises a close-on-exec pipe, nonblocking reads,
 offset byte transfers, end of file, and error translation. The package
-fixture also checks running, stopped, signaled, and exited children.
+fixture also checks running, stopped, signaled, and exited children and
+macOS signal readiness through the Fiber scheduler.
 
 `stdlib/camlinternalIntFmt.ml` (`--nopervasives`, compiled right after `CamlinternalFormatBasics`) implements integer parsing and formatting (`format_int`, `format_int32`, `format_int64`, `format_nativeint`, `parse_int`, `parse_int32`, `parse_int64`, `parse_nativeint`) in pure OCaml, replacing the C `caml_*format*` / `caml_*_of_string` implementations previously in `runtime/builtins.c`/`runtime/arc.c`. It handles 63-bit signed decimal bounds (`[-(1<<62), (1<<62)-1]`), signed/unsigned base-prefixed literals (`"-0x30"`, `"0x7fffffffffffffff"` -> `-1`, magnitude `<= INT64_MAX`, sign-extending bit 62) matching `Misc.Int_literal_converter.int`, 32/64-bit parsing, and `%[flags][width][.prec][l|ll|L|n][d|i|u|x|X|o]` formatting.[^int-fmt]
 

@@ -12,6 +12,7 @@ cd "$scratch"
 printf 'c_source src/fixture.c\n' >> ocpkg.mod
 
 cat > src/fixture.c <<'C'
+#define _POSIX_C_SOURCE 200809L
 #include <fcntl.h>
 #include <signal.h>
 #include <stdint.h>
@@ -41,12 +42,33 @@ int64_t clean_up_child(int64_t child) {
     }
     return 1;
 }
+
+static volatile sig_atomic_t term_count;
+
+static void on_term(int signal) {
+    (void)signal;
+    term_count++;
+}
+
+int64_t install_term_handler(int64_t unit) {
+    (void)unit;
+    struct sigaction action = {.sa_handler = on_term};
+    sigemptyset(&action.sa_mask);
+    return sigaction(SIGTERM, &action, NULL) == 0 ? 3 : 1;
+}
+
+int64_t term_signals(int64_t unit) {
+    (void)unit;
+    return (int64_t)term_count * 2 + 1;
+}
 C
 
 cat > src/main.ml <<'ML'
 external cloexec : Unix.file_descr -> bool = "fd_is_cloexec"
 external start_child : Unix.file_descr -> Unix.file_descr -> int = "start_child"
 external clean_up_child : int -> unit = "clean_up_child"
+external install_term_handler : unit -> bool = "install_term_handler"
+external term_signals : unit -> int = "term_signals"
 
 let with_child f =
   let reader, writer = Unix.pipe ~cloexec:true () in
@@ -75,6 +97,52 @@ let test_children () =
     Unix.kill pid Sys.sigterm;
     assert (Unix.waitpid [] pid = (pid, Unix.WSIGNALED Sys.sigterm)))
 
+let test_signal_events () =
+  let module Signals = Unix.Signal_events in
+  let test_darwin () =
+    assert (install_term_handler ());
+    let events, fd = Signals.with_events (fun events ->
+      let fd = Signals.descriptor events in
+      assert (cloexec fd && Signals.next events = None);
+      assert (match Signals.with_events ignore with
+        | exception Unix.Unix_error (Unix.EBUSY, _, _) -> true
+        | () -> false);
+      let await expected trigger =
+        let watcher = Fiber.spawn (fun () ->
+          let ready = Fiber.fd_wait ~timeout_ms:3000
+              (Unix.File_descr.to_int fd) Fiber.Direction.Read in
+          assert (ready = Fiber.Wait_result.Ready);
+          Signals.next events) in
+        let sender = Fiber.spawn trigger in
+        Fiber.await sender;
+        assert (Fiber.await watcher = Some expected)
+      in
+      with_child (fun pid writer ->
+        await Signals.Event.Child_exit (fun () ->
+          assert (Unix.write writer (Bytes.of_string "x") 0 1 = 1));
+        assert (Unix.waitpid [Unix.WNOHANG] pid = (pid, Unix.WEXITED 23)));
+      await Signals.Event.Interrupt (fun () -> Unix.kill (Unix.getpid ()) Sys.sigint);
+      await Signals.Event.Terminate (fun () -> Unix.kill (Unix.getpid ()) Sys.sigterm);
+      assert (term_signals () = 0);
+      events, fd) in
+    assert (not (cloexec fd));
+    assert (match Signals.next events with
+      | exception Invalid_argument _ -> true
+      | _ -> false);
+    let exception Exit_scope in
+    assert (match Signals.with_events (fun _ -> raise Exit_scope) with
+      | exception Exit_scope -> true
+      | _ -> false);
+    Unix.kill (Unix.getpid ()) Sys.sigterm;
+    assert (term_signals () = 1);
+    print_endline "ARC Unix signal readiness: PASS"
+  in
+  if Sys.argv.(1) = "Darwin" then test_darwin ()
+  else
+    assert (match Signals.with_events ignore with
+      | exception Unix.Unix_error (Unix.ENOSYS, _, _) -> true
+      | () -> false)
+
 let () =
   let reader, writer = Unix.pipe ~cloexec:true () in
   assert (cloexec reader && cloexec writer);
@@ -99,6 +167,9 @@ let () =
   assert (Unix.gettimeofday () > 0.);
   print_endline "ARC Unix descriptors: PASS";
   test_children ();
-  print_endline "ARC Unix child status: PASS"
+  print_endline "ARC Unix child status: PASS";
+  test_signal_events ()
 ML
-"$runner" run
+system=$(uname -s)
+"$runner" run -- "$system"
+"$runner" run --single-thread-rc -- "$system"

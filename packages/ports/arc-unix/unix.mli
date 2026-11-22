@@ -9,7 +9,7 @@ end
 type file_descr = File_descr.t
 
 type error =
-  | EACCES | EAGAIN | EBADF | ECHILD | EINTR | EINVAL | EIO | EMFILE
+  | EACCES | EAGAIN | EBADF | EBUSY | ECHILD | EINTR | EINVAL | EIO | EMFILE
   | ENFILE | ENOENT | ENOMEM | ENOSYS | EPERM | EPIPE | ESRCH | ETIMEDOUT
   | EWOULDBLOCK | EUNKNOWNERR of int
 
@@ -50,3 +50,24 @@ val kill : int -> int -> unit
 
 val waitpid : Wait_flag.t list -> int -> int * Process_status.t
 (** With [WNOHANG], [(0, WEXITED 0)] means no child status is ready. *)
+
+module Signal_events : sig
+  module Event : sig
+    type t = Interrupt | Terminate | Child_exit
+  end
+
+  type t
+
+  val with_events : (t -> 'a) -> 'a
+  (** On Darwin, route SIGINT, SIGTERM and SIGCHLD to a kqueue within the
+      callback and restore the process's previous signal actions on exit.
+      Use from a single OS thread with one active scope per process. Raises
+      [Unix_error (EBUSY, _, _)] for a nested scope and [ENOSYS] elsewhere. *)
+
+  val descriptor : t -> File_descr.t
+  (** Borrow the active scope's descriptor for [Fiber.fd_wait]. *)
+
+  val next : t -> Event.t option
+  (** Read one pending event without blocking. Signals can coalesce.
+      On [Child_exit], drain [waitpid [WNOHANG] (-1)] until no child is ready. *)
+end

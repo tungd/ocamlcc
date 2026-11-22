@@ -8,7 +8,7 @@ type file_descr = File_descr.t
 
 module Error = struct
   type t =
-    | EACCES | EAGAIN | EBADF | ECHILD | EINTR | EINVAL | EIO | EMFILE
+    | EACCES | EAGAIN | EBADF | EBUSY | ECHILD | EINTR | EINVAL | EIO | EMFILE
     | ENFILE | ENOENT | ENOMEM | ENOSYS | EPERM | EPIPE | ESRCH | ETIMEDOUT
     | EWOULDBLOCK | EUNKNOWNERR of int
 
@@ -17,7 +17,7 @@ module Error = struct
 
   let codes =
     List.map (fun (name, error) -> number name, error)
-      [ "EACCES", EACCES; "EAGAIN", EAGAIN; "EBADF", EBADF; "ECHILD", ECHILD;
+      [ "EACCES", EACCES; "EAGAIN", EAGAIN; "EBADF", EBADF; "EBUSY", EBUSY; "ECHILD", ECHILD;
         "EINTR", EINTR; "EINVAL", EINVAL; "EIO", EIO; "EMFILE", EMFILE;
         "ENFILE", ENFILE; "ENOENT", ENOENT; "ENOMEM", ENOMEM; "ENOSYS", ENOSYS;
         "EPERM", EPERM; "EPIPE", EPIPE; "ESRCH", ESRCH; "ETIMEDOUT", ETIMEDOUT;
@@ -35,7 +35,7 @@ module Error = struct
 end
 
 type error = Error.t =
-  | EACCES | EAGAIN | EBADF | ECHILD | EINTR | EINVAL | EIO | EMFILE
+  | EACCES | EAGAIN | EBADF | EBUSY | ECHILD | EINTR | EINVAL | EIO | EMFILE
   | ENFILE | ENOENT | ENOMEM | ENOSYS | EPERM | EPIPE | ESRCH | ETIMEDOUT
   | EWOULDBLOCK | EUNKNOWNERR of int
 
@@ -101,3 +101,34 @@ let waitpid flags pid =
   get "waitpid"
     (Native.waitpid pid (List.mem Wait_flag.WNOHANG flags)
        (List.mem Wait_flag.WUNTRACED flags))
+
+module Signal_events = struct
+  module Event = struct
+    type t = Interrupt | Terminate | Child_exit
+  end
+
+  type t = { mutable fd : File_descr.t option }
+
+  external open_queue : unit -> (File_descr.t, int) result =
+    "arc_unix_signal_queue_open"
+
+  external close_queue : File_descr.t -> int = "arc_unix_signal_queue_close"
+
+  external next_event : File_descr.t -> (Event.t option, int) result =
+    "arc_unix_signal_queue_next"
+
+  let descriptor scope =
+    match scope.fd with
+    | Some fd -> fd
+    | None -> invalid_arg "Unix.Signal_events: scope closed"
+
+  let next scope = get "Signal_events.next" (next_event (descriptor scope))
+
+  let with_events f =
+    let fd = get "Signal_events.with_events" (open_queue ()) in
+    let scope = { fd = Some fd } in
+    Fun.protect ~finally:(fun () ->
+      scope.fd <- None;
+      ignore (check "Signal_events.close" (close_queue fd)))
+      (fun () -> f scope)
+end

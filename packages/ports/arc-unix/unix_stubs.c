@@ -10,6 +10,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#include <sys/event.h>
+#endif
+
 typedef int64_t value;
 
 static value integer(int64_t n) { return (value)(((uint64_t)n << 1) | 1); }
@@ -42,7 +46,7 @@ value arc_unix_errno(value name)
 {
     const char *symbol = (const char *)(uintptr_t)name;
 #define CHECK(code) if (!strcmp(symbol, #code)) return integer(code)
-    CHECK(EACCES); CHECK(EAGAIN); CHECK(EBADF); CHECK(ECHILD); CHECK(EINTR);
+    CHECK(EACCES); CHECK(EAGAIN); CHECK(EBADF); CHECK(EBUSY); CHECK(ECHILD); CHECK(EINTR);
     CHECK(EINVAL); CHECK(EIO); CHECK(EMFILE); CHECK(ENFILE); CHECK(ENOENT);
     CHECK(ENOMEM); CHECK(ENOSYS); CHECK(EPERM); CHECK(EPIPE); CHECK(ESRCH);
     CHECK(ETIMEDOUT); CHECK(EWOULDBLOCK);
@@ -187,4 +191,146 @@ value arc_unix_waitpid(value pid, value nohang, value untraced)
     else
         outcome = boxed(1, integer(signal_from_native(WTERMSIG(status))));
     return boxed(0, tuple(integer(ready), outcome));
+}
+
+#ifdef __APPLE__
+enum { SIGNAL_COUNT = 3 };
+/* Keep this order aligned with Unix.Signal_events.Event.t. */
+static const int watched_signals[SIGNAL_COUNT] = {SIGINT, SIGTERM, SIGCHLD};
+static struct {
+    int fd;
+    struct sigaction previous[SIGNAL_COUNT];
+} signal_queue = {.fd = -1};
+
+static void ignore_delivery(int signal)
+{
+    (void)signal;
+}
+
+static int block_watched_signals(sigset_t *previous)
+{
+    sigset_t watched;
+    sigemptyset(&watched);
+    for (size_t i = 0; i < SIGNAL_COUNT; i++)
+        sigaddset(&watched, watched_signals[i]);
+    return sigprocmask(SIG_BLOCK, &watched, previous);
+}
+
+static int restore_signal_actions(size_t installed)
+{
+    int error = 0;
+    while (installed > 0) {
+        installed--;
+        if (sigaction(watched_signals[installed], &signal_queue.previous[installed],
+                      NULL) < 0 && error == 0)
+            error = errno;
+    }
+    return error;
+}
+
+static int open_signal_queue(void)
+{
+    if (signal_queue.fd != -1)
+        return -EBUSY;
+    int fd = kqueue();
+    if (fd < 0)
+        return -errno;
+    int error;
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
+        error = errno;
+        close(fd);
+        return -error;
+    }
+
+    sigset_t previous_mask;
+    if (block_watched_signals(&previous_mask) < 0) {
+        error = errno;
+        close(fd);
+        return -error;
+    }
+    size_t installed = 0;
+    struct kevent events[SIGNAL_COUNT];
+    for (size_t i = 0; i < SIGNAL_COUNT; i++)
+        EV_SET(&events[i], (uintptr_t)watched_signals[i],
+               EVFILT_SIGNAL, EV_ADD, 0, 0, NULL);
+    if (kevent(fd, events, SIGNAL_COUNT, NULL, 0, NULL) < 0)
+        goto rollback;
+
+    struct sigaction action = {.sa_handler = ignore_delivery};
+    sigemptyset(&action.sa_mask);
+    for (; installed < SIGNAL_COUNT; installed++) {
+        int signal = watched_signals[installed];
+        action.sa_flags = SA_RESTART | (signal == SIGCHLD ? SA_NOCLDSTOP : 0);
+        if (sigaction(signal, &action, &signal_queue.previous[installed]) < 0)
+            goto rollback;
+    }
+    if (sigprocmask(SIG_SETMASK, &previous_mask, NULL) < 0)
+        goto rollback;
+    signal_queue.fd = fd;
+    return fd;
+
+rollback:
+    error = errno;
+    restore_signal_actions(installed);
+    close(fd);
+    sigprocmask(SIG_SETMASK, &previous_mask, NULL);
+    return -error;
+}
+#endif
+
+value arc_unix_signal_queue_open(value unit)
+{
+    (void)unit;
+#ifdef __APPLE__
+    int fd = open_signal_queue();
+    return fd < 0 ? boxed(1, integer(-fd)) : boxed(0, integer(fd));
+#else
+    return boxed(1, integer(ENOSYS));
+#endif
+}
+
+value arc_unix_signal_queue_close(value descriptor)
+{
+#ifdef __APPLE__
+    int fd = number(descriptor);
+    if (fd != signal_queue.fd)
+        return integer(-EBADF);
+    sigset_t previous_mask;
+    if (block_watched_signals(&previous_mask) < 0)
+        return integer(-errno);
+    int error = restore_signal_actions(SIGNAL_COUNT);
+    if (close(fd) < 0 && error == 0)
+        error = errno;
+    signal_queue.fd = -1;
+    if (sigprocmask(SIG_SETMASK, &previous_mask, NULL) < 0 && error == 0)
+        error = errno;
+    return integer(-error);
+#else
+    (void)descriptor;
+    return integer(-ENOSYS);
+#endif
+}
+
+value arc_unix_signal_queue_next(value descriptor)
+{
+#ifdef __APPLE__
+    struct kevent event;
+    const struct timespec zero = {0};
+    int count;
+    do {
+        count = kevent(number(descriptor), NULL, 0, &event, 1, &zero);
+    } while (count < 0 && errno == EINTR);
+    if (count < 0)
+        return boxed(1, integer(errno));
+    if (count == 0)
+        return boxed(0, integer(0));
+    for (size_t i = 0; i < SIGNAL_COUNT; i++) {
+        if (event.filter == EVFILT_SIGNAL && event.ident == (uintptr_t)watched_signals[i])
+            return boxed(0, boxed(0, integer(i)));
+    }
+    return boxed(1, integer(EIO));
+#else
+    (void)descriptor;
+    return boxed(1, integer(ENOSYS));
+#endif
 }
