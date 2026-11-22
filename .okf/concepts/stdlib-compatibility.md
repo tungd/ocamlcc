@@ -70,8 +70,8 @@ test outcomes.[^runner]
 
 # POSIX Unix compatibility
 
-`ocpkg add arc-unix` provides POSIX `Unix` descriptor, process and wall-clock
-operations used by terminal applications on macOS and Linux. The ML interface
+`ocpkg add arc-unix` provides POSIX `Unix` descriptors, sockets, process
+status and wall-clock operations used by terminal applications on macOS and Linux. The ML interface
 keeps descriptors abstract in `Unix.File_descr`, exposes their borrowed
 integer through `to_int` for `Fiber.fd_wait`, and checks byte ranges before
 entering native code. `Unix.Error` maps POSIX errors to `Unix.Unix_error`.
@@ -86,6 +86,16 @@ the integer. `openfile` supports the file creation and access flags used by
 the daemon. `dup ~cloexec:true` duplicates the handle with close-on-exec set
 atomically. `set_close_on_exec` and `clear_close_on_exec` control inheritance
 on existing handles.
+
+The socket interface supports Unix-domain and IPv4 stream and datagram
+sockets. It exposes `Unix.Sockaddr.t` and keeps IPv4 addresses abstract in
+`Unix.Inet_addr`. It includes listener and client operations, socket pairs,
+local and peer addresses, shutdown, address reuse, buffer sizes and timeouts.
+Linux sets close-on-exec at creation or accept. macOS applies it before
+returning the descriptor and closes the descriptor if setup fails. The
+listener leaves accepted sockets in the mode supplied by the kernel.
+Set nonblocking mode explicitly before using `Fiber.fd_wait` with a client.
+Linux supports Unix abstract names beginning with a NUL byte.
 
 The process interface exposes `getpid`, `kill` and `waitpid` with
 `Unix.Wait_flag.t` and `Unix.Process_status.t`. The native adapter translates
@@ -105,8 +115,9 @@ Other platforms report `ENOSYS` for this signal source.
 `ninja -j1 ocpkg_arc_unix` exercises a close-on-exec pipe, nonblocking reads,
 offset byte transfers, end of file, file creation and append, native
 descriptor adoption, duplication, and inheritance flags. The package
-fixture also checks running, stopped, signaled, and exited children and
-macOS signal readiness through the Fiber scheduler.
+fixture also checks Unix-domain and loopback connections, listener and
+client readiness, half-close, datagram pairs, running, stopped, signaled,
+and exited children, and macOS signal readiness through the Fiber scheduler.
 
 `stdlib/camlinternalIntFmt.ml` (`--nopervasives`, compiled right after `CamlinternalFormatBasics`) implements integer parsing and formatting (`format_int`, `format_int32`, `format_int64`, `format_nativeint`, `parse_int`, `parse_int32`, `parse_int64`, `parse_nativeint`) in pure OCaml, replacing the C `caml_*format*` / `caml_*_of_string` implementations previously in `runtime/builtins.c`/`runtime/arc.c`. It handles 63-bit signed decimal bounds (`[-(1<<62), (1<<62)-1]`), signed/unsigned base-prefixed literals (`"-0x30"`, `"0x7fffffffffffffff"` -> `-1`, magnitude `<= INT64_MAX`, sign-extending bit 62) matching `Misc.Int_literal_converter.int`, 32/64-bit parsing, and `%[flags][width][.prec][l|ll|L|n][d|i|u|x|X|o]` formatting.[^int-fmt]
 

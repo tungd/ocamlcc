@@ -1,12 +1,15 @@
 #define _GNU_SOURCE
 #include "arc.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -26,21 +29,27 @@ static value boxed(unsigned tag, value field)
     return (value)(uintptr_t)box;
 }
 
-static value tuple(value first, value second)
+static value pair(unsigned tag, value first, value second)
 {
-    value *pair = arc_alloc(0, 2, 2 * sizeof *pair);
-    pair[0] = first;
-    pair[1] = second;
-    return (value)(uintptr_t)pair;
+    value *fields = arc_alloc(tag, 2, 2 * sizeof *fields);
+    fields[0] = first;
+    fields[1] = second;
+    return (value)(uintptr_t)fields;
 }
 
-static value text(const char *str)
+static value tuple(value first, value second)
 {
-    size_t length = strlen(str);
+    return pair(0, first, second);
+}
+
+static value copy_string(const void *source, size_t length)
+{
     char *buffer = arc_alloc_bytes(length);
-    memcpy(buffer, str, length);
+    memcpy(buffer, source, length);
     return (value)(uintptr_t)buffer;
 }
+
+static value text(const char *str) { return copy_string(str, strlen(str)); }
 
 value arc_unix_errno(value name)
 {
@@ -50,6 +59,9 @@ value arc_unix_errno(value name)
     CHECK(EEXIST); CHECK(EINVAL); CHECK(EIO); CHECK(EMFILE); CHECK(ENFILE); CHECK(ENOENT);
     CHECK(ENOMEM); CHECK(ENOSYS); CHECK(EPERM); CHECK(EPIPE); CHECK(ESRCH);
     CHECK(ETIMEDOUT); CHECK(EWOULDBLOCK);
+    CHECK(EADDRINUSE); CHECK(EADDRNOTAVAIL); CHECK(EAFNOSUPPORT); CHECK(EALREADY);
+    CHECK(ECONNREFUSED); CHECK(ECONNRESET); CHECK(EINPROGRESS); CHECK(EISCONN);
+    CHECK(ENAMETOOLONG); CHECK(ENOTCONN); CHECK(ENOTSOCK); CHECK(EPROTONOSUPPORT);
 #undef CHECK
     return integer(-1);
 }
@@ -112,6 +124,232 @@ value arc_unix_dup(value descriptor, value cloexec)
 value arc_unix_set_cloexec(value descriptor, value cloexec)
 {
     return integer(set_cloexec(number(descriptor), number(cloexec)) < 0 ? -errno : 0);
+}
+
+value arc_unix_inet_parse(value input)
+{
+    struct in_addr ip;
+    if (inet_pton(AF_INET, (const char *)(uintptr_t)input, &ip) != 1)
+        return integer(0);
+    return boxed(0, copy_string(&ip, sizeof ip));
+}
+
+/* Match the constructors in Unix.Socket_domain and Unix.Socket_type. */
+static int socket_domain(value domain) { return number(domain) == 0 ? AF_UNIX : AF_INET; }
+static int socket_type(value kind) { return number(kind) == 0 ? SOCK_STREAM : SOCK_DGRAM; }
+
+static int socket_with_cloexec(int fd, int cloexec)
+{
+#ifndef __linux__
+    if (fd >= 0 && cloexec && set_cloexec(fd, 1) < 0) {
+        int error = errno;
+        close(fd);
+        errno = error;
+        return -1;
+    }
+#else
+    (void)cloexec;
+#endif
+    return fd;
+}
+
+value arc_unix_socket(value domain, value kind, value protocol, value cloexec)
+{
+    if ((int64_t)number(protocol) != (protocol >> 1))
+        return integer(-EINVAL);
+    int flags = socket_type(kind);
+#ifdef __linux__
+    if (number(cloexec))
+        flags |= SOCK_CLOEXEC;
+#endif
+    int fd = socket(socket_domain(domain), flags, number(protocol));
+    fd = socket_with_cloexec(fd, number(cloexec));
+    return integer(fd < 0 ? -errno : fd);
+}
+
+value arc_unix_socketpair(value domain, value kind, value protocol, value cloexec)
+{
+    if ((int64_t)number(protocol) != (protocol >> 1))
+        return boxed(1, integer(EINVAL));
+    int flags = socket_type(kind);
+    int fds[2];
+#ifdef __linux__
+    if (number(cloexec))
+        flags |= SOCK_CLOEXEC;
+#endif
+    if (socketpair(socket_domain(domain), flags, number(protocol), fds) < 0)
+        return boxed(1, integer(errno));
+#ifndef __linux__
+    if (number(cloexec) && (set_cloexec(fds[0], 1) < 0 || set_cloexec(fds[1], 1) < 0)) {
+        int error = errno;
+        close(fds[0]);
+        close(fds[1]);
+        return boxed(1, integer(error));
+    }
+#endif
+    return boxed(0, tuple(integer(fds[0]), integer(fds[1])));
+}
+
+union socket_address {
+    struct sockaddr_storage storage;
+    struct sockaddr generic;
+    struct sockaddr_un local;
+    struct sockaddr_in ipv4;
+};
+
+static int encode_address(union socket_address *address, socklen_t *length,
+                          const char *bytes, size_t count, int port)
+{
+    if (port >= 0) {
+        address->ipv4.sin_family = AF_INET;
+        address->ipv4.sin_port = htons((uint16_t)port);
+        memcpy(&address->ipv4.sin_addr, bytes, sizeof address->ipv4.sin_addr);
+        *length = sizeof address->ipv4;
+#ifdef __APPLE__
+        address->ipv4.sin_len = *length;
+#endif
+        return 0;
+    }
+
+    int abstract = 0;
+#ifdef __linux__
+    abstract = count > 0 && bytes[0] == '\0';
+#endif
+    size_t used = count + (abstract ? 0 : 1);
+    if (used > sizeof address->local.sun_path)
+        return ENAMETOOLONG;
+    if (!abstract && memchr(bytes, '\0', count) != NULL)
+        return EINVAL;
+    address->local.sun_family = AF_UNIX;
+    memcpy(address->local.sun_path, bytes, count);
+    *length = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + used);
+#ifdef __APPLE__
+    address->local.sun_len = *length;
+#endif
+    return 0;
+}
+
+static value decode_address(const union socket_address *address, socklen_t length)
+{
+    /* A peer without a local address may have an empty sockaddr. */
+    if (length == 0)
+        return boxed(0, text(""));
+    if (address->generic.sa_family == AF_INET && length >= sizeof address->ipv4) {
+        value ip = copy_string(&address->ipv4.sin_addr, sizeof address->ipv4.sin_addr);
+        return pair(1, ip, integer(ntohs(address->ipv4.sin_port)));
+    }
+    if (address->generic.sa_family == AF_UNIX) {
+        size_t head = offsetof(struct sockaddr_un, sun_path);
+        size_t count = length > head ? length - head : 0;
+        if (count > sizeof address->local.sun_path)
+            count = sizeof address->local.sun_path;
+        const char *path = address->local.sun_path;
+#ifdef __linux__
+        if (count > 0 && path[0] == '\0')
+            return boxed(0, copy_string(path, count));
+#endif
+        const char *end = memchr(path, '\0', count);
+        return boxed(0, copy_string(path, end ? (size_t)(end - path) : count));
+    }
+    return 0;
+}
+
+static value use_address(int connecting, value fd, value bytes, value size, value port)
+{
+    union socket_address address = {0};
+    socklen_t length;
+    int error = encode_address(&address, &length, (const char *)(uintptr_t)bytes,
+                               (size_t)(size >> 1), number(port));
+    if (error != 0)
+        return integer(-error);
+    int descriptor = number(fd);
+    int status = connecting ? connect(descriptor, &address.generic, length) :
+                              bind(descriptor, &address.generic, length);
+    return integer(status < 0 ? -errno : 0);
+}
+
+value arc_unix_bind(value fd, value bytes, value size, value port)
+{
+    return use_address(0, fd, bytes, size, port);
+}
+
+value arc_unix_connect(value fd, value bytes, value size, value port)
+{
+    return use_address(1, fd, bytes, size, port);
+}
+
+value arc_unix_listen(value fd, value backlog)
+{
+    if ((int64_t)number(backlog) != (backlog >> 1))
+        return integer(-EINVAL);
+    return integer(listen(number(fd), number(backlog)) < 0 ? -errno : 0);
+}
+
+value arc_unix_accept(value descriptor, value cloexec)
+{
+    union socket_address address = {0};
+    socklen_t length = sizeof address.storage;
+#ifdef __linux__
+    int client = accept4(number(descriptor), &address.generic, &length,
+                         number(cloexec) ? SOCK_CLOEXEC : 0);
+#else
+    int client = accept(number(descriptor), &address.generic, &length);
+    client = socket_with_cloexec(client, number(cloexec));
+#endif
+    if (client < 0)
+        return boxed(1, integer(errno));
+    value peer = decode_address(&address, length);
+    if (peer == 0) {
+        close(client);
+        return boxed(1, integer(EAFNOSUPPORT));
+    }
+    return boxed(0, tuple(integer(client), peer));
+}
+
+value arc_unix_socket_name(value descriptor, value peer)
+{
+    union socket_address address = {0};
+    socklen_t length = sizeof address.storage;
+    int fd = number(descriptor);
+    int result = number(peer) ? getpeername(fd, &address.generic, &length) :
+                                getsockname(fd, &address.generic, &length);
+    if (result < 0)
+        return boxed(1, integer(errno));
+    value name = decode_address(&address, length);
+    return name == 0 ? boxed(1, integer(EAFNOSUPPORT)) : boxed(0, name);
+}
+
+value arc_unix_shutdown(value descriptor, value command)
+{
+    const int modes[] = {SHUT_RD, SHUT_WR, SHUT_RDWR};
+    return integer(shutdown(number(descriptor), modes[number(command)]) < 0 ? -errno : 0);
+}
+
+static value set_socket_option(value fd, int option, const void *setting, socklen_t size)
+{
+    return integer(setsockopt(number(fd), SOL_SOCKET, option, setting, size) < 0 ? -errno : 0);
+}
+
+value arc_unix_setsockopt_reuseaddr(value fd, value enabled)
+{
+    int setting = number(enabled);
+    return set_socket_option(fd, SO_REUSEADDR, &setting, sizeof setting);
+}
+
+value arc_unix_setsockopt_int(value fd, value option, value amount)
+{
+    int size = number(amount);
+    if ((int64_t)size != (amount >> 1))
+        return integer(-EINVAL);
+    int name = number(option) == 0 ? SO_SNDBUF : SO_RCVBUF;
+    return set_socket_option(fd, name, &size, sizeof size);
+}
+
+value arc_unix_setsockopt_timeout(value fd, value option, value seconds, value micros)
+{
+    struct timeval timeout = {.tv_sec = (time_t)(seconds >> 1), .tv_usec = number(micros)};
+    int name = number(option) == 0 ? SO_RCVTIMEO : SO_SNDTIMEO;
+    return set_socket_option(fd, name, &timeout, sizeof timeout);
 }
 
 value arc_unix_pipe(value cloexec)

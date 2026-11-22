@@ -2,6 +2,9 @@ module Error = struct
   type t =
     | EACCES | EAGAIN | EBADF | EBUSY | ECHILD | EINTR | EEXIST | EINVAL | EIO | EMFILE
     | ENFILE | ENOENT | ENOMEM | ENOSYS | EPERM | EPIPE | ESRCH | ETIMEDOUT
+    | EADDRINUSE | EADDRNOTAVAIL | EAFNOSUPPORT | EALREADY | ECONNREFUSED
+    | ECONNRESET | EINPROGRESS | EISCONN | ENAMETOOLONG | ENOTCONN | ENOTSOCK
+    | EPROTONOSUPPORT
     | EWOULDBLOCK | EUNKNOWNERR of int
 
   external number : string -> int = "arc_unix_errno"
@@ -13,6 +16,10 @@ module Error = struct
         "EINTR", EINTR; "EEXIST", EEXIST; "EINVAL", EINVAL; "EIO", EIO; "EMFILE", EMFILE;
         "ENFILE", ENFILE; "ENOENT", ENOENT; "ENOMEM", ENOMEM; "ENOSYS", ENOSYS;
         "EPERM", EPERM; "EPIPE", EPIPE; "ESRCH", ESRCH; "ETIMEDOUT", ETIMEDOUT;
+        "EADDRINUSE", EADDRINUSE; "EADDRNOTAVAIL", EADDRNOTAVAIL; "EAFNOSUPPORT", EAFNOSUPPORT;
+        "EALREADY", EALREADY; "ECONNREFUSED", ECONNREFUSED; "ECONNRESET", ECONNRESET;
+        "EINPROGRESS", EINPROGRESS; "EISCONN", EISCONN; "ENAMETOOLONG", ENAMETOOLONG;
+        "ENOTCONN", ENOTCONN; "ENOTSOCK", ENOTSOCK; "EPROTONOSUPPORT", EPROTONOSUPPORT;
         "EWOULDBLOCK", EWOULDBLOCK ]
 
   let of_number code =
@@ -29,6 +36,9 @@ end
 type error = Error.t =
   | EACCES | EAGAIN | EBADF | EBUSY | ECHILD | EINTR | EEXIST | EINVAL | EIO | EMFILE
   | ENFILE | ENOENT | ENOMEM | ENOSYS | EPERM | EPIPE | ESRCH | ETIMEDOUT
+  | EADDRINUSE | EADDRNOTAVAIL | EAFNOSUPPORT | EALREADY | ECONNREFUSED
+  | ECONNRESET | EINPROGRESS | EISCONN | ENAMETOOLONG | ENOTCONN | ENOTSOCK
+  | EPROTONOSUPPORT
   | EWOULDBLOCK | EUNKNOWNERR of int
 
 exception Unix_error of error * string * string
@@ -73,6 +83,68 @@ type open_flag = Open_flag.t =
   | O_RDONLY | O_WRONLY | O_RDWR | O_NONBLOCK | O_APPEND | O_CREAT
   | O_TRUNC | O_EXCL | O_NOCTTY | O_CLOEXEC | O_KEEPEXEC
 
+module Socket_domain = struct
+  type t = PF_UNIX | PF_INET
+end
+
+module Socket_type = struct
+  type t = SOCK_STREAM | SOCK_DGRAM
+end
+
+module Inet_addr = struct
+  type t = string
+
+  let any = "\000\000\000\000"
+  let loopback = "\127\000\000\001"
+
+  external parse : string -> t option = "arc_unix_inet_parse"
+  let of_string text =
+    if String.contains text '\000' then failwith "inet_addr_of_string";
+    match parse text with
+    | Some address -> address
+    | None -> failwith "inet_addr_of_string"
+
+  let to_string address =
+    let octet i = Char.code address.[i] in
+    Printf.sprintf "%d.%d.%d.%d" (octet 0) (octet 1) (octet 2) (octet 3)
+end
+
+module Sockaddr = struct
+  type t = ADDR_UNIX of string | ADDR_INET of Inet_addr.t * int
+
+  let call operation native fd = function
+    | ADDR_UNIX path ->
+        ignore (check ~argument:path operation (native fd path (String.length path) (-1)))
+    | ADDR_INET (address, port) ->
+        if port < 0 || port > 65535 then raise (Unix_error (EINVAL, operation, ""));
+        ignore (check operation (native fd address 4 port))
+end
+
+module Shutdown_command = struct
+  type t = SHUTDOWN_RECEIVE | SHUTDOWN_SEND | SHUTDOWN_ALL
+end
+
+module Socket_bool_option = struct
+  type t = SO_REUSEADDR
+end
+
+module Socket_int_option = struct
+  type t = SO_SNDBUF | SO_RCVBUF
+end
+
+module Socket_float_option = struct
+  type t = SO_RCVTIMEO | SO_SNDTIMEO
+end
+
+type socket_domain = Socket_domain.t = PF_UNIX | PF_INET
+type socket_type = Socket_type.t = SOCK_STREAM | SOCK_DGRAM
+type inet_addr = Inet_addr.t
+type sockaddr = Sockaddr.t = ADDR_UNIX of string | ADDR_INET of inet_addr * int
+type shutdown_command = Shutdown_command.t = SHUTDOWN_RECEIVE | SHUTDOWN_SEND | SHUTDOWN_ALL
+type socket_bool_option = Socket_bool_option.t = SO_REUSEADDR
+type socket_int_option = Socket_int_option.t = SO_SNDBUF | SO_RCVBUF
+type socket_float_option = Socket_float_option.t = SO_RCVTIMEO | SO_SNDTIMEO
+
 module Wait_flag = struct
   type t = WNOHANG | WUNTRACED
 end
@@ -98,6 +170,24 @@ module Native = struct
   external kill : int -> int -> int = "arc_unix_kill"
   external waitpid : int -> bool -> bool -> (int * Process_status.t, int) result =
     "arc_unix_waitpid"
+  external socket : Socket_domain.t -> Socket_type.t -> int -> bool -> int =
+    "arc_unix_socket"
+  external socketpair :
+    Socket_domain.t -> Socket_type.t -> int -> bool -> (file_descr * file_descr, int) result =
+    "arc_unix_socketpair"
+  external bind : file_descr -> string -> int -> int -> int = "arc_unix_bind"
+  external connect : file_descr -> string -> int -> int -> int = "arc_unix_connect"
+  external listen : file_descr -> int -> int = "arc_unix_listen"
+  external accept : file_descr -> bool -> (file_descr * Sockaddr.t, int) result =
+    "arc_unix_accept"
+  external socket_name : file_descr -> bool -> (Sockaddr.t, int) result =
+    "arc_unix_socket_name"
+  external shutdown : file_descr -> Shutdown_command.t -> int = "arc_unix_shutdown"
+  external setsockopt_reuseaddr : file_descr -> bool -> int = "arc_unix_setsockopt_reuseaddr"
+  external setsockopt_int : file_descr -> Socket_int_option.t -> int -> int =
+    "arc_unix_setsockopt_int"
+  external setsockopt_timeout : file_descr -> Socket_float_option.t -> int -> int -> int =
+    "arc_unix_setsockopt_timeout"
 end
 
 let stdin = 0
@@ -112,6 +202,38 @@ let clear_close_on_exec fd = ignore (check "clear_close_on_exec" (Native.set_clo
 let openfile path flags permissions =
   if String.contains path '\000' then raise (Unix_error (EINVAL, "open", path));
   check ~argument:path "open" (Native.openfile path (Open_flag.encode flags) permissions)
+
+let inet_addr_any = Inet_addr.any
+let inet_addr_loopback = Inet_addr.loopback
+let inet_addr_of_string = Inet_addr.of_string
+let string_of_inet_addr = Inet_addr.to_string
+
+let socket ?(cloexec = false) domain kind protocol =
+  check "socket" (Native.socket domain kind protocol cloexec)
+
+let socketpair ?(cloexec = false) domain kind protocol =
+  get "socketpair" (Native.socketpair domain kind protocol cloexec)
+
+let bind = Sockaddr.call "bind" Native.bind
+let connect = Sockaddr.call "connect" Native.connect
+let listen fd backlog = ignore (check "listen" (Native.listen fd backlog))
+let accept ?(cloexec = false) fd = get "accept" (Native.accept fd cloexec)
+let getsockname fd = get "getsockname" (Native.socket_name fd false)
+let getpeername fd = get "getpeername" (Native.socket_name fd true)
+let shutdown fd command = ignore (check "shutdown" (Native.shutdown fd command))
+
+let setsockopt fd Socket_bool_option.SO_REUSEADDR enabled =
+  ignore (check "setsockopt" (Native.setsockopt_reuseaddr fd enabled))
+
+let setsockopt_int fd opt value =
+  ignore (check "setsockopt" (Native.setsockopt_int fd opt value))
+
+let setsockopt_float fd opt seconds =
+  if not (Float.is_finite seconds) || seconds < 0. || seconds >= float_of_int max_int then
+    raise (Unix_error (EINVAL, "setsockopt", ""));
+  let whole = int_of_float seconds in
+  let micros = int_of_float ((seconds -. float_of_int whole) *. 1e6) in
+  ignore (check "setsockopt" (Native.setsockopt_timeout fd opt whole micros))
 
 let set_nonblock fd = ignore (check "set_nonblock" (Native.set_nonblock fd true))
 let clear_nonblock fd = ignore (check "clear_nonblock" (Native.set_nonblock fd false))

@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Add Unix-domain and IPv4 sockets to ARC Unix. Exercise close-on-exec, Fiber readiness, shutdown and socket pairs through ocpkg. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
+
 - 2026-11-23 (codex/1) — Add native descriptor adoption, file opening and duplication to ARC Unix. Exercise close-on-exec and exclusive creation through ocpkg. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
 
 - 2026-11-23 (codex/1) — Index Fiber watches by poller and descriptor. Submit kqueue additions with the readiness wait and deliver registration errors to their own waiters. See [poller registration batches](/concepts/wren-fibers.md#poller-registration-batches).

@@ -14,6 +14,9 @@ type file_descr = File_descr.t
 type error =
   | EACCES | EAGAIN | EBADF | EBUSY | ECHILD | EINTR | EEXIST | EINVAL | EIO | EMFILE
   | ENFILE | ENOENT | ENOMEM | ENOSYS | EPERM | EPIPE | ESRCH | ETIMEDOUT
+  | EADDRINUSE | EADDRNOTAVAIL | EAFNOSUPPORT | EALREADY | ECONNREFUSED
+  | ECONNRESET | EINPROGRESS | EISCONN | ENAMETOOLONG | ENOTCONN | ENOTSOCK
+  | EPROTONOSUPPORT
   | EWOULDBLOCK | EUNKNOWNERR of int
 
 exception Unix_error of error * string * string
@@ -49,6 +52,69 @@ type open_flag = Open_flag.t =
   | O_TRUNC | O_EXCL | O_NOCTTY | O_CLOEXEC | O_KEEPEXEC
 
 val openfile : string -> Open_flag.t list -> int -> File_descr.t
+
+module Socket_domain : sig
+  type t = PF_UNIX | PF_INET
+end
+
+module Socket_type : sig
+  type t = SOCK_STREAM | SOCK_DGRAM
+end
+
+module Inet_addr : sig
+  type t
+  val any : t
+  val loopback : t
+  val of_string : string -> t
+  val to_string : t -> string
+end
+
+module Sockaddr : sig
+  type t = ADDR_UNIX of string | ADDR_INET of Inet_addr.t * int
+end
+
+module Shutdown_command : sig
+  type t = SHUTDOWN_RECEIVE | SHUTDOWN_SEND | SHUTDOWN_ALL
+end
+
+module Socket_bool_option : sig
+  type t = SO_REUSEADDR
+end
+
+module Socket_int_option : sig
+  type t = SO_SNDBUF | SO_RCVBUF
+end
+
+module Socket_float_option : sig
+  type t = SO_RCVTIMEO | SO_SNDTIMEO
+end
+
+type socket_domain = Socket_domain.t = PF_UNIX | PF_INET
+type socket_type = Socket_type.t = SOCK_STREAM | SOCK_DGRAM
+type inet_addr = Inet_addr.t
+type sockaddr = Sockaddr.t = ADDR_UNIX of string | ADDR_INET of inet_addr * int
+type shutdown_command = Shutdown_command.t = SHUTDOWN_RECEIVE | SHUTDOWN_SEND | SHUTDOWN_ALL
+type socket_bool_option = Socket_bool_option.t = SO_REUSEADDR
+type socket_int_option = Socket_int_option.t = SO_SNDBUF | SO_RCVBUF
+type socket_float_option = Socket_float_option.t = SO_RCVTIMEO | SO_SNDTIMEO
+
+val inet_addr_any : inet_addr
+val inet_addr_loopback : inet_addr
+val inet_addr_of_string : string -> inet_addr
+val string_of_inet_addr : inet_addr -> string
+val socket : ?cloexec:bool -> Socket_domain.t -> Socket_type.t -> int -> File_descr.t
+val socketpair :
+  ?cloexec:bool -> Socket_domain.t -> Socket_type.t -> int -> File_descr.t * File_descr.t
+val bind : File_descr.t -> Sockaddr.t -> unit
+val connect : File_descr.t -> Sockaddr.t -> unit
+val listen : File_descr.t -> int -> unit
+val accept : ?cloexec:bool -> File_descr.t -> File_descr.t * Sockaddr.t
+val getsockname : File_descr.t -> Sockaddr.t
+val getpeername : File_descr.t -> Sockaddr.t
+val shutdown : File_descr.t -> Shutdown_command.t -> unit
+val setsockopt : File_descr.t -> Socket_bool_option.t -> bool -> unit
+val setsockopt_int : File_descr.t -> Socket_int_option.t -> int -> unit
+val setsockopt_float : File_descr.t -> Socket_float_option.t -> float -> unit
 
 module Wait_flag : sig
   type t = WNOHANG | WUNTRACED

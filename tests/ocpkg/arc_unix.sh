@@ -101,6 +101,72 @@ let test_files () =
   Unix.close fd;
   Sys.remove path
 
+let with_socket domain f =
+  let fd = Unix.socket ~cloexec:true domain Unix.SOCK_STREAM 0 in
+  Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+    assert (cloexec fd);
+    f fd)
+
+let test_socket domain address =
+  with_socket domain (fun listener ->
+    Unix.setsockopt listener Unix.SO_REUSEADDR true;
+    Unix.bind listener address;
+    Unix.listen listener 8;
+    let bound = Unix.getsockname listener in
+    (match address, bound with
+     | Unix.ADDR_UNIX path, Unix.ADDR_UNIX actual -> assert (actual = path)
+     | Unix.ADDR_INET (ip, 0), Unix.ADDR_INET (actual, port) ->
+         assert (actual = ip && port > 0);
+         with_socket domain (fun other ->
+           assert (match Unix.bind other bound with
+             | exception Unix.Unix_error (Unix.EADDRINUSE, "bind", _) -> true
+             | _ -> false))
+     | _ -> assert false);
+    Unix.set_nonblock listener;
+    assert (match Unix.accept ~cloexec:true listener with
+      | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), "accept", _) -> true
+      | _ -> false);
+    with_socket domain (fun client ->
+      Unix.setsockopt_float client Unix.SO_RCVTIMEO 0.25;
+      Unix.connect client bound;
+      assert (Unix.getpeername client = bound);
+      let fd = Unix.File_descr.to_int listener in
+      assert (Fiber.fd_wait ~timeout_ms:1000 fd Fiber.Direction.Read = Fiber.Wait_result.Ready);
+      let server, peer = Unix.accept ~cloexec:true listener in
+      Fun.protect ~finally:(fun () -> Unix.close server) (fun () ->
+        assert (cloexec server && Unix.getsockname server = bound);
+        Unix.set_nonblock server;
+        (match domain with
+         | Unix.PF_INET -> assert (Unix.getsockname client = peer)
+         | Unix.PF_UNIX -> assert (peer = Unix.ADDR_UNIX ""));
+        assert (Unix.write client (Bytes.of_string "x") 0 1 = 1);
+        Unix.shutdown client Unix.SHUTDOWN_SEND;
+        let buffer = Bytes.create 1 in
+        let read () =
+          let fd = Unix.File_descr.to_int server in
+          assert (Fiber.fd_wait ~timeout_ms:1000 fd Fiber.Direction.Read = Fiber.Wait_result.Ready);
+          Unix.read server buffer 0 1
+        in
+        assert (read () = 1 && Bytes.get buffer 0 = 'x');
+        assert (read () = 0))))
+
+let test_sockets () =
+  let path = "arc-unix.sock" in
+  test_socket Unix.PF_UNIX (Unix.ADDR_UNIX path);
+  Sys.remove path;
+  if Sys.argv.(1) = "Linux" then
+    test_socket Unix.PF_UNIX (Unix.ADDR_UNIX ("\000arc\000unix-" ^ string_of_int (Unix.getpid ())));
+  let ip = Unix.inet_addr_of_string "127.0.0.1" in
+  assert (ip = Unix.inet_addr_loopback && Unix.string_of_inet_addr ip = "127.0.0.1");
+  test_socket Unix.PF_INET (Unix.ADDR_INET (ip, 0));
+  let a, b = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_DGRAM 0 in
+  Fun.protect ~finally:(fun () -> Unix.close a; Unix.close b) (fun () ->
+    assert (cloexec a && cloexec b);
+    Unix.setsockopt_int a Unix.SO_SNDBUF 4096;
+    let buffer = Bytes.create 1 in
+    assert (Unix.write a (Bytes.of_string "y") 0 1 = 1);
+    assert (Unix.read b buffer 0 1 = 1 && Bytes.get buffer 0 = 'y'))
+
 let with_child f =
   let reader, writer = Unix.pipe ~cloexec:true () in
   let pid = start_child reader writer in
@@ -199,6 +265,8 @@ let () =
   print_endline "ARC Unix descriptors: PASS";
   test_files ();
   print_endline "ARC Unix file descriptors: PASS";
+  test_sockets ();
+  print_endline "ARC Unix sockets: PASS";
   test_children ();
   print_endline "ARC Unix child status: PASS";
   test_signal_events ()
