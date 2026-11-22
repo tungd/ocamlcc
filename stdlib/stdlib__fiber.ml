@@ -339,7 +339,7 @@ let drain_timers (s : Scheduler.t) =
       in
       loop [] ts
 
-let next_deadline (s : Scheduler.t) =
+let next_deadline ?until (s : Scheduler.t) =
   let rec earliest deadline_of current = function
     | [] -> current
     | entry :: rest ->
@@ -351,13 +351,13 @@ let next_deadline (s : Scheduler.t) =
         in
         earliest deadline_of next rest
   in
-  let earliest_timer = earliest (fun (t : Timer.t) -> Some t.deadline) None s.timers in
+  let earliest_timer = earliest (fun (t : Timer.t) -> Some t.deadline) until s.timers in
   let earliest_io =
     earliest (fun (t : Registration.t) -> t.options.deadline) earliest_timer s.io_waiters in
   earliest (fun (t : Condition_wait.t) -> t.options.deadline) earliest_io s.condition_waiters
 
-let next_timer_timeout_ms s =
-  match next_deadline s with
+let next_timer_timeout_ms ?until s =
+  match next_deadline ?until s with
   | None -> -1
   | Some deadline -> Deadline.remaining_ms ~now:(raw_monotonic_ns ()) deadline
 
@@ -484,10 +484,10 @@ let step_task (s : Scheduler.t) (t : Task.Handle.t) =
   | Sleep deadline -> s.timers <- { deadline; task = t } :: s.timers
   | Wait_fd | Park -> ()
 
-let sched_step (s : Scheduler.t) =
+let sched_step ?until (s : Scheduler.t) =
   let progressed =
     if s.ready = [] || s.steps_since_poll >= Registration.batch_size then
-      let timeout = if Scheduler.has_ready s then 0 else next_timer_timeout_ms s in
+      let timeout = if Scheduler.has_ready s then 0 else next_timer_timeout_ms ?until s in
       sched_poll s timeout
     else false in
   match Scheduler.pop s with
@@ -533,14 +533,9 @@ let sleep_ms ms =
           raise_invalid ()
         end else begin
           let rec loop () =
-            let now = raw_monotonic_ns () in
-            if not (Deadline.reached ~now deadline) then begin
-              if sched_step s then loop ()
-              else begin
-                let rem = Deadline.remaining_ms ~now deadline in
-                ignore (raw_poller_wait s.poll_buf rem);
-                loop ()
-              end
+            if not (Deadline.reached ~now:(raw_monotonic_ns ()) deadline) then begin
+              ignore (sched_step ~until:deadline s);
+              loop ()
             end
           in
           loop ();

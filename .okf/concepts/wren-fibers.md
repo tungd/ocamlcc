@@ -121,6 +121,16 @@ resume them later. An unbounded wait on the main fiber raises
 `ninja -j1 test_fiber_wait` covers signals, broadcasts, timeout,
 cancellation, and isolation between condition waiters in both ARC profiles.
 
+## Main-fiber sleep
+
+A main-fiber `sleep_ms` supplies its monotonic deadline to every scheduler
+step. The scheduler combines it with the deadlines of sleeping tasks and
+condition and descriptor waits. The poll returns when the main fiber's
+sleep expires even if the watched descriptor stays quiet. The regression
+covers a queued watch and an installed watch on a quiet pipe. In each
+case it verifies that the requested interval elapses before cancelling
+the watcher.
+
 ## OCaml 5 effect handlers
 
 The stdlib compatibility build uses the existing guarded C stacks for

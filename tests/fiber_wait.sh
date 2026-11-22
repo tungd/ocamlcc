@@ -8,6 +8,8 @@ trap 'rm -rf "$work"' EXIT
 cat > "$work/fixture.ml" <<'ML'
 module F = Stdlib.Fiber
 
+external monotonic_ns : unit -> int = "ocamlcc_monotonic_ns"
+
 let with_pipe f =
   let reader, writer = F.pipe () in
   Fun.protect ~finally:(fun () -> F.fd_close reader; F.fd_close writer)
@@ -19,6 +21,18 @@ let send fd =
 let receive fd =
   let buffer = Bytes.create 1 in
   assert (F.fd_read fd buffer 0 1 = 1 && Bytes.get buffer 0 = 'x')
+
+let test_main_sleep ~already_registered =
+  with_pipe (fun reader _ ->
+    let cancel = F.Cancel.create () in
+    let watcher = F.spawn (fun () -> F.fd_wait ~cancel reader Read) in
+    F.yield ();
+    if already_registered then F.yield ();
+    let start = monotonic_ns () in
+    F.sleep_ms 2;
+    assert (monotonic_ns () - start >= 2_000_000);
+    F.Cancel.cancel cancel;
+    assert (F.await watcher = F.Wait_result.Cancelled))
 
 let test_conditions () =
   let condition = F.Condition.create () in
@@ -66,6 +80,8 @@ let test_conditions () =
     | _ -> false)
 
 let () =
+  test_main_sleep ~already_registered:false;
+  test_main_sleep ~already_registered:true;
   test_conditions ();
   let typed = F.spawn (fun () -> "value", Bytes.of_string "payload") in
   let error = F.spawn (fun () -> raise Not_found) in
@@ -114,7 +130,21 @@ let () =
   print_endline "Fiber descriptor waits: PASS"
 ML
 
+run_fixture() {
+  python3 - "$1" <<'PY'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run([sys.argv[1]], timeout=15)
+except subprocess.TimeoutExpired:
+    print("Fiber wait fixture timed out", file=sys.stderr)
+    sys.exit(124)
+sys.exit(result.returncode if result.returncode >= 0 else 128 - result.returncode)
+PY
+}
+
 "$compiler" build "$work/fixture.ml" -o "$work/normal"
-"$work/normal"
+run_fixture "$work/normal"
 "$compiler" build --single-thread-rc "$work/fixture.ml" -o "$work/single"
-"$work/single"
+run_fixture "$work/single"
