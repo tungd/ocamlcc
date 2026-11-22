@@ -9,8 +9,8 @@
  (action (run make -B -j1 "CFLAGS=-std=c99 -O2" qbe)))
 
 (install
- (section libexec)
- (files qbe))
+ (section libexec_root)
+ (files (qbe as occ/qbe)))
 
 (install
  (section doc)

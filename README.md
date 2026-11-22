@@ -40,25 +40,25 @@ built from the pinned upstream OCaml stdlib, the ARC overlay, and `Stdlib.Fiber`
 
 ## Build
 
-Use OCaml 5.5.x, Dune, Ninja, Make, and a host C compiler.
-A Dune installation includes the compiler, its private QBE backend, and the
-runtime and canonical stdlib sources used by `occ build`. A C toolchain is
-needed on the consumer host. The default Ninja build supplies a prebuilt
-host archive in `build/stdlib`. Use `--stdlib-dir` to select a prebuilt pack
-explicitly.
+Source builds use OCaml 5.5.x, Dune, Ninja, Make, Python 3, and a host C
+compiler. Building `ocpkg` also uses libcurl development headers. A Dune
+installation includes both binaries, QBE, and the canonical stdlib and
+runtime sources. A C toolchain is needed on the consumer host. The default
+Ninja build supplies a prebuilt host archive in `build/stdlib`. Use
+`--stdlib-dir` to select a prebuilt pack explicitly.
 
 The whole project is driven by [ninja](https://ninja-build.org):
 
 ```sh
-ninja            # vendored QBE 1.3 + ARC/fiber runtime + ocamlcc compiler + examples
+ninja            # QBE, ARC runtime, occ, ocpkg, stdlib and examples
 ninja smoke      # compile examples/hello.ml end-to-end and run it
-ninja test       # run all 26 ninja checks (examples, PIC/DSO, bindgen, multi-threaded FFI)
-ninja asan_test  # run 16 ASan+UBSan runtime checks
-dune runtest     # run 14 compiler unit/IR/negative/driver/bindgen test suites
+ninja test       # run the examples, PIC/DSO, bindgen and concurrent FFI checks
+ninja asan_test  # run ASan+UBSan runtime checks
+dune runtest     # run compiler, driver, and package-manager tests
 ninja -t clean   # remove build/
 ```
 
-Currently passing (`ninja test`, 26/26): `hello`, `fib`, `tail`, `bools`,
+The `ninja test` fixtures include `hello`, `fib`, `tail`, `bools`,
 `strings`, `match`, `mutual`, `adt`, `closures`, `loops`, `arrays_bytes`,
 `arc_test`, `exn`, `weak_cycle`, `cycle_collect` (trial-deletion cycle
 collector), `mod_main` (multi-module `.mli`/`.ml` linking), `stdlib_test`
@@ -82,6 +82,25 @@ The pipeline:
    Perceus ARC pass, QBE IL writer)
 4. `vendor/ocaml-stdlib/src/` with the `stdlib/` overlay → `build/stdlib/libocamlstdlib.a` and `build/stdlib.sources`
 5. `examples/*.ml` → `.ssa` (occ) → `.s` (qbe) → native executable (cc)
+
+## Toolchain bundle
+
+`ninja -j1 dist` creates `build/dist/occ-<os>-<arch>.tar.gz`. Extract it
+to a directory of your choice and add its `bin/` directory to `PATH`.
+`occ` and `ocpkg` find QBE, the stdlib, the ARC runtime profiles, and the
+package snapshot under `lib/occ/` relative to the executable.
+
+```sh
+ocpkg init my-app
+ocpkg add cmdliner
+ocpkg build
+ocpkg run
+```
+
+`add`, `get`, and `vendor` can download locked sources. Use
+`vendor --offline` to require cached archives. Builds use vendored
+sources and content-addressed caches.
+[Package commands and compatibility checks](packages/README.md)
 
 ## Upstream standard library
 

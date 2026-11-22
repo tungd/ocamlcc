@@ -154,7 +154,7 @@ rule dune_ocpkg
   description = DUNE ocpkg
   pool = console
 
-build $builddir/bin/ocpkg: dune_ocpkg bin/ocpkg_main.ml bin/ocpkg_curl.c bin/dune lib/dune dune-project dune lib/sha256.ml lib/sha256.mli lib/ocpkg_format.ml lib/ocpkg_format.mli lib/pkg_archive.ml lib/pkg_archive.mli lib/pkg_vendor.ml lib/pkg_vendor.mli lib/pkg_project.ml lib/pkg_project.mli lib/http_fetch.ml lib/http_fetch.mli lib/build_cache.ml lib/build_cache.mli lib/pkg_toolchain.ml lib/pkg_toolchain.mli lib/pkg_compile.ml lib/pkg_compile.mli lib/workspace.ml lib/workspace.mli | $builddir/bin/occ
+build $builddir/bin/ocpkg: dune_ocpkg bin/ocpkg_main.ml bin/ocpkg_curl.c tools/curl-link-flags.sh bin/dune lib/dune dune-project dune lib/sha256.ml lib/sha256.mli lib/ocpkg_format.ml lib/ocpkg_format.mli lib/pkg_archive.ml lib/pkg_archive.mli lib/pkg_vendor.ml lib/pkg_vendor.mli lib/pkg_project.ml lib/pkg_project.mli lib/http_fetch.ml lib/http_fetch.mli lib/build_cache.ml lib/build_cache.mli lib/pkg_toolchain.ml lib/pkg_toolchain.mli lib/pkg_compile.ml lib/pkg_compile.mli lib/workspace.ml lib/workspace.mli | $builddir/bin/occ
 
 rule occ_compat
   command = ln -sf occ $out
@@ -598,3 +598,12 @@ build bootstrap_stage1: run_bootstrap | $builddir/bin/occ $builddir/qbe/qbe $bui
   stage = stage1
 build bootstrap: run_bootstrap | $builddir/bin/occ $builddir/qbe/qbe $builddir/rt/libocamlrt.a
   stage = all
+
+# ----------------------------------------------------- toolchain bundle ----
+
+rule dist_bundle
+  command = sh tools/dist.sh
+  description = PACKAGE occ toolchain
+  pool = console
+
+build dist: dist_bundle tools/dist.sh packages/snapshots/default.snap packages/ports/crunch-unix/unix.ml packages/ports/crunch-unix/unix.mli packages/ports/crunch-unix/unix_stubs.c vendor/qbe/LICENSE vendor/ocaml-stdlib/LICENSE | $builddir/bin/occ $builddir/bin/ocpkg $builddir/qbe/qbe $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a $stdlibdir/libocamlstdlib.a $stdlibdir/libocamlstdlib.a.opt $builddir/stdlib.sources

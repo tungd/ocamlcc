@@ -57,8 +57,7 @@ let resolve (s : string) : (t, string) result =
       Ok { name = s; qbe_target = "amd64_sysv"; os = Android; arch = "x86_64" }
   | other -> Error ("unsupported target: " ^ other)
 
-(* The private backend, target runtime and core library share one Dune
-   package directory, relative to the installed executable. *)
+(* Installed tools share their resources relative to the executable prefix. *)
 let installed_toolchain () =
   let exe = Sys.executable_name in
   let exe =
@@ -66,8 +65,9 @@ let installed_toolchain () =
     else exe
   in
   let prefix = Filename.dirname (Filename.dirname exe) in
-  let dir = Filename.concat prefix "lib/ocamlcc" in
-  if Sys.file_exists (Filename.concat dir "qbe") then Some dir else None
+  ["lib/occ"; "lib/ocamlcc"]
+  |> List.map (Filename.concat prefix)
+  |> List.find_opt (fun dir -> Sys.file_exists (Filename.concat dir "qbe"))
 
 let search_upwards rel_path =
   let starts =
@@ -113,22 +113,26 @@ let runtime_sources override =
       match Sys.getenv_opt "OCAMLCC_RUNTIME_DIR" with
       | Some d when Sys.file_exists d -> Some d
       | _ -> (match installed_toolchain () with
-              | Some dir -> Some (Filename.concat dir "runtime")
+              | Some dir -> ["rt-src"; "runtime"]
+                            |> List.map (Filename.concat dir)
+                            |> List.find_opt Sys.file_exists
               | None -> search_upwards "runtime"))
 
 let prebuilt_runtime ~single_thread override =
   match override with
   | Some dir -> Some dir
-  | None when Option.is_some (installed_toolchain ()) -> None
   | None ->
-      let dir = if single_thread then "rt-single" else "rt" in
-      let sibling =
-        Filename.concat
-          (Filename.dirname (Filename.dirname Sys.executable_name))
-          dir
-      in
-      if Sys.file_exists sibling then Some sibling
-      else search_upwards (Filename.concat "build" dir)
+      match installed_toolchain () with
+      | Some dir ->
+          let runtime = Filename.concat dir "rt" in
+          let archive = if single_thread then "libocamlrt_st.a" else "libocamlrt.a" in
+          if Sys.file_exists (Filename.concat runtime archive) then Some runtime else None
+      | None ->
+          let dir = if single_thread then "rt-single" else "rt" in
+          let sibling = Filename.concat
+              (Filename.dirname (Filename.dirname Sys.executable_name)) dir in
+          if Sys.file_exists sibling then Some sibling
+          else search_upwards (Filename.concat "build" dir)
 
 let stdlib_sources override =
   let bundle directory = Filename.concat directory "stdlib.sources" in
@@ -146,7 +150,8 @@ let stdlib_sources override =
       match Option.bind (Sys.getenv_opt "OCAMLCC_STDLIB_DIR") at with
       | Some _ as sources -> sources
       | _ -> (match installed_toolchain () with
-              | Some dir -> at (Filename.concat dir "stdlib")
+              | Some dir -> ["stdlib-src"; "stdlib"]
+                            |> List.find_map (fun name -> at (Filename.concat dir name))
               | None ->
                   let sibling =
                     bundle (Filename.dirname (Filename.dirname Sys.executable_name))
@@ -158,16 +163,18 @@ let stdlib_sources override =
 let prebuilt_stdlib override =
   match override with
   | Some d -> Some d
-  | None when Option.is_some (installed_toolchain ()) -> None
   | None ->
-      let sibling =
-        Filename.concat
-          (Filename.dirname (Filename.dirname Sys.executable_name))
-          "stdlib"
+      let prebuilt directory =
+        if Sys.file_exists (Filename.concat directory "libocamlstdlib.a") then Some directory else None
       in
-      if Sys.file_exists (Filename.concat sibling "libocamlstdlib.a") then
-        Some sibling
-      else search_upwards "build/stdlib"
+      match installed_toolchain () with
+      | Some dir -> prebuilt (Filename.concat dir "stdlib")
+      | None ->
+          let sibling = Filename.concat
+            (Filename.dirname (Filename.dirname Sys.executable_name)) "stdlib" in
+          match prebuilt sibling with
+          | Some _ as found -> found
+          | None -> search_upwards "build/stdlib"
 
 let resolve_ndk_cc arch =
   let ndk_opt =

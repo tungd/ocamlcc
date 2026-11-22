@@ -26,6 +26,8 @@ One checked-in `build.ninja` drives everything[^build-ninja]:
 | `build/qbe/qbe` | `cc -c` each `vendor/qbe/*.c` (amd64 sysv/winabi, arm64/_apple, rv64, plus `gvn`/`gcm`/`ifopt`) → link. `config.h` is generated out-of-tree by `tools/gen-config.sh` (host default target). |
 | `build/rt/libocamlrt.a` | `cc -c -fPIC` `runtime/*.c` (with `main_entry.c` separated from `builtins.c` so `.so`/`.dylib` libraries do not pull `main`) + `runtime/pal_ctx.S` → `ar rcs`. |
 | `build/bin/occ` | `dune build bin/occ` (with `(public_name occ)` for `dune build -p ocamlcc`) → copy out of `_build/`. |
+| `build/bin/ocpkg` | Build the native package manager and libcurl binding with Dune. |
+| `build/dist/occ-<os>-<arch>.tar.gz` | Package both binaries and the resources they discover under `lib/occ/`. |
 | `build/stdlib/libocamlstdlib.a` | `tools/stdlib_compat.py` prepares the pinned upstream library with the ARC overlay, then compiles it with `occ`, QBE and the target C toolchain. |
 | `build/stdlib.sources` | The same build publishes the overlay-resolved sources and interface order for the driver’s source fallback. |
 | `build/<name>` | `occ compile x.ml -o x.ssa` → `qbe x.ssa > x.s` → `cc x.s libocamlstdlib.a libocamlrt.a`. |
@@ -145,7 +147,10 @@ rename for new contents. Export summaries use the shared atomic writer.
 
 # Installed driver
 
-A staged Dune installation supplies the vendored QBE executable and canonical stdlib bundle and runtime sources relative to the compiler prefix. The installed driver can build multi-unit executables outside the checkout.
+Dune installs both binaries and places QBE, runtime sources, the stdlib
+source bundle, and the package catalog under `lib/occ/`. The Ninja
+distribution also includes prebuilt stdlib and runtime archives. Target
+discovery derives the resource paths from the executable prefix.
 
 # C record field names
 

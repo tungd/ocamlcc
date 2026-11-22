@@ -21,4 +21,10 @@
  (modules ocpkg_main)
  (libraries ocamlcc ocpkg_core ocpkg_http)
  (foreign_stubs (language c) (names ocpkg_curl))
- (link_flags -cclib -lcurl))
+ (link_flags (:include curl_link_flags.sexp)))
+
+(rule
+ (target curl_link_flags.sexp)
+ (action
+  (with-stdout-to %{target}
+   (run sh %{dep:../tools/curl-link-flags.sh}))))

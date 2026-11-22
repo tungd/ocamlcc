@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,35 +15,43 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "tools"))
-import ocpkg
+
+def file_hash(path):
+    with Path(path).open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", choices=["all", "crunch", "cmdliner", "ptime", "harness"], default="all")
+    parser.add_argument("--build-dir", type=Path, default=ROOT / "build/crunch")
     args = parser.parse_args()
-    base = ROOT / "build/crunch"
+    base = args.build_dir.resolve()
     vendor = base / "vendor"
     out = base / "non-lwt"
     out.mkdir(parents=True, exist_ok=True)
     receipt_path = out / (args.suite + "-receipt.json")
     receipt = dict(status="running", pid=os.getpid(), commands=[], checks=[],
-                   compiler_sha256=ocpkg.file_hash(ROOT / "build/bin/occ"),
-                   snapshot_sha256=ocpkg.file_hash(ROOT / "packages/snapshots/crunch-mvp.json"),
-                   harness={p.name:ocpkg.file_hash(p) for p in (ROOT / "tests/ocpkg/ptime_harness").iterdir() if p.is_file()},
+                   compiler_sha256=file_hash(ROOT / "build/bin/occ"),
+                   snapshot_sha256=file_hash(ROOT / "packages/snapshots/default.snap"),
+                   harness={p.name:file_hash(p) for p in (ROOT / "tests/ocpkg/ptime_harness").iterdir() if p.is_file()},
                    notes=["Upstream package/test sources are unchanged.",
                           "Ptime uses a test-only B0 assertion adapter with fixed seed 20261118; loop counts remain upstream defaults.",
                           "Ptime gmtime oracle is libc gmtime_r for ARC and stock Unix.gmtime for stock OCaml."],
                    exclusions=["Crunch's Lwt/Mirage consumer", "Ptime test_gmtime_all and min_clock (upstream run:false)"])
     env = dict(os.environ, SOURCE_DATE_EPOCH="0", TERM="dumb", LC_ALL="C", OCAMLRUNPARAM="b=0")
 
-    def save(): ocpkg.write_json(receipt_path, receipt)
+    def save():
+        temporary = receipt_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+        temporary.replace(receipt_path)
 
     def run(name, command, *, cwd=out, executable=None, timeout=240):
         deadline = time.monotonic() + 900
         while True:
-            active = subprocess.run(["pgrep", "-f", "ocamlcc|ocamlopt|llmopt|ninja|stdlib_compat"], text=True, capture_output=True)
+            pattern = (r"(^|/)(dune|ninja|occ|ocpkg|ocamlopt|llmopt|qbe|bootstrap[.]py|stdlib_compat[.]py)( |$)"
+                       r"| build-probe[.]py( |$)")
+            active = subprocess.run(["pgrep", "-f", pattern], text=True, capture_output=True)
             if not active.stdout.strip(): break
             if time.monotonic() > deadline:
                 raise RuntimeError(f"{name}: waiting deadline; command not launched")
@@ -170,13 +179,16 @@ def main():
 
     try:
         save()
-        ocpkg.verify_vendor(ocpkg.load_lock(base / "ocpkg.lock.json"), vendor)
+        require("vendor integrity", run("vendor-integrity", [ROOT / "build/bin/ocpkg", "verify"], cwd=base))
         for name, function in [("crunch", crunch), ("cmdliner", cmdliner), ("ptime", ptime)]:
             if args.suite in ("all", name) or (args.suite == "harness" and name == "ptime"):
                 try: function()
-                except (RuntimeError, OSError, ocpkg.PackageError) as error:
+                except (RuntimeError, OSError) as error:
                     check(name + " suite execution", False, str(error))
         receipt["status"] = "passed" if all(c["passed"] for c in receipt["checks"]) else "failed"
+    except (RuntimeError, OSError) as error:
+        check("vendor integrity", False, str(error))
+        receipt["status"] = "failed"
     finally:
         save()
         print(json.dumps(dict(status=receipt["status"], passed=sum(c["passed"] for c in receipt["checks"]),
