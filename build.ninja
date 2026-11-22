@@ -306,6 +306,13 @@ build test_fiber_test: run_test | $builddir/fiber_test
 build test_fiber_io: run_test | $builddir/fiber_io
   name = fiber_io
 
+rule run_fiber_wait
+  command = sh $in $builddir/bin/occ
+  description = TEST Fiber descriptor waits
+  pool = console
+
+build test_fiber_wait: run_fiber_wait tests/fiber_wait.sh | $builddir/bin/occ $builddir/qbe/qbe $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a
+
 rule qbe_pic_check
   command = $builddir/qbe/qbe -t arm64 $in > $builddir/mod_lib.arm64.s && grep -q ':got:ocamlcc_global_Mod_lib' $builddir/mod_lib.arm64.s && grep -q ':got_lo12:ocamlcc_global_Mod_lib' $builddir/mod_lib.arm64.s && ! grep -E 'adrp[[:space:]]+[^,]+,[[:space:]]*ocamlcc_global_Mod_lib' $builddir/mod_lib.arm64.s && $builddir/qbe/qbe -t amd64_sysv $in > $builddir/mod_lib.amd64.s && grep -q 'ocamlcc_global_Mod_lib@gotpcrel(%rip)' $builddir/mod_lib.amd64.s && grep -q 'callq arc_alloc@plt' $builddir/mod_lib.amd64.s && grep -q 'callq ocamlcc_set_exn@plt' $builddir/mod_lib.amd64.s && printf 'export function w $$win_id(w %%x) {\n@start\n\tret %%x\n}\n' | $builddir/qbe/qbe -t amd64_win > $builddir/win_check.s && echo "PASS qbe_pic_check"
   pool = console
@@ -442,7 +449,7 @@ rule run_qbe_arm64_long_branch
 
 build test_qbe_arm64_long_branch: run_qbe_arm64_long_branch tests/qbe_arm64_long_branch.sh | $builddir/qbe/qbe
 
-build test: phony test_qbe_arm64_long_branch test_default_stdlib test_stdlib_opt test_separate_exports test_native_ffi test_single_thread_rc test_single_thread_driver test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
+build test: phony test_qbe_arm64_long_branch test_default_stdlib test_stdlib_opt test_separate_exports test_native_ffi test_single_thread_rc test_single_thread_driver test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_fiber_wait test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
 
 rule cc_rt_asan
   command = $cc $rt_cflags -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iruntime -c $in -o $out

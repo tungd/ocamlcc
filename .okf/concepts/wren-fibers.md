@@ -6,7 +6,7 @@ tags: [fibers, concurrency, runtime, phase-3]
 status: stable
 generated:
   by: codex/1
-  at: 2026-11-22
+  at: 2026-11-23
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -68,6 +68,23 @@ Cross-calls raise `Invalid_argument`: `Fiber.suspend` inside a spawned fiber or 
 - **Finalizer dispatch owns the fiber**: `ocamlcc_poll_finalizers` is registered `yields = false`, and `run_finalizers` (`runtime/arc.c`) sets `owns_finalizer_dispatch` on the current fiber while a callback runs. Every suspension entry point checks `owns_finalizer_dispatch` via `ocamlcc_fiber_suspend` or `ocamlcc_fiber_can_yield` and raises `Invalid_argument` rather than stranding unshadowed dispatcher frames. Pinned by `test_finalizer_no_suspend` in `tests/stdlib_runtime.c` and `test_sched_edges` in `examples/fiber_test.ml`.
 
 No OCaml 5 multicore domains and no multi-shot effects: one cooperative scheduler, explicit single-shot coroutines (`Stdlib.Fiber`, design doc §2 non-goals).
+
+## Descriptor deadlines and cancellation
+
+`Fiber.fd_wait` takes a `Fiber.Direction.t` and returns a
+`Fiber.Wait_result.t` of `Ready`, `Timed_out`, or `Cancelled`. It uses
+monotonic deadlines and a one-way `Fiber.Cancel.t` on the scheduler thread.
+The scheduler checks cancellation before polling and delivers readiness
+returned by the poll before expiring deadlines. A zero timeout polls once.
+Expiry or cancellation unregisters only that waiter.
+
+`Fiber.t` keeps the task's typed outcome in a completion cell. The
+scheduler stores private, result-independent handles and wakes waiters
+after a task completes. Descriptor waiters likewise resume with a private
+completion cell that holds no reference back to the task.
+`ninja -j1 test_fiber_wait` exercises typed task completion, deadline
+expiry, zero-timeout readiness, and cancellation with a second waiter
+still registered under both ARC profiles.
 
 ## OCaml 5 effect handlers
 
