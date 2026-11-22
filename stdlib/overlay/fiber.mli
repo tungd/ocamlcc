@@ -15,6 +15,11 @@ val yield : unit -> unit
 val sleep_ms : int -> unit
 val run_all : unit -> unit
 
+val step_ready : unit -> bool
+(** On the main fiber, resume at most one queued task until it yields or
+    completes. The scheduler returns whether a task ran and leaves timer and
+    descriptor waits to the polling entry points. *)
+
 module Cancel : sig
   type t
   val create : unit -> t

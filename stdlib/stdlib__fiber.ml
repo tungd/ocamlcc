@@ -484,17 +484,29 @@ let step_task (s : Scheduler.t) (t : Task.Handle.t) =
   | Sleep deadline -> s.timers <- { deadline; task = t } :: s.timers
   | Wait_fd | Park -> ()
 
+let run_one_ready s =
+  match Scheduler.pop s with
+  | Some next -> step_task s next; true
+  | None -> false
+
 let sched_step ?until (s : Scheduler.t) =
   let progressed =
     if s.ready = [] || s.steps_since_poll >= Registration.batch_size then
       let timeout = if Scheduler.has_ready s then 0 else next_timer_timeout_ms ?until s in
       sched_poll s timeout
     else false in
-  match Scheduler.pop s with
-  | Some next ->
-      step_task s next;
-      true
-  | None -> progressed || s.io_waiters <> [] || next_deadline s <> None
+  run_one_ready s || progressed || s.io_waiters <> [] || next_deadline s <> None
+
+let step_ready () =
+  raw_can_yield ();
+  if not (raw_is_main ()) then raise_invalid ();
+  match Scheduler.existing () with
+  | None -> false
+  | Some s ->
+      if s.active <> None then raise_invalid ();
+      let ran = run_one_ready s in
+      Scheduler.release_if_idle s;
+      ran
 
 let spawn (fn : unit -> 'a) : 'a t =
   let s = Scheduler.current () in
@@ -513,9 +525,7 @@ let yield () =
         raise_invalid ()
       end else begin
         ignore (sched_poll s 0);
-        (match Scheduler.pop s with
-         | Some next -> step_task s next
-         | None -> ());
+        ignore (run_one_ready s);
         Scheduler.release_if_idle s
       end
 

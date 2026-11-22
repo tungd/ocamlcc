@@ -121,6 +121,14 @@ resume them later. An unbounded wait on the main fiber raises
 `ninja -j1 test_fiber_wait` covers signals, broadcasts, timeout,
 cancellation, and isolation between condition waiters in both ARC profiles.
 
+## Host event loops
+
+`Fiber.step_ready` lets a host callback advance one queued task on the
+main fiber. It returns whether it ran a task. It uses only the ready queue,
+so a host can drain work without polling file descriptors or running an
+idle timer. The regression checks queue order and confirms an available
+descriptor stays pending until an ordinary scheduler call polls it.
+
 ## Main-fiber sleep
 
 A main-fiber `sleep_ms` supplies its monotonic deadline to every scheduler

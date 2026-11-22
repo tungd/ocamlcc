@@ -22,6 +22,29 @@ let receive fd =
   let buffer = Bytes.create 1 in
   assert (F.fd_read fd buffer 0 1 = 1 && Bytes.get buffer 0 = 'x')
 
+let test_step_ready () =
+  assert (not (F.step_ready ()));
+  let count = ref 0 in
+  let bump () = incr count in
+  let first = F.spawn (fun () -> bump (); F.yield (); bump ()) in
+  let second = F.spawn bump in
+  assert (F.step_ready () && !count = 1);
+  assert (F.step_ready () && !count = 2);
+  assert (F.step_ready () && !count = 3);
+  assert (not (F.step_ready ()));
+  F.await first;
+  F.await second;
+  with_pipe (fun reader writer ->
+    let waiter = F.spawn (fun () -> F.fd_wait reader Read) in
+    assert (F.step_ready ());
+    send writer;
+    assert (not (F.step_ready ()));
+    assert (F.await waiter = F.Wait_result.Ready);
+    receive reader);
+  let nested = F.spawn (fun () ->
+    match F.step_ready () with exception Invalid_argument _ -> true | _ -> false) in
+  assert (F.step_ready () && F.await nested)
+
 let test_main_sleep ~already_registered =
   with_pipe (fun reader _ ->
     let cancel = F.Cancel.create () in
@@ -80,6 +103,7 @@ let test_conditions () =
     | _ -> false)
 
 let () =
+  test_step_ready ();
   test_main_sleep ~already_registered:false;
   test_main_sleep ~already_registered:true;
   test_conditions ();
