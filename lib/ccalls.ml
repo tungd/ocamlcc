@@ -83,6 +83,7 @@ let table =
     ("ocamlcc_poller_watch", abi 3 true false);
     ("ocamlcc_poller_unwatch_waiter", abi 3 false false);
     ("ocamlcc_poller_wait", abi 2 false false);
+    ("ocamlcc_poller_wait_adding", abi 4 true false);
     (* structural comparison / hashing *)
     ("caml_fresh_oo_id", abi 1 false false);
     ("caml_equal", abi 2 true false);
@@ -329,6 +330,7 @@ let returns_imm = function
   | "ocamlcc_effect_register_exceptions"
   | "ocamlcc_monotonic_ns" | "ocamlcc_poller_watch"
   | "ocamlcc_poller_unwatch_waiter" | "ocamlcc_poller_wait"
+  | "ocamlcc_poller_wait_adding"
   | "ocamlcc_arc_live" | "ocamlcc_arc_reuse" | "ocamlcc_arc_collect"
   | "ocamlcc_arc_slab_count"
   | "ocamlcc_ptr_id" | "ocamlcc_marshal_kind"

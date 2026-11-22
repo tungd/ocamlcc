@@ -29,9 +29,10 @@ external raw_can_yield : unit -> unit = "ocamlcc_fiber_can_yield"
 external raw_sched_get : unit -> 's option = "ocamlcc_fiber_sched_get"
 external raw_sched_set : 's option -> unit = "ocamlcc_fiber_sched_set"
 external raw_monotonic_ns : unit -> int = "ocamlcc_monotonic_ns"
-external raw_poller_watch : int -> int -> int -> unit = "ocamlcc_poller_watch"
 external raw_poller_unwatch : int -> int -> int -> unit = "ocamlcc_poller_unwatch_waiter"
 external raw_poller_wait : int array -> int -> int = "ocamlcc_poller_wait"
+external raw_poller_wait_adding : int array -> int -> int array -> int -> int =
+  "ocamlcc_poller_wait_adding"
 
 external pipe : unit -> int * int = "ocamlcc_pipe"
 external fd_read : int -> bytes -> int -> int -> int = "ocamlcc_fd_read"
@@ -39,6 +40,7 @@ external fd_write : int -> bytes -> int -> int -> int = "ocamlcc_fd_write"
 external fd_close : int -> unit = "ocamlcc_fd_close"
 
 external array_get : 'a array -> int -> 'a = "%array_unsafe_get"
+external array_set : 'a array -> int -> 'a -> unit = "%array_unsafe_set"
 
 module Deadline : sig
   type t
@@ -136,8 +138,15 @@ module Registration = struct
     type t = Main | Task of Task.Handle.t
   end
 
-  module Completion = struct
-    type t = { mutable outcome : Wait_result.t option }
+  module State = struct
+    type t = Queued | Watching | Completed of Wait_result.t | Invalid_fd
+  end
+
+  module Progress = struct
+    type t = { mutable state : State.t }
+
+    let pending t =
+      match t.state with Queued | Watching -> true | Completed _ | Invalid_fd -> false
   end
 
   type t = {
@@ -147,8 +156,17 @@ module Registration = struct
     owner : Owner.t;
     deadline : Deadline.t option;
     cancellation : Cancel.t option;
-    completion : Completion.t;
+    progress : Progress.t;
   }
+
+  let batch_size = 64
+
+  let stage requests i wait =
+    let offset = i * 3 in
+    array_set requests offset wait.fd;
+    array_set requests (offset + 1) (Direction.events wait.direction);
+    array_set requests (offset + 2) wait.token;
+    wait.progress.state <- Watching
 
   let cancelled = function None -> false | Some token -> Cancel.is_cancelled token
 
@@ -156,16 +174,15 @@ module Registration = struct
     if cancelled wait.cancellation then Some Wait_result.Cancelled else None
 
   let expiry ~now wait =
-    match wait.deadline with
-    | Some deadline when Deadline.reached ~now deadline -> Some Wait_result.Timed_out
+    match wait.progress.state, wait.deadline with
+    | Watching, Some deadline when Deadline.reached ~now deadline ->
+        Some Wait_result.Timed_out
     | _ -> None
 
   let unregister wait =
-    raw_poller_unwatch wait.fd (Direction.events wait.direction) wait.token
-
-  let settle wait outcome =
-    wait.completion.outcome <- Some outcome;
-    wait.owner
+    match wait.progress.state with
+    | Watching -> raw_poller_unwatch wait.fd (Direction.events wait.direction) wait.token
+    | Queued | Completed _ | Invalid_fd -> ()
 end
 
 let rec rev_append xs acc =
@@ -180,8 +197,11 @@ module Scheduler = struct
     mutable ready_rev : Task.Handle.t list;
     mutable timers : Timer.t list;
     mutable io_waiters : Registration.t list;
+    mutable queued_watches : Registration.t list;
+    mutable steps_since_poll : int;
     mutable next_tok : int;
     poll_buf : int array;
+    watch_buf : int array;
   }
 
   let create () : t =
@@ -191,8 +211,11 @@ module Scheduler = struct
       ready_rev = [];
       timers = [];
       io_waiters = [];
+      queued_watches = [];
+      steps_since_poll = 0;
       next_tok = 1;
-      poll_buf = array_make 64 0;
+      poll_buf = array_make Registration.batch_size 0;
+      watch_buf = array_make (Registration.batch_size * 3) 0;
     }
 
   let existing () : t option = raw_sched_get ()
@@ -299,8 +322,9 @@ let rec remove_io_waiter tok acc (waits : Registration.t list) = match waits wit
       if e.token = tok then (Some e, rev_append acc rest)
       else remove_io_waiter tok (e :: acc) rest
 
-let complete_wait (s : Scheduler.t) entry result =
-  match Registration.settle entry result with
+let complete_wait (s : Scheduler.t) (entry : Registration.t) state =
+  entry.progress.state <- state;
+  match entry.owner with
   | Main -> ()
   | Task task -> Scheduler.push s task
 
@@ -315,27 +339,51 @@ let drop_io (s : Scheduler.t) decide =
              | Some rest -> Some (entry :: rest))
         | Some result ->
             Registration.unregister entry;
-            complete_wait s entry result;
+            complete_wait s entry (Registration.State.Completed result);
             (match drop rest with None -> Some rest | updated -> updated)
   in
   match drop s.io_waiters with
   | None -> false
   | Some remaining -> s.io_waiters <- remaining; true
 
+let poll_watches (s : Scheduler.t) timeout_ms =
+  let rec stage count (queued : Registration.t list) =
+    match queued with
+    | [] -> count, []
+    | _ when count = Registration.batch_size -> count, queued
+    | entry :: rest ->
+        match entry.progress.state with
+        | Queued ->
+            Registration.stage s.watch_buf count entry;
+            stage (count + 1) rest
+        | Watching | Completed _ | Invalid_fd -> stage count rest
+  in
+  match s.queued_watches with
+  | [] ->
+      if timeout_ms > 0 || s.io_waiters <> [] then raw_poller_wait s.poll_buf timeout_ms
+      else 0
+  | queued ->
+      let count, pending = stage 0 (rev_append queued []) in
+      s.queued_watches <- rev_append pending [];
+      let timeout_ms = if pending <> [] then 0 else timeout_ms in
+      raw_poller_wait_adding s.watch_buf count s.poll_buf timeout_ms
+
 let sched_poll (s : Scheduler.t) timeout_ms =
+  s.steps_since_poll <- 0;
   drain_timers s;
   let removed = drop_io s Registration.cancellation in
   let timeout_ms = if removed || Scheduler.has_ready s then 0 else timeout_ms in
-  let n =
-    if timeout_ms > 0 || s.io_waiters <> [] then raw_poller_wait s.poll_buf timeout_ms
-    else 0 in
+  let n = poll_watches s timeout_ms in
   for i = 0 to n - 1 do
-    let tok = array_get s.poll_buf i in
+    let ready = array_get s.poll_buf i in
+    let tok, state =
+      if ready < 0 then 0 - ready, Registration.State.Invalid_fd
+      else ready, Registration.State.Completed Wait_result.Ready in
     let found, rest = remove_io_waiter tok [] s.io_waiters in
     s.io_waiters <- rest;
     match found with
     | None -> ()
-    | Some entry -> complete_wait s entry Wait_result.Ready
+    | Some entry -> complete_wait s entry state
   done;
   let expired =
     match s.io_waiters with
@@ -359,6 +407,7 @@ let complete_task (s : Scheduler.t) (t : Task.Handle.t) =
   wake ws
 
 let step_task (s : Scheduler.t) (t : Task.Handle.t) =
+  s.steps_since_poll <- s.steps_since_poll + 1;
   let prev = s.active in
   s.active <- Some t;
   let cmd = raw_resume t.coro () in
@@ -370,19 +419,16 @@ let step_task (s : Scheduler.t) (t : Task.Handle.t) =
   | Wait_fd | Park -> ()
 
 let sched_step (s : Scheduler.t) =
-  let progressed = sched_poll s 0 in
+  let progressed =
+    if s.ready = [] || s.steps_since_poll >= Registration.batch_size then
+      let timeout = if Scheduler.has_ready s then 0 else next_timer_timeout_ms s in
+      sched_poll s timeout
+    else false in
   match Scheduler.pop s with
   | Some next ->
       step_task s next;
       true
-  | None when progressed -> true
-  | None ->
-      if s.io_waiters <> [] || s.timers <> [] then begin
-        let tms = next_timer_timeout_ms s in
-        ignore (sched_poll s tms);
-        true
-      end else
-        false
+  | None -> progressed || s.io_waiters <> [] || s.timers <> []
 
 let spawn (fn : unit -> 'a) : 'a t =
   let s = Scheduler.current () in
@@ -454,22 +500,27 @@ let fd_wait ?timeout_ms ?cancel fd direction =
     Scheduler.release_if_idle s;
     Wait_result.Cancelled
   end else begin
+    if fd < 0 || fd > 0x7fffffff then begin
+      Scheduler.release_if_idle s;
+      raise_invalid ()
+    end;
     let tok = s.next_tok in
     s.next_tok <- tok + 1;
-    (try raw_poller_watch fd (Direction.events direction) tok
-     with e -> Scheduler.release_if_idle s; raise e);
-    let completion : Registration.Completion.t = { outcome = None } in
-    s.io_waiters <- {
-      token = tok; fd; direction; owner; deadline; cancellation = cancel; completion;
-    } :: s.io_waiters;
+    let progress : Registration.Progress.t = { state = Queued } in
+    let wait : Registration.t =
+      { token = tok; fd; direction; owner; deadline; cancellation = cancel; progress } in
+    s.io_waiters <- wait :: s.io_waiters;
+    s.queued_watches <- wait :: s.queued_watches;
     (match owner with
      | Task _ -> ignore (raw_suspend Command.Wait_fd)
      | Main ->
-         while completion.outcome = None do
+         while Registration.Progress.pending progress do
            ignore (sched_step s)
          done;
          Scheduler.release_if_idle s);
-    match completion.outcome with Some result -> result | None -> raise_invalid ()
+    match progress.state with
+    | Completed result -> result
+    | Invalid_fd | Queued | Watching -> raise_invalid ()
   end
 
 let fd_wait_read fd = ignore (fd_wait fd Direction.Read)

@@ -32,12 +32,12 @@ sources:
 
 Phase 3 implements Wren-style stackful coroutines (§4.4 of the design doc)[^design-doc], split between a small C coroutine/TLS/poller kernel (`runtime/fiber.c`) and the OCaml cooperative scheduler (`stdlib/stdlib__fiber.ml`)[^stdlib-fiber]:
 
-- Each coroutine fiber (`ARC_TAG_FIBER = 250`) is an ARC-managed heap object owning a contiguous **shadow value stack** holding live heap pointers across suspension points, a separate stack of open reuse tokens, a guard-paged `256 KB` C stack + callee-saved register `PalContext`, a per-fiber saved `exn_slot` swapped into the thread-local `tls_exn_slot` on context switch, and a caller link (`caller`). `FiberThreadState` (`tls_state`) and `tls_current_fiber` are `_Thread_local` so each OS thread holds its own `main_fiber`, `poller_fd`, and OCaml `sched_val` handle (accessed via `ocamlcc_fiber_sched_get`/`set`), and `PAL_USE_EPOLL`'s `g_watches` registry is synchronized by `g_watch_lock`.
-- **OCaml scheduler** (`stdlib/stdlib__fiber.ml`) builds scheduled tasks (`Fiber.spawn`/`yield`/`sleep_ms`/`fd_wait_read`/`fd_wait_write`/`await`/`run_all`) as acyclic task records wrapping raw coroutines (`ocamlcc_fiber_create`/`resume`/`suspend`), maintaining per-thread amortized FIFO ready queues, deadline timer lists, and token-indexed I/O waiter lists over `ocamlcc_monotonic_ns` and `ocamlcc_poller_{watch,unwatch_waiter,wait}`. When the scheduler becomes completely idle on the main fiber, `release_if_idle` resets `sched_val` to `None` so steady-state `arc_live_objects` returns to zero.
+- Each coroutine fiber (`ARC_TAG_FIBER = 250`) is an ARC-managed heap object owning a contiguous **shadow value stack** holding live heap pointers across suspension points, a separate stack of open reuse tokens, a guard-paged `256 KB` C stack + callee-saved register `PalContext`, a per-fiber saved `exn_slot` swapped into the thread-local `tls_exn_slot` on context switch, and a caller link (`caller`). `FiberThreadState` (`tls_state`) and `tls_current_fiber` are `_Thread_local` so each OS thread holds its own `main_fiber`, `poller_fd`, and OCaml `sched_val` handle (accessed via `ocamlcc_fiber_sched_get`/`set`).
+- **OCaml scheduler** (`stdlib/stdlib__fiber.ml`) builds scheduled tasks (`Fiber.spawn`/`yield`/`sleep_ms`/`fd_wait_read`/`fd_wait_write`/`await`/`run_all`) as acyclic task records wrapping raw coroutines (`ocamlcc_fiber_create`/`resume`/`suspend`). It maintains per-thread FIFO ready queues, deadline timer lists, and I/O registrations over `ocamlcc_monotonic_ns` and the PAL poller. When the scheduler becomes completely idle on the main fiber, `release_if_idle` resets `sched_val` to `None` so steady-state `arc_live_objects` returns to zero.
 - **Static yield-effect inference** (`Arc_analysis.Program_facts`) computes the fixed point of functions that can transitively yield or spawn/await (propagating transitively through `Stdlib__fiber` helpers calling `ocamlcc_fiber_suspend`/`resume`); only those calls are bracketed by `ShadowPush`/`ShadowPop`, keeping leaf and pure functions at full register speed (design doc §7 mitigation).
 - **Shadow stacks are for stackful fibers.** QBE loads the runtime’s monotonic process flag before each group of generated shadow operations, including over-application. Until the first stackful fiber is created, the zero branch skips every push and pop call. Runtime helpers used by C callers also return before touching TLS. Main-stack frames keep their ownership in place, including across the first creation. Stackful frames still record live values and reuse tokens for abandonment cleanup. The native runtime test covers a main-stack scope that straddles first creation.
 - **Deterministic cleanup** — when a suspended or abandoned coroutine's refcount hits zero, `fiber_destroy` in `runtime/fiber.c` walks its shadow-stack slots and releases each live value and open reuse token before freeing the C stack and shadow buffer; OCaml task waiter/timer/ready links are normal ARC-managed lists. **Thread-exit teardown** (`fiber_tls_cleanup`, the `pthread_key` destructor for `tls_state`): snapshots and clears `s->sched_val`, frees the main fiber's buffers, detaches `tls_state`/`tls_current_fiber` (`= NULL`), closes `s->poller_fd`, frees `s`, and only then releases `sched_val` — so a custom finalizer run during cleanup (or another `pthread_key` destructor running afterwards) gets fresh TLS safely instead of dereferencing freed memory. Pinned by `test_tls_cleanup_queued_fibers` in `tests/stdlib_runtime.c`.
-- **Event poller** — non-blocking I/O suspends the active fiber via `ocamlcc_poller_watch` / `ocamlcc_poller_wait` (backed by `kqueue` on Darwin/BSD and `epoll` on Linux in `runtime/pal.c`), keying per-waiter tokens safely on `epoll` (`PalWatch`) and `kqueue`. `ocamlcc_poller_watch` validates fds synchronously (raising `Invalid_argument` before queueing waiters). **Verified on epoll by shim syntax-check only** (`cc -fsyntax-only -DPAL_USE_EPOLL` with a stub `sys/epoll.h`); this host runs kqueue.
+- **Event poller** — descriptor waits use `kqueue` on Darwin/BSD and `epoll` on Linux. Both backends index the registry by poller and descriptor and reuse watch and waiter slots. Kernel events carry a slot generation so events from an earlier watch cannot wake a new waiter using that slot.
 
 ## Owned values and stack teardown
 
@@ -85,6 +85,24 @@ completion cell that holds no reference back to the task.
 `ninja -j1 test_fiber_wait` exercises typed task completion, deadline
 expiry, zero-timeout readiness, and cancellation with a second waiter
 still registered under both ARC profiles.
+
+## Poller registration batches
+
+The scheduler queues new descriptor waits and submits them when it polls.
+It polls between rounds of ready tasks and after at most 64 task steps
+within a round. On kqueue the pending filters and the blocking readiness
+wait use one `kevent` call. If Darwin returns change errors ahead of
+readiness, the runtime reports those failures and checks for ready events
+with a zero timeout. A failed registration resumes only its waiter with
+`Invalid_argument`. Linux applies the additions with `epoll_ctl` before
+`epoll_wait`. The default ARC runtime synchronizes the shared watch
+registry. The single-thread ARC archive compiles the registry without its
+spinlock.
+
+The PAL test combines a closed fd and two waiters on a ready pipe, then
+checks that the same pipe remains independently registered on a second
+poller. The Fiber test checks invalid-descriptor delivery and zero-timeout
+waits across consecutive batches.
 
 ## OCaml 5 effect handlers
 

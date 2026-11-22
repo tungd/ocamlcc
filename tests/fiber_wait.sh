@@ -55,6 +55,15 @@ let () =
     assert (F.await peer = Ready);
     receive reader;
     assert (F.fd_wait writer Write = Ready));
+  with_pipe (fun reader writer ->
+    let closed = with_pipe (fun reader _ -> reader) in
+    send writer;
+    let invalid = F.spawn (fun () -> F.fd_wait closed Read) in
+    let ready = List.init 70 (fun _ ->
+      F.spawn (fun () -> F.fd_wait ~timeout_ms:0 reader Read)) in
+    assert (match F.await invalid with exception Invalid_argument _ -> true | _ -> false);
+    List.iter (fun task -> assert (F.await task = F.Wait_result.Ready)) ready;
+    receive reader);
   F.run_all ();
   print_endline "Fiber descriptor waits: PASS"
 ML

@@ -28,6 +28,8 @@ uint64_t pal_monotonic_ns(void);
 /* 4. Event poller (epoll / kqueue). */
 #define PAL_POLL_READ  1u
 #define PAL_POLL_WRITE 2u
+#define PAL_POLL_INVALID 4u
+#define PAL_POLL_BATCH_MAX 64
 
 typedef struct PalPollEvent {
     int      fd;
@@ -46,6 +48,11 @@ int  pal_poller_unwatch(int pfd, int fd, uint32_t events);
  * last waiter unregisters the fd from the poller. */
 int  pal_poller_unwatch_waiter(int pfd, int fd, uint32_t events, void *udata);
 int  pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms);
+/* From the owning scheduler thread, apply up to max_events waiter additions,
+ * one direction per entry, before waiting. Failed registrations return
+ * PAL_POLL_INVALID with their udata. */
+int  pal_poller_wait_adding(int pfd, const PalPollEvent *adds, int nadds,
+                            PalPollEvent *out, int max_events, int timeout_ms);
 
 /* 5. Fiber context switching and non-blocking fd helpers. */
 

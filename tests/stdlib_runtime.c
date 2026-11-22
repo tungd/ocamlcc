@@ -564,6 +564,42 @@ static void test_poller_multi_waiters_and_overflow(void)
     pal_poller_close(pfd);
 }
 
+static void test_poller_changes_and_readiness(void)
+{
+    int pfd = pal_poller_create();
+    int other = pal_poller_create();
+    int pipe_fds[2];
+    assert(pfd >= 0 && other >= 0 && pipe(pipe_fds) == 0);
+    int closed_fd = dup(pipe_fds[0]);
+    assert(closed_fd >= 0 && close(closed_fd) == 0);
+    assert(pal_poller_watch(other, pipe_fds[0], PAL_POLL_READ, (void *)4) == 0);
+    assert(write(pipe_fds[1], "x", 1) == 1);
+
+    const PalPollEvent changes[] = {
+        {pipe_fds[0], PAL_POLL_READ, (void *)1},
+        {closed_fd, PAL_POLL_READ, (void *)2},
+        {pipe_fds[0], PAL_POLL_READ, (void *)3},
+    };
+    PalPollEvent received[3];
+    int n = pal_poller_wait_adding(pfd, changes, 3, received, 3, 100);
+    int seen = 0;
+    for (int i = 0; i < n; i++) {
+        uintptr_t token = (uintptr_t)received[i].udata;
+        assert(token >= 1 && token <= 3);
+        assert((seen & (1 << token)) == 0);
+        seen |= 1 << token;
+        assert(received[i].events == (token == 2 ? PAL_POLL_INVALID : PAL_POLL_READ));
+    }
+    assert(seen == 0xe);
+    assert(pal_poller_wait(other, received, 3, 100) == 1);
+    assert(received[0].udata == (void *)4);
+
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+    pal_poller_close(pfd);
+    pal_poller_close(other);
+}
+
 static void test_bounds_and_marshal_dos(void)
 {
     int64_t before = arc_live_objects();
@@ -1441,6 +1477,7 @@ int main(void)
     test_weak_target_header_and_reuse();
     test_weak_get_copy_and_obj_dup();
     test_poller_multi_waiters_and_overflow();
+    test_poller_changes_and_readiness();
     test_bounds_and_marshal_dos();
     test_fiber_robustness();
     test_wren_suspend_through_effect_stack();

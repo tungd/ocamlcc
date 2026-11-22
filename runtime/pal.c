@@ -35,10 +35,10 @@
 typedef struct PalWaiter {
     void *udata;
     int next;
-    int in_use;
 } PalWaiter;
 
 typedef struct PalWatch {
+    struct PalWatch *next;
     int in_use;
     uint32_t gen;
     int pfd; /* owning poller */
@@ -51,8 +51,16 @@ typedef struct PalWatch {
 
 #define PAL_WATCH_MAX  1024
 #define PAL_WAITER_MAX 2048
+#define PAL_WATCH_BUCKETS 2048
 static PalWatch g_watches[PAL_WATCH_MAX];
 static PalWaiter g_waiters[PAL_WAITER_MAX];
+static PalWatch *g_watch_buckets[PAL_WATCH_BUCKETS];
+static PalWatch *g_watch_free;
+static int g_watch_slots;
+static int g_waiter_free = -1;
+static int g_waiter_slots;
+
+#ifndef OCAMLCC_SINGLE_THREAD_RC
 static _Atomic uint32_t g_watch_lock = 0u;
 
 static inline void watch_lock(void)
@@ -65,6 +73,10 @@ static inline void watch_unlock(void)
 {
     atomic_store_explicit(&g_watch_lock, 0u, memory_order_release);
 }
+#else
+static inline void watch_lock(void) {}
+static inline void watch_unlock(void) {}
+#endif
 
 static inline uint64_t watch_encode(const PalWatch *w)
 {
@@ -86,20 +98,28 @@ static inline PalWatch *watch_decode(int pfd, uint64_t token)
 
 static int waiter_push(int *head, int *tail, void *udata)
 {
-    for (int i = 0; i < PAL_WAITER_MAX; i++) {
-        if (!g_waiters[i].in_use) {
-            g_waiters[i].in_use = 1;
-            g_waiters[i].udata = udata;
-            g_waiters[i].next = -1;
-            if (*tail >= 0)
-                g_waiters[*tail].next = i;
-            else
-                *head = i;
-            *tail = i;
-            return i;
-        }
+    int i;
+    if (g_waiter_free >= 0) {
+        i = g_waiter_free;
+        g_waiter_free = g_waiters[i].next;
+    } else if (g_waiter_slots < PAL_WAITER_MAX) {
+        i = g_waiter_slots++;
+    } else {
+        return -1;
     }
-    return -1;
+    g_waiters[i] = (PalWaiter){.udata = udata, .next = -1};
+    if (*tail >= 0)
+        g_waiters[*tail].next = i;
+    else
+        *head = i;
+    *tail = i;
+    return i;
+}
+
+static void waiter_free(int i)
+{
+    g_waiters[i].next = g_waiter_free;
+    g_waiter_free = i;
 }
 
 static int waiter_pop(int *head, int *tail, void **out_udata)
@@ -111,8 +131,7 @@ static int waiter_pop(int *head, int *tail, void **out_udata)
     *head = g_waiters[i].next;
     if (*head < 0)
         *tail = -1;
-    g_waiters[i].in_use = 0;
-    g_waiters[i].next = -1;
+    waiter_free(i);
     return 1;
 }
 
@@ -139,8 +158,7 @@ static int waiter_remove_udata(int *head, int *tail, void *udata)
                 *head = next;
             if (*tail == cur)
                 *tail = prev;
-            g_waiters[cur].in_use = 0;
-            g_waiters[cur].next = -1;
+            waiter_free(cur);
             removed = 1;
         } else {
             prev = cur;
@@ -164,8 +182,7 @@ static void waiter_remove_idx(int *head, int *tail, int target_idx)
                 *head = g_waiters[cur].next;
             if (*tail == cur)
                 *tail = prev;
-            g_waiters[cur].in_use = 0;
-            g_waiters[cur].next = -1;
+            waiter_free(cur);
             return;
         }
         prev = cur;
@@ -173,42 +190,51 @@ static void waiter_remove_idx(int *head, int *tail, int target_idx)
     }
 }
 
+static PalWatch **watch_bucket(int pfd, int fd)
+{
+    uint32_t hash = (uint32_t)pfd * 0x9e3779b1u ^ (uint32_t)fd * 0x85ebca6bu;
+    return &g_watch_buckets[(hash ^ (hash >> 16)) & (PAL_WATCH_BUCKETS - 1)];
+}
+
 static PalWatch *watch_find(int pfd, int fd)
 {
-    for (int i = 0; i < PAL_WATCH_MAX; i++) {
-        if (g_watches[i].in_use && g_watches[i].pfd == pfd && g_watches[i].fd == fd)
-            return &g_watches[i];
-    }
+    for (PalWatch *w = *watch_bucket(pfd, fd); w != NULL; w = w->next)
+        if (w->pfd == pfd && w->fd == fd)
+            return w;
     return NULL;
 }
 
 static PalWatch *watch_alloc(int pfd, int fd)
 {
-    for (int i = 0; i < PAL_WATCH_MAX; i++) {
-        if (!g_watches[i].in_use) {
-            PalWatch *w = &g_watches[i];
-            w->in_use = 1;
-            w->gen++;
-            if (w->gen == 0u)
-                w->gen = 1u;
-            w->pfd = pfd;
-            w->fd = fd;
-            w->read_head = -1;
-            w->read_tail = -1;
-            w->write_head = -1;
-            w->write_tail = -1;
-            return w;
-        }
+    PalWatch *w;
+    if (g_watch_free != NULL) {
+        w = g_watch_free;
+        g_watch_free = w->next;
+    } else if (g_watch_slots < PAL_WATCH_MAX) {
+        w = &g_watches[g_watch_slots++];
+    } else {
+        return NULL;
     }
-    return NULL;
+    uint32_t gen = w->gen + 1;
+    PalWatch **bucket = watch_bucket(pfd, fd);
+    *w = (PalWatch){.next = *bucket, .in_use = 1, .gen = gen ? gen : 1u,
+                    .pfd = pfd, .fd = fd, .read_head = -1, .read_tail = -1,
+                    .write_head = -1, .write_tail = -1};
+    *bucket = w;
+    return w;
 }
 
 static void watch_free(PalWatch *w)
 {
+    PalWatch **link = watch_bucket(w->pfd, w->fd);
+    while (*link != w)
+        link = &(*link)->next;
+    *link = w->next;
     waiter_clear(&w->read_head, &w->read_tail);
     waiter_clear(&w->write_head, &w->write_tail);
-    w->gen++;
     w->in_use = 0;
+    w->next = g_watch_free;
+    g_watch_free = w;
 }
 
 #if defined(PAL_USE_EPOLL)
@@ -318,24 +344,36 @@ int pal_poller_create(void)
 
 void pal_poller_close(int pfd)
 {
-    if (pfd >= 0)
-        close(pfd);
 #if defined(PAL_USE_KQUEUE) || defined(PAL_USE_EPOLL)
     watch_lock();
-    /* Drop this poller's watch-registry entries. */
-    for (int i = 0; i < PAL_WATCH_MAX; i++) {
+    for (int i = 0; i < g_watch_slots; i++) {
         if (g_watches[i].in_use && g_watches[i].pfd == pfd)
             watch_free(&g_watches[i]);
     }
+#endif
+    if (pfd >= 0)
+        close(pfd);
+#if defined(PAL_USE_KQUEUE) || defined(PAL_USE_EPOLL)
     watch_unlock();
 #endif
 }
 
-int pal_poller_watch(int pfd, int fd, uint32_t events, void *udata)
+typedef struct PalChanges {
+    int count;
+#if defined(PAL_USE_KQUEUE)
+    struct kevent entries[PAL_POLL_BATCH_MAX];
+#endif
+} PalChanges;
+
+static int poller_watch(int pfd, int fd, uint32_t events, void *udata,
+                        PalChanges *deferred)
 {
+    (void)deferred;
 #if defined(PAL_USE_KQUEUE) || defined(PAL_USE_EPOLL)
     if ((events & (PAL_POLL_READ | PAL_POLL_WRITE)) == 0u)
         return 0;
+    if (fd < 0)
+        return -1;
     watch_lock();
     PalWatch *w = watch_find(pfd, fd);
     int is_new = (w == NULL);
@@ -384,8 +422,14 @@ int pal_poller_watch(int pfd, int fd, uint32_t events, void *udata)
                EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, tok);
         n++;
     }
-    if (n > 0)
-        rc = kevent(pfd, kevs, n, NULL, 0, NULL);
+    if (n > 0) {
+        if (deferred != NULL) {
+            memcpy(&deferred->entries[deferred->count], kevs, (size_t)n * sizeof(*kevs));
+            deferred->count += n;
+        } else {
+            rc = kevent(pfd, kevs, n, NULL, 0, NULL);
+        }
+    }
 #elif defined(PAL_USE_EPOLL)
     (void)had_read;
     (void)had_write;
@@ -413,6 +457,11 @@ int pal_poller_watch(int pfd, int fd, uint32_t events, void *udata)
 #endif
 }
 
+int pal_poller_watch(int pfd, int fd, uint32_t events, void *udata)
+{
+    return poller_watch(pfd, fd, events, udata, NULL);
+}
+
 int pal_poller_unwatch(int pfd, int fd, uint32_t events)
 {
 #if defined(PAL_USE_KQUEUE) || defined(PAL_USE_EPOLL)
@@ -422,8 +471,10 @@ int pal_poller_unwatch(int pfd, int fd, uint32_t events)
         watch_unlock();
         return -1;
     }
+#if defined(PAL_USE_KQUEUE)
     int had_read = (w->read_head >= 0);
     int had_write = (w->write_head >= 0);
+#endif
     if (events & PAL_POLL_READ)
         waiter_clear(&w->read_head, &w->read_tail);
     if (events & PAL_POLL_WRITE)
@@ -445,8 +496,6 @@ int pal_poller_unwatch(int pfd, int fd, uint32_t events)
     if (w->read_head < 0 && w->write_head < 0)
         watch_free(w);
 #elif defined(PAL_USE_EPOLL)
-    (void)had_read;
-    (void)had_write;
     if (w->read_head < 0 && w->write_head < 0) {
         rc = epoll_ctl(pfd, EPOLL_CTL_DEL, fd, NULL);
         watch_free(w);
@@ -478,8 +527,10 @@ int pal_poller_unwatch_waiter(int pfd, int fd, uint32_t events, void *udata)
         watch_unlock();
         return -1;
     }
+#if defined(PAL_USE_KQUEUE)
     int had_read = (w->read_head >= 0);
     int had_write = (w->write_head >= 0);
+#endif
     int found = 0;
     if (events & PAL_POLL_READ)
         found |= waiter_remove_udata(&w->read_head, &w->read_tail, udata);
@@ -491,22 +542,20 @@ int pal_poller_unwatch_waiter(int pfd, int fd, uint32_t events, void *udata)
     }
     int rc = 0;
 #if defined(PAL_USE_KQUEUE)
-    if (w->read_head < 0 && w->write_head < 0) {
-        struct kevent kevs[2];
-        int n = 0;
-        if (had_read) {
-            EV_SET(&kevs[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-        }
-        if (had_write) {
-            EV_SET(&kevs[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-        }
-        if (n > 0)
-            rc = kevent(pfd, kevs, n, NULL, 0, NULL);
-        watch_free(w);
+    struct kevent kevs[2];
+    int n = 0;
+    if (had_read && w->read_head < 0) {
+        EV_SET(&kevs[n], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+        n++;
     }
-    /* Otherwise the surviving direction keeps its registration; a pending
-       ONESHOT fire for the emptied direction pops nothing and is not
-       re-armed. */
+    if (had_write && w->write_head < 0) {
+        EV_SET(&kevs[n], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+        n++;
+    }
+    if (n > 0)
+        rc = kevent(pfd, kevs, n, NULL, 0, NULL);
+    if (w->read_head < 0 && w->write_head < 0)
+        watch_free(w);
 #elif defined(PAL_USE_EPOLL)
     if (w->read_head < 0 && w->write_head < 0) {
         rc = epoll_ctl(pfd, EPOLL_CTL_DEL, fd, NULL);
@@ -529,14 +578,56 @@ int pal_poller_unwatch_waiter(int pfd, int fd, uint32_t events, void *udata)
 #endif
 }
 
-int pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms)
-{
 #if defined(PAL_USE_KQUEUE)
-    if (max_events <= 0)
-        return 0;
-    if (max_events > 64)
-        max_events = 64;
-    struct kevent kevs[64];
+static int collect_kqueue(int pfd, const struct kevent *events, int n,
+                          PalPollEvent *out, int capacity, int *errors)
+{
+    int used = 0;
+    PalChanges rearm;
+    rearm.count = 0;
+    watch_lock();
+    /* Each change was for a previously empty filter, so all failed waiters
+       fit if we deliver their errors before allocating slots to readiness. */
+    for (int pass = 0; pass < 2; pass++) {
+        int want_error = pass == 0;
+        for (int i = 0; i < n; i++) {
+            const struct kevent *event = &events[i];
+            int is_error = (event->flags & EV_ERROR) != 0;
+            if (is_error != want_error)
+                continue;
+            PalWatch *w = watch_decode(pfd, (uint64_t)(uintptr_t)event->udata);
+            if (w == NULL)
+                continue;
+            int is_write = event->filter == EVFILT_WRITE;
+            int *head = is_write ? &w->write_head : &w->read_head;
+            int *tail = is_write ? &w->write_tail : &w->read_tail;
+            uint32_t kind = is_error ? PAL_POLL_INVALID :
+                            is_write ? PAL_POLL_WRITE : PAL_POLL_READ;
+            void *token;
+            while (used < capacity && waiter_pop(head, tail, &token)) {
+                out[used++] = (PalPollEvent){w->fd, kind, token};
+                *errors += is_error;
+            }
+            if (!is_error && *head >= 0) {
+                EV_SET(&rearm.entries[rearm.count], (uintptr_t)w->fd, event->filter,
+                       EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, event->udata);
+                rearm.count++;
+            }
+            if (w->read_head < 0 && w->write_head < 0)
+                watch_free(w);
+        }
+    }
+    if (rearm.count > 0 && kevent(pfd, rearm.entries, rearm.count, NULL, 0, NULL) < 0)
+        for (int i = 0; i < rearm.count; i++)
+            (void)kevent(pfd, &rearm.entries[i], 1, NULL, 0, NULL);
+    watch_unlock();
+    return used;
+}
+
+static int wait_kqueue(int pfd, PalChanges *changes, PalPollEvent *out,
+                       int capacity, int timeout_ms)
+{
+    struct kevent events[PAL_POLL_BATCH_MAX];
     struct timespec ts;
     struct timespec *pts = NULL;
     if (timeout_ms >= 0) {
@@ -546,45 +637,42 @@ int pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms)
     }
     int n;
     do {
-        n = kevent(pfd, NULL, 0, kevs, max_events, pts);
+        n = kevent(pfd, changes->entries, changes->count, events, capacity, pts);
     } while (n < 0 && errno == EINTR);
-    if (n <= 0)
-        return n;
-    int out_n = 0;
-    watch_lock();
-    for (int i = 0; i < n; i++) {
-        PalWatch *w = watch_decode(pfd, (uint64_t)(uintptr_t)kevs[i].udata);
-        if (w == NULL)
-            continue;
-        int is_write = (kevs[i].filter == EVFILT_WRITE);
-        int *head = is_write ? &w->write_head : &w->read_head;
-        int *tail = is_write ? &w->write_tail : &w->read_tail;
-        uint32_t ev_bit = is_write ? PAL_POLL_WRITE : PAL_POLL_READ;
-        void *u = NULL;
-        while (out_n < max_events && waiter_pop(head, tail, &u)) {
-            out[out_n].fd = w->fd;
-            out[out_n].events = ev_bit;
-            out[out_n].udata = u;
-            out_n++;
-        }
-        /* EV_ONESHOT consumed this filter: re-arm if waiters remain. */
-        if (*head >= 0) {
-            struct kevent kev;
-            EV_SET(&kev, (uintptr_t)w->fd, kevs[i].filter,
-                   EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 0, kevs[i].udata);
-            (void)kevent(pfd, &kev, 1, NULL, 0, NULL);
-        }
-        if (w->read_head < 0 && w->write_head < 0)
-            watch_free(w);
-    }
-    watch_unlock();
-    return out_n;
-#elif defined(PAL_USE_EPOLL)
-    if (max_events <= 0)
+    if (n == 0)
         return 0;
-    if (max_events > 64)
-        max_events = 64;
-    struct epoll_event evs[64];
+    int errors = 0;
+    if (n < 0) {
+        if (changes->count == 0)
+            return n;
+        /* A whole-call failure may leave some changes installed. Remove
+           those filters and settle every waiter on the failed additions. */
+        for (int i = 0; i < changes->count; i++) {
+            events[i] = changes->entries[i];
+            events[i].flags = EV_ERROR;
+            changes->entries[i].flags = EV_DELETE;
+            (void)kevent(pfd, &changes->entries[i], 1, NULL, 0, NULL);
+        }
+        return collect_kqueue(pfd, events, changes->count, out, capacity, &errors);
+    }
+    int used = collect_kqueue(pfd, events, n, out, capacity, &errors);
+    if (errors > 0 && used < capacity) {
+        /* Darwin returns changelist errors before scanning ready filters. */
+        const struct timespec zero = {0};
+        do {
+            n = kevent(pfd, NULL, 0, events, capacity - used, &zero);
+        } while (n < 0 && errno == EINTR);
+        if (n > 0)
+            used += collect_kqueue(pfd, events, n, out + used, capacity - used, &errors);
+    }
+    return used;
+}
+#endif
+
+#if defined(PAL_USE_EPOLL)
+static int wait_epoll(int pfd, PalPollEvent *out, int max_events, int timeout_ms)
+{
+    struct epoll_event evs[PAL_POLL_BATCH_MAX];
     int n;
     do {
         n = epoll_wait(pfd, evs, max_events, timeout_ms);
@@ -629,13 +717,53 @@ int pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms)
     }
     watch_unlock();
     return out_n;
+}
+#endif
+
+int pal_poller_wait_adding(int pfd, const PalPollEvent *adds, int nadds,
+                           PalPollEvent *out, int max_events, int timeout_ms)
+{
+    if (max_events > PAL_POLL_BATCH_MAX)
+        max_events = PAL_POLL_BATCH_MAX;
+    if (nadds < 0 || (nadds > 0 && nadds > max_events)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (max_events <= 0)
+        return 0;
+
+    PalChanges changes;
+    changes.count = 0;
+    int rejected = 0;
+    for (int i = 0; i < nadds; i++) {
+        PalPollEvent entry = adds[i];
+        if ((entry.events != PAL_POLL_READ && entry.events != PAL_POLL_WRITE) ||
+            poller_watch(pfd, entry.fd, entry.events, entry.udata, &changes) < 0) {
+            entry.events = PAL_POLL_INVALID;
+            out[rejected++] = entry;
+        }
+    }
+    if (rejected == max_events)
+        return rejected;
+    if (rejected > 0)
+        timeout_ms = 0;
+
+    int n;
+#if defined(PAL_USE_KQUEUE)
+    n = wait_kqueue(pfd, &changes, out + rejected, max_events - rejected, timeout_ms);
+#elif defined(PAL_USE_EPOLL)
+    n = wait_epoll(pfd, out + rejected, max_events - rejected, timeout_ms);
 #else
     (void)pfd;
-    (void)out;
-    (void)max_events;
     (void)timeout_ms;
-    return -1;
+    n = -1;
 #endif
+    return n < 0 && rejected == 0 ? n : rejected + (n > 0 ? n : 0);
+}
+
+int pal_poller_wait(int pfd, PalPollEvent *out, int max_events, int timeout_ms)
+{
+    return pal_poller_wait_adding(pfd, NULL, 0, out, max_events, timeout_ms);
 }
 
 int pal_poll_wait(int *fds, int nfds, int timeout_ms)

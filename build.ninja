@@ -136,7 +136,8 @@ build $builddir/rt-single/slab.o: cc_rt_single runtime/slab.c | runtime/arc_inte
 build $builddir/rt-single/cycle.o: cc_rt_single runtime/cycle.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
 build $builddir/rt-single/weak.o: cc_rt_single runtime/weak.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h
 build $builddir/rt-single/primitives.o: cc_rt_single runtime/primitives.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h runtime/bigarray.inc
-build $builddir/rt-single/pal.o $builddir/rt-single/pal_ctx.o $builddir/rt-single/closure.o $builddir/rt-single/fiber.o $builddir/rt-single/builtins.o $builddir/rt-single/main_entry.o: copy_rt_single $builddir/rt/pal.o $builddir/rt/pal_ctx.o $builddir/rt/closure.o $builddir/rt/fiber.o $builddir/rt/builtins.o $builddir/rt/main_entry.o
+build $builddir/rt-single/pal.o: cc_rt_single runtime/pal.c | runtime/pal.h
+build $builddir/rt-single/pal_ctx.o $builddir/rt-single/closure.o $builddir/rt-single/fiber.o $builddir/rt-single/builtins.o $builddir/rt-single/main_entry.o: copy_rt_single $builddir/rt/pal_ctx.o $builddir/rt/closure.o $builddir/rt/fiber.o $builddir/rt/builtins.o $builddir/rt/main_entry.o
 build $builddir/rt-single/libocamlrt_st.a: ar $builddir/rt-single/arc.o $builddir/rt-single/slab.o $builddir/rt-single/cycle.o $builddir/rt-single/weak.o $builddir/rt-single/primitives.o $builddir/rt-single/pal.o $builddir/rt-single/pal_ctx.o $builddir/rt-single/closure.o $builddir/rt-single/fiber.o $builddir/rt-single/builtins.o $builddir/rt-single/main_entry.o
 rule single_rt_compat
   command = ln -sf libocamlrt_st.a $out

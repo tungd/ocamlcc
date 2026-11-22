@@ -13,7 +13,6 @@
 #define FIBER_GUARD_BYTES (16u * 1024u)
 #define FIBER_STACK_BYTES (256u * 1024u)
 #define SHADOW_INIT_BYTES (16u * 1024u)
-#define POLLER_BATCH_CAP  64
 
 typedef struct FiberThreadState {
     Fiber   main_fiber;
@@ -753,20 +752,52 @@ int64_t ocamlcc_poller_unwatch_waiter(int64_t fd_val, int64_t events_val, int64_
     return 1;
 }
 
-int64_t ocamlcc_poller_wait(int64_t out_arr_val, int64_t timeout_ms_val)
+static size_t poller_array_length(int64_t array)
+{
+    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)array - 1;
+    return hdr->byte_size / sizeof(int64_t);
+}
+
+static int64_t poller_wait(const PalPollEvent *adds, int nadds, int64_t out_array,
+                           int timeout_ms)
 {
     int pfd = ensure_poller();
-    const ArcHeader *hdr = (const ArcHeader *)(uintptr_t)out_arr_val - 1;
-    size_t cap = hdr->byte_size / sizeof(int64_t);
-    int64_t *out = (int64_t *)(uintptr_t)out_arr_val;
-    int max_ev = (cap == 0u) ? 1 : (cap > POLLER_BATCH_CAP ? POLLER_BATCH_CAP : (int)cap);
-    PalPollEvent evs[POLLER_BATCH_CAP];
-    int n = pal_poller_wait(pfd, evs, max_ev, (int)(timeout_ms_val >> 1));
+    size_t cap = poller_array_length(out_array);
+    int64_t *out = (int64_t *)(uintptr_t)out_array;
+    int max_ev = cap == 0u ? 1 : (cap > PAL_POLL_BATCH_MAX ? PAL_POLL_BATCH_MAX : (int)cap);
+    PalPollEvent evs[PAL_POLL_BATCH_MAX];
+    int n = pal_poller_wait_adding(pfd, adds, nadds, evs, max_ev, timeout_ms);
     if (n <= 0 || cap == 0u)
         return tag_int(0);
-    for (int i = 0; i < n; i++)
-        out[i] = tag_int((int64_t)(intptr_t)evs[i].udata);
+    for (int i = 0; i < n; i++) {
+        int64_t token = (int64_t)(intptr_t)evs[i].udata;
+        out[i] = tag_int(evs[i].events == PAL_POLL_INVALID ? -token : token);
+    }
     return tag_int((int64_t)n);
+}
+
+int64_t ocamlcc_poller_wait(int64_t out_arr_val, int64_t timeout_ms_val)
+{
+    return poller_wait(NULL, 0, out_arr_val, (int)(timeout_ms_val >> 1));
+}
+
+int64_t ocamlcc_poller_wait_adding(int64_t requests, int64_t count, int64_t out_array,
+                                  int64_t timeout_ms)
+{
+    int64_t nadds = count >> 1;
+    if (nadds < 0 || nadds > PAL_POLL_BATCH_MAX ||
+        (size_t)nadds > poller_array_length(requests) / 3 ||
+        (size_t)nadds > poller_array_length(out_array)) {
+        ocamlcc_fiber_raise_invalid();
+        return tag_int(0);
+    }
+    const int64_t *request = (const int64_t *)(uintptr_t)requests;
+    PalPollEvent adds[PAL_POLL_BATCH_MAX];
+    for (int i = 0; i < nadds; i++, request += 3) {
+        adds[i] = (PalPollEvent){(int)(request[0] >> 1), (uint32_t)(request[1] >> 1),
+                                 (void *)(intptr_t)(request[2] >> 1)};
+    }
+    return poller_wait(adds, (int)nadds, out_array, (int)(timeout_ms >> 1));
 }
 
 int64_t ocamlcc_pipe(int64_t unit)

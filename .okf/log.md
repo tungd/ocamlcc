@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Index Fiber watches by poller and descriptor. Submit kqueue additions with the readiness wait and deliver registration errors to their own waiters. See [poller registration batches](/concepts/wren-fibers.md#poller-registration-batches).
+
 - 2026-11-23 (codex/1) — Add scoped macOS signal delivery through a kqueue descriptor. Verify Fiber waits for SIGINT, SIGTERM, and SIGCHLD and signal action restoration with both ARC profiles. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
 
 - 2026-11-23 (codex/1) — Add ARC Unix process IDs, signals, and child status. Exercise running, exited, stopped, and signaled children through ocpkg. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
