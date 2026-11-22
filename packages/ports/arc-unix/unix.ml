@@ -41,6 +41,18 @@ type error = Error.t =
 
 exception Unix_error of error * string * string
 
+module Wait_flag = struct
+  type t = WNOHANG | WUNTRACED
+end
+
+module Process_status = struct
+  type t = WEXITED of int | WSIGNALED of int | WSTOPPED of int
+end
+
+type wait_flag = Wait_flag.t = WNOHANG | WUNTRACED
+type process_status = Process_status.t =
+  | WEXITED of int | WSIGNALED of int | WSTOPPED of int
+
 module Native = struct
   external pipe : bool -> (file_descr * file_descr, int) result = "arc_unix_pipe"
   external close : file_descr -> int = "arc_unix_close"
@@ -48,6 +60,9 @@ module Native = struct
   external read : file_descr -> bytes -> int -> int -> int = "arc_unix_read"
   external write : file_descr -> bytes -> int -> int -> int = "arc_unix_write"
   external gettimeofday : unit -> (float, int) result = "arc_unix_gettimeofday"
+  external kill : int -> int -> int = "arc_unix_kill"
+  external waitpid : int -> bool -> bool -> (int * Process_status.t, int) result =
+    "arc_unix_waitpid"
 end
 
 let error_message = Error.message
@@ -77,3 +92,12 @@ let transfer name call fd buffer pos len =
 let read = transfer "read" Native.read
 let write = transfer "write" Native.write
 let gettimeofday () = get "gettimeofday" (Native.gettimeofday ())
+
+external getpid : unit -> int = "arc_unix_getpid"
+
+let kill pid signal = ignore (check "kill" (Native.kill pid signal))
+
+let waitpid flags pid =
+  get "waitpid"
+    (Native.waitpid pid (List.mem Wait_flag.WNOHANG flags)
+       (List.mem Wait_flag.WUNTRACED flags))

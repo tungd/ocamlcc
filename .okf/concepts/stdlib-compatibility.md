@@ -70,7 +70,7 @@ test outcomes.[^runner]
 
 # POSIX Unix compatibility
 
-`ocpkg add arc-unix` provides the POSIX `Unix` descriptor and wall-clock
+`ocpkg add arc-unix` provides POSIX `Unix` descriptor, process and wall-clock
 operations used by terminal applications on macOS and Linux. The ML interface
 keeps descriptors abstract in `Unix.File_descr`, exposes their borrowed
 integer through `to_int` for `Fiber.fd_wait`, and checks byte ranges before
@@ -80,8 +80,15 @@ calls and clean up partially configured pipes. Linux sets close-on-exec
 atomically using `pipe2`. macOS sets it with `fcntl` after creating the pipe.
 The separate Crunch port continues to provide its own `Unix` module.
 
+The process interface exposes `getpid`, `kill` and `waitpid` with
+`Unix.Wait_flag.t` and `Unix.Process_status.t`. The native adapter translates
+`Sys.sig*` constants in both directions and preserves the POSIX nonblocking
+result as `(0, WEXITED 0)`. A fiber can reap all ready children with
+`WNOHANG` without blocking the scheduler.
+
 `ninja -j1 ocpkg_arc_unix` exercises a close-on-exec pipe, nonblocking reads,
-offset byte transfers, end of file, and error translation.
+offset byte transfers, end of file, and error translation. The package
+fixture also checks running, stopped, signaled, and exited children.
 
 `stdlib/camlinternalIntFmt.ml` (`--nopervasives`, compiled right after `CamlinternalFormatBasics`) implements integer parsing and formatting (`format_int`, `format_int32`, `format_int64`, `format_nativeint`, `parse_int`, `parse_int32`, `parse_int64`, `parse_nativeint`) in pure OCaml, replacing the C `caml_*format*` / `caml_*_of_string` implementations previously in `runtime/builtins.c`/`runtime/arc.c`. It handles 63-bit signed decimal bounds (`[-(1<<62), (1<<62)-1]`), signed/unsigned base-prefixed literals (`"-0x30"`, `"0x7fffffffffffffff"` -> `-1`, magnitude `<= INT64_MAX`, sign-extending bit 62) matching `Misc.Int_literal_converter.int`, 32/64-bit parsing, and `%[flags][width][.prec][l|ll|L|n][d|i|u|x|X|o]` formatting.[^int-fmt]
 

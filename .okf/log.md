@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Add ARC Unix process IDs, signals, and child status. Exercise running, exited, stopped, and signaled children through ocpkg. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
+
 - 2026-11-23 (codex/1) — Expose Fiber descriptor deadlines and cancellation through an explicit interface. Keep typed task completion independent of scheduler registrations and test both ARC profiles. See [descriptor deadlines and cancellation](/concepts/wren-fibers.md#descriptor-deadlines-and-cancellation).
 
 - 2026-11-23 (codex/1) — Put ARC Unix descriptors and error conversion behind named modules. Expose borrowed descriptor numbers for Fiber waits. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
