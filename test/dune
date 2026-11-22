@@ -491,3 +491,8 @@
  (modules ocpkg_format_test)
  (libraries ocpkg_core)
  (action (run %{test} %{dep:../packages/snapshots/default.snap})))
+
+(test
+ (name pkg_vendor_test)
+ (modules pkg_vendor_test)
+ (libraries ocamlcc ocpkg_core unix))

@@ -27,3 +27,6 @@ val runtime_sources : string option -> string option
 val prebuilt_runtime : single_thread:bool -> string option -> string option
 val stdlib_sources : string option -> string option
 val prebuilt_stdlib : string option -> string option
+
+val installed_toolchain : unit -> string option
+val search_upwards : string -> string option

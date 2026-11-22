@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Verify package resolution, archive bytes, extracted trees and local vendor directories in OCaml. See [verified vendoring](/concepts/package-catalog.md#verified-vendoring).
+
 - 2026-11-22 (codex/1) — Add the typed ocpkg manifest, lock and snapshot formats, and convert the Crunch catalog to the native text format. See [text formats](/concepts/package-catalog.md#text-formats).
 
 - 2026-11-22 (codex/1) — Add pure OCaml SHA-256 and preserve the package catalog’s existing source-tree digest byte for byte. See [content digests](/concepts/package-catalog.md#content-digests).

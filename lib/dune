@@ -1,7 +1,7 @@
 (library
  (name ocamlcc)
  (wrapped false)
- (modules (:standard \ sha256 ocpkg_format))
+ (modules (:standard \ sha256 ocpkg_format pkg_archive pkg_vendor pkg_project))
  (libraries compiler-libs.common unix))
 
 ;; Keep standalone generated C headers in sync with the runtime view ABI.
@@ -18,5 +18,5 @@
 (library
  (name ocpkg_core)
  (wrapped false)
- (modules sha256 ocpkg_format)
+ (modules sha256 ocpkg_format pkg_archive pkg_vendor pkg_project)
  (libraries ocamlcc unix))

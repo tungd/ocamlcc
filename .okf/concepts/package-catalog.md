@@ -44,6 +44,15 @@ recipes in sorted package order. The native tool reads the line-based
 Package names, relative paths, compilation inputs, and SHA-256 values are
 validated before they enter the parsed model.
 
+# Verified vendoring
+
+`Pkg_vendor` resolves dependencies before their users and re-derives the
+locked closure from the selected catalog and project inputs. Extraction first
+checks the entire archive for unsafe paths, duplicate members, link and
+device entries, and the 256 MiB limit. It then verifies the staged tree
+digest before publishing it. Vendoring refuses a changed package directory
+and offline mode uses existing digest-verified archives.
+
 # Model
 
 - Snapshot: immutable package selection, dependencies, source SHA-256 digests,
