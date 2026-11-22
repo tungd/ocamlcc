@@ -34,10 +34,16 @@ module Comp_input = struct
   open Sys_util.Result_syntax
 
   type t = { name : string; source : Rel_path.t }
+
   let create ~name ~source =
     let base = Filename.remove_extension name in
-    if base = "" || not (initial base.[0]) || not (String.for_all identifier base)
-       || not (List.mem (Filename.extension name) [".ml"; ".mli"; ".c"; ".h"])
+    let valid_basename =
+      match Filename.extension name with
+      | ".ml" | ".mli" -> String.for_all identifier base
+      | ".c" | ".h" -> String.for_all (function '-' -> true | c -> identifier c) base
+      | _ -> false
+    in
+    if base = "" || not (initial base.[0]) || not valid_basename
     then Error ("invalid compilation input name: " ^ name)
     else
       let* source = Rel_path.of_string source in

@@ -96,6 +96,8 @@ exposes its chosen public module and keeps its prefixed implementation
 interfaces on the hidden OCaml load path. C recipes can stage headers next
 to their sources, supply compiler arguments with `cflag`, and supply
 downstream executable or shared-library linker arguments with `ldflag`.
+C source and header names may contain hyphens, so recipes can preserve
+upstream header names and their corresponding includes.
 
 Workspace units use the local `.ocpkg/cache/unit/` store, keyed by source
 bytes, imported interface and export digests, and effective dependency

@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Let ocpkg recipes stage hyphenated C source and header names. Test the original header name through native compilation and linking. See [package build cache](/concepts/package-catalog.md#build-cache).
+
 - 2026-11-23 (codex/1) — Bound scheduler polls by the main fiber's sleep deadline. Verify a quiet descriptor stays pending while the main fiber sleeps and resumes. See [main-fiber sleep](/concepts/wren-fibers.md#main-fiber-sleep).
 
 - 2026-11-23 (codex/1) — Add scheduler-local Fiber condition waits with deadlines, cancellation and one-waiter or all-waiter notifications. See [in-memory condition waits](/concepts/wren-fibers.md#in-memory-condition-waits).

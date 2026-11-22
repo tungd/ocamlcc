@@ -59,10 +59,10 @@ echo 'native ocpkg library outputs: PASS'
 
 mkdir -p native support src-bin
 printf 'external value : unit -> int = "fixture_value"\n' > native/fixture.ml
-printf 'int support_value(void);\n' > native/fixture.h
-cat > native/fixture.c <<'C'
+printf 'int support_value(void);\n' > native/fixture-value.h
+cat > native/fixture-stubs.c <<'C'
 #include <stdint.h>
-#include <fixture.h>
+#include <fixture-value.h>
 int64_t fixture_value(int64_t arg) {
     (void)arg;
     return (support_value() + OFFSET) * 2 + 1;
@@ -74,10 +74,10 @@ ar rcs support/libocpkgfixture.a support/value.o
 cat >> fixture.snap <<'SNAP'
 pkg fixture 1
   local native
-  tree 31810d40246d18c6925da30b33116ff703522e1407587337c7370c23509946f1
+  tree 3cc94a3200a77399742d7482bca0fa78f8f9275d5c7b4ea9b64b52b81549237c
   file fixture.ml <= fixture.ml
-  file fixture.c <= fixture.c
-  file fixture.h <= fixture.h
+  file fixture-stubs.c <= fixture-stubs.c
+  file fixture-value.h <= fixture-value.h
   cflag -DOFFSET=1
   ldflag -L./support
   ldflag -locpkgfixture
