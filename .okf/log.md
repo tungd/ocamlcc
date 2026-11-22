@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-22 (codex/1) — Cache generated C shims for workspace libraries and use the final Mach-O install name during atomic linking. See [build cache](/concepts/package-catalog.md#build-cache).
+
 - 2026-11-22 (codex/1) — Compile packages and workspace units offline with content-addressed reuse. Verify wrapped module isolation, zero compilation on unchanged builds, one-unit leaf edits and nine native Crunch integration checks. See [build cache](/concepts/package-catalog.md#build-cache).
 
 - 2026-11-22 (codex/1) — Add verified content-addressed storage for package, compilation-unit and toolchain cache entries. See [build cache](/concepts/package-catalog.md#build-cache).

@@ -514,4 +514,5 @@
  (action
   (progn
    (run sh %{dep:../tests/ocpkg/workspace_incremental.sh} %{exe:../bin/ocpkg_main.exe} %{dep:../vendor/qbe/qbe})
-   (run sh %{dep:../tests/ocpkg/wrapped_packages.sh} %{exe:../bin/ocpkg_main.exe} %{dep:../vendor/qbe/qbe}))))
+   (run sh %{dep:../tests/ocpkg/wrapped_packages.sh} %{exe:../bin/ocpkg_main.exe} %{dep:../vendor/qbe/qbe})
+   (run sh %{dep:../tests/ocpkg/native_library.sh} %{exe:../bin/ocpkg_main.exe} %{dep:../vendor/qbe/qbe}))))

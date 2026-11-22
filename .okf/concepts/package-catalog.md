@@ -79,7 +79,9 @@ fingerprints. The linker reuses an output whose inputs and digest still
 match. The incremental test measures zero compiler and linker invocations
 on an unchanged rebuild, then one compiled unit and relinking after a leaf
 edit. `run` invokes the executable and `test` builds the selected manifest
-entries.
+entries. Static and shared library builds cache their generated C bindings
+alongside unit outputs. Mach-O shared libraries record the final output
+path as the install name, which supports atomic publication.
 
 The native Crunch integration ran `ocpkg vendor` and `ocpkg build` on
 macOS ARM64. All nine generation and runtime checks passed, including

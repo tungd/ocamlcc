@@ -151,7 +151,11 @@ let output_name tools kind name =
   | Exe -> if tools.Pkg_toolchain.target.os = Windows then name ^ ".exe" else name
   | Static -> "lib" ^ name ^ ".a"
   | Shared ->
-      let ext = if tools.target.os = Darwin then ".dylib" else if tools.target.os = Windows then ".dll" else ".so" in
+      let ext = match tools.target.os with
+        | Darwin | Ios | Ios_sim -> ".dylib"
+        | Windows -> ".dll"
+        | Linux | Android -> ".so"
+      in
       "lib" ^ name ^ ext
 
 let entry_point tools store modules =
@@ -174,7 +178,18 @@ let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_object
   let mode = match kind with
     | Exe -> Linker.Executable | Static -> Static | Shared -> Shared None
   in
-  let extra_ldflags = workspace.Pkg_project.manifest.ldflags in
+  let ldflags = workspace.Pkg_project.manifest.ldflags in
+  let explicit_install_name =
+    List.exists (fun flag ->
+      String.split_on_char ',' flag |> List.exists (fun part ->
+        part = "-install_name" || String.starts_with ~prefix:"-install_name=" part)) ldflags
+  in
+  let extra_ldflags =
+    match kind, tools.Pkg_toolchain.target.os with
+    | Shared, (Darwin | Ios | Ios_sim) when not explicit_install_name ->
+        ["-Xlinker"; "-install_name"; "-Xlinker"; output] @ ldflags
+    | _ -> ldflags
+  in
   let* fingerprints = digest_objects (user_objects @ internal_objects) in
   let key = Build_cache.key
       (["toolchain", Sha256.to_hex tools.Pkg_toolchain.fingerprint;
@@ -206,19 +221,33 @@ let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_object
       output)
   end
 
-let app_shims tools scope workspace work_dir output compiled_dir =
+let app_shims tools scope workspace ~cache ~output ~compiled_dir =
   match workspace.Pkg_project.manifest.public_mli with
   | [] -> Ok []
   | rel_paths ->
       let files = List.map (Rel_path.resolve ~root:workspace.root) rel_paths in
-      let headers = Filename.remove_extension output ^ ".h" in
+      let header = Filename.basename (Filename.remove_extension output ^ ".h") in
       let interfaces = List.map (fun path -> Pipeline.module_name_of_file path, path) files in
       let include_dirs = compiled_dir :: tools.Pkg_toolchain.stdlib :: scope.Pkg_compile.visible in
-      let* generated = C_bindgen.generate_headers ~include_dirs ~nopervasives:false ~nostdlib:true
-          ~work_dir ~output:headers interfaces in
-      Linker.compile_many ~verbose:tools.verbose ~work_dir tools.commands
-        (["-std=c99"; "-O2"; "-fPIC"; "-I" ^ Filename.dirname headers] @ tools.cflags)
-        generated.shim_files
+      let* digests = Build_cache.fingerprints (files @ files_with_suffix compiled_dir ".cmi") in
+      let digests = List.map (fun (path, hash) -> Filename.basename path, hash) digests in
+      let dependencies = List.map (fun key -> "dependency", Sha256.to_hex key) scope.package_keys in
+      let key = Build_cache.key (["toolchain", Sha256.to_hex tools.fingerprint; "header", header]
+          @ dependencies @ digests) in
+      let+ entry = Build_cache.ensure ~store:cache ~key (fun directory ->
+        let* generated = C_bindgen.generate_headers ~include_dirs ~nopervasives:false ~nostdlib:true
+            ~work_dir:directory ~output:(Filename.concat directory header) interfaces in
+        let pic = if tools.target.os = Windows then [] else ["-fPIC"] in
+        let flags = ["-std=c99"; "-O2"; "-I" ^ directory] @ pic @ tools.cflags in
+        let+ _ = Linker.compile_many ~verbose:tools.verbose ~work_dir:directory
+            tools.commands flags generated.shim_files in
+        List.iter Sys.remove generated.shim_files) in
+      let destination = Filename.dirname output in
+      mkdir_p destination;
+      List.iter (fun path ->
+        write_if_changed (Filename.concat destination (Filename.basename path)) (read_file path))
+        (files_with_suffix entry.directory ".h");
+      files_with_suffix entry.directory ".o"
 
 let build_target (workspace : Pkg_project.t) (options : options) selected_test =
   let kind = Option.value ~default:workspace.manifest.kind options.kind in
@@ -264,7 +293,7 @@ let build_target (workspace : Pkg_project.t) (options : options) selected_test =
       in
       if tools.verbose then
         Printf.eprintf "%d fresh units, %d cached units\n%!" app.compiled app.hits;
-      let* shims = app_shims tools scope workspace work_dir output compiled_dir in
+      let* shims = app_shims tools scope workspace ~cache ~output ~compiled_dir in
       let modules = List.concat_map (fun pack -> pack.units) packs @ app.units in
       let* entry = match kind with
         | Exe -> let+ obj = entry_point tools cache modules in [obj]
