@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Add scheduler-local Fiber condition waits with deadlines, cancellation and one-waiter or all-waiter notifications. See [in-memory condition waits](/concepts/wren-fibers.md#in-memory-condition-waits).
+
 - 2026-11-23 (codex/1) — Expose the ARC Unix signal-number conversion for shell exit status reporting. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
 
 - 2026-11-23 (codex/1) — Add ARC Unix subprocess launch, environment, fork, session creation and exec. Exercise standard streams and child exit through ocpkg. See [POSIX Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).

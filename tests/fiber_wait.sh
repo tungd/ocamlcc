@@ -20,7 +20,53 @@ let receive fd =
   let buffer = Bytes.create 1 in
   assert (F.fd_read fd buffer 0 1 = 1 && Bytes.get buffer 0 = 'x')
 
+let test_conditions () =
+  let condition = F.Condition.create () in
+  let other = F.Condition.create () in
+  let cancel = F.Cancel.create () in
+  let cancelled = F.spawn (fun () -> F.Condition.wait ~cancel condition) in
+  let first = F.spawn (fun () -> F.Condition.wait condition) in
+  let peer_awake = ref false and other_awake = ref false in
+  let observe condition awake =
+    F.spawn (fun () ->
+      let result = F.Condition.wait condition in
+      awake := true;
+      result)
+  in
+  let peer = observe condition peer_awake in
+  let second_peer = F.spawn (fun () -> F.Condition.wait condition) in
+  let untouched = observe other other_awake in
+  F.run_all ();
+  F.Cancel.cancel cancel;
+  F.Condition.signal condition;
+  assert (F.await cancelled = F.Wait_result.Cancelled);
+  assert (F.await first = F.Wait_result.Ready);
+  F.run_all ();
+  assert (not !peer_awake && not !other_awake);
+  F.Condition.broadcast condition;
+  assert (F.await peer = F.Wait_result.Ready);
+  assert (F.await second_peer = F.Wait_result.Ready && not !other_awake);
+  F.Condition.signal other;
+  assert (F.await untouched = F.Wait_result.Ready);
+  let timeout = F.spawn (fun () -> F.Condition.wait ~timeout_ms:2 condition) in
+  assert (F.await timeout = F.Wait_result.Timed_out);
+  F.Condition.signal condition;
+  assert (F.Condition.wait ~timeout_ms:0 condition = F.Wait_result.Timed_out);
+  assert (F.Condition.wait ~cancel condition = F.Wait_result.Cancelled);
+  let cancel_alone = F.Cancel.create () in
+  let waiting = F.spawn (fun () -> F.Condition.wait ~cancel:cancel_alone condition) in
+  F.run_all ();
+  F.Cancel.cancel cancel_alone;
+  assert (F.await waiting = F.Wait_result.Cancelled);
+  let signaller = F.spawn (fun () -> F.Condition.signal condition) in
+  assert (F.Condition.wait condition = F.Wait_result.Ready);
+  F.await signaller;
+  assert (match F.Condition.wait condition with
+    | exception Invalid_argument _ -> true
+    | _ -> false)
+
 let () =
+  test_conditions ();
   let typed = F.spawn (fun () -> "value", Bytes.of_string "payload") in
   let error = F.spawn (fun () -> raise Not_found) in
   let label, data = F.await typed in

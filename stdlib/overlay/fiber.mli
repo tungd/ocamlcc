@@ -31,6 +31,22 @@ module Wait_result : sig
   type t = Ready | Timed_out | Cancelled
 end
 
+module Condition : sig
+  type t
+
+  val create : unit -> t
+  val wait : ?timeout_ms:int -> ?cancel:Cancel.t -> t -> Wait_result.t
+  (** Park on a condition on the calling scheduler thread. Waits use monotonic
+      deadlines. An unbounded wait on the main fiber raises [Invalid_argument]
+      when nothing can drive the scheduler forward. *)
+
+  val signal : t -> unit
+  (** Wake the oldest noncancelled waiter. Signals with no waiter are dropped. *)
+
+  val broadcast : t -> unit
+  (** Wake all noncancelled waiters on this condition. *)
+end
+
 val fd_wait : ?timeout_ms:int -> ?cancel:Cancel.t -> int -> Direction.t -> Wait_result.t
 (** Wait for descriptor readiness. A zero timeout polls once. Cancellation is
     checked before each poll. Readiness returned by that poll wins over expiry.

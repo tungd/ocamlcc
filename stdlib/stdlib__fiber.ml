@@ -133,11 +133,57 @@ module Wait_result = struct
   type t = Ready | Timed_out | Cancelled
 end
 
-module Registration = struct
-  module Owner = struct
-    type t = Main | Task of Task.Handle.t
+module Wait_owner = struct
+  type t = Main | Task of Task.Handle.t
+end
+
+module Wait_options = struct
+  type t = { deadline : Deadline.t option; cancel : Cancel.t option }
+
+  let create ~invalid_timeout timeout_ms cancel =
+    let deadline =
+      match timeout_ms with
+      | None -> None
+      | Some ms when ms < 0 -> raise (Invalid_argument invalid_timeout)
+      | Some ms -> Some (Deadline.after_ms ms)
+    in
+    { deadline; cancel }
+
+  let cancellation t =
+    match t.cancel with
+    | Some token when Cancel.is_cancelled token -> Some Wait_result.Cancelled
+    | _ -> None
+
+  let expiry ~now t =
+    match t.deadline with
+    | Some deadline when Deadline.reached ~now deadline -> Some Wait_result.Timed_out
+    | _ -> None
+end
+
+module Condition_key = struct
+  type t = unit array
+
+  (* The wait queue is owned by the scheduler. This value is only its key. *)
+  let create () : t = array_make 1 ()
+end
+
+module Condition_wait = struct
+  module Progress = struct
+    type t = { mutable result : Wait_result.t option }
   end
 
+  type t = {
+    key : Condition_key.t;
+    owner : Wait_owner.t;
+    options : Wait_options.t;
+    progress : Progress.t;
+  }
+
+  let cancellation entry = Wait_options.cancellation entry.options
+  let expiry ~now entry = Wait_options.expiry ~now entry.options
+end
+
+module Registration = struct
   module State = struct
     type t = Queued | Watching | Completed of Wait_result.t | Invalid_fd
   end
@@ -153,9 +199,8 @@ module Registration = struct
     token : int;
     fd : int;
     direction : Direction.t;
-    owner : Owner.t;
-    deadline : Deadline.t option;
-    cancellation : Cancel.t option;
+    owner : Wait_owner.t;
+    options : Wait_options.t;
     progress : Progress.t;
   }
 
@@ -168,15 +213,11 @@ module Registration = struct
     array_set requests (offset + 2) wait.token;
     wait.progress.state <- Watching
 
-  let cancelled = function None -> false | Some token -> Cancel.is_cancelled token
+  let cancellation entry = Wait_options.cancellation entry.options
 
-  let cancellation wait =
-    if cancelled wait.cancellation then Some Wait_result.Cancelled else None
-
-  let expiry ~now wait =
-    match wait.progress.state, wait.deadline with
-    | Watching, Some deadline when Deadline.reached ~now deadline ->
-        Some Wait_result.Timed_out
+  let expiry ~now entry =
+    match entry.progress.state with
+    | Watching -> Wait_options.expiry ~now entry.options
     | _ -> None
 
   let unregister wait =
@@ -197,6 +238,7 @@ module Scheduler = struct
     mutable ready_rev : Task.Handle.t list;
     mutable timers : Timer.t list;
     mutable io_waiters : Registration.t list;
+    mutable condition_waiters : Condition_wait.t list;
     mutable queued_watches : Registration.t list;
     mutable steps_since_poll : int;
     mutable next_tok : int;
@@ -211,6 +253,7 @@ module Scheduler = struct
       ready_rev = [];
       timers = [];
       io_waiters = [];
+      condition_waiters = [];
       queued_watches = [];
       steps_since_poll = 0;
       next_tok = 1;
@@ -229,8 +272,8 @@ module Scheduler = struct
         s
 
   let is_idle (s : t) =
-    match s.active, s.ready, s.ready_rev, s.timers, s.io_waiters with
-    | None, [], [], [], [] -> true
+    match s.active, s.ready, s.ready_rev, s.timers, s.io_waiters, s.condition_waiters with
+    | None, [], [], [], [], [] -> true
     | _ -> false
 
   let release_if_idle (s : t) =
@@ -296,23 +339,25 @@ let drain_timers (s : Scheduler.t) =
       in
       loop [] ts
 
-let next_timer_timeout_ms (s : Scheduler.t) =
-  let min_deadline earlier other =
-    match earlier with
-    | Some deadline -> Some (Deadline.earlier deadline other)
-    | None -> Some other
+let next_deadline (s : Scheduler.t) =
+  let rec earliest deadline_of current = function
+    | [] -> current
+    | entry :: rest ->
+        let next =
+          match current, deadline_of entry with
+          | Some a, Some b -> Some (Deadline.earlier a b)
+          | None, (Some _ as deadline) -> deadline
+          | _, None -> current
+        in
+        earliest deadline_of next rest
   in
-  let rec timer_min earliest (timers : Timer.t list) = match timers with
-    | [] -> earliest
-    | e :: rest -> timer_min (min_deadline earliest e.deadline) rest
-  in
-  let rec io_min earliest (waits : Registration.t list) = match waits with
-    | [] -> earliest
-    | {deadline = None; _} :: rest -> io_min earliest rest
-    | {deadline = Some deadline; _} :: rest ->
-        io_min (min_deadline earliest deadline) rest
-  in
-  match io_min (timer_min None s.timers) s.io_waiters with
+  let earliest_timer = earliest (fun (t : Timer.t) -> Some t.deadline) None s.timers in
+  let earliest_io =
+    earliest (fun (t : Registration.t) -> t.options.deadline) earliest_timer s.io_waiters in
+  earliest (fun (t : Condition_wait.t) -> t.options.deadline) earliest_io s.condition_waiters
+
+let next_timer_timeout_ms s =
+  match next_deadline s with
   | None -> -1
   | Some deadline -> Deadline.remaining_ms ~now:(raw_monotonic_ns ()) deadline
 
@@ -322,13 +367,19 @@ let rec remove_io_waiter tok acc (waits : Registration.t list) = match waits wit
       if e.token = tok then (Some e, rev_append acc rest)
       else remove_io_waiter tok (e :: acc) rest
 
-let complete_wait (s : Scheduler.t) (entry : Registration.t) state =
-  entry.progress.state <- state;
-  match entry.owner with
-  | Main -> ()
+let wake_owner s = function
+  | Wait_owner.Main -> ()
   | Task task -> Scheduler.push s task
 
-let drop_io (s : Scheduler.t) decide =
+let complete_wait s (entry : Registration.t) state =
+  entry.progress.state <- state;
+  wake_owner s entry.owner
+
+let complete_condition s (entry : Condition_wait.t) result =
+  entry.progress.result <- Some result;
+  wake_owner s entry.owner
+
+let drop_waiters decide resolve waits =
   let rec drop = function
     | [] -> None
     | entry :: rest ->
@@ -338,13 +389,24 @@ let drop_io (s : Scheduler.t) decide =
              | None -> None
              | Some rest -> Some (entry :: rest))
         | Some result ->
-            Registration.unregister entry;
-            complete_wait s entry (Registration.State.Completed result);
+            resolve entry result;
             (match drop rest with None -> Some rest | updated -> updated)
   in
-  match drop s.io_waiters with
+  drop waits
+
+let drop_io (s : Scheduler.t) decide =
+  let resolve entry result =
+    Registration.unregister entry;
+    complete_wait s entry (Registration.State.Completed result)
+  in
+  match drop_waiters decide resolve s.io_waiters with
   | None -> false
   | Some remaining -> s.io_waiters <- remaining; true
+
+let drop_conditions (s : Scheduler.t) decide =
+  match drop_waiters decide (complete_condition s) s.condition_waiters with
+  | None -> false
+  | Some remaining -> s.condition_waiters <- remaining; true
 
 let poll_watches (s : Scheduler.t) timeout_ms =
   let rec stage count (queued : Registration.t list) =
@@ -371,7 +433,9 @@ let poll_watches (s : Scheduler.t) timeout_ms =
 let sched_poll (s : Scheduler.t) timeout_ms =
   s.steps_since_poll <- 0;
   drain_timers s;
-  let removed = drop_io s Registration.cancellation in
+  let removed_io = drop_io s Registration.cancellation in
+  let removed_conditions = drop_conditions s Condition_wait.cancellation in
+  let removed = removed_io || removed_conditions in
   let timeout_ms = if removed || Scheduler.has_ready s then 0 else timeout_ms in
   let n = poll_watches s timeout_ms in
   for i = 0 to n - 1 do
@@ -386,11 +450,13 @@ let sched_poll (s : Scheduler.t) timeout_ms =
     | Some entry -> complete_wait s entry state
   done;
   let expired =
-    match s.io_waiters with
-    | [] -> false
+    match s.io_waiters, s.condition_waiters with
+    | [], [] -> false
     | _ ->
         let now = raw_monotonic_ns () in
-        drop_io s (Registration.expiry ~now) in
+        let io = drop_io s (Registration.expiry ~now) in
+        let conditions = drop_conditions s (Condition_wait.expiry ~now) in
+        io || conditions in
   drain_timers s;
   removed || n > 0 || expired
 
@@ -428,7 +494,7 @@ let sched_step (s : Scheduler.t) =
   | Some next ->
       step_task s next;
       true
-  | None -> progressed || s.io_waiters <> [] || s.timers <> []
+  | None -> progressed || s.io_waiters <> [] || next_deadline s <> None
 
 let spawn (fn : unit -> 'a) : 'a t =
   let s = Scheduler.current () in
@@ -481,22 +547,19 @@ let sleep_ms ms =
           Scheduler.release_if_idle s
         end
 
+let wait_owner (s : Scheduler.t) =
+  match s.active with
+  | Some task -> Wait_owner.Task task
+  | None when raw_is_main () -> Wait_owner.Main
+  | None -> Scheduler.release_if_idle s; raise_invalid ()
+
 let fd_wait ?timeout_ms ?cancel fd direction =
   raw_can_yield ();
-  let deadline =
-    match timeout_ms with
-    | None -> None
-    | Some ms when ms < 0 -> raise (Invalid_argument "Fiber.fd_wait: negative timeout")
-    | Some ms -> Some (Deadline.after_ms ms)
-  in
+  let options = Wait_options.create ~invalid_timeout:"Fiber.fd_wait: negative timeout"
+      timeout_ms cancel in
   let s = Scheduler.current () in
-  let owner =
-    match s.active with
-    | Some task -> Registration.Owner.Task task
-    | None when raw_is_main () -> Registration.Owner.Main
-    | None -> Scheduler.release_if_idle s; raise_invalid ()
-  in
-  if Registration.cancelled cancel then begin
+  let owner = wait_owner s in
+  if Wait_options.cancellation options <> None then begin
     Scheduler.release_if_idle s;
     Wait_result.Cancelled
   end else begin
@@ -508,7 +571,7 @@ let fd_wait ?timeout_ms ?cancel fd direction =
     s.next_tok <- tok + 1;
     let progress : Registration.Progress.t = { state = Queued } in
     let wait : Registration.t =
-      { token = tok; fd; direction; owner; deadline; cancellation = cancel; progress } in
+      { token = tok; fd; direction; owner; options; progress } in
     s.io_waiters <- wait :: s.io_waiters;
     s.queued_watches <- wait :: s.queued_watches;
     (match owner with
@@ -525,6 +588,64 @@ let fd_wait ?timeout_ms ?cancel fd direction =
 
 let fd_wait_read fd = ignore (fd_wait fd Direction.Read)
 let fd_wait_write fd = ignore (fd_wait fd Direction.Write)
+
+module Condition = struct
+  type t = Condition_key.t
+
+  let create = Condition_key.create
+
+  let wait ?timeout_ms ?cancel key =
+    raw_can_yield ();
+    let options =
+      Wait_options.create ~invalid_timeout:"Fiber.Condition.wait: negative timeout"
+        timeout_ms cancel in
+    let s = Scheduler.current () in
+    let owner = wait_owner s in
+    match Wait_options.cancellation options with
+    | Some result -> Scheduler.release_if_idle s; result
+    | None ->
+        let progress : Condition_wait.Progress.t = { result = None } in
+        let entry : Condition_wait.t = { key; owner; options; progress } in
+        s.condition_waiters <- entry :: s.condition_waiters;
+        (match owner with
+         | Task _ -> ignore (raw_suspend Command.Park)
+         | Main ->
+             while progress.result = None do
+               if not (sched_step s) then begin
+                 ignore (drop_conditions s (fun entry ->
+                   if entry.progress == progress then Some Wait_result.Cancelled else None));
+                 Scheduler.release_if_idle s;
+                 raise_invalid ()
+               end
+             done;
+             Scheduler.release_if_idle s);
+        match progress.result with Some result -> result | None -> raise_invalid ()
+
+  let notify ~all key =
+    match Scheduler.existing () with
+    | None -> ()
+    | Some s ->
+        let matches (entry : Condition_wait.t) = entry.key == key in
+        ignore (drop_conditions s (fun entry ->
+          if matches entry then Condition_wait.cancellation entry else None));
+        if all then
+          ignore (drop_conditions s (fun entry ->
+            if matches entry then Some Wait_result.Ready else None))
+        else
+          let rec oldest found = function
+            | [] -> found
+            | entry :: rest ->
+                oldest (if matches entry then Some entry else found) rest
+          in
+          match oldest None s.condition_waiters with
+          | None -> ()
+          | Some first ->
+              ignore (drop_conditions s (fun entry ->
+                if entry == first then Some Wait_result.Ready else None))
+
+  let signal key = notify ~all:false key
+  let broadcast key = notify ~all:true key
+end
 
 let await (target : 'a t) : 'a =
   raw_can_yield ();

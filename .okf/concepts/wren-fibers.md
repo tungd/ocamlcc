@@ -104,6 +104,23 @@ checks that the same pipe remains independently registered on a second
 poller. The Fiber test checks invalid-descriptor delivery and zero-timeout
 waits across consecutive batches.
 
+## In-memory condition waits
+
+`Fiber.Condition.wait` parks on the calling scheduler thread. It shares
+the monotonic deadline and cancellation rules of descriptor waits and
+returns `Fiber.Wait_result.t`. Notification uses the ready queue directly.
+An unbounded condition wait alone does not keep the poller active.
+
+`signal` schedules the oldest noncancelled waiter on that condition.
+`broadcast` schedules all its noncancelled waiters. Notifications sent
+with no waiters are discarded. The scheduler retains parked waits when
+`run_all` returns for lack of work, so the same thread can notify and
+resume them later. An unbounded wait on the main fiber raises
+`Invalid_argument` if nothing can drive it forward.
+
+`ninja -j1 test_fiber_wait` covers signals, broadcasts, timeout,
+cancellation, and isolation between condition waiters in both ARC profiles.
+
 ## OCaml 5 effect handlers
 
 The stdlib compatibility build uses the existing guarded C stacks for
