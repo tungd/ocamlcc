@@ -41,6 +41,17 @@ let () =
   Bytes.fill shared 1 2 '\255';
   assert (Bytes.to_string shared = "a\255\255dcdgh");
 
+  assert (Bytes.sub shared 8 0 = Bytes.empty);
+  assert (Bytes.sub_string shared 1 3 = "\255\255d");
+  let rejects expected f =
+    match f () with
+    | _ -> assert false
+    | exception Invalid_argument message -> assert (message = expected)
+  in
+  rejects "String.sub / Bytes.sub" (fun () -> Bytes.sub shared max_int 0);
+  rejects "String.sub / Bytes.sub" (fun () -> Bytes.sub_string shared 0 min_int);
+  rejects "String.fill / Bytes.fill" (fun () -> Bytes.fill shared (-1) 0 'x');
+
   (* String equal / compare with embedded NUL *)
   let s1 = "ab\000c" in
   let s2 = "ab\000d" in
@@ -101,6 +112,8 @@ let () =
     (Array.length (Array.create_float 0)) cf.(0) cf2.(0) cf2.(1);
   check_invalid_arg "arr_sub" (fun () -> Array.sub a 3 3);
   check_invalid_arg "arr_blit" (fun () -> Array.blit a 4 a 0 2);
+  rejects "Array.sub" (fun () -> Array.sub a max_int 0);
+  rejects "Array.fill" (fun () -> Array.fill a 0 min_int 0);
   let words = Array.make 120 min_int in
   Array.fill words 20 100 max_int;
   Array.blit words 20 words 0 100;

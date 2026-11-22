@@ -579,6 +579,14 @@ _COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
             "let unsafe_blit_string src soff dst doff len = CamlinternalBulkOps.blit_string src soff dst doff len",
         ),
         (
+            "  else unsafe_fill s ofs len c",
+            "  else CamlinternalBulkOps.unsafe_fill_bytes s ofs len c",
+        ),
+        (
+            "    unsafe_blit s ofs r 0 len;\n    r",
+            "    CamlinternalBulkOps.unsafe_blit_bytes s ofs r 0 len;\n    r",
+        ),
+        (
             'external equal : t -> t -> bool = "caml_bytes_equal" [@@noalloc]',
             "let equal = CamlinternalBulkOps.bytes_equal",
         ),
@@ -610,11 +618,11 @@ _COMPAT_PATCHES: dict[str, list[tuple[str, str]]] = {
             'external create_float: int -> float array = "caml_array_create_float"\n\n'
             'module Floatarray = struct\n'
             '  external create : int -> floatarray = "caml_floatarray_create"',
-            "let unsafe_sub src off len = CamlinternalBulkOps.array_sub src off len\n"
+            "let[@inline] unsafe_sub src off len = CamlinternalBulkOps.unsafe_array_sub src off len\n"
             "let append_prim = CamlinternalBulkOps.array_append\n"
             "let concat = CamlinternalBulkOps.array_concat\n"
             "let unsafe_blit src soff dst doff len = CamlinternalBulkOps.array_blit src soff dst doff len\n"
-            "let unsafe_fill dst off len value = CamlinternalBulkOps.array_fill dst off len value\n"
+            "let[@inline] unsafe_fill dst off len value = CamlinternalBulkOps.unsafe_array_fill dst off len value\n"
             "let create_float = CamlinternalBulkOps.array_create_float\n\n"
             "module Floatarray = struct\n"
             "  let create = CamlinternalBulkOps.floatarray_create",

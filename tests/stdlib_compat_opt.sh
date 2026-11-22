@@ -2,16 +2,28 @@
 set -eu
 
 stdlib=build/stdlib_compat/out
+check_bulk_entry() {
+    awk -v entry="$2" -v primitive="$3" '
+        /function l / {
+            body = $0 ~ ("\\$" entry "(_borrowed)?__")
+            if (body) { count++; called = 0 }
+        }
+        body && /call extern \$ocamlcc_CamlinternalBulkOps_/ { checked = 1 }
+        body && $0 ~ ("call extern \\$" primitive "\\(") { called = 1 }
+        /^}/ && body { if (!called) missing = 1; body = 0 }
+        END { exit count != 2 || checked || missing }
+    ' "$1"
+}
+check_bulk_entry "$stdlib/stdlib__array.ssa" ocamlcc_Stdlib__Array_fill ocamlcc_bulk_array_fill
+check_bulk_entry "$stdlib/stdlib__array.ssa" ocamlcc_Stdlib__Array_sub ocamlcc_bulk_array_sub
+check_bulk_entry "$stdlib/stdlib__bytes.ssa" ocamlcc_Stdlib__Bytes_fill ocamlcc_bulk_fill_bytes
+check_bulk_entry "$stdlib/stdlib__bytes.ssa" ocamlcc_Stdlib__Bytes_sub ocamlcc_bulk_blit_bytes
+
+# The public unsafe Bytes functions keep the compatibility runtime's checks.
 bulk='call extern \$ocamlcc_CamlinternalBulkOps_'
-grep -Eq "${bulk}array_fill(_borrowed)?__" "$stdlib/stdlib__array.ssa"
-grep -Eq "${bulk}array_sub(_borrowed)?__" "$stdlib/stdlib__array.ssa"
 grep -Eq "${bulk}fill_bytes(_borrowed)?__" "$stdlib/stdlib__bytes.ssa"
 grep -Eq "${bulk}blit_bytes(_borrowed)?__" "$stdlib/stdlib__bytes.ssa"
 grep -Eq "${bulk}blit_string(_borrowed)?__" "$stdlib/stdlib__string.ssa"
-
-for fn in array_fill array_sub fill_bytes blit_bytes; do
-    grep -Eq "ocamlcc_CamlinternalBulkOps_${fn}_borrowed__" "$stdlib/camlinternalBulkOps.exports"
-done
 grep -Eq 'ocamlcc_Stdlib__Bytes_set_uint8_borrowed__' "$stdlib/stdlib__bytes.exports"
 
 # Later units can import both the Stdlib raise helpers and earlier bulk

@@ -81,8 +81,13 @@ module.[^bulk-ops]
 
 The compatibility builder makes the stamped CamlinternalBulkOps entries
 available before compiling Array, Bytes, and String. Explicitly applied
-shims use direct calls and can select the borrowed entries under the normal
-ARC liveness rule. The final archive includes the same provider object.
+shims use direct calls and can select borrowed entries under ARC liveness.
+The final archive includes the same provider object. The compatibility
+implementations of `Array.fill`, `Array.sub`, `Bytes.fill`, and `Bytes.sub`
+apply the upstream bounds checks and then enter the native kernels through
+CamlinternalBulkOps' unchecked primitives. `Bytes.sub_string` uses the same
+checked `Bytes.sub` path. The separately exposed unsafe Bytes entry points
+continue to delegate to the compatibility helpers with slice checks.
 The Uchar interface exposes `to_int` as the tagged identity already used by
 its implementation, so Bytes UTF-8 writers need no closure call to convert it.
 
