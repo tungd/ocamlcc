@@ -75,16 +75,19 @@ One dispatcher enters the mutator context and removes each pending registration 
 
 When registrations exist, the runtime compares allocation progress since the last completed dispatch with the minor-heap size from `Gc.get ()`. Each newly allocated word and each successful in-place reuse advance the counter. Reuse leaves the public allocation statistics unchanged. Finishing a dispatch also accounts for work done inside callbacks. A skipped collection leaves the allocation budget due.[^runtime]
 
-Generated polls read the aligned registration count before calling
-`ocamlcc_finalizers_due`. A zero count bypasses the runtime call. A nonzero
-count still follows the existing dispatch and allocation budget.
+The ANF poll lowers to a branch on the aligned registration count. A zero
+count continues directly. A nonzero count checks the dispatch state and
+allocation budget. The path that dispatches callbacks handles any exception
+before rejoining the caller.
 
 Generated code omits entry polls in bounded leaf functions. The analysis
 follows switch arms, local static exits and mutable slots. Calls, allocations, checked operations and generic array reads that can box
 floats keep the conservative path. Local field stores and integer division
 or remainder by a known nonzero divisor can omit the entry poll. Scalar cross-unit expressions expanded in the
-caller qualify as local operations. Self-tail-call backedges and explicit
-Lambda polls still check.
+caller qualify as local operations. A self-tail loop made entirely of local
+operations checks on entry and then every 64 backedges using a counter in
+the loop header. Other recursive bodies and explicit Lambda polls retain
+their original cadence.
 
 A `for` body checks on the first iteration and every 64 iterations
 in either direction. A `while` with a bounded condition and body checks on

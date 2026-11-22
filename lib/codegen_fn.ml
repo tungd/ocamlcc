@@ -176,6 +176,10 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
               param_binders
             @ List.map (fun (id, _) -> Temp (List.assoc id param_binders)) lf.loop_scalars
           in
+          let tick =
+            if lf.periodic_poll then Some (fresh_name b "poll_tick") else None
+          in
+          b.cur_fn.poll_tick <- Option.map (fun name -> Temp name) tick;
           close_block b (Jmp "loop");
           start_block b "loop";
           List.iter2
@@ -183,7 +187,11 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
             (Anf.bound_parameters lf) loop_binders;
           let result = compile_aexpr b true lf.body in
           close_ret b (Some result);
-          insert_header_phis b "loop" loop_binders start_values;
+          (match tick with
+          | None -> insert_header_phis b "loop" loop_binders start_values
+          | Some name ->
+              insert_header_phis b "loop" (loop_binders @ [Word, name])
+                (start_values @ [Int 0L]));
           let func =
             { name = g;
               export = not has_closure && not lf.private_entry;

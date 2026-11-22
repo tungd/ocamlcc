@@ -45,6 +45,7 @@ type fn_state = {
   self : Ident.t option;
   cur_group : string option;
   mutable tail_sites : (string * t list) list;
+  mutable poll_tick : Qbe_il.t option;
   mutable try_stack : string list;
   mutable compact_arc : bool;
   in_init : bool;
@@ -85,6 +86,7 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
     self;
     cur_group;
     tail_sites = [];
+    poll_tick = None;
     try_stack = [];
     compact_arc = false;
     in_init }
@@ -323,6 +325,85 @@ let rec split_wide_phis b (blocks : Qbe_il.block list) : Qbe_il.block list =
       in
       split_wide_phis b blocks'
 
+let temp_used_once blocks =
+  let counts = Hashtbl.create 32 in
+  let use = function
+    | Temp id ->
+        let n = Option.value ~default:0 (Hashtbl.find_opt counts id) in
+        Hashtbl.replace counts id (n + 1)
+    | Int _ | Global _ | Extern _ -> ()
+  in
+  let use_inst = function
+    | Binop (_, _, _, a, b) | Cmp (_, _, _, a, b)
+    | Fcmp (_, _, _, a, b) | Store (_, a, b) -> use a; use b
+    | Neg (_, _, a) | Cast (_, _, a) | Extsw (_, a) | Sltof (_, _, a)
+    | Dtosi (_, _, a) | Copy (_, _, a) | Load (_, _, _, a)
+    | Alloc8 (_, a) -> use a
+    | Phi (_, _, edges) -> List.iter (fun (_, arg) -> use arg) edges
+    | Call (_, _, call) | Call_void call ->
+        use call.fn;
+        List.iter (fun (_, arg) -> use arg) call.args
+  in
+  List.iter (fun (block : Qbe_il.block) ->
+    List.iter use_inst block.insts;
+    match block.term with
+    | Br (cond, _, _) -> use cond
+    | Ret value -> Option.iter use value
+    | Hlt | Jmp _ -> ()) blocks;
+  fun id -> Hashtbl.find_opt counts id = Some 1
+
+(* Branch directly from the arms of a short circuit when the joined value
+   is used only as a test. Visit the outer joins first so the new tests
+   can also be pushed into inner joins. *)
+let shortcut_boolean_joins b blocks =
+  let by_label = Hashtbl.create 32 in
+  let incoming = Hashtbl.create 32 in
+  let phi_sources = Hashtbl.create 32 in
+  let count map label = Option.value ~default:0 (Hashtbl.find_opt map label) in
+  let change map label n = Hashtbl.replace map label (count map label + n) in
+  let edges n = function
+    | Jmp label -> change incoming label n
+    | Br (_, yes, no) -> change incoming yes n; change incoming no n
+    | Ret _ | Hlt -> ()
+  in
+  List.iter (fun (block : Qbe_il.block) ->
+    Hashtbl.add by_label block.label block;
+    edges 1 block.term;
+    List.iter (function
+      | Phi (_, _, args) -> List.iter (fun (label, _) -> change phi_sources label 1) args
+      | _ -> ()) block.insts) blocks;
+  let used_once = lazy (temp_used_once blocks) in
+  List.iter (fun (original : Qbe_il.block) ->
+    let block = Hashtbl.find by_label original.label in
+    match block.insts, block.term with
+    | [Phi (Long, Temp value, (_ :: _ as args));
+       Cmp (Ne, Long, Temp test, Temp tested, Int 1L)],
+      Br (Temp condition, yes, no)
+      when tested = value && test = condition
+        && count phi_sources block.label = 0
+        && List.length args = count incoming block.label
+        && Lazy.force used_once value
+        (* Newly introduced tests are local to their terminator. *)
+        && (block != original || Lazy.force used_once test)
+        && List.for_all (fun (label, _) ->
+          (Hashtbl.find by_label label).term = Jmp block.label) args ->
+        edges (-1) block.term;
+        List.iter (fun (label, arg) ->
+          let pred = Hashtbl.find by_label label in
+          let pred = match arg with
+            | Int n -> { pred with term = Jmp (if n = 1L then no else yes) }
+            | _ ->
+                let test = fresh_temp b "cond" in
+                { pred with insts = pred.insts @ [Cmp (Ne, Long, test, arg, Int 1L)];
+                            term = Br (test, yes, no) }
+          in
+          change phi_sources label (-1);
+          edges 1 pred.term;
+          Hashtbl.replace by_label label pred) args;
+        Hashtbl.remove by_label block.label
+    | _ -> ()) (List.rev blocks);
+  List.filter_map (fun (block : Qbe_il.block) -> Hashtbl.find_opt by_label block.label) blocks
+
 (* Lower a comparison followed by retagging and an immediate branch directly
    to a branch on its 0/1 result. A phi, return, or any other use in a
    successor can still require the tagged value. *)
@@ -339,35 +420,9 @@ let fuse_tagged_branches blocks =
     | [] -> ()
   in
   List.iter (fun (block : Qbe_il.block) -> record block.insts) blocks;
-  let uses = lazy (
-    let counts = Hashtbl.create 32 in
-    let use = function
-      | Temp id ->
-          let n = Option.value ~default:0 (Hashtbl.find_opt counts id) in
-          Hashtbl.replace counts id (n + 1)
-      | Int _ | Global _ | Extern _ -> ()
-    in
-    let use_inst = function
-      | Binop (_, _, _, a, b) | Cmp (_, _, _, a, b)
-      | Fcmp (_, _, _, a, b) | Store (_, a, b) -> use a; use b
-      | Neg (_, _, a) | Cast (_, _, a) | Extsw (_, a) | Sltof (_, _, a)
-      | Dtosi (_, _, a) | Copy (_, _, a) | Load (_, _, _, a)
-      | Alloc8 (_, a) -> use a
-      | Phi (_, _, edges) -> List.iter (fun (_, arg) -> use arg) edges
-      | Call (_, _, call) | Call_void call ->
-          use call.fn;
-          List.iter (fun (_, arg) -> use arg) call.args
-    in
-    List.iter (fun (block : Qbe_il.block) ->
-      List.iter use_inst block.insts;
-      match block.term with
-      | Br (cond, _, _) -> use cond
-      | Ret value -> Option.iter use value
-      | Hlt | Jmp _ -> ()) blocks;
-    counts)
-  in
+  let uses = lazy (temp_used_once blocks) in
   let used_once = function
-    | Temp id -> Hashtbl.find_opt (Lazy.force uses) id = Some 1
+    | Temp id -> Lazy.force uses id
     | _ -> false
   in
   let dead = Hashtbl.create 16 in
@@ -411,7 +466,7 @@ let finish_blocks b =
           else blk)
         blocks
   in
-  split_wide_phis b (fuse_tagged_branches blocks)
+  split_wide_phis b (fuse_tagged_branches (shortcut_boolean_joins b blocks))
 
 let close_block b term =
   match b.cur_fn.term with

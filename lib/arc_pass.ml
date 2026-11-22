@@ -116,6 +116,7 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | FloatArrayGet _ | FloatArraySet _ | FloatOfInt _ | IntOfFloat _
   | FloatSign _ | FloatCompare _ | KeepAlive _ -> true
   | MakeBlock (_, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
+  | PollFinalizers -> true
   | Ccall (name, _) -> Ccalls.returns_imm name
   | NativeCcall (prim, _) ->
       not (Primitive.equal_native_repr prim.prim_native_repr_res Same_as_ocaml_repr)
@@ -368,7 +369,7 @@ let atom_operands (ce : Anf.cexpr) : Ident.Set.t * Anf.atom list =
   | FloatArraySet (_, a, i, v) | ScalarStore (_, a, i, v) -> (Anf.scalar_operand_vars (atoms_vars [a; i]) v, [])
   | FloatBinop (_, a, b) | FloatCompare (_, a, b) | IntegerBinop (_, _, a, b) | IntegerCompare (_, _, a, b) -> (Anf.scalar_operand_vars (Anf.scalar_operand_vars Ident.Set.empty a) b, [])
   | BigarrayAccess (_, args) | Ccall (_, args) | NativeCcall (_, args) -> (atoms_vars args, [])
-  | GetGlobal _ | ImportDependency _ -> (Ident.Set.empty, [])
+  | GetGlobal _ | ImportDependency _ | PollFinalizers -> (Ident.Set.empty, [])
   | StoreModuleSlot (_, a) -> (Ident.Set.empty, [ a ])
   | Assign (_, rhs) | AssignImm (_, rhs) -> (Ident.Set.empty, [ rhs ])
   | ReadScalarSlot (_, slot) -> (Ident.Set.singleton slot, [])
@@ -765,7 +766,7 @@ let operation_can_raise ~finalizers known raising = function
       true
   (* The current Bigarray helpers check bounds even for unsafe accesses. *)
   | BigarrayAccess _ | ScalarLoad _ | ScalarStore _ -> true
-  | Ccall ("ocamlcc_poll_finalizers", []) -> finalizers
+  | PollFinalizers | Ccall ("ocamlcc_poll_finalizers", []) -> finalizers
   | Ccall (name, _) -> (Ccalls.find name).Ccalls.raises
   | NativeCcall (prim, _) -> prim.prim_alloc
   | _ -> false
@@ -896,7 +897,7 @@ let exception_check env ce =
      saves a TLS read at callers of functions whose only exception source
      is an automatic poll, including one that drained the registry. *)
   match ce with
-  | Anf.Ccall ("ocamlcc_poll_finalizers", []) -> Anf.May_raise
+  | Anf.PollFinalizers | Ccall ("ocamlcc_poll_finalizers", []) -> Anf.May_raise
   | _ when operation_can_raise ~finalizers:false env.known_funs env.ordinary_raising_funs ce ->
       May_raise
   | _ -> Finalizer_raise

@@ -158,6 +158,7 @@ type cexpr =
   | DirectApp of imported_function * atom list
   | Builtin of string * Builtins.arg_kind * atom
   | Ccall of string * atom list
+  | PollFinalizers
   | NativeCcall of Primitive.description * atom list
   | GetGlobal of string
   | ImportDependency of string
@@ -184,6 +185,7 @@ and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;
   return : Lambda.value_kind;
   private_entry : bool;
+  periodic_poll : bool;
   loop_scalars : (Ident.t * (scalar_rep * Ident.t)) list;
   body : aexpr;
 }

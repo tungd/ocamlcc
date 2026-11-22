@@ -53,24 +53,29 @@ let shadow_call b fn value =
 let shadow_pop b fn count =
   if count > 0 then shadow_call b fn (Int (Int64.of_int count))
 
-let finalizers_due b =
+let emit_finalizer_poll b idle =
+  let check = fresh_label b "finalizers_check" in
+  let run = fresh_label b "finalizers_run" in
+  Option.iter (fun tick ->
+    let phase = fresh_temp b "poll_phase" in
+    let sample = fresh_label b "finalizers_sample" in
+    emit b (Binop (And, Word, phase, tick, Int 63L));
+    close_block b (Br (phase, idle, sample));
+    start_block b sample) b.cur_fn.poll_tick;
   let count = fresh_temp b "finalizer_count" in
   let active = fresh_temp b "finalizers_active" in
-  let check = fresh_label b "finalizers_check" in
-  let done_ = fresh_label b "finalizers_done" in
-  let idle = b.cur_fn.open_label in
   (* An aligned load is a relaxed atomic read on the supported targets. *)
   emit b (Load (Loadl, Long, count, Global "ocamlcc_finalizer_count"));
   emit b (Cmp (Ne, Long, active, count, Int 0L));
-  close_block b (Br (active, check, done_));
+  close_block b (Br (active, check, idle));
   start_block b check;
   let polled = fresh_temp b "polled" in
   emit b (Call (Long, polled, { fn = Global "ocamlcc_finalizers_due"; args = [] }));
-  close_block b (Jmp done_);
-  start_block b done_;
   let due = fresh_temp b "finalizers_due" in
-  emit b (Phi (Long, due, [idle, unit_const; check, polled]));
-  due
+  emit b (Cmp (Ne, Long, due, polled, unit_const));
+  close_block b (Br (due, run, idle));
+  start_block b run;
+  emit b (Call_void { fn = Global "ocamlcc_poll_finalizers"; args = [] })
 
 let module_slot b id =
   "ocamlcc_modvar_" ^ b.prefix ^ "_" ^ sanitize (Ident.unique_name id)
@@ -571,6 +576,18 @@ let apply_closure b clos_val (arg_vals : t list) : t =
                  [ (Long, clos_val); (Long, Int (Int64.of_int n)); (Long, arr) ] } ));
       dst
 
+let self_backedge b values =
+  let values = match b.cur_fn.poll_tick with
+    | None -> values
+    | Some tick ->
+        let next = fresh_temp b "poll_next" in
+        emit b (Binop (Add, Word, next, tick, Int 1L));
+        values @ [next]
+  in
+  b.cur_fn.tail_sites <- (b.cur_fn.open_label, values) :: b.cur_fn.tail_sites;
+  close_block b (Jmp b.cur_fn.entry_label);
+  unit_const
+
 let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
   let is_self id =
     match b.cur_fn.self with
@@ -609,11 +626,7 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
               emit b (Call (Long, dst, { fn = Global info.global; args }));
               dst
           | None, true when is_self id ->
-              let vs = List.map (compile_atom hooks b) ap_args in
-              b.cur_fn.tail_sites <-
-                (b.cur_fn.open_label, vs) :: b.cur_fn.tail_sites;
-              close_block b (Jmp b.cur_fn.entry_label);
-              unit_const
+              self_backedge b (List.map (compile_atom hooks b) ap_args)
           | None, _ ->
               let arg_vals = List.map (compile_atom hooks b) ap_args in
               let args =
@@ -1219,7 +1232,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
   | BigarrayAccess (access, args) ->
       let op = match access.operation with `Get -> "get" | `Set -> "set" in
       compile_ccall hooks b (Printf.sprintf "caml_ba_%s_%d" op access.rank) args
-  | Ccall ("ocamlcc_finalizers_due", []) -> finalizers_due b
+  | PollFinalizers -> failwith "codegen: missing cleanup for finalizer poll"
   | Ccall (sym, args) -> compile_ccall hooks b sym args
   | NativeCcall (prim, args) -> compile_native_ccall hooks b prim args
   | DirectApp (target, args) ->
@@ -1241,10 +1254,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
   | App (fn, args) -> apply hooks b tail fn args
   | KeepAlive _ -> unit_const
   | Recur args ->
-      let values = List.map (compile_atom hooks b) args in
-      b.cur_fn.tail_sites <- (b.cur_fn.open_label, values) :: b.cur_fn.tail_sites;
-      close_block b (Jmp b.cur_fn.entry_label);
-      unit_const
+      self_backedge b (List.map (compile_atom hooks b) args)
   | Fun _ -> failwith "codegen: Fun must be bound by Let"
   | ReadScalarSlot (rep, id) ->
       let slot = Hashtbl.find b.mut_vars id in
@@ -1324,6 +1334,16 @@ let rec compile_aexpr hooks b (tail : bool) (e : Anf.aexpr) : t =
       hooks.compile_fun_binding (compile_aexpr hooks) b tail id lf body
   | Let (id, (App _ as ce), Halt (Var v)) when tail && Ident.same id v ->
       compile_cexpr hooks b ~tail:true ce
+  | Let (id, PollFinalizers, CheckExn (exception_kind, on_err, on_ok)) ->
+      let done_ = fresh_label b "finalizers_done" in
+      emit_finalizer_poll b done_;
+      ignore (compile_check_exn hooks b exception_kind on_err (fun () ->
+        close_block b (Jmp done_);
+        unit_const));
+      start_block b done_;
+      with_shadowed_vars b [id] (fun () ->
+        Hashtbl.replace b.vars id unit_const;
+        compile_aexpr hooks b tail on_ok)
   | Let (id, (StringGet (true, _, _) | BytesSet (true, _, _, _)
             | BytesGetN (true, _, _, _) | BytesSetN (true, _, _, _, _)
             | ArrayGet (true, _, _, _) | ArraySet (true, _, _, _, _)

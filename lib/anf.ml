@@ -150,6 +150,7 @@ type cexpr =
   | DirectApp of imported_function * atom list
   | Builtin of string * Builtins.arg_kind * atom
   | Ccall of string * atom list
+  | PollFinalizers
   | NativeCcall of Primitive.description * atom list
   | GetGlobal of string
   | ImportDependency of string
@@ -176,6 +177,7 @@ and lfunction = {
   params : (Ident.t * Lambda.value_kind) list;
   return : Lambda.value_kind;
   private_entry : bool;
+  periodic_poll : bool;
   loop_scalars : (Ident.t * (scalar_rep * Ident.t)) list;
   body : aexpr;
 }
@@ -330,14 +332,7 @@ let builtin_tables :
 (* Guard the yielding, raising callback path before ARC liveness analysis.
    Idle polls need neither a shadow-stack frame nor an exception check. *)
 let with_finalizer_poll body =
-  let due = Ident.create_local "finalizers_due" in
-  let ignored = Ident.create_local "poll" in
-  let result = Ident.create_local "poll_result" in
-  Let (due, Ccall ("ocamlcc_finalizers_due", []),
-    LetJoin (ignored,
-      If (Var due, Let (result, Ccall ("ocamlcc_poll_finalizers", []), Halt Unit),
-          Halt Unit),
-      body))
+  Let (Ident.create_local "poll", PollFinalizers, body)
 
 (* Only local, bounded operations can defer polling. A call, an allocation,
    or a checked operation that constructs an exception needs the usual poll. *)
@@ -356,20 +351,27 @@ let is_local_operation = function
   (* Generic reads can box a flat-float element. *)
   | _ -> false
 
-let rec is_bounded_local = function
+let rec is_bounded_local ?backedge = function
   | Halt _ | HaltScalar _ | StaticRaise _ -> true
+  | Let (id, App (Var fn, args), Halt (Var result))
+    when Ident.same id result ->
+      Option.fold ~none:false ~some:(fun (self, arity) ->
+        Ident.same self fn && List.length args = arity) backedge
   | Let (_, ce, body) | MutLet (_, ce, body) ->
-      is_local_operation ce && is_bounded_local body
-  | LetJoin (_, lhs, rhs) | If (_, lhs, rhs) | ScalarIf (_, _, lhs, rhs)
-  | StaticCatch (lhs, _, _, rhs, _) ->
+      is_local_operation ce && is_bounded_local ?backedge body
+  | LetJoin (_, lhs, rhs) ->
+      is_bounded_local lhs && is_bounded_local ?backedge rhs
+  | If (_, lhs, rhs) | StaticCatch (lhs, _, _, rhs, None) ->
+      is_bounded_local ?backedge lhs && is_bounded_local ?backedge rhs
+  | ScalarIf (_, _, lhs, rhs) | StaticCatch (lhs, _, _, rhs, Some _) ->
       is_bounded_local lhs && is_bounded_local rhs
   | Switch (_, { consts; blocks; fail; _ }) ->
-      List.for_all (fun (_, arm) -> is_bounded_local arm) consts
-      && List.for_all (fun (_, arm) -> is_bounded_local arm) blocks
-      && Option.fold ~none:true ~some:is_bounded_local fail
+      List.for_all (fun (_, arm) -> is_bounded_local ?backedge arm) consts
+      && List.for_all (fun (_, arm) -> is_bounded_local ?backedge arm) blocks
+      && Option.fold ~none:true ~some:(is_bounded_local ?backedge) fail
   | StringSwitch (_, cases, fail) ->
-      List.for_all (fun (_, arm) -> is_bounded_local arm) cases
-      && Option.fold ~none:true ~some:is_bounded_local fail
+      List.for_all (fun (_, arm) -> is_bounded_local ?backedge arm) cases
+      && Option.fold ~none:true ~some:(is_bounded_local ?backedge) fail
   | _ -> false
 
 let with_entry_poll body =
@@ -430,11 +432,17 @@ and conv_atoms (lams : Lambda.lambda list) (k : atom list -> aexpr) : aexpr =
   | [] -> k []
   | x :: xs -> conv_expr x (fun a -> conv_atoms xs (fun rest -> k (a :: rest)))
 
-and conv_fun (lf : Lambda.lfunction) : lfunction =
+and conv_fun ?self (lf : Lambda.lfunction) : lfunction =
   match lf.kind with
   | Curried ->
+      let body = conv_tail lf.body in
+      let periodic_poll =
+        Option.fold ~none:false ~some:(fun id ->
+          not (is_bounded_local body)
+          && is_bounded_local ~backedge:(id, List.length lf.params) body) self
+      in
       { params = lf.params; return = lf.return; private_entry = false;
-        loop_scalars = []; body = with_entry_poll (conv_tail lf.body) }
+        periodic_poll; loop_scalars = []; body = with_entry_poll body }
   | Tupled ->
       let tup = Ident.create_local "tup" in
       let rec bind_fields i = function
@@ -444,7 +452,7 @@ and conv_fun (lf : Lambda.lfunction) : lfunction =
             Let (p, Field (i, kind, Var tup), bind_fields (i + 1) rest)
       in
       { params = [ (tup, Lambda.Pgenval) ]; return = lf.return; private_entry = false;
-        loop_scalars = []; body = with_entry_poll (bind_fields 0 lf.params) }
+        periodic_poll = false; loop_scalars = []; body = with_entry_poll (bind_fields 0 lf.params) }
 
 and conv_bind vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   match rhs with
@@ -459,7 +467,7 @@ and conv_bind vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexp
       let rbs =
         List.map
           (fun (rb : Lambda.rec_binding) ->
-            { id = rb.id; def = conv_fun rb.def })
+            { id = rb.id; def = conv_fun ~self:rb.id rb.def })
           bindings
       in
       LetRec (rbs, conv_bind vk id body1 k)
@@ -902,7 +910,7 @@ and conv_expr (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
       let rbs =
         List.map
           (fun (rb : Lambda.rec_binding) ->
-            { id = rb.id; def = conv_fun rb.def })
+            { id = rb.id; def = conv_fun ~self:rb.id rb.def })
           bindings
       in
       LetRec (rbs, conv_expr body k)
@@ -1045,7 +1053,7 @@ let cexpr_vars ?(include_raw = true) free_aexpr acc ce =
   | BigarrayAccess (_, args) | Ccall (_, args) | NativeCcall (_, args)
   | DirectApp (_, args) | Recur args | KeepAlive args ->
       List.fold_left atom_vars acc args
-  | GetGlobal _ | ImportDependency _ -> acc
+  | GetGlobal _ | ImportDependency _ | PollFinalizers -> acc
   | Assign (id, a) | AssignImm (id, a) -> Ident.Set.add id (atom_vars acc a)
   | ReadScalarSlot (_, slot) -> Ident.Set.add slot acc
   | AssignScalar (slot, _, value) -> scalar_operand_vars (Ident.Set.add slot acc) value

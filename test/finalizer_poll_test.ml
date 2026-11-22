@@ -7,6 +7,8 @@ let il =
       external ( - ) : int -> int -> int = "%subint"
       external ( = ) : int -> int -> bool = "%equal"
       external ( < ) : int -> int -> bool = "%lessthan"
+      external ( && ) : bool -> bool -> bool = "%sequand"
+      external ( || ) : bool -> bool -> bool = "%sequor"
       external side_effect : int -> unit = "test_unknown_primitive"
       external unsafe_get : 'a array -> int -> 'a = "%array_unsafe_get"
       type row = { width : int }
@@ -30,6 +32,9 @@ let il =
       let after_dynamic n d = dynamic_div n d + 1
       let foreign x = side_effect x
       let rec recurse n = if n = 0 then n else recurse (n - 1)
+      let rec recurse_with_call n =
+        if n = 0 then () else (side_effect n; recurse_with_call (n - 1))
+      let ascii c stop = if c < stop && c < 127 && (c = 9 || 31 < c) then c else 0
       let loop n = for i = 0 to n do () done
       let reverse n = for i = n downto 0 do () done
       let loop_with_call n = for i = 0 to n do side_effect i done
@@ -69,6 +74,10 @@ let () =
     ["allocate"; "foreign"; "recurse"; "loop"; "reverse"; "loop_with_call";
      "while_local"; "while_field"; "while_call"; "match_with_call"; "generic_get"];
   check "loop_with_call" "loadl extern $ocamlcc_finalizer_count" true;
+  check ~literal:false "foreign" "%finalizers_due\\.[0-9]+ =l phi" false;
+  check "recurse" "=w and %poll_tick." true;
+  check "recurse_with_call" "=w and %poll_tick." false;
+  check "ascii" "%if." false;
   check "width" "loadl extern $ocamlcc_finalizer_count" false;
   check "generic_get" "call extern $ocamlcc_gen_array_get(" true;
   let phase_mask = " =l and [^,\n]+, 127\n" in
