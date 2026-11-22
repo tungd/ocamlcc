@@ -501,3 +501,8 @@
  (alias runtest)
  (deps ../packages/snapshots/default.snap)
  (action (run sh %{dep:../tests/ocpkg/native_cli.sh} %{exe:../bin/ocpkg_main.exe})))
+
+(test
+ (name build_cache_test)
+ (modules build_cache_test)
+ (libraries ocamlcc ocpkg_core unix))

@@ -60,6 +60,12 @@ redirects, time out after 30 seconds, and stream at most 64 MiB to the
 archive cache. `add`, `get`, and `vendor` can download package sources.
 `vendor --offline`, `tidy`, `verify`, and `query` work from local inputs.
 
+# Build cache
+
+`Build_cache` hashes length-prefixed input fields and verifies the digest
+of each stored artifact tree. A builder writes to a private directory.
+Successful outputs are published by rename while the cache key is locked.
+
 # Model
 
 - Snapshot: immutable package selection, dependencies, source SHA-256 digests,
