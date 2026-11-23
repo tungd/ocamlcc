@@ -78,6 +78,22 @@ let () =
   forbid run "call extern $arc_alloc("
 
 let () =
+  let body count =
+    List.init count succ
+    |> List.fold_left (fun expr mask -> Printf.sprintf "(%s lxor %d)" expr mask) "n"
+  in
+  let il = compile (Printf.sprintf {|
+    let narrow a b =
+      let step n = %s in
+      step a + step b
+    let wide a b =
+      let wide_step n = %s in
+      wide_step a + wide_step b
+  |} (body 14) (body 18)) in
+  forbid (function_body il "narrow") "$ocamlcc_Lambda_inline_step";
+  require (function_body il "wide") "$ocamlcc_Lambda_inline_wide_step"
+
+let () =
   let il = compile {|
     let count = ref 0
     module Make (Order : sig val key : int -> int end) = struct

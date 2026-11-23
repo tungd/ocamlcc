@@ -327,6 +327,20 @@ call to the damage unit. Its machine code went from 9,816 to 9,796 bytes.
 Total native text grew by 3,984 bytes. Two paired production runs measured
 37.73 to 38.41 MiB/s with 135.20 MB allocated per replay on both builds.
 
+## Repeated local calls
+
+Known local functions used only at saturated call sites can use up to 32
+Lambda nodes at repeated sites. They still count against the unit's inline
+budget. The small fallback for an exhausted budget and the repeated
+callback limit remain at 24 nodes.
+
+In the frozen tterm source, the new allowance inlined four `State.map_charset`
+calls in `handle_codepoints`, leaving four direct `State_charset.map` calls.
+The caller grew from 81,768 to 85,456 bytes and total native text from
+3,995,004 to 4,056,788 bytes. The first timed pair measured 25.03 and 25.12
+MiB/s. The second pair took 58.05 and 442.44 seconds of elapsed time for an
+eight-second probe, so the timings do not isolate a throughput effect.
+
 ## Bounded leaves in exported metadata
 
 Version 6 object and archive summaries carry closed Lambda leaves of up to

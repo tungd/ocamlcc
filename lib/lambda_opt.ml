@@ -161,6 +161,7 @@ let inline_local_calls ~imports code =
   let nodes = size code in
   let max_depth = 12 in
   let small_body_limit = 24 in
+  let repeated_call_limit = 32 in
   let local_budget = ref (2 * nodes) in
   let inline_initializers = Hashtbl.create 8 in
   let import_budget = ref (min 2048 (nodes + 192)) in
@@ -207,7 +208,7 @@ let inline_local_calls ~imports code =
               Ident.Set.mem id !callbacks
               || (match Ident.Map.find_opt id !uses with
               | Some (Calls { count = 1; _ }) -> cost <= 64
-              | Some (Calls _) -> cost <= small_body_limit
+              | Some (Calls _) -> cost <= repeated_call_limit
               | _ -> false)
           | _ -> false
         in
