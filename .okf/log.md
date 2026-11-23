@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Classify bounded functions after scalar specialization so unboxed checked byte word accesses can omit entry finalizer polls. See [ARC finalizers](/concepts/arc-finalizers.md).
+
 - 2026-11-23 (codex/1) — Borrow byte fields through checked word stores and record cycle-root counts for shared int-pair lists. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-23 (codex/1) — Keep checked native-order Bytes word loads unboxed through scalar consumers. Verify signed conversion, unaligned access, and bounds exceptions. See [checked byte loads](/concepts/value-representation.md#checked-byte-loads).

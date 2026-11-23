@@ -87,49 +87,6 @@ let check_array_kind (_k : Lambda.array_kind) = ()
 let with_finalizer_poll body =
   Let (Ident.create_local "poll", PollFinalizers, body)
 
-(* Only local, bounded operations can defer polling. A call, an allocation,
-   or a checked operation that constructs an exception needs the usual poll. *)
-let is_local_operation = function
-  | Binop ((Div | Mod), _, Int n) -> n <> 0
-  | Atom _ | Field _ | SetField _ | StoreModuleSlot _ | IntSelect _ | Assign _ | AssignImm _
-  | ImportDependency _
-  | ReadScalarSlot _ | AssignScalar _
-  | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr
-           | Cmp _ | Compare_ints | Isout), _, _)
-  | Unop ((Neg | Not | Offset _ | Isint | String_length | Array_length), _)
-  | StringGet (false, _, _)
-  | BytesSet (false, _, _, _) | ArraySet (false, _, _, _, _)
-  | ArrayGet (false, (Lambda.Pintarray | Lambda.Paddrarray), _, _) -> true
-  | DirectApp (target, _) -> Option.is_some target.inline_leaf
-  (* Generic reads can box a flat-float element. *)
-  | _ -> false
-
-let rec is_bounded_local ?backedge = function
-  | Halt _ | HaltScalar _ | StaticRaise _ -> true
-  | Let (id, App (Var fn, args), Halt (Var result))
-    when Ident.same id result ->
-      Option.fold ~none:false ~some:(fun (self, arity) ->
-        Ident.same self fn && List.length args = arity) backedge
-  | Let (_, ce, body) | MutLet (_, ce, body) ->
-      is_local_operation ce && is_bounded_local ?backedge body
-  | LetJoin (_, lhs, rhs) ->
-      is_bounded_local lhs && is_bounded_local ?backedge rhs
-  | If (_, lhs, rhs) | StaticCatch (lhs, _, _, rhs, None) ->
-      is_bounded_local ?backedge lhs && is_bounded_local ?backedge rhs
-  | ScalarIf (_, _, lhs, rhs) | StaticCatch (lhs, _, _, rhs, Some _) ->
-      is_bounded_local lhs && is_bounded_local rhs
-  | Switch (_, { consts; blocks; fail; _ }) ->
-      List.for_all (fun (_, arm) -> is_bounded_local ?backedge arm) consts
-      && List.for_all (fun (_, arm) -> is_bounded_local ?backedge arm) blocks
-      && Option.fold ~none:true ~some:(is_bounded_local ?backedge) fail
-  | StringSwitch (_, cases, fail) ->
-      List.for_all (fun (_, arm) -> is_bounded_local ?backedge arm) cases
-      && Option.fold ~none:true ~some:(is_bounded_local ?backedge) fail
-  | _ -> false
-
-let with_entry_poll body =
-  if is_bounded_local body then body else with_finalizer_poll body
-
 let with_poll_when due body =
   let ignored = Ident.create_local "loop_poll" in
   LetJoin (ignored, If (Var due, with_finalizer_poll (Halt Unit), Halt Unit), body)
@@ -210,7 +167,7 @@ and conv_fun env ?self (lf : Lambda.lfunction) : lfunction =
           && is_bounded_local ~backedge:(id, List.length lf.params) body) self
       in
       { params = lf.params; return = lf.return; private_entry = false;
-        periodic_poll; loop_scalars = []; body = with_entry_poll body }
+        periodic_poll; loop_scalars = []; body }
   | Tupled ->
       let tup = Ident.create_local "tup" in
       let rec bind_fields i = function
@@ -220,7 +177,7 @@ and conv_fun env ?self (lf : Lambda.lfunction) : lfunction =
             Let (p, Field (i, kind, Var tup), bind_fields (i + 1) rest)
       in
       { params = [ (tup, Lambda.Pgenval) ]; return = lf.return; private_entry = false;
-        periodic_poll = false; loop_scalars = []; body = with_entry_poll (bind_fields 0 lf.params) }
+        periodic_poll = false; loop_scalars = []; body = bind_fields 0 lf.params }
 
 and conv_bind env vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
   match rhs with

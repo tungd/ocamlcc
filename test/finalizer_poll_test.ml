@@ -12,6 +12,8 @@ let il =
       external ( || ) : bool -> bool -> bool = "%sequor"
       external side_effect : int -> unit = "test_unknown_primitive"
       external unsafe_get : 'a array -> int -> 'a = "%array_unsafe_get"
+      external narrow : int -> int32 = "%int32_of_int"
+      external set_word : bytes -> int -> int32 -> unit = "%caml_bytes_set32"
       type row = { width : int }
       type choice = Empty | Fixed | Left of int | Right of int
       type local = { mutable index : int }
@@ -27,6 +29,9 @@ let il =
       type links = { mutable next : links option }
       let store cell value = cell.next <- value
       let constant_div n = n / 2 + n mod (-8)
+      let word_store bytes offset n = set_word bytes offset (narrow n)
+      let boxed_word_store bytes offset n =
+        let word = narrow n in set_word bytes offset word; word
       let dynamic_div n d = n / d
       let allocate x = (x, x)
       let after_allocate x = let _ = allocate x in x + 1
@@ -74,10 +79,12 @@ let check ?(literal = true) name text expected =
 let () =
   let poll = "call extern $ocamlcc_finalizers_due(" in
   List.iter (fun name -> check name poll false)
-    ["width"; "select"; "classify"; "join"; "mutate"; "store"; "constant_div"];
+    ["width"; "select"; "classify"; "join"; "mutate"; "store"; "constant_div"; "word_store"];
   List.iter (fun name -> check name poll true)
     ["allocate"; "foreign"; "recurse"; "loop"; "reverse"; "loop_with_call";
-     "while_local"; "while_field"; "while_call"; "match_with_call"; "generic_get"];
+     "while_local"; "while_field"; "while_call"; "match_with_call"; "generic_get";
+     "boxed_word_store"];
+  check "word_store" "ocamlcc_raise_invalid_arg_oob" true;
   check "loop_with_call" "loadl extern $ocamlcc_finalizer_count" true;
   check ~literal:false "foreign" "%finalizers_due\\.[0-9]+ =l phi" false;
   check "recurse" "=w and %poll_tick." true;

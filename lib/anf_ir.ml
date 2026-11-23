@@ -240,6 +240,51 @@ type program = {
   inline_bodies : Lambda.lfunction Ident.Map.t;
 }
 
+(* Calls and allocations on the success path need the usual poll.
+   Checked scalar byte accesses only allocate when they leave via a bounds
+   exception. Their error continuations are still marked as raising. *)
+let is_local_operation = function
+  | Binop ((Div | Mod), _, Int n) -> n <> 0
+  | Atom _ | Field _ | SetField _ | StoreModuleSlot _ | IntSelect _ | Assign _ | AssignImm _
+  | ImportDependency _
+  | ReadScalarSlot _ | AssignScalar _
+  | IntegerOfInt _ | IntOfInteger (_, Raw_scalar _)
+  | ScalarValue (Integer_scalar _, Raw_scalar _)
+  | BytesGetN (_, Raw_word _, _, _)
+  | BytesSetN (_, _, _, (Int32 (Raw_scalar _) | Int64 (Raw_scalar _)))
+  | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr
+           | Cmp _ | Compare_ints | Isout), _, _)
+  | Unop ((Neg | Not | Offset _ | Isint | String_length | Array_length), _)
+  | StringGet (false, _, _)
+  | BytesSet (false, _, _, _) | ArraySet (false, _, _, _, _)
+  | ArrayGet (false, (Lambda.Pintarray | Lambda.Paddrarray), _, _) -> true
+  | DirectApp (target, _) -> Option.is_some target.inline_leaf
+  (* Generic reads can box a flat-float element. *)
+  | _ -> false
+
+let rec is_bounded_local ?backedge = function
+  | Halt _ | HaltScalar _ | StaticRaise _ -> true
+  | Let (id, App (Var fn, args), Halt (Var result))
+    when Ident.same id result ->
+      Option.fold ~none:false ~some:(fun (self, arity) ->
+        Ident.same self fn && List.length args = arity) backedge
+  | Let (_, ce, body) | MutLet (_, ce, body) ->
+      is_local_operation ce && is_bounded_local ?backedge body
+  | LetJoin (_, lhs, rhs) ->
+      is_bounded_local lhs && is_bounded_local ?backedge rhs
+  | If (_, lhs, rhs) | StaticCatch (lhs, _, _, rhs, None) ->
+      is_bounded_local ?backedge lhs && is_bounded_local ?backedge rhs
+  | ScalarIf (_, _, lhs, rhs) | StaticCatch (lhs, _, _, rhs, Some _) ->
+      is_bounded_local lhs && is_bounded_local rhs
+  | Switch (_, { consts; blocks; fail; _ }) ->
+      List.for_all (fun (_, arm) -> is_bounded_local ?backedge arm) consts
+      && List.for_all (fun (_, arm) -> is_bounded_local ?backedge arm) blocks
+      && Option.fold ~none:true ~some:(is_bounded_local ?backedge) fail
+  | StringSwitch (_, cases, fail) ->
+      List.for_all (fun (_, arm) -> is_bounded_local ?backedge arm) cases
+      && Option.fold ~none:true ~some:(is_bounded_local ?backedge) fail
+  | _ -> false
+
 let native_scalar : Primitive.native_repr -> scalar_rep option = function
   | Unboxed_float -> Some Double_scalar
   | Unboxed_integer Pint32 -> Some (Integer_scalar Pint32)

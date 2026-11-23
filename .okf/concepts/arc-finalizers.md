@@ -86,8 +86,11 @@ allocation budget. The path that dispatches callbacks handles any exception
 before rejoining the caller.
 
 Generated code omits entry polls in bounded leaf functions. The analysis
-follows switch arms, local static exits and mutable slots. Calls, allocations, checked operations and generic array reads that can box
-floats keep the conservative path. Local field stores and integer division
+follows switch arms, local static exits and mutable slots after scalar
+specialization. Checked byte word loads and stores qualify when their
+success path stays unboxed. A failed bounds check still raises through the
+normal unwind path. Calls, allocations, other checked operations and generic
+array reads that can box floats keep the conservative path. Local field stores and integer division
 or remainder by a known nonzero divisor can omit the entry poll. Scalar cross-unit expressions expanded in the
 caller qualify as local operations. A self-tail loop made entirely of local
 operations checks on entry and then every 64 backedges using a counter in

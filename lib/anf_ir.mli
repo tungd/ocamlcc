@@ -256,6 +256,7 @@ val byte_store_vars : ?include_raw:bool -> Ident.Set.t -> Byte_store.t -> Ident.
 val returns_scalar : aexpr -> bool
 val free_vars : aexpr -> Ident.Set.t
 val bound_parameters : lfunction -> Ident.t list
+val is_bounded_local : ?backedge:(Ident.t * int) -> aexpr -> bool
 
 val pure_defs : aexpr -> (Ident.t * lfunction) list
 

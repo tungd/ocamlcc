@@ -384,6 +384,10 @@ let scalarize_loop specialize (rb : rec_binding) =
       | body -> Some { lf with body; loop_scalars }
       | exception Boxed_use -> None
 
+let with_entry_poll lf =
+  if is_bounded_local lf.body then lf
+  else { lf with body = Let (Ident.create_local "poll", PollFinalizers, lf.body) }
+
 let rec specialize_scalar_bindings = function
   | Let _ as expr -> specialize_let_chain [] expr
   | LetJoin (_, rhs, _) as expr when boxed_branch rhs ->
@@ -397,7 +401,7 @@ let rec specialize_scalar_bindings = function
         match defs with
         | [rb] ->
             let def = match scalarize_loop specialize_scalar_bindings rb with
-              | Some def -> def
+              | Some def -> with_entry_poll def
               | None -> specialize_scalar_function rb.def
             in
             [{ rb with def }]
@@ -445,7 +449,7 @@ and specialize_let_chain bindings = function
       else List.fold_left (fun body (id, binding) -> bind_scalar_chain id binding body) tail bindings
 
 and specialize_scalar_function lf =
-  { lf with body = specialize_scalar_bindings lf.body }
+  with_entry_poll { lf with body = specialize_scalar_bindings lf.body }
 
 and specialize_scalar_case : 'a. 'a * aexpr -> 'a * aexpr =
   fun (tag, arm) -> tag, specialize_scalar_bindings arm
