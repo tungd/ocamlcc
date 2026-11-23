@@ -8,10 +8,8 @@
 
 open Qbe_il
 
-(* Module-level or local function registry entry. Members of a mutually
-   tail-recursive group share one QBE function (the trampoline) selected by
-   [tag]; [group_arity] is the group's uniform arity. [has_closure] is true
-   when the function takes a hidden [ArcClosure*] first parameter. *)
+(* Group members share a QBE function. External entries use [tag] and
+   [group_arity] for dispatch. [has_closure] adds a hidden [ArcClosure*]. *)
 type fn_info = {
   global : string;
   arity : int;
@@ -28,6 +26,14 @@ type handler = {
   mutable hpreds : (string * t list) list; (* reversed *)
 }
 
+type tail_entry = {
+  target : string;
+  mutable predecessors : (string * Qbe_il.t list) list;
+}
+
+let tail_entry target = { target; predecessors = [] }
+let tail_entry_label entry = entry.target
+
 (* Per-function emission state, swapped atomically by [with_fn_state] when
    lowering nested functions or trampoline groups. *)
 type fn_state = {
@@ -41,10 +47,9 @@ type fn_state = {
   known_heap : (string, unit) Hashtbl.t;
   mutable known_heap_slots : Ident.Set.t;
   untagged_indices : (Ident.t, Qbe_il.t) Hashtbl.t;
-  entry_label : string;
+  entry : tail_entry;
   self : Ident.t option;
-  cur_group : string option;
-  mutable tail_sites : (string * t list) list;
+  group_entries : tail_entry Ident.Map.t;
   mutable poll_tick : Qbe_il.t option;
   mutable try_stack : string list;
   mutable compact_arc : bool;
@@ -72,7 +77,7 @@ type t = {
   mutable cur_fn : fn_state;
 }
 
-let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
+let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(group_entries = Ident.Map.empty)
     ?(in_init = false) () =
   { open_label = "start";
     insts = [];
@@ -84,10 +89,9 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
     known_heap = Hashtbl.create 16;
     known_heap_slots = Ident.Set.empty;
     untagged_indices = Hashtbl.create 4;
-    entry_label;
+    entry = tail_entry entry_label;
     self;
-    cur_group;
-    tail_sites = [];
+    group_entries;
     poll_tick = None;
     try_stack = [];
     compact_arc = false;
@@ -115,9 +119,9 @@ let create ?(inline_single_thread_rc = false) ?(may_suspend = fun _ -> true) pre
 
 (* Execute [f ()] with an isolated [fn_state], restoring the enclosing
    function's state even if [f] raises. *)
-let with_fn_state b ~self ~cur_group ~entry_label ~in_init f =
+let with_fn_state ?group_entries b ~self ~entry_label ~in_init f =
   let saved = b.cur_fn in
-  b.cur_fn <- fresh_fn_state ~entry_label ~self ~cur_group ~in_init ();
+  b.cur_fn <- fresh_fn_state ~entry_label ~self ?group_entries ~in_init ();
   Fun.protect ~finally:(fun () -> b.cur_fn <- saved) f
 
 (* Temporarily shadow [b.vars] entries for [bindings] and restore prior
@@ -190,7 +194,7 @@ let may_suspend b id = b.may_suspend id
 let compact_arc b = b.cur_fn.compact_arc
 let in_initializer b = b.cur_fn.in_init
 let self b = b.cur_fn.self
-let current_group b = b.cur_fn.cur_group
+let group_entry b id = Ident.Map.find_opt id b.cur_fn.group_entries
 let poll_tick b = b.cur_fn.poll_tick
 let set_poll_tick b tick = b.cur_fn.poll_tick <- tick
 
@@ -342,35 +346,37 @@ let close_block b term =
       b.cur_fn.insts <- [];
       b.cur_fn.term <- Some term
 
-let jump_to_entry b values =
-  b.cur_fn.tail_sites <- (b.cur_fn.open_label, values) :: b.cur_fn.tail_sites;
-  close_block b (Jmp b.cur_fn.entry_label)
+let add_entry_predecessor b entry values =
+  entry.predecessors <- (open_label b, values) :: entry.predecessors
 
-let insert_header_phis b header_label binder_names start_values =
+let jump_to_tail_entry b entry values =
+  add_entry_predecessor b entry values;
+  close_block b (Jmp entry.target)
+
+let jump_to_entry b = jump_to_tail_entry b b.cur_fn.entry
+
+let insert_entry_phis b entry binder_names =
   if binder_names <> [] then begin
-    let sites = List.rev b.cur_fn.tail_sites in
+    let sites = List.rev entry.predecessors in
     let phis =
       List.mapi
         (fun i (ty, name) ->
-          let args =
-            ("start", List.nth start_values i)
-            :: List.filter_map
-                 (fun (lbl, vs) ->
-                   match List.nth_opt vs i with
-                   | Some v -> Some (lbl, v)
-                   | None -> None)
-                 sites
-          in
+          let args = List.map (fun (lbl, vs) -> lbl, List.nth vs i) sites in
           Phi (ty, Temp name, args))
         binder_names
     in
     b.cur_fn.blocks <-
       List.map
         (fun blk ->
-          if blk.label = header_label then { blk with insts = phis @ blk.insts }
+          if blk.label = entry.target then { blk with insts = phis @ blk.insts }
           else blk)
         b.cur_fn.blocks
   end
+
+let insert_header_phis b binder_names start_values =
+  let entry = b.cur_fn.entry in
+  entry.predecessors <- entry.predecessors @ [ "start", start_values ];
+  insert_entry_phis b entry binder_names
 
 let with_static_handler b id label f =
   let handlers = b.cur_fn.handlers in

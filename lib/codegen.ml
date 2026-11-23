@@ -31,7 +31,7 @@ let export_captured b mod_value path target arity =
       load_pointer b (ptr_offset b owner (8 * index) "slot")) mod_value path
   in
   emit b (Store (Storel, clos, Global slot));
-  with_fn_state b ~self:None ~cur_group:None ~entry_label:"start" ~in_init:false
+  with_fn_state b ~self:None ~entry_label:"start" ~in_init:false
     (fun () ->
       start_block b "start";
       let clos = load_pointer b (Global slot) in

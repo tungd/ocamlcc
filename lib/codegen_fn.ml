@@ -117,7 +117,7 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
       ty, fresh_name b "loop") lf.params
     @ List.map (fun _ -> Long, fresh_name b "loop_box") lf.loop_scalars
   in
-  with_fn_state b ~self:(Some id) ~cur_group:None ~entry_label:"loop"
+  with_fn_state b ~self:(Some id) ~entry_label:"loop"
     ~in_init:false (fun () ->
       with_shadowed_vars b shadowed_ids (fun () ->
           let ps = List.map (fun (_, n) -> (Long, n)) param_binders in
@@ -156,9 +156,9 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
           let result = compile_aexpr b true lf.body in
           close_ret b (Some result);
           (match tick with
-          | None -> insert_header_phis b "loop" loop_binders start_values
+          | None -> insert_header_phis b loop_binders start_values
           | Some name ->
-              insert_header_phis b "loop" (loop_binders @ [Word, name])
+              insert_header_phis b (loop_binders @ [Word, name])
                 (start_values @ [Int 0L]));
           let func =
             { name = g;
@@ -170,58 +170,62 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
           add_function b func));
   g
 
-let compile_scc_group compile_aexpr b gname ~export ~with_closure
-    (members : (Ident.t * Anf.lfunction * Ident.t list) list) : unit =
-  let max_arity =
-    List.fold_left
-      (fun acc ((_, lf, _) : Ident.t * Anf.lfunction * Ident.t list) ->
-        max acc (List.length lf.params))
-      0 members
-  in
-  let formal_clos = if with_closure then Some (fresh_name b "grpclos") else None in
-  let phi_clos = if with_closure then Some (fresh_name b "dspclos") else None in
+type group_member = {
+  id : Ident.t;
+  def : Anf.lfunction;
+  captures : Ident.t list;
+  tag : int64;
+  entry : tail_entry;
+  closure_phi : string option;
+  argument_phis : string list;
+}
+
+let compile_scc_group compile_aexpr b gname ~export ~with_closure members =
+  let members = List.mapi (fun i (id, (def : Anf.lfunction), captures) ->
+    let entry = tail_entry (fresh_label b (sanitize (Ident.name id) ^ "_entry")) in
+    let closure_phi = if with_closure then Some (fresh_name b "grp_env") else None in
+    let argument_phis = List.map (fun _ -> fresh_name b "grp_arg") def.params in
+    { id; def; captures; tag = Int64.of_int (i + 1); entry; closure_phi; argument_phis })
+    members in
+  let group_entries = List.fold_left (fun entries member ->
+    Ident.Map.add member.id member.entry entries) Ident.Map.empty members in
+  let max_arity = List.fold_left (fun arity member ->
+    max arity (List.length member.argument_phis)) 0 members in
+  let formal_clos = if with_closure then [fresh_name b "grpclos"] else [] in
   let formal_sel = fresh_name b "grpfn" in
   let formal_slots = List.init max_arity (fun _ -> fresh_name b "grpslot") in
-  let phi_sel = fresh_name b "dspsel" in
-  let phi_slots = List.init max_arity (fun _ -> fresh_name b "dspslot") in
-  with_fn_state b ~self:None ~cur_group:(Some gname) ~entry_label:"dispatch"
+  let long_binders = List.map (fun name -> Long, name) in
+  with_fn_state ~group_entries b ~self:None ~entry_label:"start"
     ~in_init:false (fun () ->
-      let clos_params =
-        match formal_clos with Some c -> [ (Long, c) ] | None -> []
+      let params = long_binders (formal_clos @ (formal_sel :: formal_slots)) in
+      let entry_args member =
+        let slots, _ = split_at (List.length member.argument_phis) formal_slots in
+        List.map (fun name -> Temp name) (formal_clos @ slots)
       in
-      let params =
-        clos_params @ ((Long, formal_sel) :: List.map (fun n -> (Long, n)) formal_slots)
-      in
-      close_block b (Jmp "dispatch");
-      start_block b "dispatch";
-      let member_entries =
-        List.mapi
-          (fun i (id, _, _) ->
-            ( Int64.of_int (i + 1),
-              Printf.sprintf "%s_entry" (sanitize (Ident.name id)) ))
-          members
-      in
+      (* The selector runs on external entry. Saturated tail calls into this
+         group add arguments directly to the destination member's phis. *)
       let rec dispatch_chain = function
         | [] -> close_block b Hlt
-        | [ (_, entry) ] -> close_block b (Jmp entry)
-        | (tag, entry) :: rest ->
+        | [member] -> jump_to_tail_entry b member.entry (entry_args member)
+        | member :: rest ->
             let c = fresh_temp b "dspsel" in
-            emit b (Cmp (Eq, Long, c, Temp phi_sel, Int tag));
+            emit b (Cmp (Eq, Long, c, Temp formal_sel, Int member.tag));
             let lnext = fresh_label b "dspnext" in
-            close_block b (Br (c, entry, lnext));
+            add_entry_predecessor b member.entry (entry_args member);
+            close_block b (Br (c, tail_entry_label member.entry, lnext));
             start_block b lnext;
             dispatch_chain rest
       in
-      dispatch_chain member_entries;
+      dispatch_chain members;
       let ret_preds = ref [] in
-      List.iter2
-        (fun (_, entry) ((id, lf, env) : Ident.t * Anf.lfunction * Ident.t list) ->
-          start_block b entry;
+      List.iter
+        (fun { id; def; captures; entry; closure_phi; argument_phis; _ } ->
+          start_block b (tail_entry_label entry);
           let shadowed =
-            (if with_closure then id :: env else []) @ List.map fst lf.params
+            (if with_closure then id :: captures else []) @ List.map fst def.params
           in
           with_shadowed_vars b shadowed (fun () ->
-              (match phi_clos with
+              (match closure_phi with
               | Some cphi ->
                   bind_value b id (Temp cphi);
                   List.iteri
@@ -232,18 +236,17 @@ let compile_scc_group compile_aexpr b gname ~export ~with_closure
                       let dst = fresh_temp b "env" in
                       emit b (Load (Loadl, Long, dst, addr));
                       bind_value b ev dst)
-                    env
+                    captures
               | None -> ());
-              List.iteri
-                (fun j (pid, _) ->
-                  bind_value b pid (Temp (List.nth phi_slots j)))
-                lf.params;
-              let result = compile_aexpr b true lf.body in
+              List.iter2
+                (fun (pid, _) phi -> bind_value b pid (Temp phi))
+                def.params argument_phis;
+              let result = compile_aexpr b true def.body in
               if block_is_open b then begin
                 ret_preds := (open_label b, result) :: !ret_preds;
                 close_block b (Jmp "ret")
               end))
-        member_entries members;
+        members;
       (match !ret_preds with
       | [] ->
           start_block b "ret";
@@ -253,15 +256,9 @@ let compile_scc_group compile_aexpr b gname ~export ~with_closure
           let res = fresh_temp b "grpres" in
           emit b (Phi (Long, res, List.rev !ret_preds));
           close_block b (Ret (Some res)));
-      let phi_binders =
-        (match phi_clos with Some c -> [ c ] | None -> [])
-        @ (phi_sel :: phi_slots)
-      in
-      let init_args =
-        (match formal_clos with Some c -> [ Temp c ] | None -> [])
-        @ (Temp formal_sel :: List.map (fun n -> Temp n) formal_slots)
-      in
-      insert_header_phis b "dispatch" (List.map (fun name -> Long, name) phi_binders) init_args;
+      List.iter (fun member ->
+        let names = Option.to_list member.closure_phi @ member.argument_phis in
+        insert_entry_phis b member.entry (long_binders names)) members;
       let func =
         { name = gname;
           export;

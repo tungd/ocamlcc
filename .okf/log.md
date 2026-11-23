@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Give QBE recursive groups per-member argument phis and direct saturated tail jumps. Verify static and captured groups with unequal arities. See [compiler pipeline](/concepts/compiler-pipeline.md#self-tail-calls).
+
 - 2026-11-23 (codex/1) — Seal per-export suspension proofs and keep roots around effects, unknown native calls, and legacy summaries. Verify old rows after repackaging. See [Perceus ARC](/concepts/perceus-arc.md#middle-end-arc-pass).
 
 - 2026-11-23 (codex/1) — Pass up to four Fiber value roots in registers and preserve one mixed or large batch per call. Verify slot order, resumption, and abandonment. See [Fibers](/concepts/wren-fibers.md#batched-shadow-roots).

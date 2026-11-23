@@ -50,12 +50,15 @@ val fresh_group_name : t -> string
 val declare_group : t -> string -> (Ident.t * Anf.lfunction) list -> unit
 val with_uncompiled_group : t -> string -> ((Ident.t * Anf.lfunction) list -> unit) -> unit
 
+type tail_entry
+
 val with_fn_state :
-  t -> self:Ident.t option -> cur_group:string option -> entry_label:string ->
+  ?group_entries:tail_entry Ident.Map.t ->
+  t -> self:Ident.t option -> entry_label:string ->
   in_init:bool -> (unit -> 'a) -> 'a
 
 val self : t -> Ident.t option
-val current_group : t -> string option
+val group_entry : t -> Ident.t -> tail_entry option
 val in_initializer : t -> bool
 val poll_tick : t -> Qbe_il.t option
 val set_poll_tick : t -> Qbe_il.t option -> unit
@@ -69,8 +72,13 @@ val close_block : t -> term -> unit
 val close_ret : t -> Qbe_il.t option -> unit
 val finish_blocks : t -> block list
 val shadow_batch_slot : t -> int -> Qbe_il.t
+val tail_entry : string -> tail_entry
+val tail_entry_label : tail_entry -> string
+val add_entry_predecessor : t -> tail_entry -> Qbe_il.t list -> unit
+val jump_to_tail_entry : t -> tail_entry -> Qbe_il.t list -> unit
+val insert_entry_phis : t -> tail_entry -> (ty * string) list -> unit
 val jump_to_entry : t -> Qbe_il.t list -> unit
-val insert_header_phis : t -> string -> (ty * string) list -> Qbe_il.t list -> unit
+val insert_header_phis : t -> (ty * string) list -> Qbe_il.t list -> unit
 
 val try_handler : t -> string option
 val with_try_handler : t -> string -> (unit -> 'a) -> 'a

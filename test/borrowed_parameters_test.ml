@@ -45,8 +45,8 @@ let () =
     let use x = opaque x
     let twice x = use x + use x
   |} in
-  require (function_body unsafe "twice") "call $ocamlcc_Borrow_params_use_borrowed(";
-  forbid (function_body unsafe "use_borrowed") "arc_release"
+  forbid unsafe "$ocamlcc_Borrow_params_use_borrowed(";
+  require (function_body unsafe "twice") "call extern $arc_fiber_push"
 
 let () =
   let il = compile {|
@@ -168,11 +168,12 @@ let () =
   let il = compile {|
     external length : string -> int = "%string_length"
     external ( + ) : int -> int -> int = "%addint"
-    external use_owned : int -> string -> int = "foreign_native" "foreign_native"
+    external observe : string -> unit = "ocamlcc_print_string_val"
     let[@inline never] consume x = (x, x)
     let[@inline never] route keep x =
       let result = consume x in
-      length keep + use_owned 0 (match result with y, _ -> y)
+      observe (match result with y, _ -> y);
+      length keep
     let call keep x = route keep x + length keep
   |} in
   require (function_body il "call") "call $ocamlcc_Borrow_params_route_borrowed(";

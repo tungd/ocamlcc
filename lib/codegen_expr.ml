@@ -385,17 +385,12 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
           let clos_prefix =
             if info.has_closure then [ bound_value b id ] else []
           in
-          match (info.tag, tail) with
-          | Some tag, true
-            when current_group b <> None
-                 && current_group b = info.group_name ->
-              let vs =
-                pad_to info.group_arity
-                  (List.map (compile_atom hooks b) ap_args)
-              in
-              jump_to_entry b (clos_prefix @ (Int tag :: vs));
+          match info.tag, tail, group_entry b id with
+          | Some _, true, Some entry ->
+              let args = List.map (compile_atom hooks b) ap_args in
+              jump_to_tail_entry b entry (clos_prefix @ args);
               unit_const
-          | Some tag, _ ->
+          | Some tag, _, _ ->
               let vs =
                 pad_to info.group_arity
                   (List.map (compile_atom hooks b) ap_args)
@@ -406,9 +401,9 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
               let dst = fresh_temp b "call" in
               emit b (Call (Long, dst, { fn = Global info.global; args }));
               dst
-          | None, true when is_self id ->
+          | None, true, _ when is_self id ->
               self_backedge b (List.map (compile_atom hooks b) ap_args)
-          | None, _ ->
+          | None, _, _ ->
               let arg_vals = List.map (compile_atom hooks b) ap_args in
               let args =
                 List.map (fun v -> (Long, v)) (clos_prefix @ arg_vals)

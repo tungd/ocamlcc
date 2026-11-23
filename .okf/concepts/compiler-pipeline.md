@@ -248,20 +248,13 @@ the backedge is a plain `jmp @loop`[^design-doc]. This is the design doc's
 §7 mitigation for unbounded recursion: `sum_to 0 100000` runs in constant
 stack space.
 
-**Mutual tail recursion** uses the design doc's trampoline convention: a
-tail-call graph over saturated direct calls in `tail` position (for both pure
-top-level/nested `pure_defs` and non-pure `let rec` closure groups) is
-computed, and each strongly connected component (of size ≥ 2) is compiled as
-*one* QBE function — the trampoline. Its `@dispatch` header compares a selector
-argument against each member's tag and jumps to the member's body; member
-parameters flow through uniform phi slots (arities are padded with unit
-values), and non-pure closure groups also thread `%phi_clos` so each member
-entry unpacks its closure environment without pushing stack frames. A tail
-call to any group member — self or mutual — records a backedge site and jumps
-to `@dispatch`, so `even`/`odd` and `ocamllex` lexer DFAs run 300k+ transitions
-in constant stack. Calls from outside the group pass the member's tag as the
-dispatch selector (while individual member closure wrappers forward through to
-the trampoline for indirect `ocamlcc_apply_n` calls).
+**Mutual tail recursion** groups saturated tail calls between pure functions
+or members of a general recursive closure group into one QBE function per
+strongly connected component. Each internal tail call jumps directly to its
+destination, whose phis receive just that member's arguments and closure
+pointer when needed. The external entry and the closure wrappers still pass a
+selector and use the existing padded argument convention. The direct edges
+keep `even`/`odd` and `ocamllex` lexer DFAs in constant stack space.
 
 **Captured recursive calls** share one dispatcher closure when all uses of
 the recursive functions inside the group are saturated direct calls. The
