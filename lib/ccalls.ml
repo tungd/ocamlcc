@@ -17,10 +17,8 @@
    - [argc]     — the declared arity of the external; a known symbol called
                   with a different arity is a compile error.
 
-   Unknown non-[caml_] externals (user C FFI) get a conservative default:
-   [raises = true] so [TryWith] unwinds correctly even if the function never
-   raises (the cost is one dead branch), and [yields = false] (a plain C
-   function cannot suspend unless it calls into the fiber runtime). *)
+   Unknown non-[caml_] externals can raise or suspend through the runtime
+   or an OCaml callback. Their callers use the corresponding cleanup paths. *)
 
 type abi = {
   argc : int;      (* declared arity of the external *)
@@ -311,7 +309,7 @@ let find name =
   | Some abi -> abi
   | None ->
       (* Unknown user externals: conservative default. *)
-      { argc = 0; raises = true; yields = false }
+      { argc = 0; raises = true; yields = true }
 
 let is_known name = List.mem_assoc name table
 

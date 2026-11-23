@@ -4,8 +4,8 @@
    ABI its runtime implementation actually has (arities from the
    [external] declarations in [stdlib/]; [raises]/[yields] from
    [runtime/arc.c] / [runtime/fiber.c]). Unknown user externals must get the
-   conservative default: [raises = true] so [TryWith] unwinds correctly even
-   if the function never raises, [yields = false]. *)
+   conservative default so callers keep exception cleanup and suspension
+   roots. *)
 
 let check_abi name argc raises yields =
   match Ccalls.find_opt name with
@@ -105,7 +105,7 @@ let () =
     stdlib_abis;
   (* Conservative default for unknown user C externals. *)
   let unknown = Ccalls.find "my_user_ffi" in
-  if unknown.Ccalls.raises && not unknown.Ccalls.yields then
+  if unknown.Ccalls.raises && unknown.Ccalls.yields then
     Printf.printf "unknown external default: PASS\n"
   else begin
     Printf.printf "unknown external default: FAIL got {raises=%b; yields=%b}\n"

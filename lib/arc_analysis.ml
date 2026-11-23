@@ -415,6 +415,7 @@ let operation_can_raise ~finalizers known raising = function
 
 let call_can_suspend known yielding = function
   | Anf.Ccall (name, _) -> is_yielding_ccall name
+  | NativeCcall (prim, _) -> is_yielding_ccall (Primitive.native_name prim)
   | DirectApp (target, _) -> target.yields
   | App (Var fn, args) ->
       (match Ident.Map.find_opt fn known with

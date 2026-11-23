@@ -1,6 +1,8 @@
 let archive_format = "ocamlcc-opt"
 let object_format = "ocamlcc-exports"
-let current_version = 6
+let suspension_version = 7
+let current_version = suspension_version
+let versions = List.init current_version (fun i -> current_version - i)
 
 let versioned format version = format ^ "-v" ^ string_of_int version
 let digest path = Digest.to_hex (Digest.file path)
@@ -8,10 +10,9 @@ let digest path = Digest.to_hex (Digest.file path)
 let read = Sys_util.read_file
 let write = Sys_util.write_atomic
 
-let has_header format ~digest header =
+let header_version format ~digest header =
   let suffix = " " ^ digest in
-  List.exists (fun version -> header = versioned format version ^ suffix)
-    [current_version; 5; 4; 3; 2; 1]
+  List.find_opt (fun version -> header = versioned format version ^ suffix) versions
 
 let inline_payload (fn : Anf.imported_function) =
   if fn.yields then None else Option.bind fn.inline_lambda Lambda_leaf.encode
@@ -28,6 +29,8 @@ let stamped_initializer unit_name symbol =
     else None
 
 module Rows = struct
+  type suspension = May_suspend | Proven_non_suspending | Legacy_non_suspending
+
   let leaf_prefix = "leaf="
   let unicode_test = "unicode-test"
   let unicode_check = "unicode-check"
@@ -40,8 +43,9 @@ module Rows = struct
         | No_raise -> "false"
         | Finalizer_raise -> "finalizer"
         | May_raise -> "true" in
-      Printf.bprintf buffer "%s %s %s %s %d %b %b %s"
-        fn.unit_name cmi_digest path fn.symbol fn.arity fn.yields fn.returns_immediate raises;
+      let suspension = if fn.yields then "suspend=may" else "suspend=no" in
+      Printf.bprintf buffer "%s %s %s %s %d %s %b %s"
+        fn.unit_name cmi_digest path fn.symbol fn.arity suspension fn.returns_immediate raises;
       Option.iter (fun (symbol, flags) ->
         Printf.bprintf buffer " %s " symbol;
         List.iter (fun flag -> Buffer.add_char buffer (if flag then '1' else '0')) flags)
@@ -68,7 +72,13 @@ module Rows = struct
     if n < 0 then invalid_arg "negative export index or arity";
     n
 
-  let decode lines =
+  let parse_suspension ~version = function
+    | "suspend=no" when version >= suspension_version -> Proven_non_suspending
+    | "suspend=no" | "false" -> Legacy_non_suspending
+    | "suspend=may" | "true" -> May_suspend
+    | _ -> invalid_arg "invalid suspension effect"
+
+  let decode ~version lines =
     let units = Hashtbl.create 32 in
     let add row =
       let fields = String.split_on_char ' ' row in
@@ -91,21 +101,26 @@ module Rows = struct
       | [unit_name; cmi_digest; path; entry; arity; yields; immediate; raises]
         when unit_name_valid unit_name && entry_valid entry ->
           let path = List.map nonnegative (String.split_on_char '.' path) in
-          let arity = nonnegative arity and yields = bool_of_string yields in
+          let arity = nonnegative arity in
+          (* Archive and object writers can reseal raw rows from older tools.
+             The row itself must carry the new suspension proof. *)
+          let suspension = parse_suspension ~version yields in
+          let yields = suspension <> Proven_non_suspending in
           let returns_immediate = bool_of_string immediate in
           if Option.is_some unicode_validation &&
              (unit_name <> "Stdlib__Uchar" || arity <> 1 || not returns_immediate) then
             invalid_arg "invalid Unicode validation summary";
           let borrowed_entry = Option.map (fun (symbol, mask) ->
-            if yields || not (entry_valid symbol) || symbol = entry
+            if suspension = May_suspend || not (entry_valid symbol) || symbol = entry
                || String.length mask <> arity || not (String.contains mask '1')
             then invalid_arg "invalid borrowed entry";
             let flags = List.init arity (fun i -> match mask.[i] with
               | '0' -> false | '1' -> true | _ -> invalid_arg "invalid borrow mask") in
             symbol, flags) worker in
+          let borrowed_entry = if yields then None else borrowed_entry in
           let inline_lambda, inline_init =
             match leaf, stamped_initializer unit_name entry with
-            | Some payload, Some init when not yields ->
+            | Some payload, Some init when suspension <> May_suspend ->
                 (match Lambda_leaf.decode ~arity payload with
                  | Some body -> Some body, Some init
                  | None -> None, None)
@@ -198,17 +213,19 @@ let find_archive dir =
 
 let read_archive archive =
   match String.split_on_char '\n' (read (archive ^ ".opt")) with
-  | header :: lines when has_header archive_format ~digest:(digest archive) header ->
-      Some (Rows.decode lines)
+  | header :: lines ->
+      header_version archive_format ~digest:(digest archive) header
+      |> Option.map (fun version -> Rows.decode ~version lines)
   | _ -> None
 
 let read_object cmi =
   let sidecar = Filename.chop_suffix cmi ".cmi" ^ ".exports" in
   match String.split_on_char '\n' (read sidecar) with
   | header :: obj :: lines
-    when obj <> "" && obj <> "." && obj <> ".." && Filename.basename obj = obj
-      && has_header object_format ~digest:(digest (Filename.concat (Filename.dirname cmi) obj)) header ->
-      Some (Rows.decode lines)
+    when obj <> "" && obj <> "." && obj <> ".." && Filename.basename obj = obj ->
+      let obj = Filename.concat (Filename.dirname cmi) obj in
+      header_version object_format ~digest:(digest obj) header
+      |> Option.map (fun version -> Rows.decode ~version lines)
   | _ -> None
 
 let optional f =

@@ -474,7 +474,7 @@
 (test
  (name export_summary_version_test)
  (modules export_summary_version_test)
- (libraries ocamlcc))
+ (libraries ocamlcc str))
 
 (test
  (name exported_leaf_test)
