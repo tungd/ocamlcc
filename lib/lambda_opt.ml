@@ -371,6 +371,18 @@ let resolve_module_projections code =
         returns_module body
     | rhs -> Option.is_some (fields_of rhs)
   in
+  (* Signature coercions can place a primitive stub directly in a module
+     field. Name closed representation casts so the export pass can seal
+     the function identity and publish its body. *)
+  let bind_byte_cast field (bindings, fields) =
+    match field with
+    | Lfunction { kind = Curried; params = [param, _]; attr = { stub = true; _ };
+                  body = Lprim ((Pbytes_of_string | Pbytes_to_string), [Lvar arg], _); _ }
+      when Ident.same param arg ->
+        let id = Ident.create_local "byte_cast" in
+        (id, field) :: bindings, Lvar id :: fields
+    | _ -> bindings, field :: fields
+  in
   let rec visit modules = function
     | Llet (mode, kind, id, rhs, body) ->
         let bind modules rhs =
@@ -390,6 +402,11 @@ let resolve_module_projections code =
           | _ -> None
         in
         Option.value ~default:(Lprim (field_prim, [owner], loc)) field
+    | Lprim ((Pmakeblock (0, Immutable, _) as block), fields, loc) ->
+        let fields = List.map (visit modules) fields in
+        let bindings, fields = List.fold_right bind_byte_cast fields ([], []) in
+        List.fold_right (fun (id, rhs) body -> Llet (Alias, Pgenval, id, rhs, body))
+          bindings (Lprim (block, fields, loc))
     | expr -> shallow_map (visit modules) expr
   and expose bind modules = function
     | Llet (mode, kind, id, rhs, body) ->

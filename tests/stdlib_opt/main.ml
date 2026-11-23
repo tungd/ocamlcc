@@ -3,6 +3,9 @@ let[@inline never] via_bind r f = Result.bind r f
 let[@inline never] via_fold f init xs = List.fold_left f init xs
 let[@inline never] read32 bytes offset = Int32.to_int (Bytes.get_int32_le bytes offset)
 let[@inline never] read64 bytes offset = Int64.to_int (Bytes.get_int64_le bytes offset)
+let[@inline never] read16 text offset keep =
+  let value = String.get_uint16_le text offset in
+  value, keep
 
 type page = { scalars : bytes }
 type row = { mutable page : page; mutable base : int }
@@ -31,6 +34,11 @@ let () =
   Bytes.set_int64_le bytes 5 0x7fff_ffff_ffff_ffffL;
   assert (read32 bytes 1 = -2_147_483_648);
   assert (read64 bytes 5 = -1);
+  let text = "\x00\x34\x12" in
+  let value, kept = read16 text 1 bytes in
+  assert (value = 0x1234 && kept == bytes);
+  expect_bounds_error (fun text offset -> read16 text offset bytes) text 2;
+  expect_bounds_error (fun text offset -> read16 text offset bytes) text (-1);
   expect_bounds_error read32 bytes (-1);
   expect_bounds_error read64 bytes 10;
   expect_bounds_error read64 bytes max_int;

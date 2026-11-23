@@ -174,6 +174,16 @@ continue to delegate to the compatibility helpers with slice checks.
 The Uchar interface exposes `to_int` as the tagged identity already used by
 its implementation, so Bytes UTF-8 writers need no closure call to convert it.
 
+When an interface exposes a string/bytes representation cast as a value,
+the compiler gives the generated Lambda stub a binding in the module
+block. Sealed export summaries can then carry its closed body. The
+inliner uses that body for immutable aliases such as String's
+`Bytes.unsafe_of_string` binding. In the shipped stdlib,
+`String.get_uint16_le` and `String.get_uint16_be` inherit the checked
+Bytes readers' non-suspension proof. The native stdlib test checks an
+unaligned little-endian read and its bounds exceptions, and verifies that
+a caller with a live heap value emits no shadow push for the read.
+
 In five paired tterm trials, plain and Unicode replay went from 31.73 to
 31.09 ms and from 150.83 to 147.85 ms on default ARC. On single-thread ARC
 they went from 29.33 to 28.94 ms and from 130.33 to 126.00 ms.

@@ -19,6 +19,8 @@ let primitives =
     "both", (Psequand, 2); "either", (Psequor, 2); "not", (Pnot, 1);
     "isint", (Pisint, 1); "str-length", (Pstringlength, 1);
     "bytes-length", (Pbyteslength, 1);
+    "bytes-of-string", (Pbytes_of_string, 1);
+    "bytes-to-string", (Pbytes_to_string, 1);
     "int-length", (Parraylength Pintarray, 1);
     "int-get", (Parrayrefs Pintarray, 2);
     "int-get-unsafe", (Parrayrefu Pintarray, 2);

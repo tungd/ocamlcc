@@ -11,6 +11,19 @@ grep -Eq 'call extern \$ocamlcc_(direct_)?Stdlib__Option_' "$work/with-opt.ssa"
 grep -Eq 'call extern \$ocamlcc_(direct_)?Stdlib__Result_' "$work/with-opt.ssa"
 grep -Eq 'call extern \$ocamlcc_(direct_)?Stdlib__List_' "$work/with-opt.ssa"
 
+if ! awk '$1 == "Stdlib__String" && $4 ~ /^ocamlcc_Stdlib__String_get_uint16_le__/ && $6 == "suspend=no" {
+    found = 1
+} END { exit !found }' "$stdlib/libocamlstdlib.a.opt"; then
+    echo 'String.get_uint16_le lacks a non-suspension proof' >&2
+    exit 1
+fi
+awk '/^export function l \$ocamlcc_Main_read16\(/,/^}/' "$work/with-opt.ssa" >"$work/read16.ssa"
+test -s "$work/read16.ssa"
+if grep -Fq 'call extern $arc_fiber_push' "$work/read16.ssa"; then
+    echo 'String.get_uint16_le caller shadows a live owner' >&2
+    exit 1
+fi
+
 # Exercise loading without loose object files.
 pack="$work/pack"
 mkdir -p "$pack"
