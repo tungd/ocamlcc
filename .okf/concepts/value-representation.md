@@ -57,13 +57,15 @@ The QBE code generator uses the tagging invariant to minimize instructions:
 | `x + k`, `x - k` for constant `k` | One add or subtract of `2k` |
 | `k - x` for constant `k` | One subtract from `2k + 2` |
 | `x * y` | untag both (`sar 1`), multiply, retag (`shl 1`, `+ 1`) |
+| `x * k` for constant `k` | Multiply the tagged operand by `k` and add `1 - k`. Positive powers of two use a shift. |
 | `x / y` | untag both, signed `div` (QBE truncates toward zero like OCaml), retag |
 | `x = y` … comparisons | compare tagged values directly — `2x+1` is monotone, so signed order is preserved |
 | `not x` (boolean negation) | `4 - a` (`false = 1`, `true = 3`) |
 | `-x` (`Pnegint`) | `2 - a` |
 
 Constant adjustments use 64-bit wrapping arithmetic, which preserves OCaml's
-63-bit wraparound after tagging.
+63-bit wraparound after tagging. A byte offset computed by multiplying by
+a constant stays tagged until the bounds check needs its signed value.
 
 A comparison produces a raw QBE `0/1`. Conditional branches can use it
 directly, including across intervening calls. A tagged boolean uses
@@ -157,6 +159,10 @@ On macOS ARM64 a probe reading one million pairs of checked words reported
 6,000,017 allocated words before and 17 after, including measurement overhead.
 Two paired runs against the same tterm production replay snapshot measured
 36.13 to 37.89 MiB/s and 147.62 to 135.20 MB of allocation per replay.
+In a separate paired comparison against checked loads alone, nested byte
+field borrowing, bounded-entry poll placement and tagged constant
+multiplication measured 37.73 to 37.90 MiB/s, with 135.20 MB per replay on
+both builds. The borrowed row setter kept its checked native store.
 
 ## Mutable numeric slots
 

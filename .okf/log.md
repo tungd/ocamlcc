@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Lower constant integer multiplication in tagged form. Verify overflow through a checked byte offset and the original bounds exception. See [codegen arithmetic](/concepts/value-representation.md#codegen-arithmetic).
+
 - 2026-11-23 (codex/1) — Classify bounded functions after scalar specialization so unboxed checked byte word accesses can omit entry finalizer polls. See [ARC finalizers](/concepts/arc-finalizers.md).
 
 - 2026-11-23 (codex/1) — Borrow byte fields through checked word stores and record cycle-root counts for shared int-pair lists. See [Perceus ARC](/concepts/perceus-arc.md).

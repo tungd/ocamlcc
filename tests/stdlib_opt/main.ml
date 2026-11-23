@@ -4,6 +4,12 @@ let[@inline never] via_fold f init xs = List.fold_left f init xs
 let[@inline never] read32 bytes offset = Int32.to_int (Bytes.get_int32_le bytes offset)
 let[@inline never] read64 bytes offset = Int64.to_int (Bytes.get_int64_le bytes offset)
 
+type page = { scalars : bytes }
+type row = { mutable page : page; mutable base : int }
+
+let[@inline never] write_row row col scalar =
+  Bytes.set_int32_le row.page.scalars ((row.base + col) * 4) (Int32.of_int scalar)
+
 let expect_bounds_error read bytes offset =
   match read bytes offset with
   | _ -> failwith "expected Invalid_argument"
@@ -28,4 +34,9 @@ let () =
   expect_bounds_error read32 bytes (-1);
   expect_bounds_error read64 bytes 10;
   expect_bounds_error read64 bytes max_int;
-  expect_bounds_error read64 (Bytes.make 7 '\x00') 0
+  expect_bounds_error read64 (Bytes.make 7 '\x00') 0;
+  let row = { page = { scalars = bytes }; base = 1 } in
+  write_row row (1 lsl (Sys.int_size - 2)) 42;
+  assert (read32 row.page.scalars 4 = 42);
+  expect_bounds_error (fun row col -> write_row row col 7) row (-2);
+  assert (read32 row.page.scalars 4 = 42)

@@ -186,12 +186,23 @@ let compile_binop hooks b (op : Anf.binop) (a : Anf.atom) (c : Anf.atom) : t =
       | x, Int k -> arith Sub x (Int (Int64.sub k 1L))
       | Int k, x -> arith Sub (Int (Int64.add k 1L)) x
       | _ -> arith Add (arith Sub av cv) (Int 1L))
-  | Mul ->
-      let ua = untag b av in
-      let uc = untag b cv in
-      let prod = fresh_temp b "mul" in
-      emit b (Binop (Mul, Long, prod, ua, uc));
-      retag b prod
+  | Mul -> (
+      match av, cv with
+      | Int tagged, value | value, Int tagged ->
+          (* k * (2x + 1) + (1 - k) is 2kx + 1 modulo 2^64. *)
+          let factor = Int64.shift_right tagged 1 in
+          let scaled =
+            if factor > 0L && Int64.logand factor (Int64.pred factor) = 0L then
+              arith Shl value (Int (Int64.of_int (Int64.trailing_zeros factor)))
+            else arith Mul value (Int factor)
+          in
+          arith Add scaled (Int (Int64.sub 1L factor))
+      | _ ->
+          let ua = untag b av in
+          let uc = untag b cv in
+          let prod = fresh_temp b "mul" in
+          emit b (Binop (Mul, Long, prod, ua, uc));
+          retag b prod)
   | Div -> compile_div_mod b Div av cv
   | Mod -> compile_div_mod b Rem av cv
   | And ->

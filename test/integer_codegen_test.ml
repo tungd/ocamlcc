@@ -18,6 +18,7 @@ let il =
     let add_left x = (-7) + x
     let sub_left x = 0 - x
     let add_min x = x + (-4611686018427387904)
+    let scale x = 4 * x
   |} with
   | Ok { Pipeline.Output.ssa = il; _ } -> il
   | Error error -> failwith error
@@ -52,4 +53,6 @@ let () =
   check "dec" " =l add " false;
   check "add_left" " =l add [^,\n]+, -14\n" true;
   check "sub_left" " =l sub 2, %" true;
-  check "add_min" " =l add [^,\n]+, -9223372036854775808\n" true
+  check "add_min" " =l add [^,\n]+, -9223372036854775808\n" true;
+  check "scale" " =l sar " false;
+  check "scale" " =l shl [^,\n]+, 2\n" true
