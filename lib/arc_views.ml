@@ -71,6 +71,7 @@ let fuse_field_read ~can_borrow ~borrowed_flags ~yielding ~stable id index owner
   let can_cross = function
     | Atom _ | Field _
     | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr | Cmp _), _, _)
+    | IntegerOfInt _ | ScalarValue (Integer_scalar _, Raw_scalar _)
     | Unop ((String_length | Array_length | Isint), _)
     | ArrayGet (false, (Lambda.Pintarray | Lambda.Paddrarray), _, _)
     | StringGet (false, _, _) -> true
@@ -80,6 +81,7 @@ let fuse_field_read ~can_borrow ~borrowed_flags ~yielding ~stable id index owner
     | Atom (Var _ | Int _ | Char _ | Unit)
     | Unop (Isint, _)
     | Field (_, (Immediate_field | Immutable_field), _)
+    | IntegerOfInt _ | ScalarValue (Integer_scalar _, Raw_scalar _)
     | Binop ((Add | Sub | Mul | And | Or | Xor | Lsl | Lsr | Asr | Cmp _), _, _) -> true
     | _ -> false
   in

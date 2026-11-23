@@ -173,6 +173,13 @@ no buffered root or weak registration. This also applies when retaining its
 storage for reuse. The single-thread slow path reads collector activity with
 relaxed ordering, while the shared runtime retains its acquire load.
 
+An instrumented single-thread run built lists of 1, 16, 128 and 4,096
+integer pairs. Eight shared drops per cons cell produced one root insertion
+per cons and one removal when the list died. The pairs produced zero
+insertions. A separate OCaml oracle built a self-referential int-pair list.
+Dropping it left two live objects, which an explicit collection reclaimed.
+Cycle eligibility therefore depends on the graph through the tail.
+
 **Weak copies.** A shallow duplicate starts with its own weak-target state.
 `Weak.get_copy` uses the same copy path as `Obj.dup` and preserves the logical
 layout while taking ownership of copied pointer fields. Runtime-managed
@@ -205,6 +212,10 @@ A mutable field can lend its value to the immediately following projection
 or other supported local reader. This removes ownership traffic for chains
 such as `state.cursor.row`. A snapshot that survives an intervening call or
 store keeps its own reference.
+
+Checked `Bytes` word stores can borrow a byte field through nested projections
+while the index and unboxed integer value are computed. The receiver stays
+live through the access, including when the bounds check raises.
 
 ## Immediate-only word arrays
 

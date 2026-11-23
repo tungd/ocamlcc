@@ -106,6 +106,24 @@ let () =
 
 let () =
   let il = compile {|
+    external set : bytes -> int -> int32 -> unit = "%caml_bytes_set32"
+    external narrow : int -> int32 = "%int32_of_int"
+    external ( + ) : int -> int -> int = "%addint"
+    external ( * ) : int -> int -> int = "%mulint"
+    type page = { scalars : bytes }
+    type row = { mutable page : page; mutable base : int }
+    let[@inline never] write row col scalar =
+      set row.page.scalars ((row.base + col) * 4) (narrow scalar)
+    let use row col scalar = write row col scalar; row.base
+  |} in
+  let worker = function_body il "write_borrowed" in
+  require worker "storew";
+  require worker "ocamlcc_raise_invalid_arg_oob";
+  if contains ~sub:"arc_retain" worker || contains ~sub:"arc_release" worker then
+    failwith ("owning byte-field projection\n" ^ worker)
+
+let () =
+  let il = compile {|
     external length : string -> int = "%string_length"
     external ( + ) : int -> int -> int = "%addint"
     external ( - ) : int -> int -> int = "%subint"
