@@ -340,10 +340,12 @@ eight-second probe, so the timings do not isolate a throughput effect.
 
 ## Bounded leaves in exported metadata
 
-Version 6 object and archive summaries carry closed Lambda leaves of up to
-24 nodes. The bounded format represents local variables, tagged literals,
-conditionals, projections, and selected primitive operations. Direct calls
-and calls through immutable aliases can use a leaf inside the Lambda
+Object and archive summaries have carried closed Lambda leaves since
+version 6. Ordinary leaves have a 24-node budget. An explicitly hinted
+leaf with a branch can use up to 50 nodes, including bindings introduced
+by local helper inlining. The bounded format represents local variables,
+tagged literals, conditionals, projections, and selected primitive operations.
+Direct calls and calls through immutable aliases can use a leaf inside the Lambda
 inliner's existing import budget. The caller then runs its usual bounds,
 exception, finalizer and ownership passes on the copied expression.
 

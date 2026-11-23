@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Allow up to 50 nodes for explicitly hinted closed branching exports. Exercise the tterm row revision update through a sealed provider sidecar. See [compiler pipeline](/concepts/compiler-pipeline.md#bounded-leaves-in-exported-metadata).
+
 - 2026-11-23 (codex/1) — Thread constant-tag tail calls in lifted recursive dispatchers to the target arm and retain sampled finalizer polling and exception cleanup. See [compiler pipeline](/concepts/compiler-pipeline.md#self-tail-calls).
 
 - 2026-11-23 (codex/1) — Give QBE recursive groups per-member argument phis and direct saturated tail jumps. Verify static and captured groups with unequal arities. See [compiler pipeline](/concepts/compiler-pipeline.md#self-tail-calls).

@@ -1,6 +1,7 @@
 open Lambda
 
 let node_limit = 24
+let hinted_branch_limit = 50
 let byte_limit = 2048
 
 exception Unsupported
@@ -36,7 +37,11 @@ let encode (def : lfunction) =
   if def.kind <> Curried || def.attr.inline = Never_inline || def.attr.is_a_functor
      || List.compare_length_with def.params node_limit > 0 then None
   else
-    let budget = ref node_limit in
+    let limit = match def.attr.inline with
+      | Always_inline | Hint_inline -> hinted_branch_limit
+      | _ -> node_limit in
+    let budget = ref limit in
+    let contains_branch = ref false in
     let tokens = ref [] in
     let token name = tokens := name :: !tokens in
     let number n = token (string_of_int n) in
@@ -56,6 +61,7 @@ let encode (def : lfunction) =
           token "let"; token (let_kind mode); token (value_kind kind);
           term env rhs; term (id :: env) body
       | Lifthenelse (cond, yes, no) ->
+          contains_branch := true;
           token "if"; term env cond; term env yes; term env no
       | Lsequence (first, next) -> token "seq"; term env first; term env next
       | Lprim (Pfield (i, kind, mutability), [owner], _) ->
@@ -79,14 +85,17 @@ let encode (def : lfunction) =
       List.iter (fun (_, kind) -> token (value_kind kind)) def.params;
       term (List.map fst def.params) def.body;
       let payload = String.concat "," (List.rev !tokens) in
-      if String.length payload <= byte_limit then Some payload else None
+      if String.length payload <= byte_limit &&
+         (!contains_branch || limit - !budget <= node_limit)
+      then Some payload else None
     with Unsupported -> None
 
 let decode ~arity payload =
   if arity <= 0 || arity > node_limit || String.length payload > byte_limit then None
   else
     let tokens = ref (String.split_on_char ',' payload) in
-    let budget = ref node_limit in
+    let budget = ref hinted_branch_limit in
+    let contains_branch = ref false in
     let loc = Debuginfo.Scoped_location.Loc_unknown in
     let token () =
       match !tokens with
@@ -119,6 +128,7 @@ let decode ~arity payload =
           let body = term (id :: env) in
           Llet (mode, kind, id, rhs, body)
       | "if" ->
+          contains_branch := true;
           let condition = term env in
           let yes = term env in
           let no = term env in
@@ -153,6 +163,8 @@ let decode ~arity payload =
       let return = parse_kind (token ()) in
       let params = List.init arity (fun _ -> Ident.create_local "arg", parse_kind (token ())) in
       let body = term (List.map fst params) in
-      if !tokens <> [] then raise Unsupported;
+      if !tokens <> [] ||
+         (not !contains_branch && hinted_branch_limit - !budget > node_limit)
+      then raise Unsupported;
       Some (lfunction' ~kind:Curried ~params ~return ~body ~attr:default_function_attribute ~loc)
     with Unsupported | Invalid_argument _ -> None

@@ -22,6 +22,26 @@ let () =
         if index < row.length then row.cells.(index) else 0
       let[@inline never] read_out_of_line row index =
         if index < row.length then row.cells.(index) else 0
+
+      type damage = {
+        track_spans : bool;
+        mutable rows : int;
+        mutable ring_top : int;
+        mutable row_revisions : int array;
+        mutable revision : int;
+      }
+      let[@inline] phys t row =
+        let idx = t.ring_top + row in
+        if idx >= t.rows then idx - t.rows else idx
+      let[@inline] mark_row_dirty t row =
+        if t.track_spans || row < 0 || row >= t.rows then false
+        else begin
+          let p = phys t row in
+          let revisions = t.row_revisions in
+          if Array.unsafe_get revisions p <> t.revision then
+            Array.unsafe_set revisions p t.revision;
+          true
+        end
       |}
     in
     Sys_util.write_file obj "object";
@@ -53,6 +73,11 @@ let () =
     in
     assert (contains explicit_call.ssa "call extern $ocamlcc_Leaf_provider_read__");
     assert (contains explicit_call.ssa "call extern $ocamlcc_Leaf_provider_read_out_of_line__");
+    let mark = consume "let mark damage row = Leaf_provider.mark_row_dirty damage row" in
+    if contains mark.ssa "call extern $ocamlcc_Leaf_provider_mark_row_dirty__"
+    then failwith "bounded row update was not inlined from its sidecar";
+    assert (contains mark.ssa "storel");
+    assert (contains mark.ssa "call extern $ocamlcc_init_Leaf_provider__");
     let unit_summary = prefix ^ ".opt" in
     let corrupt = Sys_util.read_file unit_summary
       |> Str.global_replace (Str.regexp "leaf=[^ \n]+") "leaf=i,v,i,var,999" in
