@@ -159,6 +159,8 @@ let inline_local_calls ~imports code =
   in
   record_uses Ident.Set.empty code;
   let nodes = size code in
+  let max_depth = 12 in
+  let small_body_limit = 24 in
   let local_budget = ref (2 * nodes) in
   let import_budget = ref (min 2048 (nodes + 192)) in
   let budget = function None -> local_budget | Some _ -> import_budget in
@@ -183,13 +185,19 @@ let inline_local_calls ~imports code =
     | Some (Calls { arity; count }), Some (def, cost) ->
         def.kind = Curried && List.length def.params = arity
         && def.attr.inline <> Never_inline
-        && cost <= (if count = 1 then callback_limit else 24)
+        && cost <= (if count = 1 then callback_limit else small_body_limit)
+    | _ -> false
+  in
+  let explicitly_hinted def call =
+    match def.attr.inline, call.ap_inlined with
+    | Never_inline, _ | _, Never_inline -> false
+    | (Always_inline | Hint_inline), _ | _, (Always_inline | Hint_inline) -> true
     | _ -> false
   in
   let should_inline defs def cost call =
     match def.attr.inline, call.ap_inlined with
     | Never_inline, _ | _, Never_inline -> false
-    | (Always_inline | Hint_inline), _ | _, (Always_inline | Hint_inline) -> true
+    | _ when explicitly_hinted def call -> true
     | _ ->
         let small =
           match call.ap_func with
@@ -198,7 +206,7 @@ let inline_local_calls ~imports code =
               Ident.Set.mem id !callbacks
               || (match Ident.Map.find_opt id !uses with
               | Some (Calls { count = 1; _ }) -> cost <= 64
-              | Some (Calls _) -> cost <= 24
+              | Some (Calls _) -> cost <= small_body_limit
               | _ -> false)
           | _ -> false
         in
@@ -217,19 +225,48 @@ let inline_local_calls ~imports code =
         Option.bind (imported_callee_and_unit imports call.ap_func) (fun (target, unit_id) ->
           Option.map (fun def -> def, size def.body, Some unit_id) target.inline_lambda)
   in
-  let rec call_free = function
-    | Lapply _ | Lsend _ | Lfunction _ | Lletrec _ -> false
-    | expr ->
-        let free = ref true in
-        iter_head_constructor (fun child -> free := !free && call_free child) expr;
-        !free
+  (* Preserve the small explicit-hint fallback after the unit's budget is
+     spent. A hinted helper can participate when its expanded body fits the
+     same bound and the normal visitor can still inline the nested call. *)
+  let small_inline_hint defs def call depth =
+    let rec count depth remaining expr =
+      if remaining = 0 then None
+      else
+        let remaining = remaining - 1 in
+        match expr with
+        | Lapply call when depth < max_depth ->
+            (match known defs call.ap_func with
+            | Some (helper, _) when helper.kind = Curried && explicitly_hinted helper call
+                && List.compare_lengths helper.params call.ap_args = 0 ->
+                let count_next budget arg = Option.bind budget (fun n -> count (depth + 1) n arg) in
+                let arguments = List.fold_left count_next (Some remaining) call.ap_args in
+                Option.bind arguments (fun n -> count (depth + 1) n helper.body)
+            | _ -> None)
+        | Lapply _ | Lsend _ | Lfunction _ | Lletrec _ -> None
+        | expr ->
+            let budget = ref (Some remaining) in
+            iter_head_constructor (fun child ->
+              budget := Option.bind !budget (fun n -> count depth n child)) expr;
+            !budget
+    in
+    explicitly_hinted def call
+    && Option.is_some (count (depth + 1) small_body_limit def.body)
   in
-  let small_inline_hint def call cost =
-    cost <= 24 &&
-    (match def.attr.inline, call.ap_inlined with
-    | (Always_inline | Hint_inline), _ | _, (Always_inline | Hint_inline) ->
-        call_free def.body
-    | _ -> false)
+  (* Collapsing a projection-only wrapper leaves the sealed provider call in
+     place. Even when the local budget is spent, the wrapper adds no calls. *)
+  let rec projection = function
+    | Lvar _ | Lconst (Const_int _ | Const_char _) -> true
+    | Lprim (Pfield _, [owner], _) -> projection owner
+    | _ -> false
+  in
+  let forwards_to_import def =
+    match def.body with
+    | Lapply call ->
+        List.for_all projection call.ap_args
+        && Option.exists (fun (target, _) ->
+          target.arity = List.length call.ap_args && Option.is_none target.inline_lambda)
+          (imported_callee_and_unit imports call.ap_func)
+    | _ -> false
   in
   let rec visit depth defs = function
     | Llet (mode, kind, id, rhs, body) ->
@@ -245,9 +282,10 @@ let inline_local_calls ~imports code =
         (match callee defs call with
         | Some (def, cost, imported) when def.kind = Curried
             && List.compare_lengths def.params call.ap_args = 0
-            && depth < 12
+            && depth < max_depth
             && (cost <= !(budget imported)
-                || (Option.is_none imported && small_inline_hint def call cost)) ->
+                || (Option.is_none imported && cost <= small_body_limit
+                    && (small_inline_hint defs def call depth || forwards_to_import def))) ->
             let remaining = budget imported in
             remaining := max 0 (!remaining - cost);
             let def = duplicate_function def in

@@ -308,6 +308,25 @@ when transferring ownership. The slot preserves the identity of the value
 created at initialization. Locals with per-invocation captures keep their
 closure environments.
 
+## Small local calls after the inline budget
+
+The Lambda inliner can expand a saturated, explicitly hinted local call
+when the unit's general budget cannot cover it. An expanded body can include
+other explicitly hinted local calls when the complete expansion fits the
+existing 24-node fallback and call-depth bound. Oversized expansions and
+explicit no-inline calls keep their ordinary entry points.
+
+A small local wrapper whose arguments are projections, variables or tagged
+literals can also forward directly to a known imported entry. The imported
+call keeps its initialization dependency and exception behavior. Both
+optimizations run before ARC ownership and finalizer poll insertion.
+
+On the frozen 8,388,705-byte tterm replay, the ARM64 ASCII loop replaces
+its row lookup and damage wrapper calls with an inline lookup and a direct
+call to the damage unit. Its machine code went from 9,816 to 9,796 bytes.
+Total native text grew by 3,984 bytes. Two paired production runs measured
+37.73 to 38.41 MiB/s with 135.20 MB allocated per replay on both builds.
+
 ## Inlining imported aggregate producers
 
 Units compiled together can share bounded Lambda bodies for functions that
