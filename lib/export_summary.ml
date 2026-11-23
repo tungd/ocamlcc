@@ -1,6 +1,6 @@
 let archive_format = "ocamlcc-opt"
 let object_format = "ocamlcc-exports"
-let current_version = 5
+let current_version = 6
 
 let versioned format version = format ^ "-v" ^ string_of_int version
 let digest path = Digest.to_hex (Digest.file path)
@@ -11,9 +11,24 @@ let write = Sys_util.write_atomic
 let has_header format ~digest header =
   let suffix = " " ^ digest in
   List.exists (fun version -> header = versioned format version ^ suffix)
-    [current_version; 4; 3; 2; 1]
+    [current_version; 5; 4; 3; 2; 1]
+
+let inline_payload (fn : Anf.imported_function) =
+  if fn.yields then None else Option.bind fn.inline_lambda Lambda_leaf.encode
+
+let init_name unit_name = "ocamlcc_init_" ^ unit_name
+
+let stamped_initializer unit_name symbol =
+  let first = String.length symbol - 34 in
+  if first < 0 || String.sub symbol first 2 <> "__" then None
+  else
+    let hash = String.sub symbol (first + 2) 32 in
+    if String.for_all (function 'a'..'f' | '0'..'9' -> true | _ -> false) hash
+    then Some (init_name unit_name ^ "__" ^ hash)
+    else None
 
 module Rows = struct
+  let leaf_prefix = "leaf="
   let unicode_test = "unicode-test"
   let unicode_check = "unicode-check"
 
@@ -34,6 +49,8 @@ module Rows = struct
       Option.iter (function
         | Anf.Unicode_test -> Buffer.add_string buffer (" " ^ unicode_test)
         | Unicode_check -> Buffer.add_string buffer (" " ^ unicode_check)) fn.unicode_validation;
+      Option.iter (fun payload -> Printf.bprintf buffer " %s%s" leaf_prefix payload)
+        (inline_payload fn);
       Buffer.add_char buffer '\n')
       exports;
     Buffer.contents buffer
@@ -55,6 +72,11 @@ module Rows = struct
     let units = Hashtbl.create 32 in
     let add row =
       let fields = String.split_on_char ' ' row in
+      let fields, leaf = match List.rev fields with
+        | token :: rest when String.starts_with ~prefix:leaf_prefix token ->
+            let len = String.length leaf_prefix in
+            List.rev rest, Some (String.sub token len (String.length token - len))
+        | _ -> fields, None in
       let fields, unicode_validation = match List.rev fields with
         | tag :: rest when tag = unicode_test -> List.rev rest, Some Anf.Unicode_test
         | tag :: rest when tag = unicode_check -> List.rev rest, Some Anf.Unicode_check
@@ -81,12 +103,19 @@ module Rows = struct
             let flags = List.init arity (fun i -> match mask.[i] with
               | '0' -> false | '1' -> true | _ -> invalid_arg "invalid borrow mask") in
             symbol, flags) worker in
+          let inline_lambda, inline_init =
+            match leaf, stamped_initializer unit_name entry with
+            | Some payload, Some init when not yields ->
+                (match Lambda_leaf.decode ~arity payload with
+                 | Some body -> Some body, Some init
+                 | None -> None, None)
+            | _ -> None, None in
           let fn : Anf.imported_function =
             { unit_name; symbol = entry; arity; yields; borrowed_entry;
               raises = (match raises with
                 | "false" -> No_raise | "finalizer" -> Finalizer_raise | "true" -> May_raise
                 | _ -> invalid_arg "invalid exception effect");
-              returns_immediate; unicode_validation; inline_leaf = None; inline_lambda = None }
+              returns_immediate; unicode_validation; inline_leaf = None; inline_lambda; inline_init }
           in
           let exports = match Hashtbl.find_opt units unit_name with
             | None -> []
@@ -117,9 +146,21 @@ let seal il exports =
       let exports = List.map (fun (path, (fn : Anf.imported_function)) ->
         let symbol = rename fn.symbol in
         let borrowed_entry = Option.map (fun (worker, flags) -> rename worker, flags) fn.borrowed_entry in
-        path, { fn with symbol; borrowed_entry }) exports in
+        let inline_init =
+          if Option.is_some (inline_payload fn) then stamped_initializer fn.unit_name symbol
+          else None in
+        path, { fn with symbol; borrowed_entry; inline_init }) exports in
+      let aliases =
+        List.filter_map (fun (_, (fn : Anf.imported_function)) ->
+          Option.map (fun alias -> alias, init_name fn.unit_name) fn.inline_init) exports
+        |> List.sort_uniq compare
+        |> List.map (fun (alias, init) ->
+          let open Qbe_il in
+          { name = alias; export = true; retty = None; params = [];
+            blocks = [{ label = "start"; term = Ret None;
+                        insts = [Call_void { fn = Global init; args = [] }] }] }) in
       let name symbol = Option.value ~default:symbol (Hashtbl.find_opt names symbol) in
-      Qbe_il.to_string ~name il, exports
+      Qbe_il.to_string ~name { il with funcs = il.funcs @ aliases }, exports
 
 let write_unit ~prefix exports =
   write (prefix ^ ".opt") (Rows.encode ~cmi_digest:(digest (prefix ^ ".cmi")) exports)

@@ -793,7 +793,8 @@ let lower ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = []
     let anf =
       Anf_scalar.run
         { module_ident = program.module_ident; code = conv_tail env optimized.code;
-          value_kinds = optimized.value_kinds; inline_bodies = optimized.inline_bodies }
+          value_kinds = optimized.value_kinds; inline_bodies = optimized.inline_bodies;
+          inline_initializers = optimized.inline_initializers }
     in
     Ok (anf, optimized.export_ids)
   with Unsupported what -> Error what

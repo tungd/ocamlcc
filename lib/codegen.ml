@@ -127,8 +127,9 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
   start_block b linit;
   List.iter
     (fun dep ->
-      emit b
-        (Call_void { fn = Global ("ocamlcc_init_" ^ dep); args = [] });
+      let init = Option.value ~default:("ocamlcc_init_" ^ dep)
+        (List.assoc_opt dep program.inline_initializers) in
+      emit b (Call_void { fn = Global init; args = [] });
       let ex = fresh_temp b "depex" in
       emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
       let has_ex = fresh_temp b "dephasex" in
@@ -161,7 +162,7 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
           match emitted_function b worker with
           | Some (symbol, false, worker_arity) when arity = worker_arity -> Some (symbol, flags)
           | _ -> None) in
-        Some (path, { Anf.unit_name; symbol; arity; yields; raises; returns_immediate;
+        Some (path, { Anf.unit_name; symbol; arity; yields; raises; returns_immediate; inline_init = None;
                       borrowed_entry; inline_leaf; inline_lambda;
                       unicode_validation = unicode_validation id }))
     exported

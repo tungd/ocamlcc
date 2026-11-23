@@ -11,7 +11,7 @@ let () =
       let fn : Anf.imported_function =
         { unit_name; symbol = "ocamlcc_Provider_step"; arity = 1;
           yields = false; raises = No_raise; returns_immediate = true;
-          borrowed_entry = None; inline_leaf = None; inline_lambda = None;
+          borrowed_entry = None; inline_leaf = None; inline_lambda = None; inline_init = None;
           unicode_validation = None }
       in
       Export_summary.write_unit ~prefix [[0], fn];
@@ -26,7 +26,7 @@ let () =
           Export_summary.Loader.lookup loader ~unit_name ~cmi
         in
         assert (with_version "4" Fun.id = Some [[0], fn]);
-        assert (with_version "6" Fun.id = None);
+        assert (with_version "7" Fun.id = None);
         let remove_effects body =
           let lines = String.split_on_char '\n' body in
           let without_last_field line =

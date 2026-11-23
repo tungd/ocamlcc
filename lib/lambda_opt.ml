@@ -162,6 +162,7 @@ let inline_local_calls ~imports code =
   let max_depth = 12 in
   let small_body_limit = 24 in
   let local_budget = ref (2 * nodes) in
+  let inline_initializers = Hashtbl.create 8 in
   let import_budget = ref (min 2048 (nodes + 192)) in
   let budget = function None -> local_budget | Some _ -> import_budget in
   let rec fresh_exits labels = function
@@ -214,7 +215,11 @@ let inline_local_calls ~imports code =
           && (def.attr.is_a_functor
               || List.exists2 (known_callback defs) def.params call.ap_args))
   in
-  let callee defs call =
+  let find_import aliases = function
+    | Lvar id -> Ident.Map.find_opt id aliases
+    | expr -> imported_callee_and_unit imports expr
+  in
+  let callee defs aliases call =
     match known defs call.ap_func with
     | Some (def, cost) when List.compare_lengths def.params call.ap_args = 0
                              && should_inline defs def cost call ->
@@ -222,8 +227,8 @@ let inline_local_calls ~imports code =
     | Some _ -> None
     | None when call.ap_inlined = Never_inline -> None
     | None ->
-        Option.bind (imported_callee_and_unit imports call.ap_func) (fun (target, unit_id) ->
-          Option.map (fun def -> def, size def.body, Some unit_id) target.inline_lambda)
+        Option.bind (find_import aliases call.ap_func) (fun (target, unit_id) ->
+          Option.map (fun def -> def, size def.body, Some (unit_id, target.inline_init)) target.inline_lambda)
   in
   (* Preserve the small explicit-hint fallback after the unit's budget is
      spent. A hinted helper can participate when its expanded body fits the
@@ -268,18 +273,22 @@ let inline_local_calls ~imports code =
           (imported_callee_and_unit imports call.ap_func)
     | _ -> false
   in
-  let rec visit depth defs = function
+  let rec visit depth defs import_aliases = function
     | Llet (mode, kind, id, rhs, body) ->
         let def = known defs rhs in
         let defs' = match def with
           | Some def -> Ident.Map.add id def defs
           | None -> defs
         in
-        let body = visit depth defs' body in
+        let aliases' = match find_import import_aliases rhs with
+          | Some (({ inline_init = Some _; _ }, _) as entry) -> Ident.Map.add id entry import_aliases
+          | _ -> import_aliases
+        in
+        let body = visit depth defs' aliases' body in
         let mode = if Option.is_some def then Alias else mode in
-        Llet (mode, kind, id, visit depth defs rhs, body)
+        Llet (mode, kind, id, visit depth defs import_aliases rhs, body)
     | Lapply call ->
-        (match callee defs call with
+        (match callee defs import_aliases call with
         | Some (def, cost, imported) when def.kind = Curried
             && List.compare_lengths def.params call.ap_args = 0
             && depth < max_depth
@@ -305,15 +314,17 @@ let inline_local_calls ~imports code =
               | _ -> aliases, Llet (Strict, kind, id, arg, body))
               def.params call.ap_args (Ident.Map.empty, body) in
             let body = if Ident.Map.is_empty aliases then body else Lambda.rename aliases body in
-            let body = visit (depth + 1) defs body in
+            let body = visit (depth + 1) defs import_aliases body in
             (match imported with
              | None -> body
-             | Some unit_id ->
+             | Some (unit_id, init) ->
+                 Option.iter (Hashtbl.replace inline_initializers (Ident.name unit_id)) init;
                  Lsequence (Lprim (Pgetglobal unit_id, [], call.ap_loc), body))
-        | _ -> shallow_map (visit depth defs) (Lapply call))
-    | expr -> shallow_map (visit depth defs) expr
+        | _ -> shallow_map (visit depth defs import_aliases) (Lapply call))
+    | expr -> shallow_map (visit depth defs import_aliases) expr
   in
-  visit 0 Ident.Map.empty code
+  let code = visit 0 Ident.Map.empty Ident.Map.empty code in
+  code, (Hashtbl.to_seq inline_initializers |> List.of_seq |> List.sort compare)
 
 (* Inlining introduces argument bindings around the returned value.
    Move those bindings and any preceding effects out of strict right-hand
@@ -895,8 +906,7 @@ let inline_export_bodies defs exported =
     check def.body;
     captures
   in
-  let copy id =
-    let def = function_at id in
+  let copy_product id def =
     if not (returns_product def.body) then raise Ineligible;
     let remaining = ref 192 in
     let rec measure expr =
@@ -926,6 +936,10 @@ let inline_export_bodies defs exported =
       List.fold_left (fun body (id, helper) ->
         Llet (Alias, Pgenval, id, Lfunction helper, body))
         body helpers) def
+  in
+  let copy id =
+    let def = function_at id in
+    if Option.is_some (Lambda_leaf.encode def) then def else copy_product id def
   in
   List.fold_left (fun bodies (_, id) ->
     if Ident.Map.mem id bodies then bodies
@@ -1087,6 +1101,7 @@ module Optimized = struct
     slots : Lambda.value_kind Ident.Map.t;
     value_kinds : Lambda.value_kind Ident.Map.t;
     inline_bodies : Lambda.lfunction Ident.Map.t;
+    inline_initializers : (string * string) list;
     export_ids : (int list * Ident.t) list;
   }
 end
@@ -1097,9 +1112,11 @@ let optimize ~imports ~selectors ~is_array_initializer ~collect_exports code =
     | Some table -> specialize_int_selector_aliases table code
     | None -> code
   in
+  let code, inline_initializers =
+    inline_local_calls ~imports (propagate_immediate_constants code)
+  in
   let code =
-    code |> propagate_immediate_constants |> inline_local_calls ~imports
-    |> flatten_let_rhs |> resolve_module_projections
+    code |> flatten_let_rhs |> resolve_module_projections
     |> drop_unused_alias_lets |> promote_local_refs
     |> replace_local_aggregates
     |> Bounds.remove_redundant_checks ~is_array_initializer |> lift_recursive_calls
@@ -1113,7 +1130,7 @@ let optimize ~imports ~selectors ~is_array_initializer ~collect_exports code =
     else Ident.Map.empty, []
   in
   { Optimized.code; scalars; slots; value_kinds = binding_kinds code;
-    inline_bodies; export_ids }
+    inline_bodies; inline_initializers; export_ids }
 
 (* A small closed expression over tagged scalar parameters can be copied into
    the caller. Its body uses neither ownership operations nor exception state. *)

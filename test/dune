@@ -477,6 +477,11 @@
  (libraries ocamlcc))
 
 (test
+ (name exported_leaf_test)
+ (modules exported_leaf_test)
+ (libraries ocamlcc str))
+
+(test
  (name dep_graph_test)
  (modules dep_graph_test)
  (libraries ocamlcc compiler-libs.common))

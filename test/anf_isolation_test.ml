@@ -22,7 +22,7 @@ let start symbol =
   let fn : Anf.imported_function =
     { symbol; unit_name = "Provider"; arity = 1; yields = false;
       borrowed_entry = None; raises = No_raise; returns_immediate = true;
-      unicode_validation = None; inline_leaf = None; inline_lambda = None }
+      unicode_validation = None; inline_leaf = None; inline_lambda = None; inline_init = None }
   in
   let first_request = ref true in
   let load_exports unit_name =

@@ -5,6 +5,7 @@ module Optimized : sig
     slots : Lambda.value_kind Ident.Map.t;
     value_kinds : Lambda.value_kind Ident.Map.t;
     inline_bodies : Lambda.lfunction Ident.Map.t;
+    inline_initializers : (string * string) list;
     export_ids : (int list * Ident.t) list;
   }
 end

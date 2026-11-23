@@ -180,6 +180,7 @@ and imported_function = {
   borrowed_entry : (string * bool list) option;
   inline_leaf : lfunction option;
   inline_lambda : Lambda.lfunction option;
+  inline_init : string option;
   unicode_validation : unicode_validation option;
 }
 
@@ -238,6 +239,7 @@ type program = {
   code : aexpr;
   value_kinds : Lambda.value_kind Ident.Map.t;
   inline_bodies : Lambda.lfunction Ident.Map.t;
+  inline_initializers : (string * string) list;
 }
 
 (* Calls and allocations on the success path need the usual poll.

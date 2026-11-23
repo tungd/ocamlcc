@@ -327,6 +327,28 @@ call to the damage unit. Its machine code went from 9,816 to 9,796 bytes.
 Total native text grew by 3,984 bytes. Two paired production runs measured
 37.73 to 38.41 MiB/s with 135.20 MB allocated per replay on both builds.
 
+## Bounded leaves in exported metadata
+
+Version 6 object and archive summaries carry closed Lambda leaves of up to
+24 nodes. The bounded format represents local variables, tagged literals,
+conditionals, projections, and selected primitive operations. Direct calls
+and calls through immutable aliases can use a leaf inside the Lambda
+inliner's existing import budget. The caller then runs its usual bounds,
+exception, finalizer and ownership passes on the copied expression.
+
+The caller initializes the provider through an implementation-stamped
+symbol. It delegates to the same once-only initializer used by ordinary
+calls. An older inlined object therefore requires the provider it was built
+against. Older summary versions and malformed leaf payloads can still
+supply direct-call facts.
+
+The frozen tterm replay publishes a leaf for `Types.Csi_params.is_simple`.
+Its recursive `group_end` and `State_damage.mark_span` use direct calls.
+Native text grew from 3,985,696 to 3,995,004 bytes. The paired production
+runs allocated 135.20 MB per replay on both builds. The baseline runs
+ranged from 12.65 to 24.90 MiB/s, so the run cannot isolate a throughput
+change from the inliner.
+
 ## Inlining imported aggregate producers
 
 Units compiled together can share bounded Lambda bodies for functions that

@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Persist bounded Lambda leaves with sealed provider initialization and inline saturated direct and immutable-alias calls during Lambda optimization. See [compiler pipeline](/concepts/compiler-pipeline.md#bounded-leaves-in-exported-metadata).
+
 - 2026-11-23 (codex/1) — Use suspension facts to omit shadow roots around known partial applications and non-suspending first calls in over-applications. See [Perceus ARC](/concepts/perceus-arc.md).
 
 - 2026-11-23 (codex/1) — Batch Fiber shadow roots and reuse tokens with one scratch slot per native frame. Exercise growth, resumption, and abandonment. See [Fibers](/concepts/wren-fibers.md#batched-shadow-roots).

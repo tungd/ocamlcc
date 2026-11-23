@@ -129,7 +129,7 @@ let () =
     external set : int array -> int -> int -> unit = "%array_safe_set"
     let step x = x + 1
     let pair choose x carry = if choose then x, carry else step x, None
-    let write cells i v = set cells i v
+    let[@inline never] write cells i v = set cells i v
   |} in
   let compile = function Ok output -> output | Error error -> failwith error in
   let request =
