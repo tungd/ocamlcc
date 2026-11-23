@@ -54,6 +54,7 @@ type tail_entry
 
 val with_fn_state :
   ?group_entries:tail_entry Ident.Map.t ->
+  ?tagged_entries:(int * (int64 * tail_entry) list) ->
   t -> self:Ident.t option -> entry_label:string ->
   in_init:bool -> (unit -> 'a) -> 'a
 

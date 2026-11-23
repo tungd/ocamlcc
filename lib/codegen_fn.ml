@@ -92,6 +92,46 @@ and alloc_closure b code_sym arity (env : Ident.t list) : t =
     env;
   mark_heap b obj
 
+let emit_entry_dispatch b selector entries =
+  let rec emit_chain = function
+    | [] -> close_block b Hlt
+    | [_, entry, args] -> jump_to_tail_entry b entry args
+    | (tag, entry, args) :: rest ->
+        let equal = fresh_temp b "dspsel" in
+        emit b (Cmp (Eq, Long, equal, selector, Int tag));
+        let next = fresh_label b "dspnext" in
+        add_entry_predecessor b entry args;
+        close_block b (Br (equal, tail_entry_label entry, next));
+        start_block b next;
+        emit_chain rest
+  in
+  emit_chain entries
+
+(* The lifted closure dispatcher is a constant switch on a formal parameter.
+   Keep its entry finalizer poll and exception cleanup on every arm. *)
+let tagged_loop id (lf : Anf.lfunction) =
+  let rec arms = function
+    | Anf.Switch (Var selector, { consts = _ :: _ :: _ as cases;
+                                  blocks = []; fail = None; result_rep = None }) ->
+        Some (selector, cases)
+    | Let (id, PollFinalizers, rest) ->
+        wrap (fun body -> Anf.Let (id, PollFinalizers, body)) rest
+    | CheckExn (kind, err, rest) ->
+        wrap (fun body -> Anf.CheckExn (kind, err, body)) rest
+    | _ -> None
+  and wrap prefix rest =
+    Option.map (fun (selector, cases) ->
+      selector, List.map (fun (tag, body) -> tag, prefix body) cases)
+      (arms rest)
+  in
+  if lf.loop_scalars <> [] || not (Ident.Set.mem id (Codegen_analysis.tail_callees lf.body))
+  then None
+  else
+    Option.bind (arms lf.body) (fun (selector, cases) ->
+      List.find_mapi (fun i (param, kind) ->
+        if Ident.same param selector && kind = Lambda.Pintval then Some (i, cases) else None)
+        lf.params)
+
 let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
     ~(env : Ident.t list) : string =
   let g = (function_info b id).global in
@@ -117,7 +157,14 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
       ty, fresh_name b "loop") lf.params
     @ List.map (fun _ -> Long, fresh_name b "loop_box") lf.loop_scalars
   in
-  with_fn_state b ~self:(Some id) ~entry_label:"loop"
+  let dispatch = Option.map (fun (index, cases) ->
+    index, List.map (fun (tag, body) ->
+      let label = fresh_label b (Printf.sprintf "tag_%s_entry" (sanitize (string_of_int tag))) in
+      tag_int tag, tail_entry label, body) cases) (tagged_loop id lf)
+  in
+  let tagged_entries = Option.map (fun (index, cases) ->
+    index, List.map (fun (tag, entry, _) -> tag, entry) cases) dispatch in
+  with_fn_state ?tagged_entries b ~self:(Some id) ~entry_label:"loop"
     ~in_init:false (fun () ->
       with_shadowed_vars b shadowed_ids (fun () ->
           let ps = List.map (fun (_, n) -> (Long, n)) param_binders in
@@ -144,22 +191,43 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
               param_binders
             @ List.map (fun (id, _) -> Temp (List.assoc id param_binders)) lf.loop_scalars
           in
-          let tick =
+          let new_tick () =
             if lf.periodic_poll then Some (fresh_name b "poll_tick") else None
           in
-          set_poll_tick b (Option.map (fun name -> Temp name) tick);
+          let tick = new_tick () in
+          let with_tick binders = function
+            | None -> binders
+            | Some name -> binders @ [Word, name]
+          in
+          let bind_params binders =
+            List.iter2 (fun pid (_, name) -> bind_value b pid (Temp name))
+              (Anf.bound_parameters lf) binders
+          in
+          let emit_body binders tick body =
+            bind_params binders;
+            set_poll_tick b (Option.map (fun name -> Temp name) tick);
+            let result = compile_aexpr b true body in
+            close_ret b (Some result)
+          in
           close_block b (Jmp "loop");
           start_block b "loop";
-          List.iter2
-            (fun pid (_, loop_name) -> bind_value b pid (Temp loop_name))
-            (Anf.bound_parameters lf) loop_binders;
-          let result = compile_aexpr b true lf.body in
-          close_ret b (Some result);
-          (match tick with
-          | None -> insert_header_phis b loop_binders start_values
-          | Some name ->
-              insert_header_phis b (loop_binders @ [Word, name])
-                (start_values @ [Int 0L]));
+          (match dispatch with
+          | None -> emit_body loop_binders tick lf.body
+          | Some (index, cases) ->
+              let args = List.map (fun (_, name) -> Temp name) (with_tick loop_binders tick) in
+              let selector = List.nth args index in
+              emit_entry_dispatch b selector
+                (List.map (fun (tag, entry, _) -> tag, entry, args) cases);
+              let case_binders = List.map (fun (_, entry, body) ->
+                let params = List.map (fun (ty, _) -> ty, fresh_name b "arm_arg") loop_binders in
+                let tick = new_tick () in
+                start_block b (tail_entry_label entry);
+                emit_body params tick body;
+                entry, with_tick params tick) cases in
+              List.iter (fun (entry, binders) ->
+                insert_entry_phis b entry binders) case_binders);
+          let init = match tick with None -> start_values | Some _ -> start_values @ [Int 0L] in
+          insert_header_phis b (with_tick loop_binders tick) init;
           let func =
             { name = g;
               export = not has_closure && not lf.private_entry;
@@ -204,19 +272,8 @@ let compile_scc_group compile_aexpr b gname ~export ~with_closure members =
       in
       (* The selector runs on external entry. Saturated tail calls into this
          group add arguments directly to the destination member's phis. *)
-      let rec dispatch_chain = function
-        | [] -> close_block b Hlt
-        | [member] -> jump_to_tail_entry b member.entry (entry_args member)
-        | member :: rest ->
-            let c = fresh_temp b "dspsel" in
-            emit b (Cmp (Eq, Long, c, Temp formal_sel, Int member.tag));
-            let lnext = fresh_label b "dspnext" in
-            add_entry_predecessor b member.entry (entry_args member);
-            close_block b (Br (c, tail_entry_label member.entry, lnext));
-            start_block b lnext;
-            dispatch_chain rest
-      in
-      dispatch_chain members;
+      emit_entry_dispatch b (Temp formal_sel)
+        (List.map (fun member -> member.tag, member.entry, entry_args member) members);
       let ret_preds = ref [] in
       List.iter
         (fun { id; def; captures; entry; closure_phi; argument_phis; _ } ->

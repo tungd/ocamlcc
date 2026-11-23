@@ -50,6 +50,7 @@ type fn_state = {
   entry : tail_entry;
   self : Ident.t option;
   group_entries : tail_entry Ident.Map.t;
+  tagged_entries : (int * (int64 * tail_entry) list) option;
   mutable poll_tick : Qbe_il.t option;
   mutable try_stack : string list;
   mutable compact_arc : bool;
@@ -77,7 +78,8 @@ type t = {
   mutable cur_fn : fn_state;
 }
 
-let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(group_entries = Ident.Map.empty)
+let fresh_fn_state ?(entry_label = "start") ?(self = None)
+    ?(group_entries = Ident.Map.empty) ?tagged_entries
     ?(in_init = false) () =
   { open_label = "start";
     insts = [];
@@ -92,6 +94,7 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(group_entries = Ide
     entry = tail_entry entry_label;
     self;
     group_entries;
+    tagged_entries;
     poll_tick = None;
     try_stack = [];
     compact_arc = false;
@@ -119,9 +122,9 @@ let create ?(inline_single_thread_rc = false) ?(may_suspend = fun _ -> true) pre
 
 (* Execute [f ()] with an isolated [fn_state], restoring the enclosing
    function's state even if [f] raises. *)
-let with_fn_state ?group_entries b ~self ~entry_label ~in_init f =
+let with_fn_state ?group_entries ?tagged_entries b ~self ~entry_label ~in_init f =
   let saved = b.cur_fn in
-  b.cur_fn <- fresh_fn_state ~entry_label ~self ?group_entries ~in_init ();
+  b.cur_fn <- fresh_fn_state ~entry_label ~self ?group_entries ?tagged_entries ~in_init ();
   Fun.protect ~finally:(fun () -> b.cur_fn <- saved) f
 
 (* Temporarily shadow [b.vars] entries for [bindings] and restore prior
@@ -353,7 +356,15 @@ let jump_to_tail_entry b entry values =
   add_entry_predecessor b entry values;
   close_block b (Jmp entry.target)
 
-let jump_to_entry b = jump_to_tail_entry b b.cur_fn.entry
+let jump_to_entry b values =
+  let entry =
+    Option.bind b.cur_fn.tagged_entries (fun (index, arms) ->
+      match List.nth_opt values index with
+      | Some (Int tag) -> List.assoc_opt tag arms
+      | _ -> None)
+    |> Option.value ~default:b.cur_fn.entry
+  in
+  jump_to_tail_entry b entry values
 
 let insert_entry_phis b entry binder_names =
   if binder_names <> [] then begin

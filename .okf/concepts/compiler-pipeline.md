@@ -260,7 +260,11 @@ keep `even`/`odd` and `ocamllex` lexer DFAs in constant stack space.
 the recursive functions inside the group are saturated direct calls. The
 dispatcher takes a member selector and argument slots sized to the largest
 member arity. It loads the captured environment at entry and borrows those
-values across tail-call transitions. A first-class use in the enclosing body
+values across tail-call transitions. When the dispatcher switches on an
+immediate argument, a self-tail call with a known tag can jump to the
+matching arm. The arm keeps the original finalizer poll and exception
+cleanup, including the iteration counter for sampled polls. Runtime
+selectors use the shared entry switch. A first-class use in the enclosing body
 gets a wrapper of its original arity that owns the dispatcher. Dynamic sibling
 uses inside the group, tupled functions, and captures of mutable Lambda slots
 keep the general closure path. The `cycle_collect` executable checks constant

@@ -92,7 +92,7 @@ let () =
       in
       let params = List.length (String.split_on_char ',' header) in
       assert (params = 4);
-      assert (contains_substring ~sub:"jmp @loop" ssa);
+      check_entry_jumps ~header:prefix ~first:"tag_0" ~second:"tag_1" ssa;
       check_entry_jumps ~header:"export function l $ocamlcc_Mutrec_clos_group"
         ~first:"plain" ~second:"peer" ssa;
       check_entry_jumps ~header:"\nfunction l $ocamlcc_Mutrec_clos_group"
