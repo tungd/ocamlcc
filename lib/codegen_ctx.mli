@@ -116,7 +116,8 @@ val compile_bounds_guarded :
   Qbe_il.t -> Qbe_il.t -> (unit -> Qbe_il.t) -> Qbe_il.t
 
 val compile_bytes_slice_bounds_guarded :
-  t -> ?on_oob:(unit -> unit) -> Qbe_il.t -> Qbe_il.t -> int ->
+  t -> ?on_oob:(unit -> unit) -> ?result_type:ty ->
+  Qbe_il.t -> Qbe_il.t -> int ->
   (unit -> Qbe_il.t) -> Qbe_il.t
 
 val string_len_raw : t -> Qbe_il.t -> Qbe_il.t

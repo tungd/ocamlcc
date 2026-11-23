@@ -143,6 +143,21 @@ allocation from 605.42 to 473.09 MB. A separate million-store probe
 reported 3,000,026 words before the change and 26 after, including
 measurement overhead.
 
+## Checked byte loads
+
+The selected Stdlib `Bytes.get_int32_ne` and `Bytes.get_int64_ne` bindings
+lower to checked word loads, as do the `_le` bindings on little-endian
+targets. Explicit no-inline calls still use the Stdlib entry point.
+Scalar consumers such as `Int32.to_int` and `Int64.to_int` can read the
+native word directly. Uses that need an OCaml value receive a box.
+The bounds check covers all bytes of the unaligned word. Conversion to
+`int` preserves signed 32-bit extension and 63-bit truncation of 64-bit words.
+
+On macOS ARM64 a probe reading one million pairs of checked words reported
+6,000,017 allocated words before and 17 after, including measurement overhead.
+Two paired runs against the same tterm production replay snapshot measured
+36.13 to 37.89 MiB/s and 147.62 to 135.20 MB of allocation per replay.
+
 ## Mutable numeric slots
 
 Local refs promoted to `MutLet` can use raw QBE stack storage for floats,

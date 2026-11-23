@@ -141,18 +141,27 @@ let array_initializer ~include_dirs ~stdlib_dir =
     | Some index -> List.mem_assoc index (Lazy.force slots)
     | None -> false
 
-type byte_store = Word32 | Word64
+module Byte_access = struct
+  type word = Word32 | Word64
+  type t = Load of word | Store of word
 
-let byte_store ~include_dirs ~stdlib_dir =
-  let slots = lazy (
-    stdlib_value_slots ~unit_name:"Stdlib__Bytes" ~include_dirs ~stdlib_dir
-      (function
-        | "set_int32_ne" -> Some Word32
-        | "set_int64_ne" -> Some Word64
-        | "set_int32_le" when not Sys.big_endian -> Some Word32
-        | "set_int64_le" when not Sys.big_endian -> Some Word64
-        | _ -> None))
-  in
-  fun callee ->
-    Option.bind (slot_of_callee "Stdlib__Bytes" callee) (fun index ->
-      List.assoc_opt index (Lazy.force slots))
+  let boxed_integer = function Word32 -> Lambda.Pint32 | Word64 -> Lambda.Pint64
+
+  let resolve ~include_dirs ~stdlib_dir =
+    let slots = lazy (
+      stdlib_value_slots ~unit_name:"Stdlib__Bytes" ~include_dirs ~stdlib_dir
+        (function
+          | "get_int32_ne" -> Some (Load Word32)
+          | "get_int64_ne" -> Some (Load Word64)
+          | "get_int32_le" when not Sys.big_endian -> Some (Load Word32)
+          | "get_int64_le" when not Sys.big_endian -> Some (Load Word64)
+          | "set_int32_ne" -> Some (Store Word32)
+          | "set_int64_ne" -> Some (Store Word64)
+          | "set_int32_le" when not Sys.big_endian -> Some (Store Word32)
+          | "set_int64_le" when not Sys.big_endian -> Some (Store Word64)
+          | _ -> None))
+    in
+    fun callee ->
+      Option.bind (slot_of_callee "Stdlib__Bytes" callee) (fun index ->
+        List.assoc_opt index (Lazy.force slots))
+end

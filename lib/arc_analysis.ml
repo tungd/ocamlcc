@@ -35,8 +35,8 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | BytesSet _ | BytesSetN _ | Bswap16 _ | ArraySet _ | Builtin _ | Assign _ | AssignImm _
   | ReadScalarSlot _ | AssignScalar _ | StoreModuleSlot _ | ImportDependency _ ->
       true
-  | BytesGetN (_, 2, _, _) -> true
-  | BytesGetN _ | BswapBint _ -> false
+  | BytesGetN (_, (Uint16 | Raw_word _), _, _) -> true
+  | BytesGetN (_, Boxed_word _, _, _) | BswapBint _ -> false
   | IntegerOfInt _ | IntOfInteger _ | IntegerConvert _
   | FloatArrayGet _ | FloatArraySet _ | FloatOfInt _ | IntOfFloat _
   | FloatSign _ | FloatCompare _ | KeepAlive _ -> true

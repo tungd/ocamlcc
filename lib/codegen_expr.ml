@@ -650,30 +650,28 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
         let len = string_len_raw b bsv in
         compile_bounds_guarded b ?on_oob ui len do_write
       else do_write ()
-  | BytesGetN (safe, width, bs, idx) ->
+  | BytesGetN (safe, mode, bs, idx) ->
       let bsv = compile_atom hooks b bs in
       let ui = compile_untagged hooks b idx in
+      let width, load, ty = match mode with
+        | Uint16 -> 2, Loaduh, Long
+        | Boxed_word Word32 | Raw_word Word32 -> 4, Loadw, Word
+        | Boxed_word Word64 | Raw_word Word64 -> 8, Loadl, Long
+      in
       let do_read () =
         let addr = fresh_temp b "bgptr" in
         emit b (Binop (Add, Long, addr, bsv, ui));
-        match width with
-        | 2 ->
-            let raw = fresh_temp b "bg16" in
-            emit b (Load (Loaduh, Long, raw, addr));
-            retag b raw
-        | 4 ->
-            let raw = fresh_temp b "bg32" in
-            emit b (Load (Loadw, Word, raw, addr));
-            box_bint b Pint32 raw
-        | 8 ->
-            let raw = fresh_temp b "bg64" in
-            emit b (Load (Loadl, Long, raw, addr));
-            box_bint b Pint64 raw
-        | w -> failwith (Printf.sprintf "unsupported BytesGetN width %d" w)
+        let raw = fresh_temp b "bg" in
+        emit b (Load (load, ty, raw, addr));
+        match mode with
+        | Uint16 -> retag b raw
+        | Raw_word _ -> raw
+        | Boxed_word word -> box_bint b (Builtins.Byte_access.boxed_integer word) raw
       in
       if safe then
         let len = string_len_raw b bsv in
-        compile_bytes_slice_bounds_guarded b ?on_oob ui len width do_read
+        let result_type = match mode with Raw_word _ -> ty | _ -> Long in
+        compile_bytes_slice_bounds_guarded b ?on_oob ~result_type ui len width do_read
       else do_read ()
   | BytesSetN (safe, bs, idx, word) ->
       let bsv = compile_atom hooks b bs in

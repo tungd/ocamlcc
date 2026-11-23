@@ -387,6 +387,11 @@
  (libraries ocamlcc str))
 
 (test
+ (name bytes_load_test)
+ (modules bytes_load_test)
+ (libraries ocamlcc str))
+
+(test
  (name finalizer_poll_test)
  (modules finalizer_poll_test)
  (libraries ocamlcc str))

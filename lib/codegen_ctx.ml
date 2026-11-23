@@ -689,9 +689,10 @@ let compile_bounds_guarded b ?drop_on_oob ?on_oob ?(result_type = Long)
   close_block b (Br (ok, lok, loob));
   finish_bounds_guard b ?drop_on_oob ?on_oob ~result_type "bnd" lok loob on_ok
 
-let compile_bytes_slice_bounds_guarded b ?on_oob idx_untagged len_val (width : int)
-    (on_ok : unit -> Qbe_il.t) : Qbe_il.t =
-  if width <= 1 then compile_bounds_guarded b ?on_oob idx_untagged len_val on_ok
+let compile_bytes_slice_bounds_guarded b ?on_oob ?(result_type = Long)
+    idx_untagged len_val width on_ok =
+  if width <= 1 then
+    compile_bounds_guarded b ?on_oob ~result_type idx_untagged len_val on_ok
   else
     let has_room = fresh_temp b "sroom" in
     emit b (Cmp (Sge, Long, has_room, len_val, Int (Int64.of_int width)));
@@ -706,7 +707,7 @@ let compile_bytes_slice_bounds_guarded b ?on_oob idx_untagged len_val (width : i
     let ok = fresh_temp b "sbnd" in
     emit b (Cmp (Ult, Long, ok, idx_untagged, limit));
     close_block b (Br (ok, lok, loob));
-    finish_bounds_guard b ?on_oob ~result_type:Long "sbnd" lok loob on_ok
+    finish_bounds_guard b ?on_oob ~result_type "sbnd" lok loob on_ok
 
 let string_len_raw b sv =
   let addr = fresh_temp b "slenp" in

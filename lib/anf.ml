@@ -71,7 +71,7 @@ module Lower_env = struct
     slots : Lambda.value_kind Ident.Map.t;
     printing : Builtins.table option;
     selectors : Builtins.int_selection_table Lazy.t option;
-    byte_store : Lambda.lambda -> Builtins.byte_store option;
+    byte_access : Lambda.lambda -> Builtins.Byte_access.t option;
   }
 end
 
@@ -191,6 +191,10 @@ and conv_atoms env (lams : Lambda.lambda list) (k : atom list -> aexpr) : aexpr 
 and conv_bigstring env symbol width unsafe args k =
   let checked = Int (if unsafe then 0 else 1) in
   conv_atoms env args (fun args -> k (Ccall (symbol, args @ [Int width; checked])))
+
+and conv_byte_load env safe width b i k =
+  conv_expr env b (fun b ->
+    conv_expr env i (fun i -> k (BytesGetN (safe, width, b, i))))
 
 and conv_byte_store env safe word b i v k =
   conv_expr env b (fun b -> conv_expr env i (fun i -> conv_expr env v (fun v ->
@@ -314,16 +318,19 @@ and conv_simple env ?(result_kind = Lambda.Pgenval) (id : Ident.t)
                   Let (meth, Ccall ("ocamlcc_public_method", [receiver; label]),
                     emit_cexpr (App (Var meth, receiver :: args))))))
   | Lapply { ap_func; ap_args; ap_inlined; _ } -> (
-      let { Lower_env.printing; selectors; byte_store; _ } = env in
+      let { Lower_env.printing; selectors; byte_access; _ } = env in
       let select = Option.bind selectors (fun table -> Builtins.resolve_int_selection table ap_func) in
-      let store = if ap_inlined = Never_inline then None else byte_store ap_func in
-      match select, store, ap_args with
+      let access = if ap_inlined = Never_inline then None else byte_access ap_func in
+      match select, access, ap_args with
       | Some op, _, [ lhs; rhs ] ->
           conv_expr env lhs (fun a ->
               conv_expr env rhs (fun b -> emit_cexpr (IntSelect (op, a, b))))
-      | _, Some store, [ b; i; v ] ->
+      | _, Some (Load word), [ b; i ] ->
+          Let (Ident.create_local "import", ImportDependency "Stdlib__Bytes",
+            conv_byte_load env true (Byte_load.Boxed_word word) b i emit_cexpr)
+      | _, Some (Store store), [ b; i; v ] ->
           let word v = match store with
-            | Builtins.Word32 -> Byte_store.Int32 (Boxed_scalar v)
+            | Builtins.Byte_access.Word32 -> Byte_store.Int32 (Boxed_scalar v)
             | Word64 -> Byte_store.Int64 (Boxed_scalar v)
           in
           Let (Ident.create_local "import", ImportDependency "Stdlib__Bytes",
@@ -613,17 +620,11 @@ and conv_simple env ?(result_kind = Lambda.Pgenval) (id : Ident.t)
   | Lprim (Pbbswap bi, [ a ], _) ->
       conv_expr env a (fun av -> emit_cexpr (BswapBint (bi, av)))
   | Lprim ((Pstring_load_16 unsafe | Pbytes_load_16 unsafe), [ s; i ], _) ->
-      conv_atoms env [ s; i ] (function
-        | [ sa; ia ] -> emit_cexpr (BytesGetN (not unsafe, 2, sa, ia))
-        | _ -> assert false)
+      conv_byte_load env (not unsafe) Byte_load.Uint16 s i emit_cexpr
   | Lprim ((Pstring_load_32 unsafe | Pbytes_load_32 unsafe), [ s; i ], _) ->
-      conv_atoms env [ s; i ] (function
-        | [ sa; ia ] -> emit_cexpr (BytesGetN (not unsafe, 4, sa, ia))
-        | _ -> assert false)
+      conv_byte_load env (not unsafe) (Byte_load.Boxed_word Word32) s i emit_cexpr
   | Lprim ((Pstring_load_64 unsafe | Pbytes_load_64 unsafe), [ s; i ], _) ->
-      conv_atoms env [ s; i ] (function
-        | [ sa; ia ] -> emit_cexpr (BytesGetN (not unsafe, 8, sa, ia))
-        | _ -> assert false)
+      conv_byte_load env (not unsafe) (Byte_load.Boxed_word Word64) s i emit_cexpr
   | Lprim (Pbytes_set_16 unsafe, [ b; i; v ], _) ->
       conv_byte_store env (not unsafe) (fun v -> Byte_store.Uint16 v) b i v emit_cexpr
   | Lprim (Pbytes_set_32 unsafe, [ b; i; v ], _) ->
@@ -824,13 +825,13 @@ let lower ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = []
         ~collect_exports program.code
     in
     let env =
-      let byte_store =
+      let byte_access =
         Option.fold ~none:(fun _ -> None)
-          ~some:(fun stdlib_dir -> Builtins.byte_store ~include_dirs ~stdlib_dir)
+          ~some:(fun stdlib_dir -> Builtins.Byte_access.resolve ~include_dirs ~stdlib_dir)
           stdlib_dir
       in
       { Lower_env.scalars = optimized.scalars; imports; slots = optimized.slots;
-        printing; selectors; byte_store }
+        printing; selectors; byte_access }
     in
     let anf =
       Anf_scalar.run

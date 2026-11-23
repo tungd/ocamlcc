@@ -28,6 +28,9 @@ let raw_boxed_arithmetic op lhs rhs =
   | _ -> None
 
 let raw_producer = function
+  | BytesGetN (safe, Boxed_word word, bytes, index) ->
+      Some (Integer_scalar (Builtins.Byte_access.boxed_integer word),
+            BytesGetN (safe, Raw_word word, bytes, index))
   | ArrayGet (safe, Lambda.Pfloatarray, arr, index) ->
       Some (Double_scalar, FloatArrayGet (safe, arr, index))
   | Binop (Float_arithmetic op, lhs, rhs) ->

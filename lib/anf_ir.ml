@@ -95,6 +95,13 @@ module Byte_store = struct
   let width = function Uint16 _ -> 2 | Int32 _ -> 4 | Int64 _ -> 8
 end
 
+module Byte_load = struct
+  type t =
+    | Uint16
+    | Boxed_word of Builtins.Byte_access.word
+    | Raw_word of Builtins.Byte_access.word
+end
+
 type field_kind = Immediate_field | Immutable_field | Mutable_field
 type block_scan = Scan_all | Scan_if_managed | Scan_none
 
@@ -116,7 +123,7 @@ type cexpr =
   | OffsetRef of int * atom
   | StringGet of bool * atom * atom
   | BytesSet of bool * atom * atom * atom
-  | BytesGetN of bool * int * atom * atom
+  | BytesGetN of bool * Byte_load.t * atom * atom
   | BytesSetN of bool * atom * atom * Byte_store.t
   | Bswap16 of atom
   | BswapBint of Lambda.boxed_integer * atom
