@@ -48,7 +48,8 @@ let compile_with_exports ?(emit_entry = true) ?(inline_single_thread_rc = false)
     ?(unicode_validation = fun _ -> None) ~exported ~effects ~inline_leaf ~borrowed
     (program : Anf.program) =
   let mod_sym = sanitize (Ident.name program.Anf.module_ident) in
-  let b = create ~inline_single_thread_rc mod_sym in
+  let may_suspend id = let yields, _, _ = effects id in yields in
+  let b = create ~inline_single_thread_rc ~may_suspend mod_sym in
   let defs = Codegen_analysis.collect_pure_defs program.code in
   List.iter
     (fun ((id, lf) : Ident.t * Anf.lfunction) ->

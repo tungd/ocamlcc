@@ -419,7 +419,8 @@ let call_can_suspend known yielding = function
   | App (Var fn, args) ->
       (match Ident.Map.find_opt fn known with
       | Some arity ->
-          List.length args > arity || Ident.Set.mem fn yielding
+          let supplied = List.compare_length_with args arity in
+          supplied > 0 || (supplied = 0 && Ident.Set.mem fn yielding)
       | None -> true)
   | App _ -> true
   | _ -> false
@@ -577,5 +578,7 @@ module Program_facts = struct
       else if Ident.Set.mem id facts.raising then Finalizer_raise
       else No_raise
     in
-    Ident.Set.mem id facts.yielding, Ident.Map.mem id facts.imm_funs, raises
+    let yields =
+      not (Ident.Map.mem id facts.known_funs) || Ident.Set.mem id facts.yielding in
+    yields, Ident.Map.mem id facts.imm_funs, raises
 end

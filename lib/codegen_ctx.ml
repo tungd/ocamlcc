@@ -54,6 +54,7 @@ type fn_state = {
 type t = {
   prefix : string;
   inline_single_thread_rc : bool;
+  may_suspend : Ident.t -> bool;
   mutable temp_counter : int;
   mutable label_counter : int;
   mutable data_counter : int;
@@ -92,9 +93,10 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
     compact_arc = false;
     in_init }
 
-let create ?(inline_single_thread_rc = false) prefix =
+let create ?(inline_single_thread_rc = false) ?(may_suspend = fun _ -> true) prefix =
   { prefix;
     inline_single_thread_rc;
+    may_suspend;
     temp_counter = 0;
     label_counter = 0;
     data_counter = 0;
@@ -184,6 +186,7 @@ let finish_module b ~initializers =
 let open_label b = b.cur_fn.open_label
 let block_is_open b = b.cur_fn.term = None
 let inline_rc b = b.inline_single_thread_rc
+let may_suspend b id = b.may_suspend id
 let compact_arc b = b.cur_fn.compact_arc
 let in_initializer b = b.cur_fn.in_init
 let self b = b.cur_fn.self

@@ -22,7 +22,15 @@ let count text il =
   go 0 0
 
 let check name want il =
-  let got = count "call extern $arc_fiber_push(" il in
+  let batch = Str.regexp "call extern \\$arc_fiber_push_batch([^,]+, l \\([0-9]+\\), l [0-9]+)" in
+  let rec count_batches offset total =
+    match Str.search_forward batch il offset with
+    | _ ->
+        let roots = int_of_string (Str.matched_group 1 il) in
+        count_batches (Str.match_end ()) (total + roots)
+    | exception Not_found -> total
+  in
+  let got = count_batches 0 (count "call extern $arc_fiber_push(" il) in
   if got <> want then
     failwith (Printf.sprintf "%s: expected %d shadow roots, got %d" name want got)
 

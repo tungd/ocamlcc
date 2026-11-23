@@ -412,16 +412,14 @@ let rec apply hooks b tail (fn_atom : Anf.atom) (ap_args : Anf.atom list) : t =
               dst)
       | Some info when List.length ap_args > info.arity ->
           let first_args, rest_args = split_at info.arity ap_args in
-          (* Compile the over-apply tail before the first (possibly
-             suspending) call and register it on the fiber shadow stack:
-             this frame has no other window over the first call, so if it
-             suspends and the fiber is dropped, unshadowed rest_vals leak.
-             Pop once the first call returns - apply_closure's runtime
-             (closure.c) shadows the tail args it consumes itself. *)
+          (* The tail arguments remain in this frame while the known entry
+             runs. They need shadowing only if that exact call can suspend.
+             The returned closure still uses the generic application path. *)
           let rest_vals = List.map (compile_atom hooks b) rest_args in
-          with_shadow_stack b (fun () -> shadow_push b rest_vals []);
+          let shadow_tail = may_suspend b id in
+          if shadow_tail then with_shadow_stack b (fun () -> shadow_push b rest_vals []);
           let clos_res = apply hooks b false fn_atom first_args in
-          with_shadow_stack b (fun () -> shadow_pop b (List.length rest_vals) 0);
+          if shadow_tail then with_shadow_stack b (fun () -> shadow_pop b (List.length rest_vals) 0);
           let ex = fresh_temp b "oex" in
           emit b (Call (Long, ex, { fn = Global "ocamlcc_get_exn"; args = [] }));
           let lerr = fresh_label b "oapp_err" in

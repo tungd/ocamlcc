@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Use suspension facts to omit shadow roots around known partial applications and non-suspending first calls in over-applications. See [Perceus ARC](/concepts/perceus-arc.md).
+
 - 2026-11-23 (codex/1) — Batch Fiber shadow roots and reuse tokens with one scratch slot per native frame. Exercise growth, resumption, and abandonment. See [Fibers](/concepts/wren-fibers.md#batched-shadow-roots).
 
 - 2026-11-23 (codex/1) — Use process-owned Fiber state in single-thread ARC and check both prebuilt and source-built runtime objects for TLS references. See [Fibers](/concepts/wren-fibers.md#fiber-state-in-the-single-thread-runtime).

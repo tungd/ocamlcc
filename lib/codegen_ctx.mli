@@ -11,7 +11,8 @@ type fn_info = {
   has_closure : bool;
 }
 
-val create : ?inline_single_thread_rc:bool -> string -> t
+val create : ?inline_single_thread_rc:bool -> ?may_suspend:(Ident.t -> bool) -> string -> t
+val may_suspend : t -> Ident.t -> bool
 val module_prefix : t -> string
 val sanitize : string -> string
 val alloc_global_name : t -> Ident.t -> string
