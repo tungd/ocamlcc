@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Use process-owned Fiber state in single-thread ARC and check both prebuilt and source-built runtime objects for TLS references. See [Fibers](/concepts/wren-fibers.md#fiber-state-in-the-single-thread-runtime).
+
 - 2026-11-23 (codex/1) — Bound small hinted Lambda expansions across local helper calls and collapse projection-only wrappers of known imported entries. See [compiler pipeline](/concepts/compiler-pipeline.md#small-local-calls-after-the-inline-budget).
 
 - 2026-11-23 (codex/1) — Lower constant integer multiplication in tagged form. Verify overflow through a checked byte offset and the original bounds exception. See [codegen arithmetic](/concepts/value-representation.md#codegen-arithmetic).

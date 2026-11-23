@@ -141,7 +141,8 @@ build $builddir/rt-single/primitives.o: cc_rt_single runtime/primitives.c | runt
   runtime/caml_compat.inc runtime/caml/mlvalues.h runtime/caml/alloc.h runtime/caml/custom.h $
   runtime/caml/callback.h runtime/caml/fail.h runtime/caml/hash.h runtime/caml/intext.h
 build $builddir/rt-single/pal.o: cc_rt_single runtime/pal.c | runtime/pal.h
-build $builddir/rt-single/pal_ctx.o $builddir/rt-single/closure.o $builddir/rt-single/fiber.o $builddir/rt-single/builtins.o $builddir/rt-single/main_entry.o: copy_rt_single $builddir/rt/pal_ctx.o $builddir/rt/closure.o $builddir/rt/fiber.o $builddir/rt/builtins.o $builddir/rt/main_entry.o
+build $builddir/rt-single/fiber.o: cc_rt_single runtime/fiber.c | runtime/fiber.h runtime/arc.h runtime/pal.h
+build $builddir/rt-single/pal_ctx.o $builddir/rt-single/closure.o $builddir/rt-single/builtins.o $builddir/rt-single/main_entry.o: copy_rt_single $builddir/rt/pal_ctx.o $builddir/rt/closure.o $builddir/rt/builtins.o $builddir/rt/main_entry.o
 build $builddir/rt-single/libocamlrt_st.a: ar $builddir/rt-single/arc.o $builddir/rt-single/slab.o $builddir/rt-single/cycle.o $builddir/rt-single/weak.o $builddir/rt-single/primitives.o $builddir/rt-single/pal.o $builddir/rt-single/pal_ctx.o $builddir/rt-single/closure.o $builddir/rt-single/fiber.o $builddir/rt-single/builtins.o $builddir/rt-single/main_entry.o
 rule single_rt_compat
   command = ln -sf libocamlrt_st.a $out
@@ -413,7 +414,7 @@ build $builddir/rt-single/cycle_collect: cc_link $builddir/rt-single/cycle_colle
 build test_single_thread_rc: run_single_thread_rc_test | $builddir/rt-single/single_thread_rc $builddir/rt-single/cycle_collect tests/check_single_thread_rc.py tests/cycle_collect.expected
 
 rule run_single_thread_driver
-  command = sh tests/single_thread_driver.sh $builddir/bin/occ $stdlibdir
+  command = sh tests/single_thread_driver.sh $builddir/bin/occ $stdlibdir $builddir/rt-single/fiber.o
   description = TEST automatic single-thread ARC pairing
   pool = console
 

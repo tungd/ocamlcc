@@ -6,7 +6,9 @@
 
 #include "arc.h"
 
+#ifndef OCAMLCC_SINGLE_THREAD_RC
 #include <pthread.h>
+#endif
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -20,9 +22,19 @@ typedef struct FiberThreadState {
     int     poller_fd;
 } FiberThreadState;
 
-static _Thread_local FiberThreadState *tls_state = NULL;
-static _Thread_local Fiber            *tls_current_fiber = NULL;
-static _Thread_local uint64_t         tls_effect_owner = 0;
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+static FiberThreadState main_state = {
+    .main_fiber = { .state = FIBER_RUNNING },
+    .poller_fd = -1,
+};
+static FiberThreadState *const current_state = &main_state;
+static Fiber *current_fiber = &main_state.main_fiber;
+static uint64_t current_effect_owner;
+#else
+static _Thread_local FiberThreadState *current_state;
+static _Thread_local Fiber *current_fiber;
+static _Thread_local uint64_t current_effect_owner;
+#endif
 static _Atomic uint64_t                g_next_effect_owner = 1;
 
 /* Once a stackful fiber is published, execution on that fiber must check
@@ -30,9 +42,11 @@ static _Atomic uint64_t                g_next_effect_owner = 1;
  * fiber creation on this or another thread. */
 _Atomic uint32_t ocamlcc_stackful_fibers_created;
 
+#ifndef OCAMLCC_SINGLE_THREAD_RC
 static pthread_once_t g_fiber_tls_once = PTHREAD_ONCE_INIT;
 static pthread_key_t  g_fiber_tls_key;
 static int            g_fiber_tls_key_ok = 0;
+#endif
 
 static void fiber_drain_reuse(Fiber *f)
 {
@@ -75,6 +89,7 @@ static void fiber_free_buffers(Fiber *f)
     }
 }
 
+#ifndef OCAMLCC_SINGLE_THREAD_RC
 static void fiber_tls_cleanup(void *arg)
 {
     FiberThreadState *s = (FiberThreadState *)arg;
@@ -85,8 +100,8 @@ static void fiber_tls_cleanup(void *arg)
     fiber_free_buffers(&s->main_fiber);
     /* Detach TLS pointers and release OCaml scheduler state afterwards so any
      * finalizer touching arc_fiber_current() allocates fresh TLS safely. */
-    tls_state = NULL;
-    tls_current_fiber = NULL;
+    current_state = NULL;
+    current_fiber = NULL;
     if (s->poller_fd >= 0) {
         pal_poller_close(s->poller_fd);
         s->poller_fd = -1;
@@ -102,9 +117,14 @@ static void fiber_tls_key_init(void)
         g_fiber_tls_key_ok = 1;
 }
 
+#endif
+
 static FiberThreadState *fiber_thread_state(void)
 {
-    FiberThreadState *s = tls_state;
+#ifdef OCAMLCC_SINGLE_THREAD_RC
+    return current_state;
+#else
+    FiberThreadState *s = current_state;
     if (s != NULL)
         return s;
     s = (FiberThreadState *)calloc(1, sizeof(FiberThreadState));
@@ -112,20 +132,19 @@ static FiberThreadState *fiber_thread_state(void)
         pal_abort();
     s->main_fiber.state = FIBER_RUNNING;
     s->poller_fd = -1;
-    tls_state = s;
+    current_state = s;
     pthread_once(&g_fiber_tls_once, fiber_tls_key_init);
     if (g_fiber_tls_key_ok)
         (void)pthread_setspecific(g_fiber_tls_key, s);
     return s;
+#endif
 }
-
-#define tls_main_fiber (fiber_thread_state()->main_fiber)
 
 Fiber *arc_fiber_current(void)
 {
-    if (tls_current_fiber == NULL)
-        tls_current_fiber = &tls_main_fiber;
-    return tls_current_fiber;
+    if (current_fiber == NULL)
+        current_fiber = &fiber_thread_state()->main_fiber;
+    return current_fiber;
 }
 
 static inline int64_t tag_int(int64_t n)
@@ -147,7 +166,7 @@ static inline Fiber *shadow_fiber(void)
 {
     if (atomic_load_explicit(&ocamlcc_stackful_fibers_created, memory_order_relaxed) == 0)
         return NULL;
-    Fiber *cur = tls_current_fiber;
+    Fiber *cur = current_fiber;
     return cur != NULL && cur->c_stack != NULL ? cur : NULL;
 }
 
@@ -292,7 +311,7 @@ static void fiber_drop_value(int64_t value, void *ctx)
 
 void fiber_destroy(Fiber *f)
 {
-    if (f == NULL || (tls_state != NULL && f == &tls_state->main_fiber))
+    if (f == NULL || (current_state != NULL && f == &current_state->main_fiber))
         return;
     fiber_free_buffers(f);
     fiber_visit_fields(f, fiber_drop_value, NULL, true);
@@ -304,7 +323,7 @@ static void fiber_swap_to(Fiber *next)
     Fiber *prev = arc_fiber_current();
     prev->exn_slot = ocamlcc_get_exn();
     ocamlcc_set_exn(next->exn_slot);
-    tls_current_fiber = next;
+    current_fiber = next;
     next->state = FIBER_RUNNING;
     pal_ctx_swap(&prev->ctx, &next->ctx);
 }
@@ -479,7 +498,7 @@ int64_t ocamlcc_fiber_is_main(int64_t unit)
     Fiber *cur = arc_fiber_current();
     while (effect_fiber(cur))
         cur = cur->caller;
-    return cur == &tls_main_fiber ? 3 : 1;
+    return cur == &fiber_thread_state()->main_fiber ? 3 : 1;
 }
 
 int64_t ocamlcc_fiber_can_yield(int64_t unit)
@@ -549,13 +568,13 @@ int64_t caml_alloc_stack(int64_t retc, int64_t exnc, int64_t effc)
     Fiber *f = (Fiber *)(uintptr_t)stack;
     effect_set_handlers(f, retc, exnc, effc);
     /* A newly created OS thread may reuse a departed thread's pthread_t. */
-    if (tls_effect_owner == 0) {
-        tls_effect_owner = atomic_fetch_add_explicit(
+    if (current_effect_owner == 0) {
+        current_effect_owner = atomic_fetch_add_explicit(
             &g_next_effect_owner, 1, memory_order_relaxed);
-        if (tls_effect_owner == 0)
+        if (current_effect_owner == 0)
             pal_abort();
     }
-    f->effect_owner = tls_effect_owner;
+    f->effect_owner = current_effect_owner;
     return stack;
 }
 
@@ -578,7 +597,7 @@ static int64_t effect_already_resumed(void)
 
 static int64_t effect_drive(Fiber *f, int64_t payload)
 {
-    if (f->effect_owner != tls_effect_owner) {
+    if (f->effect_owner != current_effect_owner) {
         arc_release_val(payload);
         ocamlcc_fiber_raise_invalid();
         return 1;

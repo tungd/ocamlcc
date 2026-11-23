@@ -43,7 +43,7 @@ let compile_runtime_objs ~verbose (tc : Target.Toolchain.t) ~include_main
           if Filename.check_suffix src ".S" then []
           else
             let flags = ["-std=c11"; "-O2"; "-g"; "-fPIC"; "-I" ^ runtime_dir] in
-            if single_thread && List.mem (Filename.basename src) ("arc.c" :: runtime_parts)
+            if single_thread && List.mem (Filename.basename src) ("arc.c" :: "fiber.c" :: runtime_parts)
             then "-DOCAMLCC_SINGLE_THREAD_RC" :: flags else flags
         in
         match Linker.compile_source ~verbose tc flags src obj with
