@@ -50,11 +50,12 @@ switching fibers, and keep their main stack outside shadow-root tracking.
 
 ## Batched shadow roots
 
-At a suspension point, generated code with multiple roots stages live
-values and reuse tokens in one scratch slot per native frame. One runtime
-call copies the values and tokens to their separate shadow stacks. A pop
-can remove entries from both stacks in one call. The main stack ignores
-these operations, and the common one-root push uses its scalar entry point.
+At a suspension point, generated code passes one to four value roots
+directly as arguments when there are no reuse tokens. Larger or mixed
+pushes stage roots in one scratch slot per native frame. One runtime
+call copies the values and tokens to their separate shadow stacks with
+ordinary loops. A pop can remove entries from both stacks in one call.
+The main stack ignores these operations.
 Over-application uses the batch API for argument tails. Growing a shadow
 stack preserves its older entries through both normal resumption and
 abandonment.

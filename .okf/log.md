@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Pass up to four Fiber value roots in registers and preserve one mixed or large batch per call. Verify slot order, resumption, and abandonment. See [Fibers](/concepts/wren-fibers.md#batched-shadow-roots).
+
 - 2026-11-23 (codex/1) — Set the bounded repeated-local-call allowance to 32 nodes and verify the charset wrapper inlining against the frozen tterm source. See [compiler pipeline](/concepts/compiler-pipeline.md#repeated-local-calls).
 
 - 2026-11-23 (codex/1) — Persist bounded Lambda leaves with sealed provider initialization and inline saturated direct and immutable-alias calls during Lambda optimization. See [compiler pipeline](/concepts/compiler-pipeline.md#bounded-leaves-in-exported-metadata).

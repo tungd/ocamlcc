@@ -211,13 +211,52 @@ static inline Fiber *shadow_fiber(void)
     return cur != NULL && cur->c_stack != NULL ? cur : NULL;
 }
 
-void arc_fiber_push(int64_t val)
+static inline uint64_t *push_value_slots(size_t count)
 {
     Fiber *cur = shadow_fiber();
     if (cur == NULL)
+        return NULL;
+    reserve_values(cur, count);
+    uint64_t *slots = cur->shadow_sp;
+    cur->shadow_sp += count;
+    return slots;
+}
+
+void arc_fiber_push(int64_t val)
+{
+    uint64_t *slots = push_value_slots(1);
+    if (slots != NULL)
+        slots[0] = (uint64_t)val;
+}
+
+void arc_fiber_push2(int64_t a, int64_t b)
+{
+    uint64_t *slots = push_value_slots(2);
+    if (slots == NULL)
         return;
-    reserve_values(cur, 1);
-    *cur->shadow_sp++ = (uint64_t)val;
+    slots[0] = (uint64_t)a;
+    slots[1] = (uint64_t)b;
+}
+
+void arc_fiber_push3(int64_t a, int64_t b, int64_t c)
+{
+    uint64_t *slots = push_value_slots(3);
+    if (slots == NULL)
+        return;
+    slots[0] = (uint64_t)a;
+    slots[1] = (uint64_t)b;
+    slots[2] = (uint64_t)c;
+}
+
+void arc_fiber_push4(int64_t a, int64_t b, int64_t c, int64_t d)
+{
+    uint64_t *slots = push_value_slots(4);
+    if (slots == NULL)
+        return;
+    slots[0] = (uint64_t)a;
+    slots[1] = (uint64_t)b;
+    slots[2] = (uint64_t)c;
+    slots[3] = (uint64_t)d;
 }
 
 void arc_fiber_push_reuse(void *tok)
@@ -238,7 +277,8 @@ void arc_fiber_push_batch(const int64_t *roots, size_t values, size_t tokens)
         return;
     if (values > 0) {
         reserve_values(cur, values);
-        pal_memcpy(cur->shadow_sp, roots, values * sizeof(*roots));
+        for (size_t i = 0; i < values; i++)
+            cur->shadow_sp[i] = (uint64_t)roots[i];
         cur->shadow_sp += values;
     }
     if (tokens > 0) {

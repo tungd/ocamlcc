@@ -53,10 +53,16 @@ let shadow_call b fn value =
 
 let shadow_count n = Int (Int64.of_int n)
 
+let shadow_push_values b fn values =
+  emit b (Call_void { fn = Global fn; args = List.map (fun value -> Long, value) values })
+
 let shadow_push b values tokens =
   match values, tokens with
   | [], [] -> ()
   | [value], [] -> shadow_call b "arc_fiber_push" value
+  | [ _; _ ], [] -> shadow_push_values b "arc_fiber_push2" values
+  | [ _; _; _ ], [] -> shadow_push_values b "arc_fiber_push3" values
+  | [ _; _; _; _ ], [] -> shadow_push_values b "arc_fiber_push4" values
   | [], [token] -> shadow_call b "arc_fiber_push_reuse" token
   | _ ->
       let value_count = List.length values and token_count = List.length tokens in

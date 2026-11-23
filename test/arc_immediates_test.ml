@@ -30,7 +30,12 @@ let check name want il =
         count_batches (Str.match_end ()) (total + roots)
     | exception Not_found -> total
   in
-  let got = count_batches 0 (count "call extern $arc_fiber_push(" il) in
+  let scalar = count "call extern $arc_fiber_push(" il in
+  let registers = List.fold_left (fun total width ->
+    let call = Printf.sprintf "call extern $arc_fiber_push%d(" width in
+    total + width * count call il) 0 [2; 3; 4]
+  in
+  let got = count_batches 0 (scalar + registers) in
   if got <> want then
     failwith (Printf.sprintf "%s: expected %d shadow roots, got %d" name want got)
 

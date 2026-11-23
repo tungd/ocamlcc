@@ -63,6 +63,9 @@ Fiber *arc_fiber_current(void);
 /* Compiler shadow-stack ABI for abandonable stackful fibers. Root stacks
  * keep their live owners in their ordinary frames. */
 void arc_fiber_push(int64_t val);
+void arc_fiber_push2(int64_t a, int64_t b);
+void arc_fiber_push3(int64_t a, int64_t b, int64_t c);
+void arc_fiber_push4(int64_t a, int64_t b, int64_t c, int64_t d);
 void arc_fiber_pop(int64_t n);
 void arc_fiber_push_reuse(void *tok);
 void arc_fiber_pop_reuse(int64_t n);

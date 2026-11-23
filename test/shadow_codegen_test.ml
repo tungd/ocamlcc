@@ -21,10 +21,10 @@ let () =
 
 let () =
   let ssa = compile {|
-      let invoke f a b c =
+      let invoke f a b c d =
         let first = f a in
         let second = f b in
-        first, second, a, b, c
+        first, second, a, b, c, d
     |} in
   let count pattern =
     let re = Str.regexp_string pattern in
@@ -50,6 +50,24 @@ let has_shadow ssa =
   match Str.search_forward (Str.regexp_string "$arc_fiber_push") ssa 0 with
   | _ -> true
   | exception Not_found -> false
+
+let () =
+  let ssa = compile {|
+    let two f a = let result = f a in result, a
+    let three f a b = let result = f a in result, a, b
+    let four f a b c = let result = f a in result, a, b, c
+  |} in
+  List.iter (fun (name, arity) ->
+    let body = function_body ssa name in
+    let entry = Printf.sprintf "call extern $arc_fiber_push%d(" arity in
+    let contains text =
+      match Str.search_forward (Str.regexp_string text) body 0 with
+      | _ -> true
+      | exception Not_found -> false
+    in
+    if not (contains entry) then failwith (Printf.sprintf "missing %s in %s" entry name);
+    assert (not (contains "=l alloc8 ")))
+    ["two", 2; "three", 3; "four", 4]
 
 let () =
   let ssa = compile {|

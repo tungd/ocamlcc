@@ -1248,12 +1248,23 @@ static int64_t shadow_batch_body(int64_t closure, int64_t arg)
         roots[count + i] = (int64_t)(uintptr_t)arc_drop_reuse(batch_root());
     }
     arc_fiber_push_batch(roots, count, count);
+    int64_t short_roots[9];
+    for (size_t i = 0; i < 9; i++)
+        short_roots[i] = batch_root();
+    arc_fiber_push2(short_roots[0], short_roots[1]);
+    arc_fiber_push3(short_roots[2], short_roots[3], short_roots[4]);
+    arc_fiber_push4(short_roots[5], short_roots[6], short_roots[7], short_roots[8]);
     Fiber *fiber = arc_fiber_current();
     assert(fiber->shadow_base[0] == (uint64_t)first_value);
     assert(fiber->reuse_base[0] == first_token);
-    assert(fiber->shadow_sp - fiber->shadow_base == count + 1);
+    assert(fiber->shadow_sp - fiber->shadow_base == count + 1 + 9);
     assert(fiber->reuse_sp - fiber->reuse_base == count + 1);
+    for (size_t i = 0; i < 9; i++)
+        assert(fiber->shadow_base[count + 1 + i] == (uint64_t)short_roots[i]);
     ocamlcc_fiber_suspend(1);
+    arc_fiber_pop(9);
+    for (size_t i = 0; i < 9; i++)
+        arc_release_val(short_roots[i]);
     arc_fiber_pop_batch(count, count);
     assert(fiber->shadow_sp - fiber->shadow_base == 1);
     assert(fiber->reuse_sp - fiber->reuse_base == 1);
