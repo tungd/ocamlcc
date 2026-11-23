@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Record frozen tterm replay, direct tail edges, bounded damage imports, and residual suspension paths. Verify the relocated distribution with the pinned Cmdliner archive from cache. See [compiler pipeline](/concepts/compiler-pipeline.md#self-tail-calls) and [Perceus ARC](/concepts/perceus-arc.md#middle-end-arc-pass).
+
 - 2026-11-23 (codex/1) — Allow up to 50 nodes for explicitly hinted closed branching exports. Exercise the tterm row revision update through a sealed provider sidecar. See [compiler pipeline](/concepts/compiler-pipeline.md#bounded-leaves-in-exported-metadata).
 
 - 2026-11-23 (codex/1) — Thread constant-tag tail calls in lifted recursive dispatchers to the target arm and retain sampled finalizer polling and exception cleanup. See [compiler pipeline](/concepts/compiler-pipeline.md#self-tail-calls).

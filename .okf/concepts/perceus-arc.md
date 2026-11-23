@@ -99,13 +99,20 @@ ownership scope and exception frame used to emit retain, release and unwind
 nodes. Static handler labels are scoped to the body of their catch. Leaving
 an inner catch restores the outer label's ownership facts.
 
-Sealed object and archive summaries from version 7 record each direct
-entry's suspension result. A caller can elide roots or use the borrowed
-entry when a matching summary proves the function cannot suspend. Older
-boolean rows keep the owning direct entry and its exception convention,
+Object and archive summaries already carried a suspension boolean in
+version 6. Version 7 identifies proofs produced with the conservative
+analysis. A caller can elide roots or use the borrowed entry when a
+matching summary proves the function cannot suspend. Older boolean rows
+keep the owning direct entry and its exception convention,
 including when a newer compiler repackages them. Calls through unknown
 closures, unregistered C entries, and effect operations that may suspend
 keep their roots.
+
+In tterm after the sparse table change, `Rows.clear_sparse` and
+`Rows.clear_cells` prove they cannot suspend. The ASCII path still reaches
+`List.find_all` through scrollback retention and release.
+`State.handle_codepoints` calls `State_text.classify`, and the CSI and
+terminal bytes paths still reach generic closure application.
 
 - **Ownership**: `Let`-bindings and function parameters start owned (`+1` rc); `Pure` global functions and static literals/immediates omit refcount traffic; closure captures (`env`), self-refs, and `LetJoin`/`While`/`For` outer references are **borrowed** (with `frame_borrowed` distinguished so exceptional unwinding cleans them up cleanly).
 - **Pure-defs analysis** (`Anf.pure_defs`, shared by `arc_pass` and `codegen`): a function (or whole mutual `let rec` group) whose free variables are only its own parameters plus already-collected pure functions is an immortal static function — its binding gets no refcount traffic (no `Release`, no `DropReuse`), and codegen defines it with `has_closure = false` and groups mutual tail calls into trampoline SCCs. The analysis recurses into function bodies and every branch/join region (`LetJoin` rhs, `If`, `Switch`, `TryWith`, `While`, `For`, `StaticCatch`), so non-capturing helpers nested inside other functions are static too; a spine-only walk used to own+release them, forcing codegen to synthesize an immortal `clos.N` wrapper purely to feed `arc_release_val`. Regression-tested in `test/pure_nested_test.ml` (fronted through `Frontend.compile_implementation`, asserting non-capturing funs are never `Release`d).

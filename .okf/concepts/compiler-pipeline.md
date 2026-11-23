@@ -272,6 +272,12 @@ stack use, escaping wrappers, partial applications and immediate reclamation.
 `mutrec_closure_tail_test.ml` checks that the dispatcher signature is
 independent of the number of captures.
 
+On the frozen tterm engine, QBE emitted 4 and 51 constant-tag jumps for
+the two Parser dispatchers, 2 for State and 11 for State_sgr. Each kept
+one jump to the shared entry. On the same 8,388,705-byte corpus, production
+replay measured 40.938 and 40.825 MiB/s on `e0c5ec5` and 41.157 and 40.525
+MiB/s on `184060e`. The ARM64 `__text` section grew by 13,408 bytes.
+
 # Builtin resolution
 
 When `--nostdlib` is off, `Stdlib` entry points surface in Lambda as field
@@ -361,6 +367,10 @@ Native text grew from 3,985,696 to 3,995,004 bytes. The paired production
 runs allocated 135.20 MB per replay on both builds. The baseline runs
 ranged from 12.65 to 24.90 MiB/s, so the run cannot isolate a throughput
 change from the inliner.
+
+With tterm's guarded `State_damage.mark_row_dirty` source, the provider
+publishes a leaf and the State unit keeps 18 direct calls, down from 40.
+`State.handle_codepoints` accounts for 16 of those calls, down from 19.
 
 ## Inlining imported aggregate producers
 
