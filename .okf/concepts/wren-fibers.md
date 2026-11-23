@@ -48,6 +48,22 @@ native thread. The shared runtime maintains per-thread state and its
 pthread destructor. Both profiles save and restore the exception slot when
 switching fibers, and keep their main stack outside shadow-root tracking.
 
+## Batched shadow roots
+
+At a suspension point, generated code with multiple roots stages live
+values and reuse tokens in one scratch slot per native frame. One runtime
+call copies the values and tokens to their separate shadow stacks. A pop
+can remove entries from both stacks in one call. The main stack ignores
+these operations, and the common one-root push uses its scalar entry point.
+Over-application uses the batch API for argument tails. Growing a shadow
+stack preserves its older entries through both normal resumption and
+abandonment.
+
+In a macOS ARM64 C probe with four value roots and two reuse tokens per
+frame, two five-million-frame runs measured 15.55 and 16.08 ns per frame
+with scalar calls and 8.52 and 8.45 ns with the batch. All four runs used
+the single-thread runtime without Fiber TLS.
+
 ## Owned values and stack teardown
 
 The fiber runtime describes its owning slots once for ordinary destruction

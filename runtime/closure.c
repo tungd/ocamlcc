@@ -7,8 +7,7 @@
 #include "arc.h"
 #include "pal.h"
 
-extern void arc_fiber_push(int64_t val);
-extern void arc_fiber_pop(int64_t count);
+#include "fiber.h"
 
 #define MAX_CLOSURE_ARITY 32
 
@@ -158,8 +157,7 @@ int64_t ocamlcc_apply_n_raw(int64_t clos_val, int64_t argc, int64_t *argv)
         if (c->arity == n)
             return invoke_closure(c, c->arity, argv);
         if (c->arity < n) {
-            for (uint64_t i = c->arity; i < n; i++)
-                arc_fiber_push(argv[i]);
+            arc_fiber_push_batch(argv + c->arity, n - c->arity, 0);
             int64_t res = invoke_closure(c, c->arity, argv);
             arc_fiber_pop((int64_t)(n - c->arity));
             if (ocamlcc_get_exn() != 0) {
@@ -194,10 +192,8 @@ int64_t ocamlcc_apply_n_raw(int64_t clos_val, int64_t argc, int64_t *argv)
             }
             for (uint64_t i = 0; i < rem; i++)
                 buf[p->n_applied + i] = argv[i];
-            if (n > rem) {
-                for (uint64_t i = rem; i < n; i++)
-                    arc_fiber_push(argv[i]);
-            }
+            if (n > rem)
+                arc_fiber_push_batch(argv + rem, n - rem, 0);
             int64_t res = invoke_closure(p->orig, p->total_arity, buf);
             if (n == rem)
                 return res;

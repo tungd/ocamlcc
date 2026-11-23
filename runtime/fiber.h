@@ -66,6 +66,10 @@ void arc_fiber_push(int64_t val);
 void arc_fiber_pop(int64_t n);
 void arc_fiber_push_reuse(void *tok);
 void arc_fiber_pop_reuse(int64_t n);
+/* Only the call reads roots. Entries are OCaml values followed by reuse
+ * tokens cast to words. The batch shadows existing owners. */
+void arc_fiber_push_batch(const int64_t *roots, size_t values, size_t tokens);
+void arc_fiber_pop_batch(size_t values, size_t tokens);
 
 /* Observe each owning value edge on a stack excluded from mutation.
  * Aliased slots are reported separately. The visitor does not take ownership. */

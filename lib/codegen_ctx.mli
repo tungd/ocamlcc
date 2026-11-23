@@ -67,6 +67,7 @@ val start_block : t -> string -> unit
 val close_block : t -> term -> unit
 val close_ret : t -> Qbe_il.t option -> unit
 val finish_blocks : t -> block list
+val shadow_batch_slot : t -> int -> Qbe_il.t
 val jump_to_entry : t -> Qbe_il.t list -> unit
 val insert_header_phis : t -> string -> (ty * string) list -> Qbe_il.t list -> unit
 

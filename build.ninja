@@ -117,7 +117,7 @@ build $builddir/rt/weak.o: cc_rt runtime/weak.c | runtime/arc_internal.h runtime
 build $builddir/rt/primitives.o: cc_rt runtime/primitives.c | runtime/arc_internal.h runtime/arc.h runtime/pal.h runtime/fiber.h runtime/ocamlcc_bigarray.h runtime/ocamlcc_bigarray_types.h runtime/bigarray.inc $
   runtime/caml_compat.inc runtime/caml/mlvalues.h runtime/caml/alloc.h runtime/caml/custom.h $
   runtime/caml/callback.h runtime/caml/fail.h runtime/caml/hash.h runtime/caml/intext.h
-build $builddir/rt/closure.o:  cc_rt runtime/closure.c  | runtime/arc.h runtime/pal.h
+build $builddir/rt/closure.o:  cc_rt runtime/closure.c  | runtime/arc.h runtime/fiber.h runtime/pal.h
 build $builddir/rt/fiber.o:    cc_rt runtime/fiber.c    | runtime/fiber.h runtime/arc.h runtime/pal.h
 build $builddir/rt/builtins.o:   cc_rt runtime/builtins.c
 build $builddir/rt/main_entry.o: cc_rt runtime/main_entry.c

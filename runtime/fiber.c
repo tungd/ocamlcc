@@ -35,10 +35,10 @@ static _Thread_local FiberThreadState *current_state;
 static _Thread_local Fiber *current_fiber;
 static _Thread_local uint64_t current_effect_owner;
 #endif
-static _Atomic uint64_t                g_next_effect_owner = 1;
+static _Atomic uint64_t g_next_effect_owner = 1;
 
-/* Once a stackful fiber is published, execution on that fiber must check
- * TLS. A main-stack frame never becomes abandonable, even across the first
+/* Once a stackful fiber is published, shadow operations consult
+ * the current fiber. A main-stack frame never becomes abandonable, even across the first
  * fiber creation on this or another thread. */
 _Atomic uint32_t ocamlcc_stackful_fibers_created;
 
@@ -152,14 +152,55 @@ static inline int64_t tag_int(int64_t n)
     return (int64_t)(((uint64_t)n << 1) | 1ull);
 }
 
-static void shadow_init(Fiber *f)
+static void *grow_shadow(void *base, size_t used, size_t *capacity,
+                         size_t extra, size_t stride)
 {
-    uint64_t *buf = (uint64_t *)pal_page_alloc(SHADOW_INIT_BYTES);
-    if (buf == NULL)
+    size_t max_slots = SIZE_MAX / stride;
+    if (extra > max_slots - used)
         pal_abort();
-    f->shadow_base = buf;
-    f->shadow_sp = buf;
-    f->shadow_end = buf + (SHADOW_INIT_BYTES / sizeof(uint64_t));
+    size_t needed = used + extra;
+    size_t slots = *capacity == 0 ? SHADOW_INIT_BYTES / stride : *capacity;
+    while (slots < needed)
+        slots = slots <= max_slots / 2 ? slots * 2 : needed;
+    void *buffer = pal_page_alloc(slots * stride);
+    if (buffer == NULL)
+        pal_abort();
+    if (base != NULL) {
+        pal_memcpy(buffer, base, used * stride);
+        pal_page_free(base, *capacity * stride);
+    }
+    *capacity = slots;
+    return buffer;
+}
+
+static void reserve_values(Fiber *f, size_t n)
+{
+    if (f->shadow_base != NULL && n <= (size_t)(f->shadow_end - f->shadow_sp))
+        return;
+    size_t used = 0, capacity = 0;
+    if (f->shadow_base != NULL) {
+        used = (size_t)(f->shadow_sp - f->shadow_base);
+        capacity = (size_t)(f->shadow_end - f->shadow_base);
+    }
+    f->shadow_base = grow_shadow(f->shadow_base, used, &capacity, n,
+                                 sizeof(*f->shadow_base));
+    f->shadow_sp = f->shadow_base + used;
+    f->shadow_end = f->shadow_base + capacity;
+}
+
+static void reserve_reuse(Fiber *f, size_t n)
+{
+    if (f->reuse_base != NULL && n <= (size_t)(f->reuse_end - f->reuse_sp))
+        return;
+    size_t used = 0, capacity = 0;
+    if (f->reuse_base != NULL) {
+        used = (size_t)(f->reuse_sp - f->reuse_base);
+        capacity = (size_t)(f->reuse_end - f->reuse_base);
+    }
+    f->reuse_base = grow_shadow(f->reuse_base, used, &capacity, n,
+                               sizeof(*f->reuse_base));
+    f->reuse_sp = f->reuse_base + used;
+    f->reuse_end = f->reuse_base + capacity;
 }
 
 static inline Fiber *shadow_fiber(void)
@@ -175,35 +216,8 @@ void arc_fiber_push(int64_t val)
     Fiber *cur = shadow_fiber();
     if (cur == NULL)
         return;
-    if (cur->shadow_base == NULL)
-        shadow_init(cur);
-    if (cur->shadow_sp == cur->shadow_end) {
-        size_t old_slots = (size_t)(cur->shadow_end - cur->shadow_base);
-        size_t old_bytes = old_slots * sizeof(uint64_t);
-        size_t new_bytes = old_bytes * 2u;
-        uint64_t *nb = (uint64_t *)pal_page_alloc(new_bytes);
-        if (nb == NULL)
-            pal_abort();
-        pal_memcpy(nb, cur->shadow_base, old_bytes);
-        pal_page_free(cur->shadow_base, old_bytes);
-        cur->shadow_base = nb;
-        cur->shadow_sp = nb + old_slots;
-        cur->shadow_end = nb + (new_bytes / sizeof(uint64_t));
-    }
+    reserve_values(cur, 1);
     *cur->shadow_sp++ = (uint64_t)val;
-}
-
-void arc_fiber_pop(int64_t n)
-{
-    if (n <= 0)
-        return;
-    Fiber *cur = shadow_fiber();
-    if (cur == NULL)
-        return;
-    if (cur->shadow_base == NULL ||
-        (size_t)(cur->shadow_sp - cur->shadow_base) < (size_t)n)
-        pal_abort();
-    cur->shadow_sp -= (size_t)n;
 }
 
 void arc_fiber_push_reuse(void *tok)
@@ -211,41 +225,64 @@ void arc_fiber_push_reuse(void *tok)
     Fiber *cur = shadow_fiber();
     if (cur == NULL)
         return;
-    if (cur->reuse_base == NULL) {
-        void **buf = (void **)pal_page_alloc(SHADOW_INIT_BYTES);
-        if (buf == NULL)
-            pal_abort();
-        cur->reuse_base = buf;
-        cur->reuse_sp = buf;
-        cur->reuse_end = buf + (SHADOW_INIT_BYTES / sizeof(void *));
-    }
-    if (cur->reuse_sp == cur->reuse_end) {
-        size_t old_slots = (size_t)(cur->reuse_end - cur->reuse_base);
-        size_t old_bytes = old_slots * sizeof(void *);
-        size_t new_bytes = old_bytes * 2u;
-        void **nb = (void **)pal_page_alloc(new_bytes);
-        if (nb == NULL)
-            pal_abort();
-        pal_memcpy(nb, cur->reuse_base, old_bytes);
-        pal_page_free(cur->reuse_base, old_bytes);
-        cur->reuse_base = nb;
-        cur->reuse_sp = nb + old_slots;
-        cur->reuse_end = nb + (new_bytes / sizeof(void *));
-    }
+    reserve_reuse(cur, 1);
     *cur->reuse_sp++ = tok;
 }
 
-void arc_fiber_pop_reuse(int64_t n)
+void arc_fiber_push_batch(const int64_t *roots, size_t values, size_t tokens)
 {
-    if (n <= 0)
+    if (values == 0 && tokens == 0)
         return;
     Fiber *cur = shadow_fiber();
     if (cur == NULL)
         return;
-    if (cur->reuse_base == NULL ||
-        (size_t)(cur->reuse_sp - cur->reuse_base) < (size_t)n)
-        pal_abort();
-    cur->reuse_sp -= (size_t)n;
+    if (values > 0) {
+        reserve_values(cur, values);
+        pal_memcpy(cur->shadow_sp, roots, values * sizeof(*roots));
+        cur->shadow_sp += values;
+    }
+    if (tokens > 0) {
+        reserve_reuse(cur, tokens);
+        for (size_t i = 0; i < tokens; i++)
+            cur->reuse_sp[i] = (void *)(uintptr_t)roots[values + i];
+        cur->reuse_sp += tokens;
+    }
+}
+
+static inline void pop_shadow(Fiber *cur, size_t values, size_t tokens)
+{
+    if (cur == NULL)
+        return;
+    if (values > 0) {
+        if (cur->shadow_base == NULL ||
+            (size_t)(cur->shadow_sp - cur->shadow_base) < values)
+            pal_abort();
+        cur->shadow_sp -= values;
+    }
+    if (tokens > 0) {
+        if (cur->reuse_base == NULL ||
+            (size_t)(cur->reuse_sp - cur->reuse_base) < tokens)
+            pal_abort();
+        cur->reuse_sp -= tokens;
+    }
+}
+
+void arc_fiber_pop(int64_t n)
+{
+    if (n > 0)
+        pop_shadow(shadow_fiber(), (size_t)n, 0);
+}
+
+void arc_fiber_pop_reuse(int64_t n)
+{
+    if (n > 0)
+        pop_shadow(shadow_fiber(), 0, (size_t)n);
+}
+
+void arc_fiber_pop_batch(size_t values, size_t tokens)
+{
+    if (values > 0 || tokens > 0)
+        pop_shadow(shadow_fiber(), values, tokens);
 }
 
 static void fiber_visit_slot(int64_t *slot, FiberValueVisitor visit, void *ctx,
@@ -382,7 +419,7 @@ int64_t ocamlcc_fiber_create(int64_t closure)
     pal_memset(f, 0, sizeof(*f));
     f->c_stack = cstack;
     f->c_stack_bytes = total_bytes;
-    shadow_init(f);
+    reserve_values(f, 1);
     arc_retain_val(closure);
     f->entry_closure = closure;
     f->state = FIBER_SUSPENDED;

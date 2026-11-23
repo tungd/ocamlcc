@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-23 (codex/1) — Batch Fiber shadow roots and reuse tokens with one scratch slot per native frame. Exercise growth, resumption, and abandonment. See [Fibers](/concepts/wren-fibers.md#batched-shadow-roots).
+
 - 2026-11-23 (codex/1) — Use process-owned Fiber state in single-thread ARC and check both prebuilt and source-built runtime objects for TLS references. See [Fibers](/concepts/wren-fibers.md#fiber-state-in-the-single-thread-runtime).
 
 - 2026-11-23 (codex/1) — Bound small hinted Lambda expansions across local helper calls and collapse projection-only wrappers of known imported entries. See [compiler pipeline](/concepts/compiler-pipeline.md#small-local-calls-after-the-inline-budget).

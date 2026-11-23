@@ -34,6 +34,7 @@ type fn_state = {
   mutable open_label : string;
   mutable insts : inst list;   (* reversed *)
   mutable start_allocs : inst list; (* reversed, hoisted to @start *)
+  mutable shadow_batch : (Qbe_il.t * int) option;
   mutable term : term option;
   mutable blocks : block list; (* reversed, closed blocks *)
   handlers : (int, handler) Hashtbl.t;
@@ -75,6 +76,7 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None) ?(cur_group = None)
   { open_label = "start";
     insts = [];
     start_allocs = [];
+    shadow_batch = None;
     term = None;
     blocks = [];
     handlers = Hashtbl.create 8;
@@ -294,8 +296,20 @@ let emit_start_alloc b dst bytes =
   b.cur_fn.start_allocs <-
     Alloc8 (dst, Int (Int64.of_int bytes)) :: b.cur_fn.start_allocs
 
+let shadow_batch_slot b words =
+  let slot, capacity = match b.cur_fn.shadow_batch with
+    | Some batch -> batch
+    | None -> fresh_temp b "shadow_args", 0
+  in
+  b.cur_fn.shadow_batch <- Some (slot, max words capacity);
+  slot
+
 let finish_blocks b =
   let allocs = List.rev b.cur_fn.start_allocs in
+  let allocs = match b.cur_fn.shadow_batch with
+    | None -> allocs
+    | Some (slot, words) -> Alloc8 (slot, Int (Int64.of_int (8 * words))) :: allocs
+  in
   let blocks = List.rev b.cur_fn.blocks in
   let blocks =
     if allocs = [] then blocks

@@ -1226,6 +1226,69 @@ static void test_main_shadow_stack(void)
     arc_release(clos);
 }
 
+static int64_t batch_root(void)
+{
+    int64_t *payload = arc_alloc(0, 0, sizeof(*payload));
+    *payload = 1;
+    return (int64_t)(uintptr_t)payload;
+}
+
+static int64_t shadow_batch_body(int64_t closure, int64_t arg)
+{
+    (void)closure;
+    (void)arg;
+    enum { count = 2049 };
+    int64_t roots[2 * count];
+    int64_t first_value = batch_root();
+    void *first_token = arc_drop_reuse(batch_root());
+    arc_fiber_push(first_value);
+    arc_fiber_push_reuse(first_token);
+    for (size_t i = 0; i < count; i++) {
+        roots[i] = batch_root();
+        roots[count + i] = (int64_t)(uintptr_t)arc_drop_reuse(batch_root());
+    }
+    arc_fiber_push_batch(roots, count, count);
+    Fiber *fiber = arc_fiber_current();
+    assert(fiber->shadow_base[0] == (uint64_t)first_value);
+    assert(fiber->reuse_base[0] == first_token);
+    assert(fiber->shadow_sp - fiber->shadow_base == count + 1);
+    assert(fiber->reuse_sp - fiber->reuse_base == count + 1);
+    ocamlcc_fiber_suspend(1);
+    arc_fiber_pop_batch(count, count);
+    assert(fiber->shadow_sp - fiber->shadow_base == 1);
+    assert(fiber->reuse_sp - fiber->reuse_base == 1);
+    for (size_t i = 0; i < count; i++) {
+        arc_release_val(roots[i]);
+        arc_free_reuse((void *)(uintptr_t)roots[count + i]);
+    }
+    arc_fiber_pop_batch(1, 1);
+    arc_release_val(first_value);
+    arc_free_reuse(first_token);
+    return 1;
+}
+
+static void test_shadow_batch(void)
+{
+    int64_t before = arc_live_objects();
+    ArcClosure *clos = arc_alloc(ARC_TAG_CLOSURE, 0, sizeof(*clos));
+    clos->code = (void *)shadow_batch_body;
+    clos->arity = 1;
+    for (int abandon = 0; abandon <= 1; abandon++) {
+        int64_t fiber = ocamlcc_fiber_create((int64_t)(uintptr_t)clos);
+        assert(ocamlcc_fiber_resume(fiber, 1) == 1);
+        assert(!ocamlcc_get_exn());
+        if (!abandon) {
+            assert(ocamlcc_fiber_resume(fiber, 1) == 1);
+            assert(ocamlcc_fiber_is_done(fiber) == 3);
+            assert(!ocamlcc_get_exn());
+        }
+        arc_release_val(fiber);
+        assert(arc_live_objects() == before + 1);
+    }
+    arc_release(clos);
+    assert(arc_live_objects() == before);
+}
+
 static void test_bulk_array_ownership(void)
 {
     int64_t before = arc_live_objects();
@@ -1468,6 +1531,7 @@ int main(void)
     test_small_immediate_retirement();
     test_unscanned_block_obj_store();
     test_main_shadow_stack();
+    test_shadow_batch();
     test_bulk_array_ownership();
     test_array_scan_promotion();
     test_float_format();
