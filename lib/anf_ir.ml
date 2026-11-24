@@ -102,6 +102,13 @@ module Byte_load = struct
     | Raw_word of Builtins.Byte_access.word
 end
 
+module Native_call = struct
+  type t = {
+    primitive : Primitive.description;
+    may_suspend : bool;
+  }
+end
+
 type field_kind = Immediate_field | Immutable_field | Mutable_field
 type block_scan = Scan_all | Scan_if_managed | Scan_none
 
@@ -158,7 +165,7 @@ type cexpr =
   | Ccall of string * atom list
   | PollFinalizers
   | LoopPollDue of atom * atom
-  | NativeCcall of Primitive.description * atom list
+  | NativeCcall of Native_call.t * atom list
   | GetGlobal of string
   | ImportDependency of string
   | StoreModuleSlot of Ident.t * atom

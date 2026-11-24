@@ -72,6 +72,7 @@ module Lower_env = struct
     printing : Builtins.table option;
     selectors : Builtins.int_selection_table Lazy.t option;
     byte_access : Lambda.lambda -> Builtins.Byte_access.t option;
+    nonsuspending_externals : string list;
   }
 end
 
@@ -497,7 +498,13 @@ and conv_simple env ?(result_kind = Lambda.Pgenval) (id : Ident.t)
           else if Ccalls.is_known sym then
             conv_atoms env args (fun vs -> emit_cexpr (Ccall (sym, vs)))
           else conv_atoms env args (fun vs ->
-            let call = NativeCcall (pd, vs) in
+            let native_symbol = Primitive.native_name pd in
+            let may_suspend =
+              match Ccalls.find_opt native_symbol with
+              | Some abi -> abi.yields
+              | None -> not (List.mem native_symbol env.nonsuspending_externals)
+            in
+            let call = NativeCcall ({ primitive = pd; may_suspend }, vs) in
             match native_scalar pd.prim_native_repr_res with
             | None -> emit_cexpr call
             | Some rep ->
@@ -753,7 +760,8 @@ and seq_stmt (stmt : aexpr) (next : aexpr) : aexpr =
   LetJoin (id, stmt, next)
 
 let lower ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = [])
-    ?(load_exports = fun _ -> None) ~collect_exports (program : Lambda.program) :
+    ?(load_exports = fun _ -> None) ?(nonsuspending_externals = [])
+    ~collect_exports (program : Lambda.program) :
     (program * (int list * Ident.t) list, string) result =
   let printing = if use_builtins then Some (Builtins.load ~include_dirs ()) else None in
   let stdlib_dir =
@@ -788,7 +796,7 @@ let lower ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = []
           stdlib_dir
       in
       { Lower_env.scalars = optimized.scalars; imports; slots = optimized.slots;
-        printing; selectors; byte_access }
+        printing; selectors; byte_access; nonsuspending_externals }
     in
     let anf =
       Anf_scalar.run

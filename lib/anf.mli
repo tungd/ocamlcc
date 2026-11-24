@@ -6,6 +6,7 @@ val lower :
   ?stdlib_dir:string ->
   ?imports:(string * exports) list ->
   ?load_exports:(string -> exports option) ->
+  ?nonsuspending_externals:string list ->
   collect_exports:bool ->
   Lambda.program ->
   (program * (int list * Ident.t) list, string) result

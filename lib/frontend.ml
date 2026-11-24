@@ -64,8 +64,37 @@ module Implementation = struct
     lambda : Lambda.program;
     cmis : (string * string) list;
     interface : string option;
+    nonsuspending_externals : string list;
   }
 end
+
+(* The attribute describes the native symbol's ABI. Read it from typed
+   declarations and imported references before Lambda drops attributes. *)
+let nonsuspending_externals structure =
+  let symbols = ref [] in
+  let record (description : Types.value_description) =
+    let nosuspend attribute =
+      attribute.Parsetree.attr_name.txt = "ocamlcc.nosuspend"
+    in
+    match description.val_kind with
+    | Val_prim primitive when List.exists nosuspend description.val_attributes ->
+        symbols := Primitive.native_name primitive :: !symbols
+    | _ -> ()
+  in
+  let default = Tast_iterator.default_iterator in
+  let expr iterator (expression : Typedtree.expression) =
+    (match expression.exp_desc with
+     | Texp_ident (_, _, description) -> record description
+     | _ -> ());
+    default.expr iterator expression
+  in
+  let value_description iterator (declaration : Typedtree.value_description) =
+    record declaration.val_val;
+    default.value_description iterator declaration
+  in
+  let iterator = { default with expr; value_description } in
+  iterator.structure iterator structure;
+  List.sort_uniq String.compare !symbols
 
 let compile_unit ?(include_dirs = []) ?hidden_include_dirs ?output_prefix ?(emit_cmi = false)
     ?(nopervasives = false) ?(nostdlib = false) ?(no_alias_deps = false)
@@ -110,7 +139,8 @@ let compile_unit ?(include_dirs = []) ?hidden_include_dirs ?output_prefix ?(emit
                    Option.map (fun path -> name, path) (find_cmi name))
           else []
         in
-        Ok { Implementation.lambda = program; cmis; interface })
+        Ok { Implementation.lambda = program; cmis; interface;
+             nonsuspending_externals = nonsuspending_externals impl.structure })
   with exn -> Error { msg = error_msg exn }
 
 let compile_implementation ?include_dirs ?hidden_include_dirs ?output_prefix ?emit_cmi ?nopervasives

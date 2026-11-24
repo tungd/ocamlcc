@@ -970,7 +970,7 @@ let compile_cexpr ?on_oob hooks b ~tail (ce : Anf.cexpr) : t =
       compile_ccall hooks b (Printf.sprintf "caml_ba_%s_%d" op access.rank) args
   | PollFinalizers -> failwith "codegen: missing cleanup for finalizer poll"
   | Ccall (sym, args) -> compile_ccall hooks b sym args
-  | NativeCcall (prim, args) -> compile_native_ccall hooks b prim args
+  | NativeCcall ({ primitive; _ }, args) -> compile_native_ccall hooks b primitive args
   | DirectApp (target, args) ->
       let symbol = Option.fold ~none:target.symbol ~some:fst target.borrowed_entry in
       compile_ccall hooks b symbol args

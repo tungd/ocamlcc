@@ -105,10 +105,10 @@ analysis. A caller can elide roots or use the borrowed entry when a
 matching summary proves the function cannot suspend. Older boolean rows
 keep the owning direct entry and its exception convention,
 including when a newer compiler repackages them. Calls through unknown
-closures, unregistered C entries, and effect operations that may suspend
-keep their roots.
+closures, native C entries without a suspension proof, and effect operations
+that may suspend keep their roots.
 
-In tterm after the sparse table change, `Rows.clear_sparse` and
+In the tterm replay built with `184060e`, `Rows.clear_sparse` and
 `Rows.clear_cells` prove they cannot suspend. The ASCII path still reaches
 `List.find_all` through scrollback retention and release.
 `State.handle_codepoints` calls `State_text.classify`, and the CSI and
@@ -129,7 +129,22 @@ terminal bytes paths still reach generic closure application.
 - **Immediate static joins and local slots.** A static handler argument needs ARC only when an incoming exit can pass a managed value. The pass intersects those facts per binder, follows local definitions and nested exits, and uses the handler facts when inferring the result of a catch or join. A local mutable slot uses the immediate convention when its initializer and every assignment are proven unmanaged and no closure captures the slot. That removes retains on reads, releases on writes or scope exit, and fiber shadow roots for that slot. A possible heap write keeps the owning slot path. `test/arc_immediates_test.ml` checks the emitted roots for immediate and mixed paths.
 - **Generated ARC guards.** QBE uses the same nullable heap test for explicit retain and release operations, field and array accesses, and owning-slot cleanup. The heap path calls `arc_retain` or `arc_release`, or uses the selected single-thread inline RC path. Compact exception cleanup and C entry points can use the value helpers directly.
 - **Mutable-slot scope invariant**: For owning slots, `Halt`s that flow into a `LetJoin` rhs, `While`/`For` condition/body, or a loop-exit continuation are *not* scope exits, so they must not emit `ReleaseMut` for slots that remain in scope. `env.scope.no_release_muts` (set to `env.scope.muts` when descending into those regions) defers such slots to the continuation that still uses them; `Halt` releases `env.scope.muts - env.scope.no_release_muts`. Muts introduced *inside* the region still release at its own `Halt`. Regression-tested at the middle-end level in `test/arc_mutlet_test.ml` (drives hand-written `Lmutlet` Lambda terms through `Anf.of_lambda` + `Arc_pass.run` and counts `ReleaseMut` per slot).
-- **Native C externals.** User declarations use the compiler-libs native symbol and argument/result representations. QBE receives the full declared argument list and assigns registers and stack slots according to the target C ABI. Unboxed floats cross as C `double`, unboxed int32 as a 32-bit word, and unboxed int64, nativeint, and untagged OCaml int as 64-bit words on the supported targets. ARC keeps the boxed argument owners live through the call. A potentially raising call checks the exception slot before boxing its numeric result. A declaration with `[@@noalloc]` promises that the C entry point will neither allocate nor raise and skips the call-site exception check. Unregistered C entries use conservative suspension analysis. Registered runtime primitives retain their ocamlcc boxed ABI.
+- **Native C externals.** User declarations use the compiler-libs native
+  symbol and argument and result representations. QBE assigns registers and
+  stack slots according to the target C ABI. Unboxed floats cross as C
+  `double`, unboxed int32 as a 32-bit word, and unboxed int64, nativeint, and
+  untagged OCaml int as 64-bit words on the supported targets. ARC keeps boxed
+  argument owners live through the call. A potentially raising call checks
+  the exception slot before boxing its numeric result. `[@@noalloc]` skips
+  that check under the allocation and exception contract.
+- **Native C suspension.** An external declaration may use
+  `[@@ocamlcc.nosuspend]` for a C entry point that cannot switch Fibers or
+  invoke code that can suspend. The promise follows the native symbol in
+  typed declarations and imported interfaces. Registered runtime entries
+  keep their own suspension facts. Other native calls keep conservative
+  roots, including calls marked only `[@@noalloc]`. The native fixture
+  switches Fibers through a C call that neither allocates OCaml values nor
+  raises and checks that abandoning the Fiber releases its live value.
 
 - **Internal closure application.** Generated OCaml calls use the raw apply helpers inside the OS-thread mutator boundary. Exact arities one through four dispatch directly with register arguments. Partial, over-, and larger applications use the generic dispatcher. The C host apply API, generated FFI shims, standalone main, and exported unit initializers establish the mutator boundary.
 - **Application shadowing.** A known partial application constructs a PAP and executes no callee body. A known over-application can use the fixed-point suspension analysis for its first saturated call. If that call can suspend, the pending arguments are shadowed before entry and popped on return or exception. The returned closure keeps a shadow root during generic application. The runtime also protects pending arguments during generic over-application. The codegen regression covers both first-call effects and the dynamic second call. The native `oapp=` probe in `examples/fiber_test.ml` checks weak reachability and zero leaked ARC objects when the first call suspends and is abandoned.

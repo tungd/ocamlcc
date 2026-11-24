@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-24 (codex/1) — Honor explicit native C suspension contracts from typed declarations and interfaces. Check root removal for audited leaves and abandonment through a noalloc C call that suspends. See [Perceus ARC](/concepts/perceus-arc.md#middle-end-arc-pass).
+
 - 2026-11-24 (codex/1) — Seal compiler-generated string/bytes cast stubs so checked String word reads inherit their Bytes suspension proofs. Verify unaligned reads, bounds exceptions and caller roots in the native stdlib. See [stdlib compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility).
 
 - 2026-11-23 (codex/1) — Record frozen tterm replay, direct tail edges, bounded damage imports, and residual suspension paths. Verify the relocated distribution with the pinned Cmdliner archive from cache. See [compiler pipeline](/concepts/compiler-pipeline.md#self-tail-calls) and [Perceus ARC](/concepts/perceus-arc.md#middle-end-arc-pass).

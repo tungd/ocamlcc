@@ -13,12 +13,27 @@ external digits : int -> int -> int -> int -> int -> int -> int -> int ->
 
 external null_value : unit -> int option = "ffi_null_value" [@@noalloc]
 external observe : 'a -> unit = "ffi_observe" [@@noalloc]
+external suspend_noalloc : unit -> unit = "ffi_suspend_noalloc" [@@noalloc]
 
 let[@inline never] release_unknown value = observe value
 
 type magnitude = Magnitude of float [@@unboxed]
 
 let[@inline never] opaque x = x
+
+let[@inline never] suspend_and_keep keep =
+  suspend_noalloc ();
+  keep
+
+let[@inline never] abandon_suspended_call weak =
+  let fiber = Fiber.create (fun () ->
+      let keep = Bytes.make 1 'x' in
+      Weak.set weak 0 (Some keep);
+      observe (suspend_and_keep keep))
+  in
+  Fiber.resume fiber ();
+  assert (Weak.check weak 0);
+  assert (not (Fiber.is_done fiber))
 
 let () =
   let indirect = opaque double in
@@ -31,4 +46,7 @@ let () =
   release_unknown (null_value ());
   release_unknown (-17);
   release_unknown (Some 17);
+  let weak = Weak.create 1 in
+  abandon_suspended_call weak;
+  assert (not (Weak.check weak 0));
   print_endline "native FFI: PASS"

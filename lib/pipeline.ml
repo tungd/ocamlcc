@@ -55,7 +55,7 @@ let compile_source (request : Request.t) source =
       ~resolve_imports:(Option.is_some summaries) ~filename ~modname source
     |> Result.map_error (fun { Frontend.msg } -> msg)
   in
-  let { Frontend.Implementation.lambda; cmis; interface } = implementation in
+  let { Frontend.Implementation.lambda; cmis; interface; nonsuspending_externals } = implementation in
   let load_exports = Option.map (fun loader unit_name ->
       let open Sys_util.Option_syntax in
       let* cmi = List.assoc_opt unit_name cmis in
@@ -63,7 +63,7 @@ let compile_source (request : Request.t) source =
   in
   let* anf, exported =
     Anf.lower ~use_builtins:(not nostdlib) ~include_dirs ?stdlib_dir ~imports
-      ?load_exports ~collect_exports:(export_policy <> Omit) lambda
+      ?load_exports ~nonsuspending_externals ~collect_exports:(export_policy <> Omit) lambda
     |> Result.map_error (Printf.sprintf "unsupported: %s")
   in
   let inline_leaf =

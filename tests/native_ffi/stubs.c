@@ -1,5 +1,7 @@
 #include <stdint.h>
 
+#include "../../runtime/fiber.h"
+
 double ffi_double(double number) {
     return number * 2.0;
 }
@@ -30,4 +32,12 @@ int64_t ffi_null_value(int64_t unit) {
 int64_t ffi_observe(int64_t value) {
     (void)value;
     return 1;
+}
+
+int64_t ffi_suspend_noalloc(int64_t unit) {
+    Fiber *fiber = arc_fiber_current();
+    if (fiber->caller == NULL || fiber->effect_owner != 0 ||
+        fiber->owns_finalizer_dispatch)
+        return unit;
+    return ocamlcc_fiber_suspend(unit);
 }

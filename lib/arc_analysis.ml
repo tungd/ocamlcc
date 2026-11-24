@@ -43,8 +43,8 @@ let cexpr_is_imm ~pure ~imm_funs imm (ce : Anf.cexpr) =
   | MakeBlock (_, _, []) | ScalarLoad _ | ScalarValue _ | FloatBinop _ | IntegerBinop _ | IntegerCompare _ | IntegerNeg _ | IntegerShift _ | ScalarStore _ -> true
   | PollFinalizers | LoopPollDue _ -> true
   | Ccall (name, _) -> Ccalls.returns_imm name
-  | NativeCcall (prim, _) ->
-      not (Primitive.equal_native_repr prim.prim_native_repr_res Same_as_ocaml_repr)
+  | NativeCcall ({ primitive; _ }, _) ->
+      not (Primitive.equal_native_repr primitive.prim_native_repr_res Same_as_ocaml_repr)
   | DirectApp (target, _) -> target.returns_immediate
   | App (Var fn, args) -> (
       match Ident.Map.find_opt fn imm_funs with
@@ -410,12 +410,12 @@ let operation_can_raise ~finalizers known raising = function
   | BigarrayAccess _ | ScalarLoad _ | ScalarStore _ -> true
   | PollFinalizers | Ccall ("ocamlcc_poll_finalizers", []) -> finalizers
   | Ccall (name, _) -> (Ccalls.find name).Ccalls.raises
-  | NativeCcall (prim, _) -> prim.prim_alloc
+  | NativeCcall ({ primitive; _ }, _) -> primitive.prim_alloc
   | _ -> false
 
 let call_can_suspend known yielding = function
   | Anf.Ccall (name, _) -> is_yielding_ccall name
-  | NativeCcall (prim, _) -> is_yielding_ccall (Primitive.native_name prim)
+  | NativeCcall ({ may_suspend; _ }, _) -> may_suspend
   | DirectApp (target, _) -> target.yields
   | App (Var fn, args) ->
       (match Ident.Map.find_opt fn known with

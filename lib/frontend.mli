@@ -5,6 +5,7 @@ module Implementation : sig
     lambda : Lambda.program;
     cmis : (string * string) list;
     interface : string option;
+    nonsuspending_externals : string list;
   }
 end
 
