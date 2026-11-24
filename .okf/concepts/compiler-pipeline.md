@@ -382,6 +382,30 @@ replacement, so a caller that only projects the result can receive the fields
 at a static join without constructing the block. Persisted export summaries
 continue to carry direct-entry facts.
 
+# Proposed performance experiments
+
+At `b857e6a`, five interleaved tterm replay runs on Apple M4 Pro put median
+Unicode event application at 467.17 ms per payload with ocamlcc and 39.20 ms
+with stock OCaml 5.5.0. Total replay times were 570.00 ms and 57.79 ms. The
+ocamlcc run used the default atomic runtime and matched all 1,758 parser
+assertions from the stock build.
+
+1. **Specialize known callbacks before ARC insertion.** Start with the
+   iterator passed by tterm's `handle_codepoints` to `put_unicode_glyphs`.
+   Specializing the callee for that iterator could turn indirect application
+   inside the loop into a direct call and expose captures and local ref cells
+   to scalar replacement. Measure Unicode apply time, closure allocations,
+   and indirect calls together.
+2. **Specialize bulk operations on proven `int array` values.** The
+   [stdlib bulk operations](/concepts/stdlib-compatibility.md) use generic
+   element access. Try checking slice bounds once and emitting direct stores
+   for fill or an overlap-safe copy for blit. Compare plain replay and count
+   generic setter calls.
+3. **Measure small-object slab allocation and freeing.** The
+   [ARC allocator](/concepts/perceus-arc.md) locks the shared slab state on
+   small allocations and frees. Isolate that cost and compare a per-thread
+   slab cache prototype using the existing object layout and C ownership ABI.
+
 [^design-doc]: Stage structure, goals, and the exception/fiber lowering
   plans are specified in `docs/design.md` §3–§4.
 

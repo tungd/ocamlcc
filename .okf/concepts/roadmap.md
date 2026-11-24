@@ -5,8 +5,8 @@ description: Development phases, deliverables, and key risks with mitigations.
 tags: [planning, roadmap, risks]
 status: stable
 generated:
-  by: autoagent/1
-  at: 2026-11-13
+  by: codex/1
+  at: 2026-11-18T04:57:21Z
 sources:
   - id: design-doc
     resource: ../docs/design.md
@@ -24,6 +24,18 @@ Estimates assume solo development (~5–6 months total)[^design-doc].
 | 3. Wren fibers & I/O poller | 3–4 weeks | Fiber struct, shadow-stack lowering, deterministic fiber-drop cleanup, kqueue/epoll driver. | **done** (`fiber_test`, `fiber_io`) |
 | 4. Mobile & cross-build CLI | 3–4 weeks | Single-binary driver (`ocamlcc build --target ...`); `.mli → .h` C99 header + FFI shim generator (`ocamlcc bindgen`); `.xcframework`, shared/static libraries, and cross-target QBE/toolchain orchestration. | **done** (`c_bindgen_test`, `driver_test`, `bindgen`) |
 | 5. Core stdlib port | 3–4 weeks | Multi-module linking + ARC-native Option, Result, List, Array, Bytes, String, Buffer, Hashtbl, Printf, Weak, Fiber, Stdlib. | **done** (`mod_main`, `stdlib_test`) |
+
+# Current focus
+
+Improve Bigarray scalar processing and native memory views on ARM64 and AMD64,
+Linux and macOS. Keep automatic ARC and QBE, with Bigarray as the opt-in path
+for contiguous data and reusable native buffers. The
+[memory-view implementation brief](/concepts/memory-views.md) records the
+ownership contracts, compiler work, FFI changes, and behavioral checks.
+
+MCU support, RV32, embedded runtime profiles, and backend expansion are future
+work. The current brief does not introduce a general ownership/region system
+or replace the existing ARC reclamation policy.
 
 # Key risks
 
