@@ -143,6 +143,61 @@ pkg jsonm 1.0.2
   file jsonm.ml <= src/jsonm.ml
   file jsonm.mli <= src/jsonm.mli
 
+pkg jsont 0.4.0
+  dep bytesrw
+  url https://github.com/dbuenzli/jsont/archive/refs/tags/v0.4.0.tar.gz
+  sha256 a90a5efaa8d01fa97596a16f94c6eecc8cf4d4b4b64e30e4262e88d233f71159
+  root jsont-0.4.0
+  tree 2cb65269d65205f683a5ffef888f16f56155375a5474c3d5710cabf33a6bd33a
+  wrapped false
+  export Jsont
+  export Jsont_bytesrw
+  license "ISC"
+  file jsont_base.mli <= src/jsont_base.mli
+  file jsont_base.ml <= src/jsont_base.ml
+  file jsont.mli <= src/jsont.mli
+  file jsont.ml <= src/jsont.ml
+  file jsont_bytesrw.mli <= src/bytesrw/jsont_bytesrw.mli
+  file jsont_bytesrw.ml <= src/bytesrw/jsont_bytesrw.ml
+
+pkg tyxml 4.6.0
+  dep re
+  dep uutf
+  url https://github.com/ocsigen/tyxml/releases/download/4.6.0/tyxml-4.6.0.tbz
+  sha256 bfeb673c6b4e120a4eca4c48448add47dc3f8d02c2b40f63ffdccc4e91c902dd
+  root tyxml-4.6.0
+  tree a96bb083ec564f5b3c06aea31ebe48c24356f560a6dae6bbc61103c1766f1936
+  wrapped false
+  export Tyxml
+  export Tyxml_html
+  export Tyxml_svg
+  export Tyxml_xml
+  license "LGPL-2.1-only WITH OCaml-LGPL-linking-exception"
+  file xml_wrap.mli <= lib/xml_wrap.mli
+  file xml_wrap.ml <= lib/xml_wrap.ml
+  file xml_sigs.mli <= lib/xml_sigs.mli
+  file xml_print.mli <= lib/xml_print.mli
+  file xml_print.ml <= lib/xml_print.ml
+  file xml_iter.mli <= lib/xml_iter.mli
+  file xml_iter.ml <= lib/xml_iter.ml
+  file xml_stream.mli <= lib/xml_stream.mli
+  file xml_stream.ml <= lib/xml_stream.ml
+  file html_types.mli <= lib/html_types.mli
+  file html_sigs.mli <= lib/html_sigs.mli
+  file html_f.mli <= lib/html_f.mli
+  file html_f.ml <= lib/html_f.ml
+  file svg_types.mli <= lib/svg_types.mli
+  file svg_sigs.mli <= lib/svg_sigs.mli
+  file svg_f.mli <= lib/svg_f.mli
+  file svg_f.ml <= lib/svg_f.ml
+  file tyxml_xml.mli <= implem/tyxml_xml.mli
+  file tyxml_xml.ml <= implem/tyxml_xml.ml
+  file tyxml_html.mli <= implem/tyxml_html.mli
+  file tyxml_html.ml <= implem/tyxml_html.ml
+  file tyxml_svg.mli <= implem/tyxml_svg.mli
+  file tyxml_svg.ml <= implem/tyxml_svg.ml
+  file tyxml.ml <= implem/tyxml.ml
+
 pkg logs 0.7.0
   url https://erratique.ch/software/logs/releases/logs-0.7.0.tbz
   sha256 86f4a02807eb1a297aae44977d9f61e419c31458a5d7b23c6f55575e8e69d5ca

@@ -79,5 +79,5 @@ let () =
     let packages = require (parse_snapshot catalog) in
     let names = List.map (fun package -> Package_name.to_string package.package.name) packages in
     assert (names = ["arc-unix"; "astring"; "base64"; "bytesrw"; "cmdliner"; "crunch"; "crunch-unix";
-                     "fmt"; "jsonm"; "logs"; "ptime"; "re"; "uutf"])
+                     "fmt"; "jsonm"; "jsont"; "logs"; "ptime"; "re"; "tyxml"; "uutf"])
   end

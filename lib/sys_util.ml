@@ -9,7 +9,8 @@ let write_file path data =
 let replace_file ?mode path data =
   let tmp, out =
     Filename.open_temp_file ~mode:[Open_binary] ~perms:0o666
-      ~temp_dir:(Filename.dirname path) ".ocamlcc-" ".tmp"
+      ~temp_dir:(Filename.dirname path)
+      (Printf.sprintf ".ocamlcc-%d-" (Unix.getpid ())) ".tmp"
   in
   Fun.protect
     ~finally:(fun () ->

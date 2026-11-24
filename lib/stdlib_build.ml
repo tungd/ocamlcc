@@ -198,7 +198,8 @@ let prepare_cached ?(mode = Build_mode.Release) ?debug_info ?(cflags = [])
                 let store = Filename.concat cache "stdlib" in
                 let* entry =
                   Build_cache.ensure ~store ~key (fun destination ->
-                    let work = Filename.temp_dir "occ-stdlib-cache-" "" in
+                    let work = Filename.temp_dir
+                        (Printf.sprintf "occ-stdlib-cache-%d-" (Unix.getpid ())) "" in
                     Fun.protect ~finally:(fun () -> rm_rf work) (fun () ->
                       let* plan = compile ~mode ~debug_info ~directory:work path in
                       let* objects =

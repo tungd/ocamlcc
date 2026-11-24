@@ -65,8 +65,10 @@ let ensure ?(hasher = default_hasher) ~store ~key build =
       let data = Filename.concat target "data" in
       if verify hasher target then Ok {directory = data; hit = true}
       else
-        let staging = Filename.temp_dir ~temp_dir:store ".stage-" "" in
-        Fun.protect ~finally:(fun () -> rm_rf staging) (fun () ->
+        let staging = Filename.temp_dir ~temp_dir:store
+            (Printf.sprintf ".stage-%d-" (Unix.getpid ())) "" in
+        let renamed = ref false in
+        Fun.protect ~finally:(fun () -> if not !renamed then rm_rf staging) (fun () ->
           let temporary = Filename.concat staging "data" in
           Sys.mkdir temporary 0o700;
           let* () = build temporary in
@@ -74,6 +76,7 @@ let ensure ?(hasher = default_hasher) ~store ~key build =
           write_file (Filename.concat staging "digest") (Sha256.to_hex digest ^ "\n");
           rm_rf target;
           Sys.rename staging target;
+          renamed := true;
           {directory = data; hit = false}))
   with
   | Sys_error msg -> Error msg

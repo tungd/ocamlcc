@@ -104,7 +104,8 @@ let prepare_package_task tools ~vendor ~held ~prior recipe =
         let compiled_count = ref 0 in
         let* entry = Build_cache.ensure ~hasher ~store ~key (fun directory ->
           let source_root = Filename.concat vendor (package_name recipe) in
-          let staging = Filename.temp_dir "ocpkg-package-" "" in
+          let staging = Filename.temp_dir
+              (Printf.sprintf "ocpkg-package-%d-" (Unix.getpid ())) "" in
           Fun.protect ~finally:(fun () -> rm_rf staging) (fun () ->
             let files = List.map (fun item ->
                 let source = Rel_path.resolve ~root:source_root (Comp_input.source item) in

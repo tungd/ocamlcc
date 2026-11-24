@@ -43,8 +43,8 @@ Symlinks and special files are rejected.
 requirements. `ocpkg.lock` records the selected catalog digest and resolved
 recipes in sorted package order. The line-based
 `packages/snapshots/default.snap` catalog includes the Crunch recipes, the
-ARC Unix descriptor package, and Astring, Base64, Bytesrw, Fmt, Jsonm, Logs,
-Re, and Uutf. [ARC Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility)
+ARC Unix descriptor package, and Astring, Base64, Bytesrw, Cmdliner, Fmt, Jsonm,
+Jsont, Logs, Ptime, Re, Tyxml, and Uutf. [ARC Unix compatibility](/concepts/stdlib-compatibility.md#posix-unix-compatibility)
 Package names, relative paths, compilation inputs, and SHA-256 values are
 validated before they enter the parsed model.
 
@@ -90,8 +90,9 @@ cache root (`Target.cache_dir`). The stat index under `$OCPKG_CACHE/stat-index`
 reuses file digests while device, inode, size, and nanosecond modification
 and change timestamps match. `--verify-cache` recomputes file hashes for
 the build, and `ocpkg verify` recomputes vendor tree hashes. A builder writes
-to a private directory and publishes successful outputs by rename while the
-cache key is locked.
+to a PID-scoped private staging directory (`Unix.getpid ()` prefix to prevent
+PRNG filename collisions after `Unix.fork`), publishes successful outputs by
+rename while the cache key is locked, and skips cleanup removal once renamed.
 
 `ocpkg build` verifies the lock and vendor tree before preparing the
 toolchain. Builds default to `Release` (`-O2`, full optimization, `debug_info = false`);

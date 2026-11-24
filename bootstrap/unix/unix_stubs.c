@@ -283,3 +283,9 @@ int64_t ocamlcc_unix_waitpid(int64_t pid_val)
     int64_t st_pair = mk_pair(tag_int(kind), tag_int(code));
     return mk_ok(mk_pair(tag_int((int64_t)r), st_pair));
 }
+
+int64_t ocamlcc_unix_getpid(int64_t ignored)
+{
+    (void)ignored;
+    return tag_int((int64_t)getpid());
+}

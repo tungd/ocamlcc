@@ -60,6 +60,7 @@ external c_create_process :
   string -> string array -> int -> int -> int -> (int, int) result
   = "ocamlcc_unix_create_process"
 external c_waitpid : int -> (int * (int * int), int) result = "ocamlcc_unix_waitpid"
+external c_getpid : unit -> int = "ocamlcc_unix_getpid"
 
 let enoent_code = c_enoent ()
 
@@ -136,3 +137,5 @@ let waitpid _flags pid =
     | _ -> WSTOPPED code
   in
   (wpid, status)
+
+let getpid () = c_getpid ()

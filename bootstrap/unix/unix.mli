@@ -63,3 +63,4 @@ val create_process :
   string -> string array -> file_descr -> file_descr -> file_descr -> int
 
 val waitpid : unit list -> int -> int * process_status
+val getpid : unit -> int

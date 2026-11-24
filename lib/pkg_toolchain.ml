@@ -93,7 +93,7 @@ let pack_stdlib ~pool ~held ~progress ~index ~cache ~stdlib_source ~fingerprint 
   let store = Filename.concat cache "stdlib" in
   let+ entry =
     Build_cache.ensure ~hasher:(Digest_index.hasher index) ~store ~key:fingerprint (fun destination ->
-      let work = Filename.temp_dir "occ-stdlib-" "" in
+      let work = Filename.temp_dir (Printf.sprintf "occ-stdlib-%d-" (Unix.getpid ())) "" in
       Fun.protect ~finally:(fun () -> rm_rf work) (fun () ->
         let started = Unix.gettimeofday () in
         let compile_scope = ref None in
@@ -196,7 +196,7 @@ let runtime ?(held = false) tools ~include_main =
       ["toolchain", Sha256.to_hex tools.fingerprint; "main", string_of_bool include_main] in
   let store = Filename.concat tools.cache "runtime" in
   let+ entry = Build_cache.ensure ~hasher:(Digest_index.hasher tools.index) ~store ~key (fun directory ->
-    let work = Filename.temp_dir "occ-runtime-" "" in
+    let work = Filename.temp_dir (Printf.sprintf "occ-runtime-%d-" (Unix.getpid ())) "" in
     Fun.protect ~finally:(fun () -> rm_rf work) (fun () ->
       let* inputs = Runtime_build.link_inputs
           ~parallel:(parallel_run ~pool:tools.pool ~held ~progress:tools.progress ~prefix:"runtime" ~summary_label:"runtime")
