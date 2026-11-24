@@ -128,14 +128,17 @@ Each unit's generated `ocamlcc_init_<Mod>` first calls `ocamlcc_init_try_enter` 
 # Driver modules
 
 `Target` resolves host and cross targets, toolchain commands, and resource
-paths. `Dep_graph` scans source dependencies and returns ordered interface
-and implementation steps. It restores the caller's compiler-libs dependency
-state after each scan. `Linker` owns native compilation commands, final
-archive and linker arguments, symbol visibility, and XCFramework packaging.
-`Build_units` compiles the ordered interfaces and implementations, threading
-export facts and emitting the executable entry point. `C_bindgen` handles
-single headers, umbrella headers, and FFI shims. `Driver` selects the output
-mode and coordinates these operations with the runtime and stdlib inputs.
+paths. `Dep_graph` scans source dependencies and returns either a flattened
+topological step list (`plan_build_order`) or the SCC-condensed dependency DAG
+(`plan_build_dag`) for parallel unit scheduling, restoring the caller's
+compiler-libs dependency state after each scan. `Linker` owns native
+compilation commands, final archive and linker arguments, symbol visibility,
+and XCFramework packaging. `Build_units` compiles the ordered interfaces and
+implementations, threading export facts and emitting the executable entry point.
+`C_bindgen` handles single headers, umbrella headers, and FFI shims. `Driver`
+selects the output mode and coordinates these operations with the runtime and
+stdlib inputs (`Stdlib_build` and `Runtime_build` also accept optional parallel
+runners used by `ocpkg`).
 
 # Runtime objects
 

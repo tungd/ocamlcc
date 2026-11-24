@@ -30,29 +30,40 @@ let runtime_objects ~include_main dir =
   let split = List.exists (fun unit -> Sys.file_exists (object_path unit)) runtime_parts in
   runtime_units ~split ~include_main |> List.map object_path
 
-let compile_runtime_objs ~verbose (tc : Target.Toolchain.t) ~include_main
+let compile_runtime_objs ?parallel ~verbose (tc : Target.Toolchain.t) ~include_main
     ~single_thread runtime_dir out_dir =
   mkdir_p out_dir;
   let srcs = runtime_sources ~include_main runtime_dir in
-  let rec go acc = function
-    | [] -> Ok (List.rev acc)
-    | src :: rest ->
-        let base = Filename.chop_extension (Filename.basename src) in
-        let obj = Filename.concat out_dir (base ^ ".o") in
-        let flags =
-          if Filename.check_suffix src ".S" then []
-          else
-            let flags = ["-std=c11"; "-O2"; "-g"; "-fPIC"; "-I" ^ runtime_dir] in
-            if single_thread && List.mem (Filename.basename src) ("arc.c" :: "fiber.c" :: runtime_parts)
-            then "-DOCAMLCC_SINGLE_THREAD_RC" :: flags else flags
-        in
+  let tasks =
+    List.map (fun src ->
+      let base_file = Filename.basename src in
+      let base = Filename.chop_extension base_file in
+      let obj = Filename.concat out_dir (base ^ ".o") in
+      let flags =
+        if Filename.check_suffix src ".S" then []
+        else
+          let flags = ["-std=c11"; "-O2"; "-g"; "-fPIC"; "-I" ^ runtime_dir] in
+          if single_thread && List.mem base_file ("arc.c" :: "fiber.c" :: runtime_parts)
+          then "-DOCAMLCC_SINGLE_THREAD_RC" :: flags else flags
+      in
+      base_file, (fun () ->
         match Linker.compile_source ~verbose tc flags src obj with
         | Error _ as e -> e
-        | Ok () -> go (obj :: acc) rest
+        | Ok () -> Ok obj)) srcs
   in
-  go [] srcs
+  match parallel with
+  | Some run -> run tasks
+  | None ->
+      let rec go acc = function
+        | [] -> Ok (List.rev acc)
+        | (_, f) :: rest ->
+            match f () with
+            | Error _ as e -> e
+            | Ok obj -> go (obj :: acc) rest
+      in
+      go [] tasks
 
-let link_inputs (request : Request.t) =
+let link_inputs ?parallel (request : Request.t) =
   let { Request.single_thread; prefer_prebuilt; include_main; prebuilt_dir;
         source_dir; work_dir; toolchain; verbose } = request in
   let prebuilt =
@@ -73,7 +84,7 @@ let link_inputs (request : Request.t) =
   | None ->
       match Target.runtime_sources source_dir with
       | Some dir ->
-          compile_runtime_objs ~verbose toolchain ~include_main ~single_thread dir work_dir
+          compile_runtime_objs ?parallel ~verbose toolchain ~include_main ~single_thread dir work_dir
       | None ->
           Error (if prefer_prebuilt then "cannot locate runtime/ directory"
                  else "cannot locate runtime/ directory for cross build")

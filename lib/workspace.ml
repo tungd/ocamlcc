@@ -13,11 +13,14 @@ type options = {
   verbose : bool;
   verify_cache : bool;
   emit_header : string option;
+  jobs : int;
+  progress : bool;
 }
 
 let defaults = {
   product = Native {target = "host"; kind = None}; output = None;
   single_thread = false; verbose = false; verify_cache = false; emit_header = None;
+  jobs = Pkg_parallel.default_jobs (); progress = true;
 }
 
 type pack = {
@@ -50,7 +53,18 @@ let module_sources paths =
 let native_sources paths = List.filter (fun file -> Filename.check_suffix file ".c") paths
 let package_archive directory recipe = Filename.concat directory ("lib" ^ package_name recipe ^ ".a")
 
-let prepare_package tools ~vendor ~prior recipe =
+type pkg_event =
+  | Pkg_compiling of int
+  | Pkg_unit of int * Pkg_compile.event
+
+type prepared_pack = {
+  pack : pack;
+  hit : bool;
+  compiled : int;
+  elapsed : float;
+}
+
+let prepare_package_task tools ~vendor ~held ~prior recipe =
   let rec all_dependencies seen todo =
     match todo with
     | [] -> seen
@@ -68,45 +82,109 @@ let prepare_package tools ~vendor ~prior recipe =
         @ List.map (fun key -> "dependency", Sha256.to_hex key) scope.package_keys)
   in
   let store = Filename.concat tools.cache "pkg" in
-  let* entry = Build_cache.ensure ~index:tools.Pkg_toolchain.index ~store ~key (fun directory ->
-    let source_root = Filename.concat vendor (package_name recipe) in
-    let staging = Filename.temp_dir "ocpkg-package-" "" in
-    Fun.protect ~finally:(fun () -> rm_rf staging) (fun () ->
-      let files = List.map (fun item ->
-          let source = Rel_path.resolve ~root:source_root (Comp_input.source item) in
-          let target = Filename.concat staging (Comp_input.name item) in
-          write_file target (read_file source);
-          target) recipe.files in
-      let* output =
-        Pkg_compile.compile ~tools ~scope ~wrapping:recipe.wrapping ~exports:recipe.exports
-          ~cflags:recipe.cflags ~sources:(module_sources files) ~c_sources:(native_sources files) ~directory ()
-      in
-      let archive = package_archive directory recipe in
-      let* () = Pkg_toolchain.archive tools archive output.objects in
-      let units = List.map (fun obj -> Filename.remove_extension obj ^ ".opt") output.objects
-                  |> List.filter Sys.file_exists in
-      Export_summary.write_archive ~archive ~units;
-      write_file (Filename.concat directory "units") (String.concat "\n" output.units);
-      (* The generated alias source is only needed while compiling the units. *)
-      rm_rf (Filename.concat directory "aliases");
-      Ok ())) in
-  let directory = entry.directory in
-  let units = read_file (Filename.concat directory "units") |> String.split_on_char '\n'
-              |> List.filter (fun unit -> unit <> "") in
-  let archive = package_archive directory recipe in
-  let* outputs = Build_cache.fingerprints ~index:tools.index [archive; archive ^ ".opt"] in
-  let id = Build_cache.key (("recipe", Sha256.to_hex key) :: outputs) in
-  Ok {recipe; id; directory; archive; units}
+  let finish_pack ~hit ~compiled ~elapsed directory =
+    let units = read_file (Filename.concat directory "units") |> String.split_on_char '\n'
+                |> List.filter (fun unit -> unit <> "") in
+    let archive = package_archive directory recipe in
+    let+ outputs = Build_cache.fingerprints ~index:tools.index [archive; archive ^ ".opt"] in
+    let id = Build_cache.key (("recipe", Sha256.to_hex key) :: outputs) in
+    { pack = {recipe; id; directory; archive; units}; hit; compiled; elapsed }
+  in
+  match Build_cache.peek ~index:tools.Pkg_toolchain.index ~store ~key () with
+  | Some entry ->
+      let+ prepared = finish_pack ~hit:true ~compiled:0 ~elapsed:0.0 entry.directory in
+      `Ready prepared
+  | None ->
+      Ok (`Run (fun report ->
+        let started = Unix.gettimeofday () in
+        let compiled_count = ref 0 in
+        let* entry = Build_cache.ensure ~index:tools.Pkg_toolchain.index ~store ~key (fun directory ->
+          let source_root = Filename.concat vendor (package_name recipe) in
+          let staging = Filename.temp_dir "ocpkg-package-" "" in
+          Fun.protect ~finally:(fun () -> rm_rf staging) (fun () ->
+            let files = List.map (fun item ->
+                let source = Rel_path.resolve ~root:source_root (Comp_input.source item) in
+                let target = Filename.concat staging (Comp_input.name item) in
+                write_file target (read_file source);
+                target) recipe.files in
+            let sources = module_sources files in
+            let c_sources = native_sources files in
+            report (Pkg_compiling (List.length sources + List.length c_sources));
+            let* output =
+              Pkg_compile.compile ~tools ~scope ~wrapping:recipe.wrapping ~exports:recipe.exports
+                ~cflags:recipe.cflags ~held
+                ~on_event:(fun total ev -> report (Pkg_unit (total, ev)))
+                ~sources ~c_sources ~directory ()
+            in
+            compiled_count := output.compiled;
+            let archive = package_archive directory recipe in
+            let* () = Pkg_toolchain.archive tools archive output.objects in
+            let units = List.map (fun obj -> Filename.remove_extension obj ^ ".opt") output.objects
+                        |> List.filter Sys.file_exists in
+            Export_summary.write_archive ~archive ~units;
+            write_file (Filename.concat directory "units") (String.concat "\n" output.units);
+            (* The generated alias source is only needed while compiling the units. *)
+            rm_rf (Filename.concat directory "aliases");
+            Ok ())) in
+        let elapsed = Unix.gettimeofday () -. started in
+        finish_pack ~hit:entry.hit ~compiled:!compiled_count ~elapsed entry.directory))
 
 let prepare_dependencies tools workspace (lock : lock) =
   let vendor = Pkg_project.vendor_dir workspace in
-  let rec build packed = function
-    | [] -> Ok (List.rev packed)
-    | recipe :: rest ->
-        let* pack = prepare_package tools ~vendor ~prior:(List.rev packed) recipe in
-        build (pack :: packed) rest
-  in
-  build [] lock.packages
+  let recipes = Array.of_list lock.packages in
+  let n = Array.length recipes in
+  if n = 0 then Ok []
+  else begin
+    let index_by_name = Hashtbl.create n in
+    Array.iteri (fun i recipe -> Hashtbl.replace index_by_name recipe.package.name i) recipes;
+    let deps i =
+      List.filter_map (fun dep -> Hashtbl.find_opt index_by_name dep) recipes.(i).dependencies
+    in
+    let child_held = Pkg_parallel.Pool.jobs tools.Pkg_toolchain.pool > 1 && not Sys.win32 in
+    let scope = Pkg_progress.start_scope tools.progress ~prefix:"deps" ~total:n in
+    let unit_done = Array.make n 0 in
+    let done_count = ref 0 in
+    let on_event i = function
+      | Pkg_compiling _ ->
+          let name = package_name recipes.(i) in
+          Pkg_progress.task_started scope ~id:i ~name
+      | Pkg_unit (total, ev) ->
+          let name = package_name recipes.(i) in
+          let path = match ev with
+            | Pkg_compile.Start (_, p) -> p
+            | Pkg_compile.Finish (_, p, _) ->
+                unit_done.(i) <- unit_done.(i) + 1;
+                p
+          in
+          Pkg_progress.task_detail scope ~id:i
+            (Printf.sprintf "%s (%d/%d %s)" name unit_done.(i) total (Filename.basename path))
+    in
+    let on_done i (prepared : prepared_pack) =
+      incr done_count;
+      let name = package_name recipes.(i) in
+      let milestone =
+        if prepared.hit then None
+        else
+          Some (Printf.sprintf "[deps %d/%d] Built %s (%d units, %s)"
+                  !done_count n name prepared.compiled (Pkg_progress.format_duration prepared.elapsed))
+      in
+      Pkg_progress.task_finished ?milestone ~id:i ~cached:prepared.hit scope
+    in
+    let prepare i results =
+      let prior =
+        Array.fold_left (fun acc item ->
+          match item with Some p -> p.pack :: acc | None -> acc) [] results
+        |> List.rev
+      in
+      prepare_package_task tools ~vendor ~held:child_held ~prior recipes.(i)
+    in
+    let res =
+      Pkg_parallel.run_dag ~pool:tools.pool ~held:false ~index:tools.index
+        ~on_event ~on_done ~deps ~prepare n
+    in
+    Pkg_progress.end_scope scope;
+    Result.map (fun arr -> Array.to_list arr |> List.map (fun p -> p.pack)) res
+  end
 
 let files_with_suffix directory suffix =
   if not (Sys.file_exists directory && Sys.is_directory directory) then []
@@ -239,6 +317,7 @@ let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_object
   in
   if hit then Ok output
   else begin
+    Pkg_progress.milestone tools.progress (Printf.sprintf "[link] %s" (Filename.basename output));
     mkdir_p (Filename.dirname output);
     let temporary, channel = Filename.open_temp_file ~temp_dir:(Filename.dirname output) ".ocpkg-link-" "" in
     close_out channel;
@@ -258,7 +337,7 @@ let link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_object
       output)
   end
 
-let app_shims tools scope (workspace : Pkg_project.t) options ~sources ~cache ~output ~compiled_dir =
+let app_shims tools ~held scope (workspace : Pkg_project.t) options ~sources ~cache ~output ~compiled_dir =
   let files =
     match workspace.manifest.public_mli, options.emit_header with
     | [], Some _ -> List.filter (fun path -> Filename.check_suffix path ".mli") sources
@@ -283,8 +362,15 @@ let app_shims tools scope (workspace : Pkg_project.t) options ~sources ~cache ~o
             ~work_dir:directory ~output:(Filename.concat headers header) interfaces in
         let pic = if tools.target.os = Windows then [] else ["-fPIC"] in
         let flags = ["-std=c99"; "-O2"; "-I" ^ headers] @ pic @ tools.cflags in
-        let+ _ = Linker.compile_many ~verbose:tools.verbose ~work_dir:directory
-            tools.commands flags generated.shim_files in
+        let tasks =
+          List.mapi (fun index source ->
+            fun _report ->
+              let base = Filename.chop_extension (Filename.basename source) in
+              let object_file = Filename.concat directory (Printf.sprintf "u_%d_%s.o" index base) in
+              let+ () = Linker.compile_source ~verbose:tools.verbose tools.commands flags source object_file in
+              object_file) generated.shim_files
+        in
+        let+ _ = Pkg_parallel.map ~pool:tools.pool ~held tasks in
         List.iter Sys.remove generated.shim_files) in
       let destination = Filename.dirname header_output in
       let headers = files_with_suffix (Filename.concat entry.directory "headers") "" in
@@ -301,14 +387,35 @@ let app_shims tools scope (workspace : Pkg_project.t) options ~sources ~cache ~o
         Ok (files_with_suffix entry.directory ".o")
       end
 
-let build_target (workspace : Pkg_project.t) (options : options) ~target ~kind selected_test =
+let short_path ~root path =
+  let prefix = if String.ends_with ~suffix:Filename.dir_sep root then root else root ^ Filename.dir_sep in
+  if String.starts_with ~prefix path then
+    String.sub path (String.length prefix) (String.length path - String.length prefix)
+  else path
+
+let build_target ?pool ?(held = false) ?progress (workspace : Pkg_project.t) (options : options) ~target ~kind selected_test =
+  let owned_pool, pool =
+    match pool with
+    | Some p -> None, p
+    | None -> let p = Pkg_parallel.Pool.create options.jobs in Some p, p
+  in
+  let owned_progress, progress =
+    match progress with
+    | Some p -> None, p
+    | None ->
+        let p = Pkg_progress.create ~enabled:options.progress ~verbose:options.verbose in
+        Some p, p
+  in
+  Fun.protect ~finally:(fun () ->
+    Option.iter Pkg_progress.finish owned_progress;
+    Option.iter Pkg_parallel.Pool.close owned_pool) (fun () ->
   let single_thread = options.single_thread || workspace.manifest.single_thread_rc in
   let* cache = Pkg_project.cache_dir () in
   Digest_index.with_index ~cache ~workspace:workspace.root ~verify:options.verify_cache (fun index ->
   let* lock = Pkg_project.read_lock workspace in
   let* () = Pkg_vendor.verify ~index ~vendor:(Pkg_project.vendor_dir workspace) lock.packages in
   let* tools = Pkg_toolchain.prepare ~index ~cache ~target ~single_thread
-      ~cflags:workspace.manifest.cflags ~verbose:options.verbose in
+      ~cflags:workspace.manifest.cflags ~verbose:options.verbose ~pool ~held ~progress () in
   let* packs = prepare_dependencies tools workspace lock in
   let catalog_exe =
     if workspace.manifest.source_dirs = [] && workspace.manifest.entry = None then
@@ -340,13 +447,46 @@ let build_target (workspace : Pkg_project.t) (options : options) ~target ~kind s
       let cache = Filename.concat root "cache/unit" in
       let scope = package_scope packs in
       let c_sources = List.map (Rel_path.resolve ~root:workspace.root) workspace.manifest.c_sources in
+      let app_scope = ref None in
+      let app_done = ref 0 in
+      let app_started = Unix.gettimeofday () in
+      let on_event total ev =
+        let s = match !app_scope with
+          | Some s -> s
+          | None ->
+              let s = Pkg_progress.start_scope tools.progress ~prefix:"app" ~total in
+              app_scope := Some s;
+              s
+        in
+        match ev with
+        | Pkg_compile.Start (id, path) ->
+            Pkg_progress.task_started s ~id ~name:(short_path ~root:workspace.root path)
+        | Pkg_compile.Finish (id, path, cached) ->
+            incr app_done;
+            let rel = short_path ~root:workspace.root path in
+            let milestone =
+              if cached then None
+              else Some (Printf.sprintf "[%d/%d] Compiled %s" !app_done total rel)
+            in
+            Pkg_progress.task_finished ?milestone ~id ~cached s
+      in
       let* app =
-        Pkg_compile.compile ~tools ~scope ~wrapping:Flat ~exports:[] ~cache
-          ~sources ~c_sources ~directory:compiled_dir ()
+        let res =
+          Pkg_compile.compile ~tools ~scope ~wrapping:Flat ~exports:[] ~cache
+            ~held ~on_event ~sources ~c_sources ~directory:compiled_dir ()
+        in
+        Option.iter (fun s ->
+          let elapsed = Pkg_progress.format_duration (Unix.gettimeofday () -. app_started) in
+          let summary = match res with
+            | Ok app -> Some (Printf.sprintf "Built %s (%d compiled, %d cached, %s)" name app.compiled app.hits elapsed)
+            | Error _ -> None
+          in
+          Pkg_progress.end_scope ?summary s) !app_scope;
+        res
       in
       if tools.verbose then
         Printf.eprintf "%d fresh units, %d cached units\n%!" app.compiled app.hits;
-      let* shims = app_shims tools scope workspace options ~sources ~cache ~output ~compiled_dir in
+      let* shims = app_shims tools ~held scope workspace options ~sources ~cache ~output ~compiled_dir in
       let modules = List.concat_map (fun pack -> pack.units) packs @ app.units in
       let* entry = match kind with
         | Exe -> let+ obj = entry_point tools cache modules in [obj]
@@ -358,10 +498,10 @@ let build_target (workspace : Pkg_project.t) (options : options) ~target ~kind s
       in
       let user_objects = entry @ app.objects @ shims @ archives in
       let include_main = kind = Exe in
-      let* runtime = Pkg_toolchain.runtime tools ~include_main in
+      let* runtime = Pkg_toolchain.runtime ~held tools ~include_main in
       let internal_objects = Pkg_toolchain.stdlib_link_inputs tools ~archive:include_main @ runtime in
       let dependency_ldflags = List.concat_map (fun pack -> pack.recipe.ldflags) (List.rev packs) in
-      link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_objects ~dependency_ldflags))
+      link tools ~workspace ~work_dir ~kind ~output ~user_objects ~internal_objects ~dependency_ldflags)))
 
 let protect f =
   try f () with
@@ -382,20 +522,57 @@ let build_xcframework (workspace : Pkg_project.t) options =
     let headers = workspace.manifest.public_mli <> [] || options.emit_header <> None ||
       List.exists (fun path -> Filename.check_suffix path ".mli") sources in
     let header_basename = Option.fold ~none:(name ^ ".h") ~some:Filename.basename options.emit_header in
+    let slice_spec = [("ios-arm64", "device"); ("ios-sim-arm64", "simulator")] in
+    let pool = Pkg_parallel.Pool.create options.jobs in
+    let progress = Pkg_progress.create ~enabled:options.progress ~verbose:options.verbose in
+    Fun.protect ~finally:(fun () -> Pkg_progress.finish progress; Pkg_parallel.Pool.close pool) (fun () ->
+    let parallel_slices = Pkg_parallel.Pool.jobs pool >= 2 && not Sys.win32 in
+    let slice_progress =
+      if parallel_slices then Pkg_progress.create ~enabled:false ~verbose:options.verbose
+      else progress
+    in
     let slice target name =
       let path = Filename.concat temporary (name ^ ".a") in
       let directory = if headers then Some (Filename.concat temporary name) else None in
       let emit_header = Option.map (fun dir -> Filename.concat dir header_basename) directory in
       let options = {options with output = Some path; emit_header} in
-      let+ library = build_target workspace options ~target ~kind:Static None in
+      let+ library =
+        build_target ~pool ~held:parallel_slices ~progress:slice_progress
+          workspace options ~target ~kind:Static None
+      in
       { Linker.Xcframework_slice.library; headers = directory }
     in
-    let* device = slice "ios-arm64" "device" in
-    let* simulator = slice "ios-sim-arm64" "simulator" in
+    let* slices =
+      if parallel_slices then begin
+        let scope = Pkg_progress.start_scope progress ~prefix:"xcframework" ~total:2 in
+        let tasks =
+          List.map (fun (target, slice_name) ->
+            fun _report -> slice target slice_name) slice_spec
+        in
+        let res =
+          Pkg_parallel.map ~pool ~held:false
+            ~on_start:(fun i ->
+              let target, _ = List.nth slice_spec i in
+              Pkg_progress.task_started scope ~id:i ~name:target)
+            ~on_done:(fun i _ ->
+              let target, _ = List.nth slice_spec i in
+              Pkg_progress.task_finished
+                ~milestone:(Printf.sprintf "[xcframework %d/2] Built %s" (i + 1) target)
+                ~id:i ~cached:false scope)
+            tasks
+        in
+        Pkg_progress.end_scope scope;
+        res
+      end else
+        let* device = slice "ios-arm64" "device" in
+        let+ simulator = slice "ios-sim-arm64" "simulator" in
+        [device; simulator]
+    in
+    let device = List.hd slices in
     let product = Filename.concat temporary "product" in
     Unix.mkdir product 0o700;
     let staged = Filename.concat product (Filename.basename output) in
-    let* _ = Linker.xcframework ~verbose:options.verbose ~output:staged [device; simulator] in
+    let* _ = Linker.xcframework ~verbose:options.verbose ~output:staged slices in
     let previous = Filename.concat temporary ".previous" in
     let had_previous = Sys.file_exists output in
     if had_previous && not (Sys.file_exists (Filename.concat output "Info.plist")) then
@@ -413,7 +590,7 @@ let build_xcframework (workspace : Pkg_project.t) options =
                (read_file (Filename.concat directory file))) (Sys.readdir directory)
        | _ -> ());
       Ok output
-    end)
+    end))
 
 let build workspace options =
   protect (fun () ->

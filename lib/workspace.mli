@@ -11,6 +11,8 @@ type options = {
   verbose : bool;
   verify_cache : bool;
   emit_header : string option;
+  jobs : int;
+  progress : bool;
 }
 
 val defaults : options

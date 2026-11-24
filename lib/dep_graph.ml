@@ -27,7 +27,14 @@ let parse_deps ~(kind : [ `Mli | `Ml ]) path =
   with exn ->
     Error (Printf.sprintf "dependency parse failed for %s: %s" path (Printexc.to_string exn))
 
-let plan_build_order (ocaml_files : string list) : (Step.t list, string) result =
+module Plan = struct
+  type group = {
+    steps : Step.t list;
+    deps : int list;
+  }
+end
+
+let plan_build_dag (ocaml_files : string list) : (Plan.group list, string) result =
   let mli_by_mod : (string, int * string) Hashtbl.t = Hashtbl.create 16 in
   let ml_by_mod : (string, int * string) Hashtbl.t = Hashtbl.create 16 in
   let order_counter = ref 0 in
@@ -170,6 +177,7 @@ let plan_build_order (ocaml_files : string list) : (Step.t list, string) result 
             scc_arr;
           (* Topological order over condensation DAG via Kahn with node-index tie-break. *)
           let c_rev = Array.make num_sccs [] in
+          let c_deps = Array.make num_sccs [] in
           let c_indeg = Array.make num_sccs 0 in
           for i = 0 to n - 1 do
             let ci = scc_of.(i) in
@@ -178,6 +186,7 @@ let plan_build_order (ocaml_files : string list) : (Step.t list, string) result 
                 let cj = scc_of.(j) in
                 if ci <> cj && not (List.mem ci c_rev.(cj)) then begin
                   c_rev.(cj) <- ci :: c_rev.(cj);
+                  c_deps.(ci) <- cj :: c_deps.(ci);
                   c_indeg.(ci) <- c_indeg.(ci) + 1
                 end)
               soft_deps.(i)
@@ -229,7 +238,10 @@ let plan_build_order (ocaml_files : string list) : (Step.t list, string) result 
             if List.length !out <> List.length members then None
             else Some (List.rev !out)
           in
-          let result = ref [] in
+          let scc_pos = Array.make num_sccs (-1) in
+          let groups = ref [] in
+          let group_count = ref 0 in
+          let step_count = ref 0 in
           let cyclic = ref false in
           while !ready_c <> [] && not !cyclic do
             let cid = List.hd !ready_c in
@@ -237,9 +249,16 @@ let plan_build_order (ocaml_files : string list) : (Step.t list, string) result 
             (match topo_hard scc_arr.(cid) with
             | None -> cyclic := true
             | Some sorted ->
-                List.iter
-                  (fun idx -> result := List.nth nodes idx :: !result)
-                  sorted);
+                let pos = !group_count in
+                incr group_count;
+                scc_pos.(cid) <- pos;
+                let steps = List.map (List.nth nodes) sorted in
+                step_count := !step_count + List.length steps;
+                let deps =
+                  List.map (fun dep -> scc_pos.(dep)) c_deps.(cid)
+                  |> List.sort_uniq compare
+                in
+                groups := { Plan.steps; deps } :: !groups);
             List.iter
               (fun nxt ->
                 c_indeg.(nxt) <- c_indeg.(nxt) - 1;
@@ -247,8 +266,11 @@ let plan_build_order (ocaml_files : string list) : (Step.t list, string) result 
                   ready_c := List.sort cmp_cid (nxt :: !ready_c))
               c_rev.(cid)
           done;
-          if !cyclic || List.length !result <> n then
+          if !cyclic || !step_count <> n then
             Error "cyclic module dependency detected"
-          else Ok (List.rev !result))
+          else Ok (List.rev !groups))
+
+let plan_build_order ocaml_files =
+  Result.map (List.concat_map (fun (g : Plan.group) -> g.steps)) (plan_build_dag ocaml_files)
 
 let references (step : Step.t) = parse_deps ~kind:step.kind step.path

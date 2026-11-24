@@ -12,6 +12,8 @@ type t = {
   verbose : bool;
   cache : string;
   index : Digest_index.t;
+  pool : Pkg_parallel.Pool.t;
+  progress : Pkg_progress.t;
 }
 
 let self () =
@@ -61,22 +63,67 @@ let copy_into directory source =
   let target = Filename.concat directory (Filename.basename source) in
   write_file target (read_file source)
 
-let pack_stdlib ~index ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose =
+let parallel_run ~pool ~held ~progress ~prefix ~summary_label tasks =
+  let total = List.length tasks in
+  let scope = Pkg_progress.start_scope progress ~prefix ~total in
+  let names = Array.of_list (List.map fst tasks) in
+  let fns = List.map (fun (_, f) -> fun _report -> f ()) tasks in
+  let started = Unix.gettimeofday () in
+  let res =
+    Pkg_parallel.map ~pool ~held
+      ~on_start:(fun i -> Pkg_progress.task_started scope ~id:i ~name:names.(i))
+      ~on_done:(fun i _ -> Pkg_progress.task_finished ~id:i ~cached:false scope)
+      fns
+  in
+  let elapsed = Pkg_progress.format_duration (Unix.gettimeofday () -. started) in
+  let summary =
+    match res with
+    | Ok _ -> Some (Printf.sprintf "Built %s (%d units, %s)" summary_label total elapsed)
+    | Error _ -> None
+  in
+  Pkg_progress.end_scope ?summary scope;
+  res
+
+let pack_stdlib ~pool ~held ~progress ~index ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose =
   let store = Filename.concat cache "stdlib" in
   let+ entry =
     Build_cache.ensure ~index ~store ~key:fingerprint (fun destination ->
       let work = Filename.temp_dir "occ-stdlib-" "" in
       Fun.protect ~finally:(fun () -> rm_rf work) (fun () ->
-        let* plan = Stdlib_build.prepare ~disabled:false ~prefer_prebuilt:false ~prefer_archive:false
-            ~sources:(Some stdlib_source) ~prebuilt:None ~work_dir:work in
+        let started = Unix.gettimeofday () in
+        let compile_scope = ref None in
+        let prev_idx = ref (-1) in
+        let on_step idx total name =
+          let s = match !compile_scope with
+            | Some s -> s
+            | None ->
+                let s = Pkg_progress.start_scope progress ~prefix:"stdlib" ~total in
+                compile_scope := Some s;
+                s
+          in
+          if !prev_idx >= 0 then Pkg_progress.task_finished ~id:!prev_idx ~cached:false s;
+          prev_idx := idx - 1;
+          Pkg_progress.task_started s ~id:(idx - 1) ~name
+        in
+        let* plan = Stdlib_build.compile ~on_step
+            ~directory:(Filename.concat work "stdlib") stdlib_source in
+        Option.iter (fun s ->
+          if !prev_idx >= 0 then Pkg_progress.task_finished ~id:!prev_idx ~cached:false s;
+          Pkg_progress.end_scope s) !compile_scope;
         let* directory = Stdlib_build.interface_dir plan |> require "stdlib interfaces" in
-        let* objects = Stdlib_build.link_inputs ~verbose ~qbe ~target ~toolchain:commands plan in
+        let* objects =
+          Stdlib_build.link_inputs
+            ~parallel:(parallel_run ~pool ~held ~progress ~prefix:"stdlib-asm" ~summary_label:"standard library")
+            ~verbose ~qbe ~target ~toolchain:commands plan
+        in
         let archive = Filename.concat destination "libocamlstdlib.a" in
         let* () = archive_tool ~verbose commands archive objects in
         let opts = List.map (fun obj -> Filename.remove_extension obj ^ ".opt") objects in
         Export_summary.write_archive ~archive ~units:opts;
         List.iter (copy_into destination)
           (matching_files directory [".cmi"; ".o"; ".exports"]);
+        let elapsed = Pkg_progress.format_duration (Unix.gettimeofday () -. started) in
+        Pkg_progress.milestone progress (Printf.sprintf "Prepared standard library (%s)" elapsed);
         Ok ())) in
   entry.directory
 
@@ -88,7 +135,10 @@ module Stdlib_input = struct
     | Source path -> [path]
 end
 
-let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose =
+let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose
+    ?pool ?(held = false) ?progress () =
+  let pool = match pool with Some p -> p | None -> Pkg_parallel.Pool.create 1 in
+  let progress = match progress with Some p -> p | None -> Pkg_progress.create ~enabled:false ~verbose in
   let* target = Target.resolve name in
   let* qbe = Target.qbe None in
   let* commands = Target.toolchain target in
@@ -125,13 +175,13 @@ let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose =
     | Prebuilt directory -> Ok (directory, fingerprint)
     | Source stdlib_source ->
         let* stdlib =
-          pack_stdlib ~index ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose in
+          pack_stdlib ~pool ~held ~progress ~index ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose in
         let+ artifacts = Build_cache.fingerprints ~index (matching_files stdlib [".cmi"; ".a"; ".a.opt"]) in
         stdlib, Build_cache.key (("source toolchain", Sha256.to_hex fingerprint) :: artifacts)
   in
-  Ok {target; commands; qbe; stdlib; fingerprint; single_thread; cflags; verbose; cache; index}
+  Ok {target; commands; qbe; stdlib; fingerprint; single_thread; cflags; verbose; cache; index; pool; progress}
 
-let runtime tools ~include_main =
+let runtime ?(held = false) tools ~include_main =
   let key = Build_cache.key
       ["toolchain", Sha256.to_hex tools.fingerprint; "main", string_of_bool include_main] in
   let store = Filename.concat tools.cache "runtime" in
@@ -139,6 +189,7 @@ let runtime tools ~include_main =
     let work = Filename.temp_dir "occ-runtime-" "" in
     Fun.protect ~finally:(fun () -> rm_rf work) (fun () ->
       let* inputs = Runtime_build.link_inputs
+          ~parallel:(parallel_run ~pool:tools.pool ~held ~progress:tools.progress ~prefix:"runtime" ~summary_label:"runtime")
           { single_thread = tools.single_thread; prefer_prebuilt = Target.is_host tools.target;
             include_main; prebuilt_dir = None; source_dir = None; work_dir = work;
             toolchain = tools.commands; verbose = tools.verbose } in

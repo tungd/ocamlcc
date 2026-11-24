@@ -9,8 +9,8 @@ import subprocess
 
 PACKAGE_MODULES = {
     "Sha256", "Ocpkg_format", "Pkg_archive", "Pkg_vendor", "Pkg_project",
-    "Http_fetch", "Digest_index", "Build_cache", "Pkg_toolchain",
-    "Pkg_compile", "Workspace",
+    "Http_fetch", "Digest_index", "Build_cache", "Pkg_progress",
+    "Pkg_parallel", "Pkg_toolchain", "Pkg_compile", "Workspace",
 }
 
 TEST_ARGS = {

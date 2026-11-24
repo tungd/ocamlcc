@@ -1,5 +1,8 @@
 type t
 
+val compile :
+  ?on_step:(int -> int -> string -> unit) -> directory:string -> string -> (t, string) result
+
 val prepare :
   disabled:bool -> prefer_prebuilt:bool -> prefer_archive:bool ->
   sources:string option -> prebuilt:string option -> work_dir:string ->
@@ -10,5 +13,6 @@ val archive : t -> string option
 val imports : t -> (string * Anf.exports) list
 
 val link_inputs :
+  ?parallel:((string * (unit -> (string, string) result)) list -> (string list, string) result) ->
   verbose:bool -> qbe:string -> target:Target.t -> toolchain:Target.Toolchain.t ->
   t -> (string list, string) result

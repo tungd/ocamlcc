@@ -11,5 +11,7 @@ module Request : sig
   }
 end
 
-val link_inputs : Request.t -> (string list, string) result
+val link_inputs :
+  ?parallel:((string * (unit -> (string, string) result)) list -> (string list, string) result) ->
+  Request.t -> (string list, string) result
 (** Select the runtime profile and prepare its link inputs for the target. *)

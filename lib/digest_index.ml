@@ -17,6 +17,28 @@ type memo = {
 
 type t = Verify | Memoize of memo
 
+type delta = (string * stamp * Sha256.t) list
+
+let reset_updates = function
+  | Verify -> ()
+  | Memoize memo -> Hashtbl.clear memo.updates
+
+let take_updates = function
+  | Verify -> []
+  | Memoize memo ->
+      Hashtbl.fold (fun path (stamp, digest) acc -> (path, stamp, digest) :: acc)
+        memo.updates []
+
+let merge_updates index delta =
+  match index with
+  | Verify -> ()
+  | Memoize memo ->
+      List.iter (fun (path, stamp, digest) ->
+        let entry = stamp, digest in
+        Hashtbl.replace memo.entries path entry;
+        Hashtbl.replace memo.updates path entry)
+        delta
+
 let file index path = match index with
   | Verify -> Sha256.file path
   | Memoize index ->

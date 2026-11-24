@@ -14,6 +14,7 @@ let usage = {|Usage: ocpkg <command>
   verify                  Verify the lock and vendor tree
   query [name]            List selected packages or show a locked recipe
   build [options]         Compile and link the workspace offline
+        [-j N|--jobs N] [--no-progress]
         [--target TARGET] [--shared|--static|--exe|--xcframework]
         [--emit-header FILE] [--verify-cache] [-o PATH]
   run [options] [-- args] Build and run the executable
@@ -99,12 +100,28 @@ let build_options args =
     | _, None -> native None
     | _, Some (`Native kind) -> native (Some kind)
   in
+  let parse_jobs raw =
+    match int_of_string_opt raw with
+    | Some n when n >= 1 -> Ok n
+    | _ -> Error ("invalid job count: " ^ raw)
+  in
   let rec parse (options : Workspace.options) target mode positional = function
     | [] ->
         let+ product = product target mode in
         {options with product}, List.rev positional
     | "--target" :: name :: rest -> parse options (Some name) mode positional rest
     | "-o" :: path :: rest -> parse {options with output = Some path} target mode positional rest
+    | ("-j" | "--jobs") :: raw :: rest ->
+        let* jobs = parse_jobs raw in
+        parse {options with jobs} target mode positional rest
+    | flag :: rest when String.starts_with ~prefix:"--jobs=" flag ->
+        let* jobs = parse_jobs (String.sub flag 7 (String.length flag - 7)) in
+        parse {options with jobs} target mode positional rest
+    | flag :: rest when String.starts_with ~prefix:"-j" flag && String.length flag > 2 ->
+        let* jobs = parse_jobs (String.sub flag 2 (String.length flag - 2)) in
+        parse {options with jobs} target mode positional rest
+    | ("-j" | "--jobs") :: [] -> Error "missing job count"
+    | "--no-progress" :: rest -> parse {options with progress = false} target mode positional rest
     | ("--exe" | "--shared" | "--static" | "--xcframework" as flag) :: rest ->
         let selected =
           match flag with

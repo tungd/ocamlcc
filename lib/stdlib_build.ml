@@ -68,13 +68,15 @@ let unpack path directory =
   | End_of_file -> Error ("truncated standard library source bundle: " ^ path)
   | Failure msg | Sys_error msg -> Error msg
 
-let compile ~directory path =
+let compile ?on_step ~directory path =
   let source_dir = Filename.concat directory "src" in
   mkdir_p source_dir;
   let* sources = unpack path source_dir in
-  let rec units compiled imports = function
+  let total = List.length sources in
+  let rec units index compiled imports = function
     | [] -> Ok (Compiled { directory; units = List.rev compiled })
     | { filename; prefix; flags } :: rest ->
+        Option.iter (fun f -> f (index + 1) total (Filename.basename filename)) on_step;
         let has_flag = Fun.flip List.mem flags in
         let prefix = Filename.concat directory prefix in
         let modname = Pipeline.module_name_of_file (prefix ^ ".ml") in
@@ -88,7 +90,7 @@ let compile ~directory path =
         let result =
           if Filename.check_suffix filename ".mli" then
             let* _ = Pipeline.compile_interface_file request in
-            units compiled imports rest
+            units (index + 1) compiled imports rest
           else
             let request =
               { request with emit_cmi = not (Sys.file_exists (prefix ^ ".cmi")
@@ -99,12 +101,12 @@ let compile ~directory path =
             let* output = Pipeline.compile_file request in
             write_file (prefix ^ ".ssa") output.ssa;
             let exports = output.exports in
-            units ({ prefix; exports; modname } :: compiled)
+            units (index + 1) ({ prefix; exports; modname } :: compiled)
               ((modname, exports) :: imports) rest
         in
         result
   in
-  units [] [] sources
+  units 0 [] [] sources
 
 let prebuilt directory ~prefer_archive =
   if not (Sys.file_exists (Filename.concat directory "stdlib.cmi")) then None
@@ -134,20 +136,29 @@ let prepare ~disabled ~prefer_prebuilt ~prefer_archive ~sources ~prebuilt:direct
         | Some path -> compile ~directory:(Filename.concat work_dir "stdlib") path
         | None -> Ok Unavailable
 
-let link_inputs ~verbose ~qbe ~(target : Target.t) ~toolchain = function
+let link_inputs ?parallel ~verbose ~qbe ~(target : Target.t) ~toolchain = function
   | Disabled | Unavailable -> Ok []
   | Prebuilt { objects; _ } -> Ok objects
   | Compiled { units; _ } ->
-      let rec build objects = function
-        | [] -> Ok (List.rev objects)
-        | { prefix; exports; modname = _ } :: rest ->
-            let asm = prefix ^ ".s" in
-            let obj = prefix ^ ".o" in
-            let* () = run_cmd ~verbose ~stdout_file:asm qbe
-                ["-t"; target.qbe_target; prefix ^ ".ssa"] in
-            let* () = Linker.compile_source ~verbose toolchain [] asm obj in
-            Export_summary.write_unit ~prefix exports;
-            Export_summary.write_unit_object (prefix ^ ".opt");
-            build (obj :: objects) rest
+      let build_unit { prefix; exports; modname } =
+        modname, (fun () ->
+          let asm = prefix ^ ".s" in
+          let obj = prefix ^ ".o" in
+          let* () = run_cmd ~verbose ~stdout_file:asm qbe
+              ["-t"; target.qbe_target; prefix ^ ".ssa"] in
+          let* () = Linker.compile_source ~verbose toolchain [] asm obj in
+          Export_summary.write_unit ~prefix exports;
+          Export_summary.write_unit_object (prefix ^ ".opt");
+          Ok obj)
       in
-      build [] units
+      let tasks = List.map build_unit units in
+      match parallel with
+      | Some run -> run tasks
+      | None ->
+          let rec seq acc = function
+            | [] -> Ok (List.rev acc)
+            | (_, f) :: rest ->
+                let* obj = f () in
+                seq (obj :: acc) rest
+          in
+          seq [] tasks

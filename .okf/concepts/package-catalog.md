@@ -4,7 +4,7 @@ title: Native package catalog and workspace builder
 description: Pinned package metadata, verified vendoring, offline incremental compilation, and the Crunch integration.
 status: draft
 tags: [packages, supply-chain, build-cache, compatibility]
-generated: { by: codex/1, at: 2026-11-23 }
+generated: { by: gemini/1, at: 2026-11-25 }
 sources:
   - id: user-design
     resource: conversation:ocamlcc-package-companion-2026-11-18
@@ -101,6 +101,30 @@ to their sources, supply compiler arguments with `cflag`, and supply
 downstream executable or shared-library linker arguments with `ldflag`.
 C source and header names may contain hyphens, so recipes can preserve
 upstream header names and their corresponding includes.
+
+# Parallel builds and progress
+
+`Pkg_parallel` schedules independent dependency packages, module condensation-DAG
+groups (`Dep_graph.plan_build_dag`), workspace C sources, generated C shims,
+source-built stdlib/runtime objects, and XCFramework slices across `Unix.fork`
+worker processes (falling back to sequential execution on Win32 or `-j 1`). A
+non-blocking jobserver token pipe (`Pool.t`) caps total concurrent leaf builds
+across nested package and unit scopes to `-j N`/`--jobs N` (or `OCPKG_JOBS`,
+defaulting to `Domain.recommended_domain_count ()`). `Build_cache.peek` resolves
+verified cache hits in-process without spawning workers, and workers return
+`Digest_index` deltas over framed pipes so the parent merges and persists
+stat-index updates once.
+
+`Pkg_progress` writes build progress exclusively to `stderr` so `stdout`
+remains clean for `build`, `run`, and `test`. On an interactive TTY (when
+`TERM` is not `dumb` and `--verbose` is unset), it renders a single updating
+status line with active units/packages and clears it before errors, `execv`,
+or completion summaries; on non-TTY streams, `TERM=dumb`, or `--verbose`, it
+emits newline-terminated milestones for compiled packages, units, and links
+while staying quiet on cache hits. Pass `--no-progress` to suppress progress
+output. `test/pkg_parallel_test.ml` and `tests/ocpkg/parallel_progress.sh`
+cover DAG concurrency, `Digest_index` delta merging, cancellation, `-j`, and
+`--no-progress`.
 
 Recipes can opt into the ARC leaf C headers with
 `cflag -DOCAMLCC_CAML_LEAF`. The headers expose borrowed tagged integers,

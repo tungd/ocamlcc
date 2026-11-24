@@ -5,6 +5,11 @@ val fingerprints : ?index:Digest_index.t -> string list -> ((string * string) li
 
 type entry = { directory : string; hit : bool }
 
+val peek :
+  ?index:Digest_index.t -> store:string -> key:Sha256.t -> unit -> entry option
+(** Check whether a complete, verified entry already exists without creating
+    the store or invoking a builder. *)
+
 val ensure :
   ?index:Digest_index.t -> store:string -> key:Sha256.t -> (string -> (unit, string) result) ->
   (entry, string) result

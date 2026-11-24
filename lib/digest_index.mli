@@ -6,3 +6,9 @@ val with_index :
 
 val file : t -> string -> (Sha256.t, string) result
 val tree : t -> string -> (Sha256.t, string) result
+
+type delta
+
+val reset_updates : t -> unit
+val take_updates : t -> delta
+val merge_updates : t -> delta -> unit

@@ -32,6 +32,22 @@ let verify index directory =
        | Error _ -> false)
   | _ -> false
 
+let peek ?index ~store ~key () =
+  try
+    let key = Sha256.to_hex key in
+    let target = Filename.concat store key in
+    let seal = Filename.concat target "digest" in
+    match Unix.lstat seal with
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
+    | _ ->
+        let lock = Filename.concat store (key ^ ".lock") in
+        let fd = Unix.openfile lock [Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC] 0o600 in
+        Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+          Unix.lockf fd Unix.F_LOCK 0;
+          if verify index target then Some {directory = Filename.concat target "data"; hit = true}
+          else None)
+  with Sys_error _ | Unix.Unix_error _ -> None
+
 let ensure ?index ~store ~key build =
   try
     mkdir_p store;

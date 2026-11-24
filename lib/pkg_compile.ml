@@ -18,6 +18,10 @@ type output = {
   hits : int;
 }
 
+type event =
+  | Start of int * string
+  | Finish of int * string * bool
+
 type layout = {
   map_name : string -> string;
   public : string -> bool;
@@ -108,19 +112,43 @@ let artifact_key ~tools ~scope ~layout available (step : Dep_graph.Step.t) =
   in
   Ok key
 
-let compile ~tools ~scope ~wrapping ~exports ?cache ?(cflags = []) ~sources ~c_sources ~directory () =
+type step_output = {
+  modname : string;
+  kind : [ `Mli | `Ml ];
+  path : string;
+  prefix : string;
+  object_file : string;
+  hit : bool;
+}
+
+type task_output =
+  | Ocaml_steps of step_output list
+  | C_object of string
+
+type node =
+  | Ocaml_group of Dep_graph.Step.t list * int list
+  | C_unit of int * string
+
+let compile ~tools ~scope ~wrapping ~exports ?cache ?(cflags = [])
+    ?(held = false) ?on_event ~sources ~c_sources ~directory () =
   mkdir_p directory;
   let layout, prelude, ending =
     match wrapping with
     | Ocpkg_format.Flat -> ordinary_layout, [], []
     | Wrapped wrap -> wrapped_sources ~directory ~wrap ~exports sources
   in
-  let* steps = Dep_graph.plan_build_order sources in
+  let* dag_groups = Dep_graph.plan_build_dag sources in
   let alias_step path = { Dep_graph.Step.modname = Pipeline.module_name_of_file path; kind = `Ml; path } in
-  let steps = List.map alias_step prelude @ steps @ List.map alias_step ending in
+  let prelude_steps = List.map alias_step prelude in
+  let ending_steps = List.map alias_step ending in
+  let all_ocaml_steps =
+    prelude_steps
+    @ List.concat_map (fun (g : Dep_graph.Plan.group) -> g.steps) dag_groups
+    @ ending_steps
+  in
   let implementation_interfaces = List.fold_left (fun set (step : Dep_graph.Step.t) ->
       match step.kind with `Ml -> set | `Mli -> Name_set.add step.modname set)
-      Name_set.empty steps in
+      Name_set.empty all_ocaml_steps in
   let private_dir = Filename.concat directory "private" in
   if layout.open_modules <> [] then mkdir_p private_dir;
   let private_first = if layout.open_modules = [] then [] else [private_dir] in
@@ -128,12 +156,11 @@ let compile ~tools ~scope ~wrapping ~exports ?cache ?(cflags = []) ~sources ~c_s
   let hide_dirs = scope.hidden in
   let stdlib_archive = Export_summary.find_archive tools.stdlib in
   let archives = Option.to_list stdlib_archive @ scope.archives in
-  let local_units = List.map (fun (step : Dep_graph.Step.t) -> layout.map_name step.modname) steps in
+  let local_units = List.map (fun (step : Dep_graph.Step.t) -> layout.map_name step.modname) all_ocaml_steps in
   let summaries = Some (Export_summary.Loader.create ~archives ~exclude_units:local_units ()) in
-  let initial = {objects = []; units = []; compiled = 0; hits = 0} in
   let runtime_flags =
     Option.to_list (Option.map (fun dir -> "-I" ^ dir) (Target.runtime_sources None)) in
-  let compile_unit available imports (step : Dep_graph.Step.t) =
+  let compile_unit available imports ?precomputed_key (step : Dep_graph.Step.t) =
     let modname = layout.map_name step.modname in
     let output_dir = if layout.public step.modname then directory else private_dir in
     let file_prefix = String.uncapitalize_ascii modname in
@@ -173,49 +200,135 @@ let compile ~tools ~scope ~wrapping ~exports ?cache ?(cflags = []) ~sources ~c_s
       | None ->
           let+ () = write output_dir in (output_dir, false)
       | Some store ->
-          let* key = artifact_key ~tools ~scope ~layout available step in
+          let* key = match precomputed_key with
+            | Some key -> Ok key
+            | None -> artifact_key ~tools ~scope ~layout available step
+          in
           let+ entry = Build_cache.ensure ~index:tools.index ~store ~key write in
           copy_artifacts entry.directory output_dir;
           entry.directory, entry.hit
     in
     let prefix = Filename.concat output_dir file_prefix in
-    Ok (modname, prefix, Filename.concat artifact_directory (file_prefix ^ ".o"), hit)
+    Ok { modname; kind = step.kind; path = step.path; prefix;
+         object_file = Filename.concat artifact_directory (file_prefix ^ ".o"); hit }
   in
+  let prelude_nodes = List.map (fun s -> Ocaml_group ([s], [])) prelude_steps in
+  let prelude_len = List.length prelude_nodes in
+  let dag_nodes =
+    List.map (fun (g : Dep_graph.Plan.group) ->
+      let deps =
+        (if prelude_len > 0 then [0] else [])
+        @ List.map (fun d -> prelude_len + d) g.deps
+      in
+      Ocaml_group (g.steps, deps)) dag_groups
+  in
+  let ocaml_base_len = prelude_len + List.length dag_nodes in
+  let ending_nodes =
+    let all_deps = List.init ocaml_base_len Fun.id in
+    List.map (fun s -> Ocaml_group ([s], all_deps)) ending_steps
+  in
+  let c_nodes = List.mapi (fun idx file -> C_unit (idx, file)) c_sources in
+  let nodes = Array.of_list (prelude_nodes @ dag_nodes @ ending_nodes @ c_nodes) in
+  let total_units = List.length all_ocaml_steps + List.length c_sources in
+  let emit = match on_event with Some f -> f total_units | None -> fun _ -> () in
   let local_summaries = Export_summary.Loader.create () in
-  let rec compile_steps available imports output = function
-    | [] -> Ok output
-    | (step : Dep_graph.Step.t) :: rest ->
-        let* modname, prefix, object_file, hit = compile_unit available imports step in
-        let available = Names.add modname (prefix ^ ".cmi") available in
-        let output = {output with
-          compiled = output.compiled + (if hit then 0 else 1);
-          hits = output.hits + (if hit then 1 else 0) } in
-        let output = match step.kind with
-          | `Mli -> output
-          | `Ml -> {output with objects = object_file :: output.objects;
-                                units = modname :: output.units}
-        in
-        let imports = match step.kind with
-          | `Mli -> imports
-          | `Ml ->
-              match Export_summary.Loader.lookup local_summaries ~unit_name:modname ~cmi:(prefix ^ ".cmi") with
-              | Some facts -> (modname, facts) :: imports
-              | None -> imports
-        in
-        compile_steps available imports output rest
+  let available_ref = ref Names.empty in
+  let imports_ref = ref [] in
+  let record_step out =
+    available_ref := Names.add out.modname (out.prefix ^ ".cmi") !available_ref;
+    match out.kind with
+    | `Mli -> ()
+    | `Ml ->
+        match Export_summary.Loader.lookup local_summaries ~unit_name:out.modname ~cmi:(out.prefix ^ ".cmi") with
+        | Some facts -> imports_ref := (out.modname, facts) :: !imports_ref
+        | None -> ()
   in
-  let* output = compile_steps Names.empty [] initial steps in
-  (* Workspace C files can include headers beyond their source directory.
-     Their compiler inputs are independent of the OCaml unit cache. *)
-  let rec compile_native index output = function
-    | [] -> Ok {output with objects = List.rev output.objects; units = List.rev output.units}
-    | file :: rest ->
-        let basename = Printf.sprintf "c%d_%s.o" index (Filename.remove_extension (Filename.basename file)) in
+  let node_label = function
+    | Ocaml_group (step :: _, _) -> step.path
+    | Ocaml_group ([], _) -> ""
+    | C_unit (_, file) -> file
+  in
+  let deps i =
+    match nodes.(i) with
+    | Ocaml_group (_, ds) -> ds
+    | C_unit _ -> []
+  in
+  let prepare i _results =
+    match nodes.(i) with
+    | C_unit (c_idx, file) ->
+        let basename = Printf.sprintf "c%d_%s.o" c_idx (Filename.remove_extension (Filename.basename file)) in
         let obj = Filename.concat directory basename in
-        if tools.verbose then Printf.eprintf "compile %s\n%!" file;
-        let* () = Pkg_toolchain.compile_c tools
-            ~flags:(("-I" ^ Filename.dirname file) :: runtime_flags @ cflags) file obj in
-        let output = {output with objects = obj :: output.objects; compiled = output.compiled + 1} in
-        compile_native (index + 1) output rest
+        Ok (`Run (fun _report ->
+          if tools.verbose then Printf.eprintf "compile %s\n%!" file;
+          let+ () = Pkg_toolchain.compile_c tools
+              ~flags:(("-I" ^ Filename.dirname file) :: runtime_flags @ cflags) file obj in
+          C_object obj))
+    | Ocaml_group ([step], _) when Option.is_some cache -> (
+        let store = Option.get cache in
+        let available = !available_ref in
+        let imports = !imports_ref in
+        let* key = artifact_key ~tools ~scope ~layout available step in
+        match Build_cache.peek ~index:tools.index ~store ~key () with
+        | Some entry ->
+            let modname = layout.map_name step.modname in
+            let output_dir = if layout.public step.modname then directory else private_dir in
+            let file_prefix = String.uncapitalize_ascii modname in
+            copy_artifacts entry.directory output_dir;
+            let prefix = Filename.concat output_dir file_prefix in
+            let object_file = Filename.concat entry.directory (file_prefix ^ ".o") in
+            Ok (`Ready (Ocaml_steps [{ modname; kind = step.kind; path = step.path; prefix; object_file; hit = true }]))
+        | None ->
+            Ok (`Run (fun _report ->
+              let+ out = compile_unit available imports ~precomputed_key:key step in
+              Ocaml_steps [out])))
+    | Ocaml_group (steps, _) ->
+        let available = !available_ref in
+        let imports = !imports_ref in
+        Ok (`Run (fun _report ->
+          let group_summaries = Export_summary.Loader.create () in
+          let rec run_group avail imps acc = function
+            | [] -> Ok (Ocaml_steps (List.rev acc))
+            | step :: rest ->
+                let* out = compile_unit avail imps step in
+                let avail = Names.add out.modname (out.prefix ^ ".cmi") avail in
+                let imps = match out.kind with
+                  | `Mli -> imps
+                  | `Ml ->
+                      match Export_summary.Loader.lookup group_summaries ~unit_name:out.modname ~cmi:(out.prefix ^ ".cmi") with
+                      | Some facts -> (out.modname, facts) :: imps
+                      | None -> imps
+                in
+                run_group avail imps (out :: acc) rest
+          in
+          run_group available imports [] steps))
   in
-  compile_native 0 output c_sources
+  let on_start i = emit (Start (i, node_label nodes.(i))) in
+  let on_done i = function
+    | Ocaml_steps outs ->
+        List.iter (fun out ->
+          record_step out;
+          emit (Finish (i, out.path, out.hit))) outs
+    | C_object _ ->
+        emit (Finish (i, node_label nodes.(i), false))
+  in
+  let+ outputs =
+    Pkg_parallel.run_dag ~pool:tools.pool ~held ~index:tools.index
+      ~on_start ~on_done ~deps ~prepare (Array.length nodes)
+  in
+  let objects = ref [] in
+  let units = ref [] in
+  let compiled = ref 0 in
+  let hits = ref 0 in
+  Array.iter (function
+    | Ocaml_steps outs ->
+        List.iter (fun out ->
+          if out.hit then incr hits else incr compiled;
+          match out.kind with
+          | `Mli -> ()
+          | `Ml ->
+              objects := out.object_file :: !objects;
+              units := out.modname :: !units) outs
+    | C_object obj ->
+        objects := obj :: !objects;
+        incr compiled) outputs;
+  { objects = List.rev !objects; units = List.rev !units; compiled = !compiled; hits = !hits }

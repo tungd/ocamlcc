@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-25 (gemini/1) — Parallelize `ocpkg` dependency, module-DAG, C/shim, stdlib/runtime, and XCFramework builds across forked workers bounded by a shared jobserver pool, and report live TTY or plain build progress on `stderr`. Verify DAG concurrency, `Digest_index` delta merging, incremental rebuilds, and `-j`/`--no-progress` flags. See [package catalog](/concepts/package-catalog.md#parallel-builds-and-progress).
+
 - 2026-11-24 (codex/1) — Build the compiler, package manager, and tests directly with Ninja. Discover host OCaml dependencies with `ocamldep` and use the same toolchain layout for archive and prefix installs. See [Ninja build pipeline](/concepts/build-pipeline.md).
 
 - 2026-11-24 (codex/1) — Honor explicit native C suspension contracts from typed declarations and interfaces. Check root removal for audited leaves and abandonment through a noalloc C call that suspends. See [Perceus ARC](/concepts/perceus-arc.md#middle-end-arc-pass).
