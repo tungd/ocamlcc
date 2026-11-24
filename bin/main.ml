@@ -9,11 +9,12 @@
 
 let usage =
   "usage: occ build [--target t] [--shared|--static|--exe|-c|-S] \
-   [--emit-header h] [-I dir] [--nostdlib] [--nopervasives] [--no-main] \
-   [--qbe path] [--cc path] [--sysroot path] [--single-thread-rc] \
-   [-v] <files...> -o <out>\n\
+   [--debug|--release] [-g] [-I dir] [--nostdlib] [--nopervasives] [--no-main] \
+   [--emit-header h] [--cache-dir dir] [--no-cache] [--qbe path] [--cc path] \
+   [--sysroot path] [--single-thread-rc] [-v] <files...> -o <out>\n\
    \       occ compile [-I dir] [--nostdlib] [--nopervasives] [--emit-cmi] \
-   [--cmi-prefix p] [--mod] [--emit-opt] [--stdlib-dir dir] [--inline-single-thread-rc] <file.ml> [-o <out.ssa>]\n\
+   [--cmi-prefix p] [--mod] [--emit-opt] [--stdlib-dir dir] \
+   [--debug|--release] [-g] [--inline-single-thread-rc] <file.ml> [-o <out.ssa>]\n\
    \       occ compile-mli [-I dir] [--nostdlib] [--nopervasives] \
    <file.mli> [-o <out.cmi>]\n\
    \       occ bindgen [-I dir] [--nostdlib] [--nopervasives] \
@@ -49,6 +50,10 @@ type cli_opts = {
   inline_single_thread_rc : bool;
   stdlib_dir : string option;
   work_dir : string option;
+  mode : Build_mode.t;
+  debug_info : bool option;
+  cache_dir : string option;
+  no_cache : bool;
   extra_cflags : string list;
   extra_ldflags : string list;
   verbose : bool;
@@ -81,6 +86,10 @@ let default_opts =
     inline_single_thread_rc = false;
     stdlib_dir = None;
     work_dir = None;
+    mode = Build_mode.Release;
+    debug_info = None;
+    cache_dir = None;
+    no_cache = false;
     extra_cflags = [];
     extra_ldflags = [];
     verbose = false }
@@ -134,6 +143,12 @@ let parse_opts args =
     | "--stdlib-dir" :: p :: rest ->
         go { opts with stdlib_dir = Some p } rest
     | "--work-dir" :: p :: rest -> go { opts with work_dir = Some p } rest
+    | ("--debug" | "-O0") :: rest -> go { opts with mode = Build_mode.Debug } rest
+    | ("--release" | "-O2") :: rest -> go { opts with mode = Build_mode.Release } rest
+    | "-g" :: rest -> go { opts with debug_info = Some true } rest
+    | "-g0" :: rest -> go { opts with debug_info = Some false } rest
+    | "--cache-dir" :: p :: rest -> go { opts with cache_dir = Some p } rest
+    | "--no-cache" :: rest -> go { opts with no_cache = true } rest
     | "--cflags" :: f :: rest ->
         go { opts with extra_cflags = f :: opts.extra_cflags } rest
     | "--ldflags" :: f :: rest ->
@@ -145,6 +160,11 @@ let parse_opts args =
     | file :: rest -> go { opts with inputs = file :: opts.inputs } rest
   in
   go default_opts args
+
+let resolve_debug_info opts =
+  match opts.debug_info with
+  | Some b -> b
+  | None -> opts.mode = Build_mode.Debug
 
 let write_out out ssa =
   match out with
@@ -182,6 +202,7 @@ let compile opts =
       let summaries =
         if opts.emit_opt && Option.is_none opts.stdlib_dir then None
         else Some (Export_summary.Loader.create ?archive ()) in
+      let debug_info = resolve_debug_info opts in
       let request =
         { (Pipeline.Request.create ~filename:file ~modname) with
           include_dirs; output_prefix; stdlib_dir = opts.stdlib_dir; summaries;
@@ -190,6 +211,7 @@ let compile opts =
           nostdlib = opts.nostdlib; no_alias_deps = opts.no_alias_deps;
           nolabels = opts.nolabels; open_modules = opts.open_modules;
           inline_single_thread_rc = opts.inline_single_thread_rc;
+          mode = opts.mode; debug_info;
           emit_entry = not opts.is_mod }
       in
       match Pipeline.compile_file request with
@@ -341,6 +363,10 @@ let build opts =
         inline_single_thread_rc = opts.inline_single_thread_rc;
         prebuilt_stdlib_dir = opts.stdlib_dir;
         work_dir = opts.work_dir;
+        mode = opts.mode;
+        debug_info = resolve_debug_info opts;
+        cache_dir = opts.cache_dir;
+        no_cache = opts.no_cache;
         extra_cflags = opts.extra_cflags;
         extra_ldflags = opts.extra_ldflags;
         verbose = opts.verbose }

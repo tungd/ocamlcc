@@ -30,6 +30,14 @@ type open_flag =
   | O_APPEND
   | O_CLOEXEC
 
+type lock_command =
+  | F_ULOCK
+  | F_LOCK
+  | F_TLOCK
+  | F_TEST
+  | F_RLOCK
+  | F_TRLOCK
+
 type process_status =
   | WEXITED of int
   | WSIGNALED of int
@@ -43,6 +51,7 @@ external c_rmdir : string -> (unit, int) result = "ocamlcc_unix_rmdir"
 external c_unlink : string -> (unit, int) result = "ocamlcc_unix_unlink"
 external c_openfile : string -> int -> int -> (int, int) result = "ocamlcc_unix_openfile"
 external c_close : int -> (unit, int) result = "ocamlcc_unix_close"
+external c_lockf : int -> int -> int -> (unit, int) result = "ocamlcc_unix_lockf"
 external c_pipe : bool -> (int * int, int) result = "ocamlcc_unix_pipe"
 external _unix_ch_cast : 'a -> 'b = "%identity"
 let c_in_channel_of_descr (fd : int) : in_channel =
@@ -99,6 +108,16 @@ let openfile path flags perm =
   unwrap "openfile" path (c_openfile path mask perm)
 
 let close fd = unwrap "close" "" (c_close fd)
+
+let lock_code = function
+  | F_ULOCK -> 0
+  | F_LOCK -> 1
+  | F_TLOCK -> 2
+  | F_TEST -> 3
+  | F_RLOCK -> 4
+  | F_TRLOCK -> 5
+
+let lockf fd cmd len = unwrap "lockf" "" (c_lockf fd (lock_code cmd) len)
 
 let pipe ?(cloexec = false) () =
   unwrap "pipe" "" (c_pipe cloexec)

@@ -54,6 +54,7 @@ type fn_state = {
   mutable poll_tick : Qbe_il.t option;
   mutable try_stack : string list;
   mutable compact_arc : bool;
+  mutable last_loc : (int * int) option;
   in_init : bool;
 }
 
@@ -61,6 +62,8 @@ type t = {
   prefix : string;
   inline_single_thread_rc : bool;
   may_suspend : Ident.t -> bool;
+  optimize : bool;
+  locs : (int * int) Ident.Map.t;
   mutable temp_counter : int;
   mutable label_counter : int;
   mutable data_counter : int;
@@ -98,12 +101,16 @@ let fresh_fn_state ?(entry_label = "start") ?(self = None)
     poll_tick = None;
     try_stack = [];
     compact_arc = false;
+    last_loc = None;
     in_init }
 
-let create ?(inline_single_thread_rc = false) ?(may_suspend = fun _ -> true) prefix =
+let create ?(inline_single_thread_rc = false) ?(may_suspend = fun _ -> true)
+    ?(optimize = true) ?(locs = Ident.Map.empty) prefix =
   { prefix;
     inline_single_thread_rc;
     may_suspend;
+    optimize;
+    locs;
     temp_counter = 0;
     label_counter = 0;
     data_counter = 0;
@@ -300,6 +307,14 @@ let emit b inst =
   | _ -> ());
   b.cur_fn.insts <- inst :: b.cur_fn.insts
 
+let emit_loc b id =
+  if not (Ident.Map.is_empty b.locs) && b.cur_fn.term = None then
+    match Ident.Map.find_opt id b.locs with
+    | Some ((line, col) as loc) when line > 0 && b.cur_fn.last_loc <> Some loc ->
+        b.cur_fn.last_loc <- Some loc;
+        emit b (Dbgloc (line, col))
+    | _ -> ()
+
 (* Hoist fixed-size alloc8 slots to @start so QBE treats them as static frame
    slots rather than dynamic alloca inside loops or tail-recursive @loop. *)
 let emit_start_alloc b dst bytes =
@@ -334,7 +349,7 @@ let finish_blocks b =
   let names : Qbe_il.Names.t =
     { temp_counter = b.temp_counter; label_counter = b.label_counter }
   in
-  let blocks, names = Qbe_il.optimize_blocks names blocks in
+  let blocks, names = Qbe_il.optimize_blocks ~optimize:b.optimize names blocks in
   b.temp_counter <- names.temp_counter;
   b.label_counter <- names.label_counter;
   blocks
@@ -416,7 +431,8 @@ let start_block b label =
   | None -> if b.cur_fn.insts <> [] then close_block b (Jmp label)
   | Some _ -> ());
   b.cur_fn.open_label <- label;
-  b.cur_fn.term <- None
+  b.cur_fn.term <- None;
+  b.cur_fn.last_loc <- None
 
 let close_ret b value =
   match b.cur_fn.term with

@@ -47,6 +47,10 @@ type config = {
   stdlib_src_dir : string option;
   prebuilt_stdlib_dir : string option;
   work_dir : string option;
+  mode : Build_mode.t;
+  debug_info : bool;
+  cache_dir : string option;
+  no_cache : bool;
   extra_cflags : string list;
   extra_ldflags : string list;
   verbose : bool;

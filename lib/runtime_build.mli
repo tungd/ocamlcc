@@ -13,5 +13,9 @@ end
 
 val link_inputs :
   ?parallel:((string * (unit -> (string, string) result)) list -> (string list, string) result) ->
+  ?mode:Build_mode.t ->
+  ?debug_info:bool ->
+  ?extra_cflags:string list ->
+  ?cache_dir:string ->
   Request.t -> (string list, string) result
 (** Select the runtime profile and prepare its link inputs for the target. *)

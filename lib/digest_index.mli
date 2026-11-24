@@ -6,6 +6,7 @@ val with_index :
 
 val file : t -> string -> (Sha256.t, string) result
 val tree : t -> string -> (Sha256.t, string) result
+val hasher : t -> Build_cache.hasher
 
 type delta
 

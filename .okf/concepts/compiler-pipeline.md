@@ -72,14 +72,22 @@ The pipeline has four stages[^design-doc]:
 
 # Compilation requests
 
-`Pipeline.Request.t` holds the per-unit source, compiler options, and import
-inputs. `compile_source` and `compile_file` return `Pipeline.Output.t` with
-QBE SSA, the selected or emitted CMI path when available, and cross-unit
-export facts.[^lib-pipeline] The export policy chooses ordinary code generation,
-in-process export collection, or sealed link symbols for separately built
-objects. The CLI and driver pass export facts and CMI paths directly from the
-result into publication. An optional summary loader reads external metadata
-against the CMI selected by the frontend.
+`Pipeline.Request.t` holds the per-unit source, compiler options, `Build_mode.t`
+(`Release` default or `Debug`), `debug_info` toggle (`-g`), and import inputs.
+`compile_source` and `compile_file` return `Pipeline.Output.t` with QBE SSA,
+the selected or emitted CMI path when available, and cross-unit export facts.[^lib-pipeline]
+The export policy chooses ordinary code generation, in-process export
+collection, or sealed link symbols for separately built objects. When
+`debug_info` is enabled, `Anf.lower` records module-local `Location.t`
+`(line, col)` pairs in `Anf_ir.program.locs` and codegen emits QBE `dbgfile`
+and `dbgloc` instructions (lowered by vendored QBE to DWARF `.file`/`.loc`
+directives), gated without mutating `Anf_ir.aexpr` constructors. When `mode` is
+`Debug`, `Lambda_opt.optimize` skips constant propagation, local/export
+inlining, local ref/aggregate elimination, and `Bounds.remove_redundant_checks`,
+and `Qbe_il.optimize_blocks` skips boolean-join/tagged-branch folding while
+still splitting wide phis. The CLI and driver pass export facts and CMI paths
+directly from the result into publication. An optional summary loader reads
+external metadata against the CMI selected by the frontend.
 
 # Code generation interfaces
 

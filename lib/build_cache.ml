@@ -1,6 +1,13 @@
 open Sys_util
 open Result_syntax
 
+type hasher = {
+  file : string -> (Sha256.t, string) result;
+  tree : string -> (Sha256.t, string) result;
+}
+
+let default_hasher = { file = Sha256.file; tree = (fun path -> Sha256.tree_hash path) }
+
 let key fields =
   let buffer = Buffer.create 512 in
   List.iter (fun (name, value) ->
@@ -8,31 +15,29 @@ let key fields =
     fields;
   Sha256.string (Buffer.contents buffer)
 
-let fingerprints ?index paths =
-  let digest_file = Option.fold ~none:Sha256.file ~some:Digest_index.file index in
+let fingerprints ?(hasher = default_hasher) paths =
   let rec collect digests = function
     | [] -> Ok (List.rev digests)
     | path :: rest ->
-        let* digest = digest_file path in
+        let* digest = hasher.file path in
         collect ((path, Sha256.to_hex digest) :: digests) rest
   in
   collect [] paths
 
 type entry = { directory : string; hit : bool }
 
-let verify index directory =
-  let tree = Option.fold ~none:(fun path -> Sha256.tree_hash path) ~some:Digest_index.tree index in
+let verify hasher directory =
   let data = Filename.concat directory "data" in
   let seal = Filename.concat directory "digest" in
   match Unix.lstat seal with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false
   | {Unix.st_kind = Unix.S_REG; _} ->
-      (match tree data with
+      (match hasher.tree data with
        | Ok digest -> Sha256.to_hex digest = String.trim (read_file seal)
        | Error _ -> false)
   | _ -> false
 
-let peek ?index ~store ~key () =
+let peek ?(hasher = default_hasher) ~store ~key () =
   try
     let key = Sha256.to_hex key in
     let target = Filename.concat store key in
@@ -44,11 +49,11 @@ let peek ?index ~store ~key () =
         let fd = Unix.openfile lock [Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC] 0o600 in
         Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
           Unix.lockf fd Unix.F_LOCK 0;
-          if verify index target then Some {directory = Filename.concat target "data"; hit = true}
+          if verify hasher target then Some {directory = Filename.concat target "data"; hit = true}
           else None)
   with Sys_error _ | Unix.Unix_error _ -> None
 
-let ensure ?index ~store ~key build =
+let ensure ?(hasher = default_hasher) ~store ~key build =
   try
     mkdir_p store;
     let key = Sha256.to_hex key in
@@ -58,17 +63,17 @@ let ensure ?index ~store ~key build =
     Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
       Unix.lockf fd Unix.F_LOCK 0;
       let data = Filename.concat target "data" in
-      if verify index target then Ok {directory = data; hit = true}
+      if verify hasher target then Ok {directory = data; hit = true}
       else
         let staging = Filename.temp_dir ~temp_dir:store ".stage-" "" in
         Fun.protect ~finally:(fun () -> rm_rf staging) (fun () ->
           let temporary = Filename.concat staging "data" in
-          Unix.mkdir temporary 0o700;
+          Sys.mkdir temporary 0o700;
           let* () = build temporary in
           let+ digest = Sha256.tree_hash temporary in
           write_file (Filename.concat staging "digest") (Sha256.to_hex digest ^ "\n");
           rm_rf target;
-          Unix.rename staging target;
+          Sys.rename staging target;
           {directory = data; hit = false}))
   with
   | Sys_error msg -> Error msg

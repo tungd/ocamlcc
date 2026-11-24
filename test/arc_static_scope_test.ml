@@ -12,7 +12,8 @@ let () =
   in
   let program =
     { module_ident = Ident.create_persistent "Arc_static_scope";
-      code; value_kinds = Ident.Map.empty; inline_bodies = Ident.Map.empty; inline_initializers = [] }
+      code; value_kinds = Ident.Map.empty; inline_bodies = Ident.Map.empty;
+      inline_initializers = []; locs = Ident.Map.empty }
   in
   let result = Arc_pass.run program in
   (match result.code with

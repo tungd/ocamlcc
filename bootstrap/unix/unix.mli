@@ -43,6 +43,14 @@ type open_flag =
 
 val openfile : string -> open_flag list -> int -> file_descr
 val close : file_descr -> unit
+type lock_command =
+  | F_ULOCK
+  | F_LOCK
+  | F_TLOCK
+  | F_TEST
+  | F_RLOCK
+  | F_TRLOCK
+val lockf : file_descr -> lock_command -> int -> unit
 val pipe : ?cloexec:bool -> unit -> file_descr * file_descr
 val in_channel_of_descr : file_descr -> in_channel
 

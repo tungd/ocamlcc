@@ -1,7 +1,7 @@
 (** Direct-call facts for separately linked units. *)
 
 (** Give externally consumed entries implementation-specific link symbols. *)
-val seal : Qbe_il.module_ -> Anf.exports -> string * Anf.exports
+val seal : ?dbgfile:string -> Qbe_il.module_ -> Anf.exports -> string * Anf.exports
 
 val write_unit : prefix:string -> Anf.exports -> unit
 val write_archive : archive:string -> units:string list -> unit

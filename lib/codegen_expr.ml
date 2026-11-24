@@ -1147,6 +1147,7 @@ and[@inline never] compile_finalizer_poll hooks b tail id exception_kind on_err 
     compile_aexpr hooks b tail on_ok)
 
 and[@inline never] compile_checked_access hooks b tail id ce on_err on_ok =
+  emit_loc b id;
   let on_oob () = ignore (compile_aexpr hooks b tail on_err) in
   let value = compile_cexpr ~on_oob hooks b ~tail:false ce in
   bind_value b id value;
@@ -1156,6 +1157,7 @@ and[@inline never] compile_checked_access hooks b tail id ce on_err on_ok =
   res
 
 and[@inline never] compile_let hooks b tail id ce body =
+  emit_loc b id;
   let v =
     match ce with
     | DirectApp ({ inline_leaf = Some lf; _ }, args) -> inline_leaf hooks b lf args
@@ -1177,6 +1179,7 @@ and[@inline never] compile_let hooks b tail id ce body =
   end
 
 and[@inline never] compile_mutable_let hooks b tail id ce body =
+  emit_loc b id;
   let v = compile_cexpr hooks b ~tail:false ce in
   let slot = fresh_temp b "mslot" in
   emit_start_alloc b slot 8;
@@ -1191,6 +1194,7 @@ and[@inline never] compile_mutable_let hooks b tail id ce body =
   res
 
 and[@inline never] compile_join hooks b tail id rhs body =
+  emit_loc b id;
   let v = compile_aexpr hooks b false rhs in
   forget_heap_slots b;
   if not (block_is_open b) then unit_const
@@ -1241,6 +1245,7 @@ and[@inline never] compile_for hooks b id start_a stop_a dir body =
   close_block b (Br (enter, lbody, ldone));
   start_block b lbody;
   emit b (Phi (Long, iv, [ (lpre, sv); (lnext, next_i) ]));
+  emit_loc b id;
   with_untagged_index b id iv
     (fun () -> ignore (compile_aexpr hooks b false body));
   if block_is_open b then close_block b (Jmp lstep);

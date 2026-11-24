@@ -21,6 +21,8 @@ module Request = struct
     open_modules : string list;
     emit_entry : bool;
     inline_single_thread_rc : bool;
+    mode : Build_mode.t;
+    debug_info : bool;
     imports : (string * Anf.exports) list;
     summaries : Export_summary.Loader.t option;
     export_policy : export_policy;
@@ -31,6 +33,7 @@ module Request = struct
       output_prefix = None; emit_cmi = false; nopervasives = false;
       nostdlib = false; no_alias_deps = false; nolabels = false;
       open_modules = []; emit_entry = true; inline_single_thread_rc = false;
+      mode = Build_mode.Release; debug_info = false;
       imports = []; summaries = None; export_policy = Omit }
 end
 
@@ -46,9 +49,11 @@ let compile_source (request : Request.t) source =
   let open Sys_util.Result_syntax in
   let { Request.filename; modname; include_dirs; hidden_include_dirs; stdlib_dir; output_prefix;
         emit_cmi; nopervasives; nostdlib; no_alias_deps; nolabels; open_modules;
-        emit_entry; inline_single_thread_rc; imports; summaries; export_policy } =
+        emit_entry; inline_single_thread_rc; mode; debug_info; imports; summaries;
+        export_policy } =
     request
   in
+  let optimize = Build_mode.optimize mode in
   let* implementation =
     Frontend.compile_unit ~include_dirs ~hidden_include_dirs ?output_prefix ~emit_cmi ~nopervasives
       ~nostdlib ~no_alias_deps ~nolabels ~open_modules
@@ -63,13 +68,14 @@ let compile_source (request : Request.t) source =
   in
   let* anf, exported =
     Anf.lower ~use_builtins:(not nostdlib) ~include_dirs ?stdlib_dir ~imports
-      ?load_exports ~nonsuspending_externals ~collect_exports:(export_policy <> Omit) lambda
+      ?load_exports ~nonsuspending_externals ~optimize ~debug_info
+      ~source_file:filename ~collect_exports:(export_policy <> Omit) lambda
     |> Result.map_error (Printf.sprintf "unsupported: %s")
   in
   let inline_leaf =
     match exported with
-    | [] -> (fun _ -> None)
-    | _ -> Lambda_opt.inline_export_leaves lambda.code anf.code
+    | _ :: _ when optimize -> Lambda_opt.inline_export_leaves lambda.code anf.code
+    | _ -> (fun _ -> None)
   in
   let anf, effects, borrowed = Arc_pass.run_with_effects ~exported anf in
   let unicode_validation =
@@ -79,12 +85,14 @@ let compile_source (request : Request.t) source =
   in
   let il, exports =
     Codegen.compile_with_exports ~emit_entry ~inline_single_thread_rc
-      ~unicode_validation ~exported ~effects ~inline_leaf ~borrowed anf
+      ~optimize ~debug_info ~unicode_validation ~exported ~effects
+      ~inline_leaf ~borrowed anf
   in
+  let dbgfile = if debug_info then Some filename else None in
   let ssa, exports =
     match export_policy with
-    | Seal -> Export_summary.seal il exports
-    | Collect | Omit -> Qbe_il.to_string il, exports
+    | Seal -> Export_summary.seal ?dbgfile il exports
+    | Collect | Omit -> Qbe_il.to_string ?dbgfile il, exports
   in
   Ok { Output.ssa; interface; exports }
 

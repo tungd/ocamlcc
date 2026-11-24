@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-11-25 (gemini/1) — Add shared content-addressed build caching to `occ` (`--cache-dir`, `--no-cache`, `$OCC_CACHE`/`$OCPKG_CACHE`), promote `Sha256` and `Build_cache` into `ocamlcc.cmxa` with `Unix.lockf` in `bootstrap/unix`, and add `Debug`/`Release` modes (defaulting to `Release`, `--debug`/`--release`/`-O0`/`-O2`/`-g`/`-g0`) with QBE `dbgfile`/`dbgloc` DWARF line info across `occ` and `ocpkg`. Verify `test/occ_cache_mode_test.ml`, `tests/ocpkg/debug_release.sh`, 50 `test_host_*` suites, and all 7 `ocpkg_test` suites. See [Ninja build pipeline](/concepts/build-pipeline.md#driver-modules), [compiler pipeline](/concepts/compiler-pipeline.md#compilation-requests), and [package catalog](/concepts/package-catalog.md#build-cache).
+
 - 2026-11-25 (gemini/1) — Parallelize `ocpkg` dependency, module-DAG, C/shim, stdlib/runtime, and XCFramework builds across forked workers bounded by a shared jobserver pool, and report live TTY or plain build progress on `stderr`. Verify DAG concurrency, `Digest_index` delta merging, incremental rebuilds, and `-j`/`--no-progress` flags. See [package catalog](/concepts/package-catalog.md#parallel-builds-and-progress).
 
 - 2026-11-24 (codex/1) — Build the compiler, package manager, and tests directly with Ninja. Discover host OCaml dependencies with `ocamldep` and use the same toolchain layout for archive and prefix installs. See [Ninja build pipeline](/concepts/build-pipeline.md).

@@ -15,12 +15,15 @@ type options = {
   emit_header : string option;
   jobs : int;
   progress : bool;
+  mode : Build_mode.t;
+  debug_info : bool option;
 }
 
 let defaults = {
   product = Native {target = "host"; kind = None}; output = None;
   single_thread = false; verbose = false; verify_cache = false; emit_header = None;
   jobs = Pkg_parallel.default_jobs (); progress = true;
+  mode = Build_mode.Release; debug_info = None;
 }
 
 type pack = {
@@ -86,11 +89,12 @@ let prepare_package_task tools ~vendor ~held ~prior recipe =
     let units = read_file (Filename.concat directory "units") |> String.split_on_char '\n'
                 |> List.filter (fun unit -> unit <> "") in
     let archive = package_archive directory recipe in
-    let+ outputs = Build_cache.fingerprints ~index:tools.index [archive; archive ^ ".opt"] in
+    let+ outputs = Build_cache.fingerprints ~hasher:(Digest_index.hasher tools.index) [archive; archive ^ ".opt"] in
     let id = Build_cache.key (("recipe", Sha256.to_hex key) :: outputs) in
     { pack = {recipe; id; directory; archive; units}; hit; compiled; elapsed }
   in
-  match Build_cache.peek ~index:tools.Pkg_toolchain.index ~store ~key () with
+  let hasher = Digest_index.hasher tools.Pkg_toolchain.index in
+  match Build_cache.peek ~hasher ~store ~key () with
   | Some entry ->
       let+ prepared = finish_pack ~hit:true ~compiled:0 ~elapsed:0.0 entry.directory in
       `Ready prepared
@@ -98,7 +102,7 @@ let prepare_package_task tools ~vendor ~held ~prior recipe =
       Ok (`Run (fun report ->
         let started = Unix.gettimeofday () in
         let compiled_count = ref 0 in
-        let* entry = Build_cache.ensure ~index:tools.Pkg_toolchain.index ~store ~key (fun directory ->
+        let* entry = Build_cache.ensure ~hasher ~store ~key (fun directory ->
           let source_root = Filename.concat vendor (package_name recipe) in
           let staging = Filename.temp_dir "ocpkg-package-" "" in
           Fun.protect ~finally:(fun () -> rm_rf staging) (fun () ->
@@ -247,7 +251,7 @@ let output_name tools kind name =
 let entry_point tools store modules =
   let key = Build_cache.key (["toolchain", Sha256.to_hex tools.Pkg_toolchain.fingerprint; "entry", "1"]
       @ List.map (fun name -> "module", name) modules) in
-  let+ entry = Build_cache.ensure ~index:tools.Pkg_toolchain.index ~store ~key (fun directory ->
+  let+ entry = Build_cache.ensure ~hasher:(Digest_index.hasher tools.Pkg_toolchain.index) ~store ~key (fun directory ->
     let ssa = Filename.concat directory "entry.ssa" in
     let obj = Filename.concat directory "entry.o" in
     let entry = Codegen.entry_point modules in
@@ -356,12 +360,12 @@ let app_shims tools ~held scope (workspace : Pkg_project.t) options ~sources ~ca
       let dependencies = List.map (fun key -> "dependency", Sha256.to_hex key) scope.package_keys in
       let key = Build_cache.key (["toolchain", Sha256.to_hex tools.fingerprint; "bindings", "1"; "header", header]
           @ dependencies @ digests) in
-      let* entry = Build_cache.ensure ~index:tools.Pkg_toolchain.index ~store:cache ~key (fun directory ->
+      let* entry = Build_cache.ensure ~hasher:(Digest_index.hasher tools.Pkg_toolchain.index) ~store:cache ~key (fun directory ->
         let headers = Filename.concat directory "headers" in
         let* generated = C_bindgen.generate_headers ~include_dirs ~nopervasives:false ~nostdlib:true
             ~work_dir:directory ~output:(Filename.concat headers header) interfaces in
         let pic = if tools.target.os = Windows then [] else ["-fPIC"] in
-        let flags = ["-std=c99"; "-O2"; "-I" ^ headers] @ pic @ tools.cflags in
+        let flags = ["-std=c99"] @ Build_mode.cflags ~debug_info:tools.debug_info tools.mode @ ["-I" ^ headers] @ pic @ tools.cflags in
         let tasks =
           List.mapi (fun index source ->
             fun _report ->
@@ -415,7 +419,8 @@ let build_target ?pool ?(held = false) ?progress (workspace : Pkg_project.t) (op
   let* lock = Pkg_project.read_lock workspace in
   let* () = Pkg_vendor.verify ~index ~vendor:(Pkg_project.vendor_dir workspace) lock.packages in
   let* tools = Pkg_toolchain.prepare ~index ~cache ~target ~single_thread
-      ~cflags:workspace.manifest.cflags ~verbose:options.verbose ~pool ~held ~progress () in
+      ~cflags:workspace.manifest.cflags ~verbose:options.verbose
+      ~mode:options.mode ?debug_info:options.debug_info ~pool ~held ~progress () in
   let* packs = prepare_dependencies tools workspace lock in
   let catalog_exe =
     if workspace.manifest.source_dirs = [] && workspace.manifest.entry = None then

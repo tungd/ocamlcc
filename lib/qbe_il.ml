@@ -105,6 +105,7 @@ type inst =
   | Alloc8 of t * t
   | Call of ty * t * call
   | Call_void of call
+  | Dbgloc of int * int
 
 type term =
   | Ret of t option
@@ -203,6 +204,9 @@ let string_of_inst st inst =
         (string_of_args st args)
   | Call_void { fn; args } ->
       Printf.sprintf "call %s(%s)" (st fn) (string_of_args st args)
+  | Dbgloc (line, col) ->
+      if col > 0 then Printf.sprintf "dbgloc %d, %d" line col
+      else Printf.sprintf "dbgloc %d" line
 
 let string_of_term st term =
   match term with
@@ -260,7 +264,7 @@ let string_of_data ~name d =
   Buffer.add_string buf " }\n\n";
   Buffer.contents buf
 
-let to_string ?(pic = true) ?(name = Fun.id) m =
+let to_string ?(pic = true) ?dbgfile ?(name = Fun.id) m =
   let locals = Hashtbl.create 32 in
   List.iter
     (fun (d : data) -> if not d.export then Hashtbl.replace locals d.name ())
@@ -270,8 +274,14 @@ let to_string ?(pic = true) ?(name = Fun.id) m =
     m.funcs;
   let is_local s = Hashtbl.mem locals s in
   let st = string_of_t ~is_local ~pic ~name in
+  let header =
+    match dbgfile with
+    | Some path -> [Printf.sprintf "dbgfile \"%s\"\n\n" (String.escaped path)]
+    | None -> []
+  in
   String.concat ""
-    (List.map (string_of_data ~name) m.datas
+    (header
+    @ List.map (string_of_data ~name) m.datas
     @ List.map (string_of_func ~name st) m.funcs)
 
 module Names = struct
@@ -417,6 +427,7 @@ let temp_used_once blocks =
     | Call (_, _, call) | Call_void call ->
         use call.fn;
         List.iter (fun (_, arg) -> use arg) call.args
+    | Dbgloc _ -> ()
   in
   List.iter (fun (block : block) ->
     List.iter use_inst block.insts;
@@ -527,7 +538,7 @@ let fuse_tagged_branches blocks =
     List.map (fun (block : block) ->
       { block with insts = List.filter live_inst block.insts }) blocks
 
-let optimize_blocks (names : Names.t) blocks =
+let optimize_blocks ?(optimize = true) (names : Names.t) blocks =
   let temps = ref names.temp_counter and labels = ref names.label_counter in
   let fresh counter base =
     let name = Printf.sprintf "%s.%d" base !counter in
@@ -537,7 +548,10 @@ let optimize_blocks (names : Names.t) blocks =
   let fresh_label = fresh labels in
   let fresh_temp base = Temp (fresh temps base) in
   let blocks =
-    blocks |> shortcut_boolean_joins ~fresh_temp |> fuse_tagged_branches
-    |> split_wide_phis ~fresh_label ~fresh_temp
+    if optimize then
+      blocks |> shortcut_boolean_joins ~fresh_temp |> fuse_tagged_branches
+      |> split_wide_phis ~fresh_label ~fresh_temp
+    else
+      split_wide_phis ~fresh_label ~fresh_temp blocks
   in
   blocks, { Names.temp_counter = !temps; label_counter = !labels }

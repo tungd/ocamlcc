@@ -71,12 +71,7 @@ let catalog (workspace : t) =
         let root = catalog_root workspace in
         Ok {Catalog.root; digest = Sha256.string contents; recipes})
 
-let cache_dir () =
-  match Sys.getenv_opt "OCPKG_CACHE", Sys.getenv_opt "XDG_CACHE_HOME", Sys.getenv_opt "HOME" with
-  | Some path, _, _ when path <> "" -> Ok path
-  | _, Some xdg, _ when xdg <> "" -> Ok (Filename.concat xdg "ocpkg")
-  | _, _, Some home when home <> "" -> Ok (Filename.concat home ".cache/ocpkg")
-  | _ -> Error "set OCPKG_CACHE to locate the package cache"
+let cache_dir () = Target.cache_dir ()
 
 let archive_cache () =
   let+ dir = cache_dir () in

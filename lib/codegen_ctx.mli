@@ -11,7 +11,13 @@ type fn_info = {
   has_closure : bool;
 }
 
-val create : ?inline_single_thread_rc:bool -> ?may_suspend:(Ident.t -> bool) -> string -> t
+val create :
+  ?inline_single_thread_rc:bool ->
+  ?may_suspend:(Ident.t -> bool) ->
+  ?optimize:bool ->
+  ?locs:(int * int) Ident.Map.t ->
+  string ->
+  t
 val may_suspend : t -> Ident.t -> bool
 val module_prefix : t -> string
 val sanitize : string -> string
@@ -67,6 +73,7 @@ val set_poll_tick : t -> Qbe_il.t option -> unit
 val open_label : t -> string
 val block_is_open : t -> bool
 val emit : t -> inst -> unit
+val emit_loc : t -> Ident.t -> unit
 val emit_start_alloc : t -> Qbe_il.t -> int -> unit
 val start_block : t -> string -> unit
 val close_block : t -> term -> unit

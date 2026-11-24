@@ -33,6 +33,9 @@ OCAMLCC_MODULES: list[tuple[str, bool, bool]] = [
     # (basename, has_mli, is_mod)
     ("bigarray_header", False, True),
     ("sys_util", True, True),
+    ("build_mode", True, True),
+    ("sha256", True, True),
+    ("build_cache", True, True),
     ("qbe_il", True, True),
     ("ccalls", True, True),
     ("builtins", True, True),

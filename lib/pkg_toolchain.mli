@@ -5,6 +5,8 @@ type t = {
   stdlib : string;
   fingerprint : Sha256.t;
   single_thread : bool;
+  mode : Build_mode.t;
+  debug_info : bool;
   cflags : string list;
   verbose : bool;
   cache : string;
@@ -16,6 +18,7 @@ type t = {
 val compiler_binary : unit -> string option
 val prepare :
   index:Digest_index.t -> cache:string -> target:string -> single_thread:bool -> cflags:string list -> verbose:bool ->
+  ?mode:Build_mode.t -> ?debug_info:bool ->
   ?pool:Pkg_parallel.Pool.t -> ?held:bool -> ?progress:Pkg_progress.t -> unit ->
   (t, string) result
 

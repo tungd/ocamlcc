@@ -14,7 +14,7 @@ let usage = {|Usage: ocpkg <command>
   verify                  Verify the lock and vendor tree
   query [name]            List selected packages or show a locked recipe
   build [options]         Compile and link the workspace offline
-        [-j N|--jobs N] [--no-progress]
+        [-j N|--jobs N] [--no-progress] [--debug|--release] [-g]
         [--target TARGET] [--shared|--static|--exe|--xcframework]
         [--emit-header FILE] [--verify-cache] [-o PATH]
   run [options] [-- args] Build and run the executable
@@ -122,6 +122,10 @@ let build_options args =
         parse {options with jobs} target mode positional rest
     | ("-j" | "--jobs") :: [] -> Error "missing job count"
     | "--no-progress" :: rest -> parse {options with progress = false} target mode positional rest
+    | ("--debug" | "-O0") :: rest -> parse {options with mode = Build_mode.Debug} target mode positional rest
+    | ("--release" | "-O2") :: rest -> parse {options with mode = Build_mode.Release} target mode positional rest
+    | "-g" :: rest -> parse {options with debug_info = Some true} target mode positional rest
+    | "-g0" :: rest -> parse {options with debug_info = Some false} target mode positional rest
     | ("--exe" | "--shared" | "--static" | "--xcframework" as flag) :: rest ->
         let selected =
           match flag with
@@ -160,7 +164,7 @@ let run = function
   | ["clean"] -> with_project (fun workspace -> clean (Filename.concat workspace.root ".ocpkg") ["bin"; "cache"])
   | ["clean"; "--global"] ->
       let* cache = Pkg_project.cache_dir () in
-      clean cache ["pkg"; "stdlib"; "runtime"; "stat-index"; "archives"]
+      clean cache ["pkg"; "stdlib"; "runtime"; "stat-index"; "archives"; "occ-unit"; "occ-obj"; "occ-c"]
   | ["version"] | ["--version"] -> print_endline ("ocpkg " ^ Ocpkg_version.value); Ok ()
   | ["vendor"] -> with_project (fun workspace -> vendor workspace ~offline:false)
   | ["vendor"; "--offline"] -> with_project (fun workspace -> vendor workspace ~offline:true)

@@ -118,6 +118,35 @@ int64_t ocamlcc_unix_close(int64_t fd_val)
     return mk_ok(1);
 }
 
+int64_t ocamlcc_unix_lockf(int64_t fd_val, int64_t cmd_val, int64_t len_val)
+{
+    int fd = (int)(fd_val >> 1);
+    int64_t cmd_idx = cmd_val >> 1;
+    int64_t len = len_val >> 1;
+    struct flock fl;
+    memset(&fl, 0, sizeof(fl));
+    fl.l_whence = SEEK_CUR;
+    fl.l_start = 0;
+    fl.l_len = (off_t)len;
+    int fcntl_cmd;
+    switch (cmd_idx) {
+    case 0: fl.l_type = F_UNLCK; fcntl_cmd = F_SETLK; break;
+    case 1: fl.l_type = F_WRLCK; fcntl_cmd = F_SETLKW; break;
+    case 2: fl.l_type = F_WRLCK; fcntl_cmd = F_SETLK; break;
+    case 3: fl.l_type = F_WRLCK; fcntl_cmd = F_GETLK; break;
+    case 4: fl.l_type = F_RDLCK; fcntl_cmd = F_SETLKW; break;
+    case 5: fl.l_type = F_RDLCK; fcntl_cmd = F_SETLK; break;
+    default: return mk_err(EINVAL);
+    }
+    int r;
+    do {
+        r = fcntl(fd, fcntl_cmd, &fl);
+    } while (r != 0 && errno == EINTR);
+    if (r != 0) return mk_err(errno);
+    if (cmd_idx == 3 && fl.l_type != F_UNLCK) return mk_err(EACCES);
+    return mk_ok(1);
+}
+
 int64_t ocamlcc_unix_pipe(int64_t cloexec_val)
 {
     int fds[2];

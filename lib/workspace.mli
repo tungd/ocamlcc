@@ -13,6 +13,8 @@ type options = {
   emit_header : string option;
   jobs : int;
   progress : bool;
+  mode : Build_mode.t;
+  debug_info : bool option;
 }
 
 val defaults : options

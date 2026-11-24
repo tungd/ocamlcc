@@ -30,3 +30,4 @@ val prebuilt_stdlib : string option -> string option
 
 val installed_toolchain : unit -> string option
 val search_upwards : string -> string option
+val cache_dir : ?override:string -> unit -> (string, string) result

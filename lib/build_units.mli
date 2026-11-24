@@ -9,6 +9,10 @@ module Request : sig
     single_thread : bool;
     include_main : bool;
     publish_object : bool;
+    mode : Build_mode.t;
+    debug_info : bool;
+    cache_dir : string option;
+    toolchain_key : string;
     qbe : string;
     target : Target.t;
     verbose : bool;
@@ -18,6 +22,8 @@ end
 type compiled = {
   assemblies : string list;
   object_interface : (string * string * Anf.exports) option;
+  compiled : int;
+  hits : int;
 }
 
 val compile : Request.t -> (compiled, string) result

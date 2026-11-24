@@ -175,6 +175,7 @@ let compile ~tools ~scope ~wrapping ~exports ?cache ?(cflags = [])
           emit_entry = false; no_alias_deps = layout.open_modules <> [];
           open_modules = if generated_alias then [] else layout.open_modules;
           inline_single_thread_rc = tools.single_thread;
+          mode = tools.mode; debug_info = tools.debug_info;
           export_policy = Seal; summaries; imports }
       in
       if tools.verbose then Printf.eprintf "compile %s\n%!" step.path;
@@ -204,7 +205,7 @@ let compile ~tools ~scope ~wrapping ~exports ?cache ?(cflags = [])
             | Some key -> Ok key
             | None -> artifact_key ~tools ~scope ~layout available step
           in
-          let+ entry = Build_cache.ensure ~index:tools.index ~store ~key write in
+          let+ entry = Build_cache.ensure ~hasher:(Digest_index.hasher tools.index) ~store ~key write in
           copy_artifacts entry.directory output_dir;
           entry.directory, entry.hit
     in
@@ -268,7 +269,7 @@ let compile ~tools ~scope ~wrapping ~exports ?cache ?(cflags = [])
         let available = !available_ref in
         let imports = !imports_ref in
         let* key = artifact_key ~tools ~scope ~layout available step in
-        match Build_cache.peek ~index:tools.index ~store ~key () with
+        match Build_cache.peek ~hasher:(Digest_index.hasher tools.index) ~store ~key () with
         | Some entry ->
             let modname = layout.map_name step.modname in
             let output_dir = if layout.public step.modname then directory else private_dir in

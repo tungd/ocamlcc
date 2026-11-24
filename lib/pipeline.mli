@@ -18,6 +18,8 @@ module Request : sig
     open_modules : string list;
     emit_entry : bool;
     inline_single_thread_rc : bool;
+    mode : Build_mode.t;
+    debug_info : bool;
     imports : (string * Anf.exports) list;
     summaries : Export_summary.Loader.t option;
     export_policy : export_policy;

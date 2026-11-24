@@ -73,8 +73,41 @@ module Lower_env = struct
     selectors : Builtins.int_selection_table Lazy.t option;
     byte_access : Lambda.lambda -> Builtins.Byte_access.t option;
     nonsuspending_externals : string list;
+    debug_info : bool;
+    source_file : string option;
+    locs : (Ident.t, int * int) Hashtbl.t;
   }
 end
+
+let rec lambda_sloc (lam : Lambda.lambda) =
+  match lam with
+  | Lapply { ap_loc; _ } -> Some ap_loc
+  | Lfunction lf -> Some lf.loc
+  | Lprim (_, _, loc) -> Some loc
+  | Lsend (_, _, _, _, loc) -> Some loc
+  | Lswitch (_, _, loc) -> Some loc
+  | Lstringswitch (_, _, _, loc) -> Some loc
+  | Levent (_, lev) -> Some lev.lev_loc
+  | Llet (_, _, _, rhs, _) | Lmutlet (_, _, rhs, _) -> lambda_sloc rhs
+  | Lifused (_, l) -> lambda_sloc l
+  | _ -> None
+
+let record_sloc (env : Lower_env.t) (id : Ident.t) sloc =
+  if env.debug_info then
+    let loc = Debuginfo.Scoped_location.to_location sloc in
+    if not loc.Location.loc_ghost && loc.loc_start.pos_lnum > 0 then
+      let file = loc.loc_start.pos_fname in
+      let matches_source =
+        match env.source_file with
+        | None -> true
+        | Some sf -> file = sf || Filename.basename file = Filename.basename sf
+      in
+      if file <> "" && file <> "_none_" && matches_source then
+        let col = max 0 (loc.loc_start.pos_cnum - loc.loc_start.pos_bol) in
+        Hashtbl.replace env.locs id (loc.loc_start.pos_lnum, col)
+
+let record_lambda_loc (env : Lower_env.t) id lam =
+  if env.debug_info then Option.iter (record_sloc env id) (lambda_sloc lam)
 
 let variable (env : Lower_env.t) id =
   match Ident.Map.find_opt id env.slots with
@@ -181,6 +214,7 @@ and conv_fun env ?self (lf : Lambda.lfunction) : lfunction =
         periodic_poll = false; loop_scalars = []; body = bind_fields 0 lf.params }
 
 and conv_bind env vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : aexpr =
+  record_lambda_loc env id rhs;
   match rhs with
   | Levent (l, _) | Lifused (_, l) ->
       conv_bind env vk id l k
@@ -193,6 +227,7 @@ and conv_bind env vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) : 
       let rbs =
         List.map
           (fun (rb : Lambda.rec_binding) ->
+            record_sloc env rb.id rb.def.loc;
             { id = rb.id; def = conv_fun env ~self:rb.id rb.def })
           bindings
       in
@@ -237,6 +272,7 @@ and conv_sequence env action k =
 
 and conv_mut_bind env vk (id : Ident.t) (rhs : Lambda.lambda) (k : unit -> aexpr) :
     aexpr =
+  record_lambda_loc env id rhs;
   let t = Ident.create_local (Ident.name id ^ "_init") in
   conv_bind env vk t rhs (fun () ->
     let init = match Ident.Map.find_opt id env.scalars with
@@ -260,6 +296,7 @@ and mut_assignment env slot value =
 
 and conv_simple env ?(result_kind = Lambda.Pgenval) (id : Ident.t)
     (lam : Lambda.lambda) (k : unit -> aexpr) : aexpr =
+  record_lambda_loc env id lam;
   let emit_cexpr ce = Let (id, ce, k ()) in
   match lam with
   | Lsend (((Public | Cached) as dispatch), label, receiver, args, _) ->
@@ -680,6 +717,7 @@ and conv_expr env (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
       let rbs =
         List.map
           (fun (rb : Lambda.rec_binding) ->
+            record_sloc env rb.id rb.def.loc;
             { id = rb.id; def = conv_fun env ~self:rb.id rb.def })
           bindings
       in
@@ -687,9 +725,11 @@ and conv_expr env (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
   | Lsequence (a, b) -> conv_sequence env a (fun () -> conv_expr env b k)
   | Lfunction lf ->
       let id = Ident.create_local "anon" in
+      record_sloc env id lf.loc;
       Let (id, Fun (conv_fun env lf), k (Var id))
   | Lassign (id, rhs) ->
       let t = Ident.create_local "assign" in
+      record_lambda_loc env t rhs;
       conv_expr env rhs (fun a -> Let (t, mut_assignment env id a, k (Var t)))
   | Lprim (Psequand, [ a; b ], _) ->
       let e =
@@ -741,6 +781,7 @@ and conv_expr env (lam : Lambda.lambda) (k : atom -> aexpr) : aexpr =
   | Lwhile (cond, body) ->
       seq_stmt (while_with_poll (conv_tail env cond) (conv_tail env body)) (k Unit)
   | Lfor (id, start_e, stop_e, dir, body) ->
+      record_lambda_loc env id body;
       conv_expr env start_e (fun sa ->
           conv_expr env stop_e (fun ea ->
               seq_stmt (For (id, sa, ea, dir, with_counted_loop_poll id sa (conv_tail env body))) (k Unit)))
@@ -761,6 +802,7 @@ and seq_stmt (stmt : aexpr) (next : aexpr) : aexpr =
 
 let lower ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = [])
     ?(load_exports = fun _ -> None) ?(nonsuspending_externals = [])
+    ?(optimize = true) ?(debug_info = false) ?source_file
     ~collect_exports (program : Lambda.program) :
     (program * (int list * Ident.t) list, string) result =
   let printing = if use_builtins then Some (Builtins.load ~include_dirs ()) else None in
@@ -786,9 +828,10 @@ let lower ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = []
         stdlib_dir
     in
     let optimized =
-      Lambda_opt.optimize ~imports ~selectors ~is_array_initializer
+      Lambda_opt.optimize ~optimize ~imports ~selectors ~is_array_initializer
         ~collect_exports program.code
     in
+    let locs_tbl = Hashtbl.create 64 in
     let env =
       let byte_access =
         Option.fold ~none:(fun _ -> None)
@@ -796,13 +839,20 @@ let lower ?(use_builtins = true) ?(include_dirs = []) ?stdlib_dir ?(imports = []
           stdlib_dir
       in
       { Lower_env.scalars = optimized.scalars; imports; slots = optimized.slots;
-        printing; selectors; byte_access; nonsuspending_externals }
+        printing; selectors; byte_access; nonsuspending_externals;
+        debug_info; source_file; locs = locs_tbl }
+    in
+    let code = conv_tail env optimized.code in
+    let locs =
+      if debug_info then
+        Hashtbl.fold Ident.Map.add locs_tbl Ident.Map.empty
+      else Ident.Map.empty
     in
     let anf =
       Anf_scalar.run
-        { module_ident = program.module_ident; code = conv_tail env optimized.code;
+        { module_ident = program.module_ident; code;
           value_kinds = optimized.value_kinds; inline_bodies = optimized.inline_bodies;
-          inline_initializers = optimized.inline_initializers }
+          inline_initializers = optimized.inline_initializers; locs }
     in
     Ok (anf, optimized.export_ids)
   with Unsupported what -> Error what

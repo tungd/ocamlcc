@@ -54,6 +54,10 @@ type config = {
   stdlib_src_dir : string option;
   prebuilt_stdlib_dir : string option;
   work_dir : string option;
+  mode : Build_mode.t;
+  debug_info : bool;
+  cache_dir : string option;
+  no_cache : bool;
   extra_cflags : string list;
   extra_ldflags : string list;
   verbose : bool;
@@ -79,6 +83,10 @@ let default_config () =
     stdlib_src_dir = None;
     prebuilt_stdlib_dir = None;
     work_dir = None;
+    mode = Build_mode.Release;
+    debug_info = false;
+    cache_dir = None;
+    no_cache = false;
     extra_cflags = [];
     extra_ldflags = [];
     verbose = false }
@@ -144,11 +152,132 @@ let headers cfg ~include_dirs ~nostdlib ~work_dir steps =
       C_bindgen.generate_headers ~include_dirs ~nopervasives:cfg.nopervasives
         ~nostdlib ~work_dir ~output interfaces
 
+let compiler_binary () =
+  let exe = Sys.executable_name in
+  if Filename.is_implicit exe then Option.value (find_in_path exe) ~default:exe
+  else exe
+
+let matching_files directory extensions =
+  if not (Sys.file_exists directory && Sys.is_directory directory) then []
+  else
+    Sys.readdir directory |> Array.to_list
+    |> List.filter (fun name -> List.exists (Filename.check_suffix name) extensions)
+    |> List.sort String.compare |> List.map (Filename.concat directory)
+
+let os_label = function
+  | Darwin -> "darwin"
+  | Linux -> "linux"
+  | Ios -> "ios"
+  | Ios_sim -> "ios-sim"
+  | Android -> "android"
+  | Windows -> "windows"
+
+let compute_toolchain_key ~compiler ~qbe ~(target : Target.t) ~mode ~debug_info
+    ~single_thread ~nostdlib ~nopervasives ~stdlib =
+  let stdlib_files =
+    match Stdlib_build.interface_dir stdlib with
+    | Some dir -> matching_files dir [".cmi"; ".a.opt"; ".exports"]
+    | None -> []
+  in
+  let* digests = Build_cache.fingerprints (compiler :: qbe :: stdlib_files) in
+  let fields =
+    [ "schema", "1";
+      "target", target.name;
+      "qbe-target", target.qbe_target;
+      "os", os_label target.os;
+      "arch", target.arch;
+      "mode", Build_mode.to_string mode;
+      "debug-info", string_of_bool debug_info;
+      "rc", string_of_bool single_thread;
+      "nostdlib", string_of_bool nostdlib;
+      "nopervasives", string_of_bool nopervasives ]
+    @ digests
+  in
+  Ok (Sha256.to_hex (Build_cache.key fields))
+
+let parse_make_deps raw =
+  let normalized = String.concat "" (String.split_on_char '\\' raw) in
+  let body =
+    match String.index_opt normalized ':' with
+    | Some idx -> String.sub normalized (idx + 1) (String.length normalized - idx - 1)
+    | None -> normalized
+  in
+  String.split_on_char ' ' body
+  |> List.concat_map (String.split_on_char '\n')
+  |> List.concat_map (String.split_on_char '\r')
+  |> List.concat_map (String.split_on_char '\t')
+  |> List.filter (fun tok -> tok <> "")
+
+let compile_asm_list ~cache_dir ~verbose toolchain flags ~work_dir inputs =
+  match cache_dir with
+  | None -> Linker.compile_many ~verbose ~work_dir toolchain flags inputs
+  | Some cache ->
+      let store = Filename.concat cache "occ-obj" in
+      let base_fields =
+        [ "schema", "1"; "kind", "asm"; "cc", toolchain.Target.Toolchain.cc_prog ]
+        @ List.map (fun f -> "cc-base", f) toolchain.cc_base_args
+        @ List.map (fun f -> "flag", f) flags
+      in
+      let rec go acc = function
+        | [] -> Ok (List.rev acc)
+        | src :: rest ->
+            let* digest = Sha256.file src in
+            let key = Build_cache.key (("asm", Sha256.to_hex digest) :: base_fields) in
+            let* entry =
+              Build_cache.ensure ~store ~key (fun dir ->
+                Linker.compile_source ~verbose toolchain flags src
+                  (Filename.concat dir "unit.o"))
+            in
+            go (Filename.concat entry.directory "unit.o" :: acc) rest
+      in
+      go [] inputs
+
+let compile_c_list ~cache_dir ~verbose toolchain flags ~work_dir inputs =
+  match cache_dir with
+  | None -> Linker.compile_many ~verbose ~work_dir toolchain flags inputs
+  | Some cache ->
+      let store = Filename.concat cache "occ-c" in
+      let base_fields =
+        [ "schema", "1"; "kind", "c"; "cc", toolchain.Target.Toolchain.cc_prog ]
+        @ List.map (fun f -> "cc-base", f) toolchain.cc_base_args
+        @ List.map (fun f -> "flag", f) flags
+      in
+      let rec go acc index = function
+        | [] -> Ok (List.rev acc)
+        | src :: rest ->
+            let deps_opt =
+              match capture_cmd toolchain.cc_prog
+                      (toolchain.cc_base_args @ flags @ ["-MM"; src]) with
+              | Ok raw ->
+                  let deps = parse_make_deps raw |> List.sort_uniq String.compare in
+                  if deps <> [] && List.for_all Sys.file_exists deps then Some deps
+                  else None
+              | Error _ -> None
+            in
+            match deps_opt with
+            | Some deps ->
+                let* digests = Build_cache.fingerprints deps in
+                let key = Build_cache.key (base_fields @ digests) in
+                let* entry =
+                  Build_cache.ensure ~store ~key (fun dir ->
+                    Linker.compile_source ~verbose toolchain flags src
+                      (Filename.concat dir "unit.o"))
+                in
+                go (Filename.concat entry.directory "unit.o" :: acc) (index + 1) rest
+            | None ->
+                let base = Filename.chop_extension (Filename.basename src) in
+                let obj = Filename.concat work_dir (Printf.sprintf "u_c%d_%s.o" index base) in
+                let* () = Linker.compile_source ~verbose toolchain flags src obj in
+                go (obj :: acc) (index + 1) rest
+      in
+      go [] 0 inputs
+
 let compile_object cfg ~target ~output (units : Build_units.compiled) =
   let* toolchain = resolve_toolchain cfg target in
+  let flags = Build_mode.cflags ~debug_info:cfg.debug_info cfg.mode @ cfg.extra_cflags in
   match units.assemblies with
   | [asm] ->
-      let* () = Linker.compile_source ~verbose:cfg.verbose toolchain cfg.extra_cflags asm output in
+      let* () = Linker.compile_source ~verbose:cfg.verbose toolchain flags asm output in
       (try
          Option.iter (fun (unit_name, cmi, exports) ->
            Export_summary.publish_object ~unit_name ~cmi ~obj:output exports)
@@ -165,9 +294,26 @@ let build_single cfg ~(target : target_spec) ~kind ~work_dir =
   let* steps = plan_build_order ocaml_inputs in
   let prefer_prebuilt = is_host_default_toolchain cfg target in
   let prefer_archive = match kind with Kind_exe | Kind_obj | Kind_asm -> true | _ -> false in
+  let cache_dir =
+    if cfg.no_cache then None
+    else Result.to_option (Target.cache_dir ?override:cfg.cache_dir ())
+  in
+  let compiler = compiler_binary () in
+  let* toolchain_opt =
+    match kind with
+    | Kind_asm -> Ok None
+    | Kind_obj | Kind_exe | Kind_shared | Kind_static ->
+        let+ tc = resolve_toolchain cfg target in
+        Some tc
+    | Kind_xcframework -> assert false
+  in
+  let mode_cflags = Build_mode.cflags ~debug_info:cfg.debug_info cfg.mode in
   let* stdlib =
-    Stdlib_build.prepare ~disabled:cfg.nostdlib ~prefer_prebuilt ~prefer_archive
-      ~sources:cfg.stdlib_src_dir ~prebuilt:cfg.prebuilt_stdlib_dir ~work_dir
+    Stdlib_build.prepare_cached
+      ~mode:cfg.mode ~debug_info:cfg.debug_info ~cflags:cfg.extra_cflags
+      ?cache_dir ~compiler ~qbe ~target ?toolchain:toolchain_opt ~verbose
+      ~disabled:cfg.nostdlib ~prefer_prebuilt ~prefer_archive
+      ~sources:cfg.stdlib_src_dir ~prebuilt:cfg.prebuilt_stdlib_dir ~work_dir ()
   in
   let stdlib_dir = Stdlib_build.interface_dir stdlib in
   let include_dirs =
@@ -176,12 +322,23 @@ let build_single cfg ~(target : target_spec) ~kind ~work_dir =
   let nostdlib = cfg.nostdlib || Option.is_some stdlib_dir in
   let single_thread = cfg.inline_single_thread_rc in
   let include_main = kind = Kind_exe && not cfg.no_main in
+  let* toolchain_key =
+    match cache_dir with
+    | None -> Ok ""
+    | Some _ ->
+        compute_toolchain_key ~compiler ~qbe ~target ~mode:cfg.mode
+          ~debug_info:cfg.debug_info ~single_thread ~nostdlib
+          ~nopervasives:cfg.nopervasives ~stdlib
+  in
   let* units =
     Build_units.compile
       { steps; work_dir; include_dirs; stdlib; nostdlib; nopervasives = cfg.nopervasives;
         single_thread; include_main; publish_object = (kind = Kind_obj);
+        mode = cfg.mode; debug_info = cfg.debug_info; cache_dir; toolchain_key;
         qbe; target; verbose }
   in
+  if verbose then
+    Printf.eprintf "occ: %d compiled, %d cached\n%!" units.compiled units.hits;
   let* headers = headers cfg ~include_dirs ~nostdlib ~work_dir steps in
   let output = Option.value ~default:(default_output target kind) cfg.output in
   mkdir_p (Filename.dirname output);
@@ -191,24 +348,38 @@ let build_single cfg ~(target : target_spec) ~kind ~work_dir =
       Ok output
   | Kind_obj -> compile_object cfg ~target ~output units
   | Kind_exe | Kind_shared | Kind_static ->
-      let* toolchain = resolve_toolchain cfg target in
+      let toolchain = Option.get toolchain_opt in
       let pic = if target.os = Windows then [] else ["-fPIC"] in
       let header_flags =
         Option.to_list (Option.map (fun path -> "-I" ^ Filename.dirname path) cfg.emit_header)
       in
-      let compile = Linker.compile_many ~verbose ~work_dir toolchain in
-      let* unit_objs = compile (pic @ cfg.extra_cflags) units.assemblies in
-      let* shim_objs = compile (["-std=c99"; "-O2"] @ pic @ header_flags @ cfg.extra_cflags)
-          headers.shim_files in
-      let* c_objs = compile (pic @ header_flags @ cfg.extra_cflags) c_inputs in
+      let* unit_objs =
+        compile_asm_list ~cache_dir ~verbose toolchain
+          (pic @ mode_cflags @ cfg.extra_cflags) ~work_dir units.assemblies
+      in
+      let* shim_objs =
+        compile_c_list ~cache_dir ~verbose toolchain
+          (["-std=c99"] @ mode_cflags @ pic @ header_flags @ cfg.extra_cflags)
+          ~work_dir headers.shim_files
+      in
+      let* c_objs =
+        compile_c_list ~cache_dir ~verbose toolchain
+          (pic @ mode_cflags @ header_flags @ cfg.extra_cflags)
+          ~work_dir c_inputs
+      in
       let user_objects = unit_objs @ shim_objs @ c_objs @ obj_inputs in
       let* runtime =
         Runtime_build.link_inputs
+          ~mode:cfg.mode ~debug_info:cfg.debug_info ~extra_cflags:cfg.extra_cflags
+          ?cache_dir
           { single_thread; prefer_prebuilt; include_main;
             prebuilt_dir = cfg.prebuilt_rt_dir; source_dir = cfg.runtime_dir;
             work_dir = Filename.concat work_dir "rt"; toolchain; verbose }
       in
-      let* stdlib_objects = Stdlib_build.link_inputs ~verbose ~qbe ~target ~toolchain stdlib in
+      let* stdlib_objects =
+        Stdlib_build.link_inputs ~mode:cfg.mode ~debug_info:cfg.debug_info
+          ~cflags:cfg.extra_cflags ~verbose ~qbe ~target ~toolchain stdlib
+      in
       let mode = match kind with
         | Kind_exe -> Linker.Executable
         | Kind_static -> Linker.Static

@@ -8,13 +8,14 @@ import subprocess
 
 
 PACKAGE_MODULES = {
-    "Sha256", "Ocpkg_format", "Pkg_archive", "Pkg_vendor", "Pkg_project",
-    "Http_fetch", "Digest_index", "Build_cache", "Pkg_progress",
+    "Ocpkg_format", "Pkg_archive", "Pkg_vendor", "Pkg_project",
+    "Http_fetch", "Digest_index", "Pkg_progress",
     "Pkg_parallel", "Pkg_toolchain", "Pkg_compile", "Workspace",
 }
 
 TEST_ARGS = {
     "driver_test": ["$builddir/qbe/qbe", "$builddir/stdlib.sources"],
+    "occ_cache_mode_test": ["$builddir/bin/occ", "$builddir/qbe/qbe", "$builddir/stdlib.sources"],
     "mutrec_closure_tail_test": ["$builddir/qbe/qbe"],
     "phi_split_test": ["$builddir/qbe/qbe"],
     "ocpkg_format_test": ["packages/snapshots/default.snap"],

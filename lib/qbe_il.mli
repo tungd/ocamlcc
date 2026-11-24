@@ -54,6 +54,7 @@ type inst =
   | Alloc8 of t * t                    (* %dst =l alloc8 size *)
   | Call of ty * t * call              (* %dst =ty call $f(...) *)
   | Call_void of call                  (* call $f(...) *)
+  | Dbgloc of int * int                (* dbgloc line[, col] *)
 
 type term =
   | Ret of t option
@@ -89,12 +90,12 @@ type data = {
 
 type module_ = { funcs : func list; datas : data list }
 
-val to_string : ?pic:bool -> ?name:(string -> string) -> module_ -> string
+val to_string : ?pic:bool -> ?dbgfile:string -> ?name:(string -> string) -> module_ -> string
 
 module Names : sig
   type t = { temp_counter : int; label_counter : int }
 end
 
-val optimize_blocks : Names.t -> block list -> block list * Names.t
+val optimize_blocks : ?optimize:bool -> Names.t -> block list -> block list * Names.t
 (** Simplify branch conditions and split wide phi nodes. Take the fresh-name
     counters from the caller and return their updated values. *)

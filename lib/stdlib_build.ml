@@ -68,7 +68,8 @@ let unpack path directory =
   | End_of_file -> Error ("truncated standard library source bundle: " ^ path)
   | Failure msg | Sys_error msg -> Error msg
 
-let compile ?on_step ~directory path =
+let compile ?on_step ?(mode = Build_mode.Release) ?debug_info ~directory path =
+  let debug_info = match debug_info with Some b -> b | None -> mode = Build_mode.Debug in
   let source_dir = Filename.concat directory "src" in
   mkdir_p source_dir;
   let* sources = unpack path source_dir in
@@ -85,7 +86,8 @@ let compile ?on_step ~directory path =
             include_dirs = [directory]; output_prefix = Some prefix;
             nopervasives = has_flag "--nopervasives"; nostdlib = true;
             no_alias_deps = has_flag "--no-alias-deps";
-            nolabels = has_flag "--nolabels" }
+            nolabels = has_flag "--nolabels";
+            mode; debug_info }
         in
         let result =
           if Filename.check_suffix filename ".mli" then
@@ -122,31 +124,21 @@ let prebuilt directory ~prefer_archive =
     in
     if objects = [] then None else Some (Prebuilt { directory; objects })
 
-let prepare ~disabled ~prefer_prebuilt ~prefer_archive ~sources ~prebuilt:directory ~work_dir =
-  if disabled then Ok Disabled
-  else
-    let candidate = if prefer_prebuilt then
-        Option.bind (Target.prebuilt_stdlib directory) (prebuilt ~prefer_archive)
-      else None
-    in
-    match candidate with
-    | Some plan -> Ok plan
-    | None ->
-        match Target.stdlib_sources sources with
-        | Some path -> compile ~directory:(Filename.concat work_dir "stdlib") path
-        | None -> Ok Unavailable
-
-let link_inputs ?parallel ~verbose ~qbe ~(target : Target.t) ~toolchain = function
+let link_inputs ?parallel ?(mode = Build_mode.Release) ?debug_info ?(cflags = [])
+    ~verbose ~qbe ~(target : Target.t) ~toolchain = function
   | Disabled | Unavailable -> Ok []
   | Prebuilt { objects; _ } -> Ok objects
   | Compiled { units; _ } ->
+      let debug_info = match debug_info with Some b -> b | None -> mode = Build_mode.Debug in
+      let pic = if target.os = Windows then [] else ["-fPIC"] in
+      let cc_flags = pic @ Build_mode.cflags ~debug_info mode @ cflags in
       let build_unit { prefix; exports; modname } =
         modname, (fun () ->
           let asm = prefix ^ ".s" in
           let obj = prefix ^ ".o" in
           let* () = run_cmd ~verbose ~stdout_file:asm qbe
               ["-t"; target.qbe_target; prefix ^ ".ssa"] in
-          let* () = Linker.compile_source ~verbose toolchain [] asm obj in
+          let* () = Linker.compile_source ~verbose toolchain cc_flags asm obj in
           Export_summary.write_unit ~prefix exports;
           Export_summary.write_unit_object (prefix ^ ".opt");
           Ok obj)
@@ -162,3 +154,70 @@ let link_inputs ?parallel ~verbose ~qbe ~(target : Target.t) ~toolchain = functi
                 seq (obj :: acc) rest
           in
           seq [] tasks
+
+let copy_matching ~extensions src dst =
+  Sys.readdir src |> Array.iter (fun name ->
+    if List.exists (Filename.check_suffix name) extensions then
+      write_file (Filename.concat dst name) (read_file (Filename.concat src name)))
+
+let prepare_cached ?(mode = Build_mode.Release) ?debug_info ?(cflags = [])
+    ?cache_dir ?compiler ?qbe ?target ?toolchain ?(verbose = false)
+    ~disabled ~prefer_prebuilt ~prefer_archive ~sources ~prebuilt:directory ~work_dir () =
+  let debug_info = match debug_info with Some b -> b | None -> mode = Build_mode.Debug in
+  if disabled then Ok Disabled
+  else
+    let allow_prebuilt =
+      prefer_prebuilt && (Option.is_some directory || (mode = Build_mode.Release && not debug_info))
+    in
+    let candidate =
+      if allow_prebuilt then
+        Option.bind (Target.prebuilt_stdlib directory) (prebuilt ~prefer_archive)
+      else None
+    in
+    match candidate with
+    | Some plan -> Ok plan
+    | None ->
+        match Target.stdlib_sources sources with
+        | Some path -> (
+            match cache_dir, compiler, qbe, target, toolchain with
+            | Some cache, Some compiler_bin, Some qbe_bin, Some target, Some tc ->
+                let* digests = Build_cache.fingerprints [compiler_bin; qbe_bin; path] in
+                let key =
+                  Build_cache.key
+                    (["schema", "1"; "kind", "stdlib";
+                      "mode", Build_mode.to_string mode;
+                      "debug-info", string_of_bool debug_info;
+                      "target", target.Target.name;
+                      "qbe-target", target.qbe_target;
+                      "cc", tc.Target.Toolchain.cc_prog;
+                      "ar", tc.ar_prog]
+                    @ List.map (fun f -> "cc-base", f) tc.cc_base_args
+                    @ List.map (fun f -> "cflag", f) cflags
+                    @ digests)
+                in
+                let store = Filename.concat cache "stdlib" in
+                let* entry =
+                  Build_cache.ensure ~store ~key (fun destination ->
+                    let work = Filename.temp_dir "occ-stdlib-cache-" "" in
+                    Fun.protect ~finally:(fun () -> rm_rf work) (fun () ->
+                      let* plan = compile ~mode ~debug_info ~directory:work path in
+                      let* objects =
+                        link_inputs ~mode ~debug_info ~cflags ~verbose
+                          ~qbe:qbe_bin ~target ~toolchain:tc plan
+                      in
+                      let archive = Filename.concat destination "libocamlstdlib.a" in
+                      let* () = run_cmd ~verbose tc.Target.Toolchain.ar_prog
+                          (["rcs"; archive] @ objects) in
+                      let opts = List.map (fun obj -> Filename.remove_extension obj ^ ".opt") objects in
+                      Export_summary.write_archive ~archive ~units:opts;
+                      copy_matching ~extensions:[".cmi"; ".o"; ".exports"] work destination;
+                      Ok ()))
+                in
+                (match prebuilt entry.directory ~prefer_archive with
+                | Some plan -> Ok plan
+                | None -> Error "corrupt stdlib cache entry")
+            | _ -> compile ~mode ~debug_info ~directory:(Filename.concat work_dir "stdlib") path)
+        | None -> Ok Unavailable
+
+let prepare ~disabled ~prefer_prebuilt ~prefer_archive ~sources ~prebuilt ~work_dir =
+  prepare_cached ~disabled ~prefer_prebuilt ~prefer_archive ~sources ~prebuilt ~work_dir ()

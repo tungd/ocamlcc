@@ -127,18 +127,32 @@ Each unit's generated `ocamlcc_init_<Mod>` first calls `ocamlcc_init_try_enter` 
 
 # Driver modules
 
-`Target` resolves host and cross targets, toolchain commands, and resource
-paths. `Dep_graph` scans source dependencies and returns either a flattened
-topological step list (`plan_build_order`) or the SCC-condensed dependency DAG
-(`plan_build_dag`) for parallel unit scheduling, restoring the caller's
-compiler-libs dependency state after each scan. `Linker` owns native
-compilation commands, final archive and linker arguments, symbol visibility,
-and XCFramework packaging. `Build_units` compiles the ordered interfaces and
-implementations, threading export facts and emitting the executable entry point.
+`Target` resolves host and cross targets, toolchain commands, resource paths,
+and the shared cache root (`Target.cache_dir`: `--cache-dir` → `$OCC_CACHE`
+→ `$OCPKG_CACHE` → `$XDG_CACHE_HOME/ocpkg` → `~/.cache/ocpkg`). `Build_mode`
+defines `Release` (`-O2`, full optimization, default) and `Debug` (`-O0 -g`,
+skipping speculative inlining and bounds-check elision) plus optional DWARF
+source-line emission (`-g`/`-g0`). `Build_cache` and `Sha256` live in
+`ocamlcc.cmxa` (with `Unix.lockf` in `bootstrap/unix`) so both `occ` and
+`ocpkg` reuse lock-protected content-addressed caching without linking
+`Digest_index`'s host C stub into the bootstrap compiler. `Dep_graph` scans
+source dependencies and returns either a flattened topological step list
+(`plan_build_order`) or the SCC-condensed dependency DAG (`plan_build_dag`)
+for parallel unit scheduling, restoring the caller's compiler-libs dependency
+state after each scan. `Linker` owns native compilation commands, final archive
+and linker arguments, symbol visibility, and XCFramework packaging.
+`Build_units` compiles the ordered interfaces and implementations with
+per-unit `<cache>/occ-unit` caching (keeping executable startup
+`ocamlcc_entry.s` separate from module assemblies so module artifacts remain
+reusable across builds), threading export facts across fresh and cached units.
 `C_bindgen` handles single headers, umbrella headers, and FFI shims. `Driver`
-selects the output mode and coordinates these operations with the runtime and
-stdlib inputs (`Stdlib_build` and `Runtime_build` also accept optional parallel
-runners used by `ocpkg`).
+selects the output mode and coordinates unit, assembly (`<cache>/occ-obj`), C
+header-tracked (`-MM` → `<cache>/occ-c`), and source-built stdlib/runtime
+(`<cache>/stdlib`, `<cache>/runtime`) caching unless `--no-cache` is passed.
+(`Stdlib_build` and `Runtime_build` also accept optional parallel runners used
+by `ocpkg`.) `test/occ_cache_mode_test.ml` verifies Debug/Release codegen,
+`dbgfile`/`dbgloc`, `.file`/`.loc`, cache hits, C header invalidation, and
+`--no-cache`.
 
 # Runtime objects
 

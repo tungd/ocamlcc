@@ -211,6 +211,7 @@ let compile_function compile_aexpr b id (lf : Anf.lfunction) ~has_closure
           in
           close_block b (Jmp "loop");
           start_block b "loop";
+          emit_loc b id;
           (match dispatch with
           | None -> emit_body loop_binders tick lf.body
           | Some (index, cases) ->
@@ -278,6 +279,7 @@ let compile_scc_group compile_aexpr b gname ~export ~with_closure members =
       List.iter
         (fun { id; def; captures; entry; closure_phi; argument_phis; _ } ->
           start_block b (tail_entry_label entry);
+          emit_loc b id;
           let shadowed =
             (if with_closure then id :: captures else []) @ List.map fst def.params
           in

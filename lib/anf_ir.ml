@@ -247,6 +247,7 @@ type program = {
   value_kinds : Lambda.value_kind Ident.Map.t;
   inline_bodies : Lambda.lfunction Ident.Map.t;
   inline_initializers : (string * string) list;
+  locs : (int * int) Ident.Map.t;
 }
 
 (* Calls and allocations on the success path need the usual poll.

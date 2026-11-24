@@ -78,13 +78,15 @@ vendor trees from offline sources, and leaves missing packages for
 vendor moves on publication failure, and share the project lock with
 commands that read the lock or build against the vendor tree.
 `clean` clears workspace build artifacts. `clean --global` clears shared
-compiled artifacts, downloaded archives, and the stat index. `version`
-prints the version declared in `ocamlcc.opam`.
+compiled artifacts (`pkg`, `stdlib`, `runtime`, `occ-unit`, `occ-obj`, `occ-c`),
+downloaded archives, and the stat index. `version` prints the version declared
+in `ocamlcc.opam`.
 
 # Build cache
 
 `Build_cache` hashes length-prefixed input fields and verifies the digest
-of each stored artifact tree. The stat index under `$OCPKG_CACHE/stat-index`
+of each stored artifact tree. Both `occ` and `ocpkg` share the same default
+cache root (`Target.cache_dir`). The stat index under `$OCPKG_CACHE/stat-index`
 reuses file digests while device, inode, size, and nanosecond modification
 and change timestamps match. `--verify-cache` recomputes file hashes for
 the build, and `ocpkg verify` recomputes vendor tree hashes. A builder writes
@@ -92,9 +94,14 @@ to a private directory and publishes successful outputs by rename while the
 cache key is locked.
 
 `ocpkg build` verifies the lock and vendor tree before preparing the
-toolchain. The fingerprint covers the compiler, QBE, stdlib, runtime,
-target, ARC profile, and compiler flags. Vendored recipes build into
-archives with `.a.opt` metadata in the shared package cache. A wrapped recipe
+toolchain. Builds default to `Release` (`-O2`, full optimization, `debug_info = false`);
+`--debug` / `-O0` selects `Debug` (`-O0 -g`, uninlined OCaml with `dbgloc`/bounds
+checks preserved and source-built debug stdlib/runtime), `--release` / `-O2`
+selects `Release`, and `-g` / `-g0` controls DWARF line info independently of
+optimization level. The toolchain fingerprint covers the compiler, QBE, stdlib,
+runtime, target, ARC profile, build mode, debug-info toggle, and compiler flags,
+keeping Debug and Release cache entries isolated (`tests/ocpkg/debug_release.sh`).
+Vendored recipes build into archives with `.a.opt` metadata in the shared package cache. A wrapped recipe
 exposes its chosen public module and keeps its prefixed implementation
 interfaces on the hidden OCaml load path. C recipes can stage headers next
 to their sources, supply compiler arguments with `cflag`, and supply

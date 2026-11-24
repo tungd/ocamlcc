@@ -147,8 +147,8 @@ end
 
 (* A CMI describes layout, not callee behavior. An older caller that imported
    direct-call facts must fail to link against a different implementation. *)
-let seal il exports =
-  let ssa = Qbe_il.to_string il in
+let seal ?dbgfile il exports =
+  let ssa = Qbe_il.to_string ?dbgfile il in
   match exports with
   | [] -> ssa, []
   | _ ->
@@ -175,7 +175,7 @@ let seal il exports =
             blocks = [{ label = "start"; term = Ret None;
                         insts = [Call_void { fn = Global init; args = [] }] }] }) in
       let name symbol = Option.value ~default:symbol (Hashtbl.find_opt names symbol) in
-      Qbe_il.to_string ~name { il with funcs = il.funcs @ aliases }, exports
+      Qbe_il.to_string ?dbgfile ~name { il with funcs = il.funcs @ aliases }, exports
 
 let write_unit ~prefix exports =
   write (prefix ^ ".opt") (Rows.encode ~cmi_digest:(digest (prefix ^ ".cmi")) exports)

@@ -8,6 +8,8 @@ type t = {
   stdlib : string;
   fingerprint : Sha256.t;
   single_thread : bool;
+  mode : Build_mode.t;
+  debug_info : bool;
   cflags : string list;
   verbose : bool;
   cache : string;
@@ -49,13 +51,16 @@ let assemble tools ssa output =
   let asm = Filename.remove_extension output ^ ".s" in
   let* () = run_cmd ~verbose:tools.verbose ~stdout_file:asm tools.qbe
       ["-t"; tools.target.qbe_target; ssa] in
-  let flags = if tools.target.os = Windows then [] else ["-fPIC"] in
+  let pic = if tools.target.os = Windows then [] else ["-fPIC"] in
+  let mode_flags = Build_mode.cflags ~debug_info:tools.debug_info tools.mode in
+  let flags = pic @ mode_flags @ tools.cflags in
   let+ () = Linker.compile_source ~verbose:tools.verbose tools.commands flags asm output in
   Sys.remove asm
 
 let compile_c tools ~flags input output =
   let pic = if tools.target.os = Windows then [] else ["-fPIC"] in
-  Linker.compile_source ~verbose:tools.verbose tools.commands (pic @ tools.cflags @ flags) input output
+  let mode_flags = Build_mode.cflags ~debug_info:tools.debug_info tools.mode in
+  Linker.compile_source ~verbose:tools.verbose tools.commands (pic @ mode_flags @ tools.cflags @ flags) input output
 
 let archive tools path objects = archive_tool ~verbose:tools.verbose tools.commands path objects
 
@@ -84,10 +89,10 @@ let parallel_run ~pool ~held ~progress ~prefix ~summary_label tasks =
   Pkg_progress.end_scope ?summary scope;
   res
 
-let pack_stdlib ~pool ~held ~progress ~index ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose =
+let pack_stdlib ~pool ~held ~progress ~index ~cache ~stdlib_source ~fingerprint ~mode ~debug_info ~qbe ~target ~commands ~verbose =
   let store = Filename.concat cache "stdlib" in
   let+ entry =
-    Build_cache.ensure ~index ~store ~key:fingerprint (fun destination ->
+    Build_cache.ensure ~hasher:(Digest_index.hasher index) ~store ~key:fingerprint (fun destination ->
       let work = Filename.temp_dir "occ-stdlib-" "" in
       Fun.protect ~finally:(fun () -> rm_rf work) (fun () ->
         let started = Unix.gettimeofday () in
@@ -105,7 +110,7 @@ let pack_stdlib ~pool ~held ~progress ~index ~cache ~stdlib_source ~fingerprint 
           prev_idx := idx - 1;
           Pkg_progress.task_started s ~id:(idx - 1) ~name
         in
-        let* plan = Stdlib_build.compile ~on_step
+        let* plan = Stdlib_build.compile ~on_step ~mode ~debug_info
             ~directory:(Filename.concat work "stdlib") stdlib_source in
         Option.iter (fun s ->
           if !prev_idx >= 0 then Pkg_progress.task_finished ~id:!prev_idx ~cached:false s;
@@ -114,7 +119,7 @@ let pack_stdlib ~pool ~held ~progress ~index ~cache ~stdlib_source ~fingerprint 
         let* objects =
           Stdlib_build.link_inputs
             ~parallel:(parallel_run ~pool ~held ~progress ~prefix:"stdlib-asm" ~summary_label:"standard library")
-            ~verbose ~qbe ~target ~toolchain:commands plan
+            ~mode ~debug_info ~verbose ~qbe ~target ~toolchain:commands plan
         in
         let archive = Filename.concat destination "libocamlstdlib.a" in
         let* () = archive_tool ~verbose commands archive objects in
@@ -136,7 +141,8 @@ module Stdlib_input = struct
 end
 
 let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose
-    ?pool ?(held = false) ?progress () =
+    ?(mode = Build_mode.Release) ?debug_info ?pool ?(held = false) ?progress () =
+  let debug_info = match debug_info with Some b -> b | None -> mode = Build_mode.Debug in
   let pool = match pool with Some p -> p | None -> Pkg_parallel.Pool.create 1 in
   let progress = match progress with Some p -> p | None -> Pkg_progress.create ~enabled:false ~verbose in
   let* target = Target.resolve name in
@@ -144,9 +150,10 @@ let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose
   let* commands = Target.toolchain target in
   let* compiler = compiler_binary () |> require "occ" in
   let host = Target.is_host target in
+  let allow_prebuilt = host && mode = Build_mode.Release && not debug_info in
   let* stdlib_input =
     match Target.prebuilt_stdlib None with
-    | Some dir when host && Sys.file_exists (Filename.concat dir "stdlib.cmi")
+    | Some dir when allow_prebuilt && Sys.file_exists (Filename.concat dir "stdlib.cmi")
                         && Option.is_some (Export_summary.find_archive dir) ->
         Ok (Stdlib_input.Prebuilt dir)
     | _ ->
@@ -157,16 +164,19 @@ let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose
         matching_files dir [".c"; ".h"; ".inc"; ".S"]
         @ matching_files (Filename.concat dir "caml") [".h"]) (Target.runtime_sources None) in
   let rt_objects =
-    if host then
+    if allow_prebuilt then
       Option.fold ~none:[] ~some:(fun dir -> matching_files dir [".a"; ".o"])
         (Target.prebuilt_runtime ~single_thread None)
     else []
   in
-  let* digests = Build_cache.fingerprints ~index
+  let hasher = Digest_index.hasher index in
+  let* digests = Build_cache.fingerprints ~hasher
       (compiler :: self () :: qbe :: Stdlib_input.files stdlib_input @ rt_sources @ rt_objects) in
   let options =
     ["schema", "1"; "target", target.name; "qbe-target", target.qbe_target;
-     "rc", string_of_bool single_thread; "cc", commands.cc_prog; "ar", commands.ar_prog]
+     "rc", string_of_bool single_thread; "mode", Build_mode.to_string mode;
+     "debug-info", string_of_bool debug_info;
+     "cc", commands.cc_prog; "ar", commands.ar_prog]
     @ List.map (fun flag -> "cc-base", flag) commands.cc_base_args
     @ List.map (fun flag -> "cflag", flag) cflags
   in
@@ -175,21 +185,22 @@ let prepare ~index ~cache ~target:name ~single_thread ~cflags ~verbose
     | Prebuilt directory -> Ok (directory, fingerprint)
     | Source stdlib_source ->
         let* stdlib =
-          pack_stdlib ~pool ~held ~progress ~index ~cache ~stdlib_source ~fingerprint ~qbe ~target ~commands ~verbose in
-        let+ artifacts = Build_cache.fingerprints ~index (matching_files stdlib [".cmi"; ".a"; ".a.opt"]) in
+          pack_stdlib ~pool ~held ~progress ~index ~cache ~stdlib_source ~fingerprint ~mode ~debug_info ~qbe ~target ~commands ~verbose in
+        let+ artifacts = Build_cache.fingerprints ~hasher (matching_files stdlib [".cmi"; ".a"; ".a.opt"]) in
         stdlib, Build_cache.key (("source toolchain", Sha256.to_hex fingerprint) :: artifacts)
   in
-  Ok {target; commands; qbe; stdlib; fingerprint; single_thread; cflags; verbose; cache; index; pool; progress}
+  Ok {target; commands; qbe; stdlib; fingerprint; single_thread; mode; debug_info; cflags; verbose; cache; index; pool; progress}
 
 let runtime ?(held = false) tools ~include_main =
   let key = Build_cache.key
       ["toolchain", Sha256.to_hex tools.fingerprint; "main", string_of_bool include_main] in
   let store = Filename.concat tools.cache "runtime" in
-  let+ entry = Build_cache.ensure ~index:tools.index ~store ~key (fun directory ->
+  let+ entry = Build_cache.ensure ~hasher:(Digest_index.hasher tools.index) ~store ~key (fun directory ->
     let work = Filename.temp_dir "occ-runtime-" "" in
     Fun.protect ~finally:(fun () -> rm_rf work) (fun () ->
       let* inputs = Runtime_build.link_inputs
           ~parallel:(parallel_run ~pool:tools.pool ~held ~progress:tools.progress ~prefix:"runtime" ~summary_label:"runtime")
+          ~mode:tools.mode ~debug_info:tools.debug_info ~extra_cflags:tools.cflags
           { single_thread = tools.single_thread; prefer_prebuilt = Target.is_host tools.target;
             include_main; prebuilt_dir = None; source_dir = None; work_dir = work;
             toolchain = tools.commands; verbose = tools.verbose } in

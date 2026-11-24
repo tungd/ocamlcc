@@ -11,6 +11,7 @@ module Optimized : sig
 end
 
 val optimize :
+  ?optimize:bool ->
   imports:(string -> Anf_ir.exports option) ->
   selectors:Builtins.int_selection_table Lazy.t option ->
   is_array_initializer:(Lambda.lambda -> bool) ->

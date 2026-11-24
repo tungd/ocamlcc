@@ -59,6 +59,7 @@ let file index path = match index with
       Error (path ^ ": " ^ Unix.error_message error)
 
 let tree index path = Sha256.tree_hash ~file:(file index) path
+let hasher index : Build_cache.hasher = { file = file index; tree = tree index }
 
 let read path =
   let entries = Hashtbl.create 512 in

@@ -7,6 +7,9 @@ val lower :
   ?imports:(string * exports) list ->
   ?load_exports:(string -> exports option) ->
   ?nonsuspending_externals:string list ->
+  ?optimize:bool ->
+  ?debug_info:bool ->
+  ?source_file:string ->
   collect_exports:bool ->
   Lambda.program ->
   (program * (int list * Ident.t) list, string) result

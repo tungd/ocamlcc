@@ -335,3 +335,15 @@ let toolchain ?cc_path ?ar_path ?sysroot (t : t) : (Toolchain.t, string) result 
 let is_host t =
   let host = detect_host_target () in
   t.qbe_target = host.qbe_target && t.os = host.os && t.arch = host.arch
+
+let cache_dir ?override () =
+  match override with
+  | Some path when path <> "" -> Ok path
+  | _ -> (
+      match Sys.getenv_opt "OCC_CACHE", Sys.getenv_opt "OCPKG_CACHE",
+            Sys.getenv_opt "XDG_CACHE_HOME", Sys.getenv_opt "HOME" with
+      | Some path, _, _, _ when path <> "" -> Ok path
+      | _, Some path, _, _ when path <> "" -> Ok path
+      | _, _, Some xdg, _ when xdg <> "" -> Ok (Filename.concat xdg "ocpkg")
+      | _, _, _, Some home when home <> "" -> Ok (Filename.concat home ".cache/ocpkg")
+      | _ -> Error "set OCPKG_CACHE or OCC_CACHE to locate the build cache")

@@ -1124,27 +1124,33 @@ module Optimized = struct
   }
 end
 
-let optimize ~imports ~selectors ~is_array_initializer ~collect_exports code =
+let optimize ?(optimize = true) ~imports ~selectors ~is_array_initializer ~collect_exports code =
   let code =
     match selectors with
-    | Some table -> specialize_int_selector_aliases table code
-    | None -> code
+    | Some table when optimize -> specialize_int_selector_aliases table code
+    | _ -> code
   in
   let code, inline_initializers =
-    inline_local_calls ~imports (propagate_immediate_constants code)
+    if optimize then inline_local_calls ~imports (propagate_immediate_constants code)
+    else code, []
   in
   let code =
-    code |> flatten_let_rhs |> resolve_module_projections
-    |> drop_unused_alias_lets |> promote_local_refs
-    |> replace_local_aggregates
-    |> Bounds.remove_redundant_checks ~is_array_initializer |> lift_recursive_calls
+    let code = code |> flatten_let_rhs |> resolve_module_projections |> drop_unused_alias_lets in
+    let code =
+      if optimize then
+        code |> promote_local_refs |> replace_local_aggregates
+        |> Bounds.remove_redundant_checks ~is_array_initializer
+      else code
+    in
+    lift_recursive_calls code
   in
   let code, scalars = specialize_mutable_slots code in
   let exported = exported_functions code in
   let bindings = module_bindings code in
   let slots = module_captures bindings exported in
   let inline_bodies, export_ids =
-    if collect_exports then inline_export_bodies bindings exported, exported
+    if collect_exports then
+      (if optimize then inline_export_bodies bindings exported else Ident.Map.empty), exported
     else Ident.Map.empty, []
   in
   { Optimized.code; scalars; slots; value_kinds = binding_kinds code;
