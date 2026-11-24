@@ -140,7 +140,12 @@ let link_inputs ?parallel ?(mode = Build_mode.Release) ?debug_info
                   in
                   Ok ())
               in
-              runtime_objects ~include_main entry.directory)
+              let objects = runtime_objects ~include_main entry.directory in
+              mkdir_p work_dir;
+              List.map (fun src ->
+                let dst = Filename.concat work_dir (Filename.basename src) in
+                write_if_changed dst (read_file src);
+                dst) objects)
       | None ->
           Error (if prefer_prebuilt then "cannot locate runtime/ directory"
                  else "cannot locate runtime/ directory for cross build")

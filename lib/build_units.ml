@@ -71,8 +71,18 @@ let read_refs available include_dirs (step : Dep_graph.Step.t) =
               let sidecar = Filename.remove_extension interface ^ ".exports" in
               let* files =
                 if Sys.file_exists sidecar then
-                  let+ metadata = fingerprint_bytes (name ^ ".exports") sidecar in
-                  metadata :: file :: files
+                  let* metadata = fingerprint_bytes (name ^ ".exports") sidecar in
+                  let obj_entry =
+                    match String.split_on_char '\n' (read_file sidecar) with
+                    | _header :: obj_name :: _ when String.trim obj_name <> "" ->
+                        let obj_path = Filename.concat (Filename.dirname sidecar) (String.trim obj_name) in
+                        if Sys.file_exists obj_path then
+                          fingerprint_bytes (name ^ ".exports#obj") obj_path
+                        else Ok (name ^ ".exports#obj", "missing")
+                    | _ -> Ok (name ^ ".exports#obj", "none")
+                  in
+                  let+ obj_fp = obj_entry in
+                  obj_fp :: metadata :: file :: files
                 else Ok (file :: files)
               in
               let bin_exports = Filename.remove_extension interface ^ ".exports_bin" in
