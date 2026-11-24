@@ -28,7 +28,7 @@ Self-hosting compiles `ocamlcc` and its entire closure into a standalone native
 binary running on `ocamlcc`'s Perceus ARC runtime (zero host OCaml runtime or
 tracing GC):
 
-1. **Stage 0** — host Dune/OCaml 5.5.0 builds `build/bin/occ` (uses OCaml
+1. **Stage 0** — Ninja and host OCaml 5.5.0 build `build/bin/occ` (uses OCaml
    `ocamlopt` right-to-left evaluation order on tuple/cons arguments such as
    `Translprim.make_params`).
 2. **Stage 1** — `stage0` compiles the canonical stdlib (78 modules with the ARC

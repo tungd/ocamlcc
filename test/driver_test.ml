@@ -87,7 +87,7 @@ let with_temp_dir f =
 let find_repo_root () =
   let rec up dir =
     if
-      Sys.file_exists (Filename.concat dir "dune-project")
+      Sys.file_exists (Filename.concat dir "build.ninja")
       && Sys.file_exists (Filename.concat dir "runtime/arc.c")
     then dir
     else
@@ -108,7 +108,10 @@ let () =
     else Filename.concat root "build/qbe/qbe"
   in
   let runtime_dir = Filename.concat root "runtime" in
-  let stdlib_src_dir = Filename.concat root "stdlib.sources" in
+  let stdlib_src_dir =
+    if Array.length Sys.argv > 2 then Unix.realpath Sys.argv.(2)
+    else Filename.concat root "build/stdlib.sources"
+  in
 
   (* 1. Target parsing *)
   let targets_ok =

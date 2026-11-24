@@ -17,7 +17,7 @@ links into the concepts below.
 |---------|--------|---------|
 | [/concepts/getting-started.md](/concepts/getting-started.md) | stable | Build, smoke-test, and navigate the project. |
 | [/concepts/compiler-pipeline.md](/concepts/compiler-pipeline.md) | stable | The four-stage compilation architecture. |
-| [/concepts/build-pipeline.md](/concepts/build-pipeline.md) | stable | How ninja orchestrates vendored QBE, the C runtime, and dune. |
+| [/concepts/build-pipeline.md](/concepts/build-pipeline.md) | stable | How Ninja builds the host OCaml tools, vendored QBE, and the C runtime. |
 | [/concepts/value-representation.md](/concepts/value-representation.md) | stable | Tagged 63-bit immediates vs. heap ARC objects. |
 | [/concepts/vendored-qbe.md](/concepts/vendored-qbe.md) | stable | QBE as an out-of-tree vendored dependency. |
 | [/concepts/perceus-arc.md](/concepts/perceus-arc.md) | stable | Freestanding slab allocator, Perceus ARC, and weak refs (Phase 2). |

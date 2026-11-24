@@ -395,7 +395,6 @@ ninja -j1
 python3 tools/stdlib_compat.py --skip-tests
 python3 tools/stdlib_regressions.py bigarray
 python3 tools/stdlib_regressions.py --stock bigarray
-dune runtest -j1
 ninja -j1 test
 ninja -j1 asan_test
 ```

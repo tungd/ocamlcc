@@ -1,8 +1,8 @@
 ---
 type: Concept
 title: Ninja build pipeline
-description: How the top-level build.ninja orchestrates vendored QBE, the C runtime, dune, and end-to-end example compilation.
-tags: [build, ninja, dune, qbe]
+description: How Ninja builds the host OCaml tools, vendored QBE, the C runtime, and end-to-end examples.
+tags: [build, ninja, ocamlopt, qbe]
 status: stable
 generated:
   by: codex/1
@@ -19,30 +19,33 @@ stale_after: 2027-02-13
 
 # Design
 
-One checked-in `build.ninja` drives everything[^build-ninja]:
+The top-level `build.ninja` drives the build.[^build-ninja]
 
 | Artifact | Rule chain |
 |----------|------------|
 | `build/qbe/qbe` | `cc -c` each `vendor/qbe/*.c` (amd64 sysv/winabi, arm64/_apple, rv64, plus `gvn`/`gcm`/`ifopt`) → link. `config.h` is generated out-of-tree by `tools/gen-config.sh` (host default target). |
 | `build/rt/libocamlrt.a` | `cc -c -fPIC` `runtime/*.c` (with `main_entry.c` separated from `builtins.c` so `.so`/`.dylib` libraries do not pull `main`) + `runtime/pal_ctx.S` → `ar rcs`. |
-| `build/bin/occ` | `dune build bin/occ` (with `(public_name occ)` for `dune build -p ocamlcc`) → copy out of `_build/`. |
-| `build/bin/ocpkg` | Build the native package manager and libcurl binding with Dune. |
+| `build/bin/occ` | Ninja compiles the host OCaml units with `ocamlopt` and links the compiler archive against compiler-libs. |
+| `build/bin/ocpkg` | Ninja links the package-manager archive, host C stubs, and libcurl. |
 | `build/dist/occ-<os>-<arch>.tar.gz` | Package both binaries and the resources they discover under `lib/occ/`. |
 | `build/stdlib/libocamlstdlib.a` | `tools/stdlib_compat.py` prepares the pinned upstream library with the ARC overlay, then compiles it with `occ`, QBE and the target C toolchain. |
 | `build/stdlib.sources` | The same build publishes the overlay-resolved sources and interface order for the driver’s source fallback. |
 | `build/<name>` | `occ compile x.ml -o x.ssa` → `qbe x.ssa > x.s` → `cc x.s libocamlstdlib.a libocamlrt.a`. |
 | `build/asan/<name>` | ASan + UBSan (`-fsanitize=address,undefined -fno-sanitize-recover=all`) runtime `build/asan/rt/libocamlrt.a` linked with compiled examples. |
 
-`ninja smoke` builds and runs `build/hello`; `ninja test` runs all checked
-tests by redirecting `$builddir/$name > $builddir/$name.out` before `diff` so
-non-zero exit codes never fail silently; `ninja asan_test` runs key runtime-heavy
-examples under ASan+UBSan; `dune runtest` runs the compiler unit, IR, and
-negative diagnostic tests in `test/`. `.github/workflows/ci.yml` runs the
+`tools/host-ninja.py` uses `ocamldep` to generate `host.ninja`. Ninja
+regenerates the included graph when a source or directory changes and
+preserves its timestamp when the graph stays identical. Host objects and
+test executables live under `build/host/`.
+
+`ninja smoke` builds and runs `build/hello`. `ninja test` runs the host
+OCaml suites, native examples, and `ocpkg` integration tests. Use
+`ninja test_host` for the compiler and driver suites and `ninja asan_test`
+for sanitizer checks. `.github/workflows/ci.yml` runs the
 compiler and runtime suites on both Linux (epoll) and macOS (kqueue).
 The Linux job installs the libcurl development headers, `pkg-config`, and
-Python 3. Both jobs run `ninja -j1 ocpkg_test dist_smoke ocpkg_catalog` to
-verify the CLI, relocated archive, and daily-use catalog APIs. Ninja's
-build products stay under the gitignored `build/` directory.
+Python 3. Both jobs run `ninja -j1 dist_smoke ocpkg_catalog` to verify
+the relocated archive and daily-use catalog APIs.
 
 The tagged release workflow runs the package and distribution tests for
 macOS ARM64, Linux x86-64, and Linux ARM64 before publishing the archives,
@@ -66,8 +69,6 @@ test, including `occ-linux-arm64.tar.gz` on hosts that report `aarch64`.
   initializer is void.
 - **Ninja does not re-tokenize expanded variables** — a variable used in a
   path list must itself be a single path; lists are spelled out inline.
-- **dune wraps libraries by default** — `lib/dune` sets `wrapped false` so
-  the CLI can reference `Pipeline`, `Codegen`, etc. directly.
 - **Vendored tarballs restore old mtimes** — after re-vendoring QBE, run
   `ninja -t clean` or ninja will happily link stale objects.
 
@@ -156,10 +157,11 @@ rename for new contents. Export summaries use the shared atomic writer.
 
 # Installed driver
 
-Dune installs both binaries and places QBE, runtime sources, the stdlib
-source bundle, and the package catalog under `lib/occ/`. The Ninja
-distribution also includes prebuilt stdlib and runtime archives. Target
-discovery derives the resource paths from the executable prefix.
+`PREFIX=/path/to/prefix ninja install` installs both binaries and the
+toolchain resources under `lib/occ/`. It uses the same layout as the
+distribution archive, including the prebuilt stdlib and runtime archives
+and their sources. Target discovery derives resource paths from the
+executable prefix.
 
 # C record field names
 
@@ -187,12 +189,14 @@ The Ninja shared-library rule links libm for the math primitives it includes. It
 
 # Verified on Linux and macOS (2026-11-18)
 
-The 14 Dune suites, 26 Ninja checks, 16 ASan/UBSan checks and installed core-stdlib driver smoke test pass on Ubuntu 24.04 arm64 with OCaml 5.5.2 and on macOS arm64 with OCaml 5.5.0. The macOS installed driver also passes the three-module Map.Make(String) registration test with the compatibility stdlib.
+The then-current 14 host suites, 26 native checks, 16 ASan/UBSan checks
+and installed core-stdlib smoke test passed on Ubuntu 24.04 arm64 with
+OCaml 5.5.2 and macOS arm64 with OCaml 5.5.0. The installed macOS driver
+also passed the three-module Map.Make(String) registration test.
 
 # Package companion
 
 The [package catalog](/concepts/package-catalog.md) describes the native
 `ocpkg` workspace builder. It verifies vendored sources, uses the compiler
 pipeline for unit compilation, and invokes QBE and the target C toolchain
-directly. Dune excludes the generated `build/` tree, including vendored
-upstream projects.
+directly. The host graph scans the repository's own source directories.

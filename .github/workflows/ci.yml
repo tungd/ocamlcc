@@ -16,17 +16,13 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: 5.5.x
-      - run: opam install -y dune
-      - name: Build and run dune unit tests
-        run: opam exec -- dune runtest
-      - name: Build and run ninja end-to-end tests (epoll)
-        run: opam exec -- ninja test
-      - name: Test ocpkg and the relocated distribution
-        run: opam exec -- ninja -j1 ocpkg_test dist_smoke ocpkg_catalog
+      - name: Run compiler and end-to-end tests (epoll)
+        run: opam exec -- ninja -j1 test
+      - name: Test the relocated distribution and package catalog
+        run: opam exec -- ninja -j1 dist_smoke ocpkg_catalog
       - name: Exercise the installed driver outside the checkout
         run: |
-          opam exec -- dune build -p ocamlcc
-          opam exec -- dune install --prefix "$RUNNER_TEMP/ocamlcc" ocamlcc
+          opam exec -- env PREFIX="$RUNNER_TEMP/ocamlcc" ninja -j1 install
           opam exec -- sh tests/installed_driver.sh "$RUNNER_TEMP/ocamlcc/bin/occ"
       - name: Run ASan + UBSan runtime tests
         run: opam exec -- ninja asan_test
@@ -40,17 +36,13 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: 5.5.x
-      - run: opam install -y dune
-      - name: Build and run dune unit tests
-        run: opam exec -- dune runtest
-      - name: Build and run ninja end-to-end tests (kqueue)
-        run: opam exec -- ninja test
-      - name: Test ocpkg and the relocated distribution
-        run: opam exec -- ninja -j1 ocpkg_test dist_smoke ocpkg_catalog
+      - name: Run compiler and end-to-end tests (kqueue)
+        run: opam exec -- ninja -j1 test
+      - name: Test the relocated distribution and package catalog
+        run: opam exec -- ninja -j1 dist_smoke ocpkg_catalog
       - name: Exercise the installed driver outside the checkout
         run: |
-          opam exec -- dune build -p ocamlcc
-          opam exec -- dune install --prefix "$RUNNER_TEMP/ocamlcc" ocamlcc
+          opam exec -- env PREFIX="$RUNNER_TEMP/ocamlcc" ninja -j1 install
           opam exec -- sh tests/installed_driver.sh "$RUNNER_TEMP/ocamlcc/bin/occ"
       - name: Run ASan + UBSan runtime tests
         run: opam exec -- ninja asan_test

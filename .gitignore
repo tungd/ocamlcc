@@ -1,4 +1,4 @@
-# dune / OCaml
+# OCaml artifacts and old build directories
 _build/
 *.install
 *.cmi

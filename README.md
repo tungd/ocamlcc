@@ -18,8 +18,8 @@ full design and roadmap.
 
 ## Status
 
-Phases 1–5 complete (`ninja test`: 26/26, `ninja asan_test`: 16/16,
-`dune runtest`: 14/14 passing).
+Phases 1–5 are complete. `ninja test` runs the compiler, runtime, and
+package-manager suites.
 
 `ocamlcc` compiles multi-module OCaml programs (`.mli` interfaces and `.ml`
 implementations) to native binaries, shared/static libraries, and iOS
@@ -40,22 +40,20 @@ built from the pinned upstream OCaml stdlib, the ARC overlay, and `Stdlib.Fiber`
 
 ## Build
 
-Source builds use OCaml 5.5.x, Dune, Ninja, Make, Python 3, and a host C
-compiler. Building `ocpkg` also uses libcurl development headers. A Dune
-installation includes both binaries, QBE, and the canonical stdlib and
-runtime sources. A C toolchain is needed on the consumer host. The default
-Ninja build supplies a prebuilt host archive in `build/stdlib`. Use
-`--stdlib-dir` to select a prebuilt pack explicitly.
+Source builds use OCaml 5.5.x, Ninja, Python 3.10+, a host C compiler, and
+libcurl development headers for `ocpkg`. Ninja compiles the host executables
+with `ocamlopt`. The default build supplies a prebuilt host stdlib archive in
+`build/stdlib`. Use `--stdlib-dir` to select a prebuilt pack explicitly.
 
 The whole project is driven by [ninja](https://ninja-build.org):
 
 ```sh
 ninja            # QBE, ARC runtime, occ, ocpkg, stdlib and examples
 ninja smoke      # compile examples/hello.ml end-to-end and run it
-ninja test       # run the examples, PIC/DSO, bindgen and concurrent FFI checks
+ninja test       # run compiler, package-manager and native end-to-end tests
+ninja test_host  # run the host OCaml unit, IR, and driver suites
 ninja asan_test  # run ASan+UBSan runtime checks
-dune runtest     # run compiler, driver, and package-manager tests
-ninja -t clean   # remove build/
+ninja -t clean   # clean generated build outputs
 ```
 
 The `ninja test` fixtures include `hello`, `fib`, `tail`, `bools`,
@@ -78,8 +76,8 @@ The pipeline:
 1. `vendor/qbe/*.c` → `build/qbe/qbe` (host target selected by
    `tools/gen-config.sh`)
 2. `runtime/*.c` → `build/rt/libocamlrt.a`
-3. `dune build` → `build/bin/occ` (OCaml compiler-libs frontend, ANF,
-   Perceus ARC pass, QBE IL writer)
+3. `ocamldep` discovers host OCaml dependencies and Ninja runs `ocamlopt`
+   to build `build/bin/occ` and `build/bin/ocpkg`
 4. `vendor/ocaml-stdlib/src/` with the `stdlib/` overlay → `build/stdlib/libocamlstdlib.a` and `build/stdlib.sources`
 5. `examples/*.ml` → `.ssa` (occ) → `.s` (qbe) → native executable (cc)
 
@@ -87,6 +85,9 @@ The pipeline:
 
 `ninja -j1 dist` creates `build/dist/occ-<os>-<arch>.tar.gz`. Extract it
 to a directory of your choice and add its `bin/` directory to `PATH`.
+
+`PREFIX=/path/to/prefix ninja install` installs the same toolchain layout
+from a source build. `DESTDIR` optionally stages the installation.
 `occ` and `ocpkg` find QBE, the stdlib, the ARC runtime profiles, and the
 package snapshot under `lib/occ/` relative to the executable.
 
@@ -157,7 +158,7 @@ lib/          QBE IL model + printer, Lambda frontend, ANF, ARC pass, codegen
 stdlib/       ARC-native core standard library modules
 runtime/      freestanding C runtime: pal.h/c, pal_ctx.S, arc.h/c, closure.c, fiber.h/c, builtins.c, main_entry.c
 vendor/qbe/   vendored QBE 1.3 (source drop, built out-of-tree by ninja)
-test/         compiler unit/IR/negative test suites (dune runtest)
+test/         compiler unit/IR/negative test suites (ninja test_host)
 examples/     example programs
 tests/        expected outputs and C FFI hosts (ninja test / ninja asan_test)
 .okf/         OKF knowledge bundle: design, decisions, roadmap

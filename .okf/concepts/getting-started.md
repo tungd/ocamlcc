@@ -21,25 +21,25 @@ sources:
 
 # Getting started
 
-Requirements: OCaml 5.5.x (opam switch), dune >= 3.0, a C compiler, and
-[ninja](https://ninja-build.org).
+Build with OCaml 5.5.x, a C compiler, Python 3.10+, Ninja, and libcurl
+development headers.
 
 ## Build
 
 ```sh
 ninja            # vendored QBE + ARC/fiber runtime + ocamlcc compiler + examples
 ninja smoke      # compile examples/hello.ml end-to-end and run it
-ninja test       # run all checked end-to-end examples
+ninja test       # run compiler, package-manager and native end-to-end tests
+ninja test_host  # run compiler unit, IR, and driver suites
 ninja asan_test  # run runtime-heavy examples under ASan + UBSan
-dune runtest     # run unit, IR, and negative diagnostic tests in test/
-ninja -t clean   # remove build/
+ninja -t clean   # clean generated build outputs
 ```
 
 One `ninja` invocation produces, in order (see [build-pipeline]):
 
 1. `build/qbe/qbe` — the vendored QBE executable[^build-ninja]
 2. `build/rt/libocamlrt.a` — the C runtime (PAL, ARC, fibers, builtins)
-3. `build/bin/occ` — the compiler CLI, built by dune
+3. `build/bin/occ` and `build/bin/ocpkg` — the host tools built with `ocamlopt`
 4. `build/hello` — an example OCaml program compiled to a native binary
 
 The [smoke test](/concepts/build-pipeline.md) exercises the full
@@ -75,8 +75,6 @@ build/bin/occ dump-lambda examples/hello.ml                 # dump Lambda IR
 
 # Clean-checkout tests
 
-Dune builds the vendored QBE needed by the driver integration suite. A fresh OCaml 5.5 checkout can run dune runtest before any Ninja targets.
-
-# Dune test executable ownership
-
-Each standalone test executable declares its module explicitly so Dune 3.14 can also build the suite.
+`ninja test` works from a clean checkout. Ninja builds the host test
+executables alongside the vendored QBE and stdlib source bundle used by
+the driver integration suite.

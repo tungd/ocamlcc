@@ -3,9 +3,9 @@ set -eu
 case "$(uname -s)" in
     Darwin)
         sdk=$(xcrun --show-sdk-path)
-        printf '(-cclib "%s/usr/lib/libcurl.tbd")\n' "$sdk"
+        printf '%s\n' -cclib "$sdk/usr/lib/libcurl.tbd"
         ;;
     *)
-        printf '(-cclib -lcurl)\n'
+        printf '%s\n' -cclib -lcurl
         ;;
 esac

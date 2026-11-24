@@ -60,7 +60,7 @@ let with_temp_dir f =
 let find_repo_root () =
   let rec up dir =
     if
-      Sys.file_exists (Filename.concat dir "dune-project")
+      Sys.file_exists (Filename.concat dir "build.ninja")
       && Sys.file_exists (Filename.concat dir "runtime/arc.c")
     then dir
     else

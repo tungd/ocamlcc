@@ -7,10 +7,15 @@ os=$(uname -s | tr '[:upper:]' '[:lower:]')
 arch=$(uname -m)
 case "$arch" in aarch64) arch=arm64 ;; esac
 output="$dist/occ-$os-$arch.tar.gz"
-if [ "${1:-}" = --path ]; then
-    printf '%s\n' "$output"
-    exit 0
-fi
+case "${1:-}" in
+    --path)
+        printf '%s\n' "$output"
+        exit 0 ;;
+    --install)
+        destination=${2:?Installation prefix required} ;;
+    '') ;;
+    *) echo 'Usage: dist.sh [--path | --install PREFIX]' >&2; exit 2 ;;
+esac
 mkdir -p "$dist"
 stage=$(mktemp -d "$dist/.stage.XXXXXXXX")
 trap 'rm -rf "$stage"' EXIT
@@ -40,6 +45,12 @@ install -m 644 vendor/ocaml-stdlib/LICENSE "$prefix/share/doc/occ/ocaml-LICENSE"
     fi
 ) > "$stage/toolchain.sha256"
 mv "$stage/toolchain.sha256" "$lib/toolchain.sha256"
+if [ "${1:-}" = --install ]; then
+    mkdir -p "$destination"
+    cp -R "$prefix/." "$destination/"
+    printf 'Installed in %s\n' "$destination"
+    exit 0
+fi
 COPYFILE_DISABLE=1 tar -C "$prefix" -czf "$stage/bundle.tar.gz" .
 mv "$stage/bundle.tar.gz" "$output"
 printf '%s\n' "$output"

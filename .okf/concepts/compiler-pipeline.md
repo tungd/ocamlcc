@@ -65,7 +65,7 @@ The pipeline has four stages[^design-doc]:
    `caml_{equal,notequal,compare,lessthan,lessequal,greaterthan,greaterequal}`, overflow-safe
    `For` loops that check `iv < ev` / `iv > ev` before stepping, and
    `b.term = None` guards after compiling `While` conditions).
-4. **Linking & packaging** — `dune` exposes the `occ` public executable,
+4. **Linking & packaging** — Ninja builds the `occ` executable,
    `build.ninja` archives `build/rt/libocamlrt.a` and
    `build/stdlib/libocamlstdlib.a`, and Phase 4 adds `.mli → .h` C ABI header
    generation and xcframework/AAR packaging.

@@ -2,7 +2,7 @@
 """
 Multi-stage self-hosting bootstrap orchestrator for ocamlcc.
 
-  Stage 0: host Dune / ocamlopt -> build/bin/occ
+  Stage 0: host ocamlopt under Ninja -> build/bin/occ
   Stage 1: stage0 compiles stdlib_compat (72) + compiler-libs subset (104+4)
            + bootstrap/unix + ocamlcc -> build/bootstrap/stage1/ocamlcc
   Stage 2: stage1 compiles the exact same ~193 modules -> build/bootstrap/stage2/ocamlcc

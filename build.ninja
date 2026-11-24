@@ -2,7 +2,7 @@
 #
 #   1. vendor/qbe  -> build/qbe/qbe
 #   2. runtime/    -> build/rt/libocamlrt.a
-#   3. dune        -> build/bin/occ
+#   3. ocamlopt    -> build/bin/occ and build/bin/ocpkg
 #   4. examples/*.ml -> .ssa (ocamlcc) -> .s (qbe) -> native executable (cc)
 
 builddir = build
@@ -31,11 +31,6 @@ rule cc_rt
 rule ar
   command = ar rcs $out $in
   description = AR $out
-
-rule dune_occ
-  command = dune build bin/occ && mkdir -p $builddir/bin && rm -f $out && cp _build/default/bin/occ $out
-  description = DUNE occ
-  pool = console
 
 rule occ_cmi
   command = $builddir/bin/occ compile-mli $flags $in -o $out
@@ -153,14 +148,64 @@ build single_thread_runtime: phony $builddir/rt-single/libocamlrt_st.a $builddir
 
 # ------------------------------------------------------------- ocamlcc ----
 
-build $builddir/bin/occ: dune_occ runtime/ocamlcc_bigarray_types.h bin/main.ml lib/qbe_il.ml lib/qbe_il.mli lib/frontend.ml lib/frontend.mli lib/builtins.ml lib/builtins.mli lib/anf.ml lib/anf.mli lib/anf_ir.ml lib/anf_ir.mli lib/anf_scalar.ml lib/anf_scalar.mli lib/lambda_opt.ml lib/lambda_opt.mli lib/lambda_leaf.ml lib/lambda_leaf.mli lib/bounds.ml lib/bounds.mli lib/arc_analysis.ml lib/arc_analysis.mli lib/arc_views.ml lib/arc_views.mli lib/arc_pass.ml lib/arc_pass.mli lib/ccalls.ml lib/ccalls.mli lib/c_bindgen.ml lib/c_bindgen.mli lib/target.ml lib/target.mli lib/linker.ml lib/linker.mli lib/runtime_build.ml lib/runtime_build.mli lib/stdlib_build.ml lib/stdlib_build.mli lib/build_units.ml lib/build_units.mli lib/dep_graph.ml lib/dep_graph.mli lib/driver.ml lib/driver.mli lib/export_summary.ml lib/export_summary.mli lib/codegen_ctx.ml lib/codegen_ctx.mli lib/codegen_analysis.ml lib/codegen_analysis.mli lib/codegen_scalar.ml lib/codegen_scalar.mli lib/codegen_expr.ml lib/codegen_expr.mli lib/codegen_fn.ml lib/codegen_fn.mli lib/codegen.ml lib/codegen.mli lib/pipeline.ml lib/pipeline.mli lib/sys_util.ml lib/sys_util.mli lib/dune bin/dune dune-project
+host = $builddir/host
+ocamlopt = ocamlopt
+ocamldep = ocamldep
+host_flags = -g -I +compiler-libs -I +unix -I +str -I $host/lib -I $host/bin
+host_libraries = ocamlcommon.cmxa unix.cmxa str.cmxa
 
-rule dune_ocpkg
-  command = dune build -j1 bin/ocpkg_main.exe && mkdir -p $builddir/bin && install -m 755 _build/default/bin/ocpkg_main.exe $out
-  description = DUNE ocpkg
+rule host_graph
+  command = python3 tools/host-ninja.py $out --depfile $builddir/host-ninja.d --ocamldep $ocamldep
+  depfile = $builddir/host-ninja.d
+  description = SCAN OCaml dependencies
+  generator = 1
+  restat = 1
+
+# Ninja checks the root manifest for regeneration before scheduling targets.
+build build.ninja: phony host.ninja
+build host.ninja | $builddir/host-ninja.d: host_graph tools/host-ninja.py lib bin
+
+rule host_header
+  command = (printf '%s\n' 'let contents = {|'; cat $in; printf '%s\n' '|}') > $out
+  description = GEN $out
+
+rule host_version
+  command = awk '/^version:/ { print "let value = " $$2; found = 1 } END { exit !found }' $in > $out
+  description = GEN $out
+
+rule host_compile
+  command = $ocamlopt $host_flags -c -o $out $in
+  description = OCAMLOPT $out
+
+rule host_archive
+  command = $ocamlopt -a -o $out $in
+  description = OCAML ARCHIVE $out
+
+rule host_c
+  command = $cc -O2 -g -fPIC -I "$$($ocamlopt -where)" -MMD -MF $out.d -c $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = CC $out
+
+rule host_curl_link_args
+  command = sh $in > $out
+  description = GEN $out
+
+rule host_link
+  command = $ocamlopt $host_flags -o $out.tmp $host_libraries $in $link_args && mv -f $out.tmp $out
+  description = OCAML LINK $out
+
+rule host_test
+  command = $in $args
+  description = TEST $in
   pool = console
 
-build $builddir/bin/ocpkg: dune_ocpkg bin/ocpkg_main.ml bin/ocpkg_curl.c ocamlcc.opam tools/curl-link-flags.sh bin/dune lib/dune dune-project dune lib/sha256.ml lib/sha256.mli lib/ocpkg_format.ml lib/ocpkg_format.mli lib/pkg_archive.ml lib/pkg_archive.mli lib/pkg_vendor.ml lib/pkg_vendor.mli lib/pkg_project.ml lib/pkg_project.mli lib/http_fetch.ml lib/http_fetch.mli lib/digest_index.ml lib/digest_index.mli lib/digest_stat.c lib/build_cache.ml lib/build_cache.mli lib/pkg_toolchain.ml lib/pkg_toolchain.mli lib/pkg_compile.ml lib/pkg_compile.mli lib/workspace.ml lib/workspace.mli | $builddir/bin/occ
+rule host_golden_test
+  command = $in $args > ${in}.actual && diff -u $expected ${in}.actual
+  description = TEST $in
+  pool = console
+
+include host.ninja
 
 rule occ_compat
   command = ln -sf occ $out
@@ -455,7 +500,7 @@ rule run_qbe_arm64_long_branch
 
 build test_qbe_arm64_long_branch: run_qbe_arm64_long_branch tests/qbe_arm64_long_branch.sh | $builddir/qbe/qbe
 
-build test: phony test_qbe_arm64_long_branch test_default_stdlib test_stdlib_opt test_separate_exports test_native_ffi test_single_thread_rc test_single_thread_driver test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_fiber_wait test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
+build test: phony test_host ocpkg_test test_qbe_arm64_long_branch test_default_stdlib test_stdlib_opt test_separate_exports test_native_ffi test_single_thread_rc test_single_thread_driver test_stdlib_runtime test_hello test_fib test_tail test_bools test_strings test_match test_mutual test_adt test_closures test_loops test_arrays_bytes test_arc_test test_exn test_weak_cycle test_cycle_collect test_mod_main test_stdlib_test test_fiber_test test_fiber_io test_fiber_wait test_qbe_pic test_pic_so test_mt_ffi test_tupled_letrec test_primitives_test test_bindgen
 
 rule cc_rt_asan
   command = $cc $rt_cflags -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Iruntime -c $in -o $out
@@ -625,12 +670,21 @@ build bootstrap: run_bootstrap | $builddir/bin/occ $builddir/qbe/qbe $builddir/r
 
 # ----------------------------------------------------- toolchain bundle ----
 
+build toolchain: phony $builddir/bin/occ $builddir/bin/ocpkg $builddir/qbe/qbe $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a $stdlibdir/libocamlstdlib.a $stdlibdir/libocamlstdlib.a.opt $builddir/stdlib.sources
+
 rule dist_bundle
   command = sh tools/dist.sh
   description = PACKAGE occ toolchain
   pool = console
 
-build dist: dist_bundle tools/dist.sh packages/snapshots/default.snap packages/ports/arc-unix/unix.ml packages/ports/arc-unix/unix.mli packages/ports/arc-unix/unix_stubs.c packages/ports/crunch-unix/unix.ml packages/ports/crunch-unix/unix.mli packages/ports/crunch-unix/unix_stubs.c vendor/qbe/LICENSE vendor/ocaml-stdlib/LICENSE | $builddir/bin/occ $builddir/bin/ocpkg $builddir/qbe/qbe $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a $stdlibdir/libocamlstdlib.a $stdlibdir/libocamlstdlib.a.opt $builddir/stdlib.sources
+build dist: dist_bundle tools/dist.sh packages/snapshots/default.snap packages/ports/arc-unix/unix.ml packages/ports/arc-unix/unix.mli packages/ports/arc-unix/unix_stubs.c packages/ports/crunch-unix/unix.ml packages/ports/crunch-unix/unix.mli packages/ports/crunch-unix/unix_stubs.c vendor/qbe/LICENSE vendor/ocaml-stdlib/LICENSE | toolchain
+
+rule install_toolchain
+  command = sh tools/dist.sh --install "$${DESTDIR:-}$${PREFIX:-/usr/local}"
+  description = INSTALL occ toolchain
+  pool = console
+
+build install: install_toolchain tools/dist.sh | toolchain
 
 rule run_ocpkg_test
   command = sh $in $builddir/bin/ocpkg

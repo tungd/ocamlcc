@@ -105,8 +105,8 @@ upstream header names and their corresponding includes.
 Recipes can opt into the ARC leaf C headers with
 `cflag -DOCAMLCC_CAML_LEAF`. The headers expose borrowed tagged integers,
 strings, writable byte buffers, and read-only record fields for C functions
-that neither allocate ARC values nor call OCaml. The relocated and Dune
-installs carry the headers under `lib/occ/rt-src/caml`. The package
+that neither allocate ARC values nor call OCaml. The distribution archive
+and source install carry the headers under `lib/occ/rt-src/caml`. The package
 fingerprint includes those headers.
 
 With `MIRAGE_CRYPTO_SOURCE` pointing at the unpacked Mirage Crypto 2.4.1
