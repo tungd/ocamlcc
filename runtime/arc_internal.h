@@ -8,10 +8,7 @@
 #include "fiber.h"
 #include "pal.h"
 #include <stdbool.h>
-
-#ifndef OCAMLCC_SINGLE_THREAD_RC
 #include <pthread.h>
-#endif
 
 #define ARC_PRIVATE __attribute__((visibility("hidden")))
 
@@ -52,6 +49,14 @@ typedef struct OcamlccBigarrayView {
 typedef struct ArcSpinLock {
     _Atomic uint32_t locked;
 } ArcSpinLock;
+
+typedef struct OcamlccThreadCtx {
+    pthread_t tid;
+    int64_t fn;      /* owned closure until the worker runs it */
+    int64_t result;  /* owned result after completion (0 until then) */
+    int64_t exn;     /* owned exception after completion (0 until then) */
+    int32_t id;
+} OcamlccThreadCtx;
 
 static inline void cpu_relax(void)
 {

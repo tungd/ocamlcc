@@ -11,6 +11,7 @@ typedef struct DropPage {
 
 extern void ocamlcc_c_mutex_free(void *p);
 extern void ocamlcc_c_cond_free(void *c);
+extern void ocamlcc_c_thread_free(void *p);
 
 _Atomic int g_cc_waiting = 0;
 _Atomic int g_active_mutators = 0;
@@ -608,7 +609,13 @@ static __attribute__((noinline)) void release_subtree_slow(ArcHeader *root,
                 ocamlcc_c_mutex_free(p);
             else if (cur->reserved == ARC_CUSTOM_COND)
                 ocamlcc_c_cond_free(p);
-            else if (cur->reserved == ARC_CUSTOM_BIGARRAY) {
+            else if (cur->reserved == ARC_CUSTOM_THREAD) {
+                OcamlccThreadCtx *t = p;
+                drop_child_val(&w, t->fn, &tail);
+                drop_child_val(&w, t->result, &tail);
+                drop_child_val(&w, t->exn, &tail);
+                ocamlcc_c_thread_free(p);
+            } else if (cur->reserved == ARC_CUSTOM_BIGARRAY) {
                 ArcBigarray *a = (void *)(cur + 1);
                 drop_child_val(&w, (int64_t)(uintptr_t)a->backing, &tail);
             } else if (cur->reserved == ARC_CUSTOM_BIGARRAY_BUFFER) {

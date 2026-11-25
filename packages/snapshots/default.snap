@@ -1,6 +1,17 @@
 # Curated package snapshot
 schema 1
 
+pkg arc-threads 0.1.0
+  local ports/arc-threads
+  tree be2275c8e662d4c39630f7d1e36b81ac6b039fac1632058e5d82226d7aa0a2a2
+  wrapped false
+  export Thread
+  export Event
+  file thread.ml <= thread.ml
+  file thread.mli <= thread.mli
+  file event.ml <= event.ml
+  file event.mli <= event.mli
+
 pkg arc-unix 0.1.0
   local ports/arc-unix
   tree 61f31a66b32656318a3d1cea089a61162abcb188a23a4a9400ee1f3488b556af

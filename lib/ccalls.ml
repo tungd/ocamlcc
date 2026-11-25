@@ -178,6 +178,17 @@ let table =
     ("caml_ml_condition_wait", abi 2 true false);
     ("caml_ml_condition_signal", abi 1 false false);
     ("caml_ml_condition_broadcast", abi 1 false false);
+    (* sync: threads *)
+    ("caml_ml_thread_spawn", abi 1 true false);
+    ("caml_ml_thread_join", abi 1 true false);
+    ("caml_ml_thread_join_value", abi 1 true false);
+    ("caml_ml_thread_self", abi 1 false false);
+    ("caml_ml_thread_id", abi 1 false false);
+    ("caml_ml_thread_yield", abi 1 false false);
+    ("caml_ml_thread_delay_us", abi 1 false false);
+    ("caml_ml_thread_set_name", abi 1 false false);
+    ("caml_ml_cpu_relax", abi 1 false false);
+    ("caml_ml_cpu_count", abi 1 false false);
     (* libm float math *)
     ("caml_exp_float", abi 1 false false);
     ("caml_exp2_float", abi 1 false false);

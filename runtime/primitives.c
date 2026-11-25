@@ -3,7 +3,12 @@
 
 #define OCAMLCC_CAML_ALLOC 1
 #include "caml/custom.h"
+#include <errno.h>
+#include <sched.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 static int ba_compare(const ArcBigarray *, const ArcBigarray *, int);
 static uint32_t ba_hash(const ArcBigarray *);
@@ -1767,6 +1772,199 @@ int64_t caml_ml_condition_broadcast(int64_t c_val)
     void *c = (void *)(uintptr_t)unbox_custom_i64(c_val);
     (void)ocamlcc_c_cond_broadcast(c);
     return 1;
+}
+
+/* ---- Sync: OS threads running OCaml closures ---- */
+
+static _Thread_local int64_t tls_thread_block;
+static _Atomic int32_t next_thread_id = 1; /* 0 marks the initial thread */
+static pthread_t initial_thread;
+static pthread_once_t initial_thread_once = PTHREAD_ONCE_INIT;
+
+static void record_initial_thread(void)
+{
+    initial_thread = pthread_self();
+}
+
+void ocamlcc_c_thread_free(void *p)
+{
+    free(p);
+}
+
+static void *thread_worker(void *p)
+{
+    int64_t block = (int64_t)(uintptr_t)p;
+    OcamlccThreadCtx *ctx = (OcamlccThreadCtx *)(uintptr_t)unbox_custom_i64(block);
+    tls_thread_block = block;
+    int64_t r = ocamlcc_apply1(ctx->fn, 1); /* Val_unit */
+    int64_t ex = ocamlcc_get_exn();
+    if (ex != 0) {
+        ocamlcc_set_exn(0);
+        ctx->exn = ex;
+    } else {
+        ctx->result = r;
+    }
+    arc_release_val(ctx->fn);
+    ctx->fn = 0;
+    arc_release_val(block); /* the worker's reference; may free the handle */
+    return NULL;
+}
+
+int64_t caml_ml_thread_spawn(int64_t fn)
+{
+    pthread_once(&initial_thread_once, record_initial_thread);
+    OcamlccThreadCtx *ctx = malloc(sizeof *ctx);
+    if (ctx == NULL)
+        pal_abort();
+    arc_retain_val(fn);
+    ctx->fn = fn;
+    ctx->result = 0;
+    ctx->exn = 0;
+    ctx->id = atomic_fetch_add_explicit(&next_thread_id, 1, memory_order_relaxed);
+    int64_t block = ocamlcc_alloc_custom(ARC_CUSTOM_THREAD, (uint64_t)(uintptr_t)ctx);
+    arc_retain_val(block); /* the worker's reference */
+    if (pthread_create(&ctx->tid, NULL, thread_worker, (void *)(uintptr_t)block) != 0) {
+        arc_release_val(block);
+        arc_release_val(block);
+        raise_sys_error_errno(EAGAIN);
+        return 0;
+    }
+    return block;
+}
+
+static int thread_join_ctx(OcamlccThreadCtx *ctx)
+{
+    int entered = tls_os_mutator_active;
+    if (entered)
+        arc_mutator_leave(1);
+    int rc = pthread_join(ctx->tid, NULL);
+    if (entered)
+        (void)arc_mutator_enter();
+    return rc;
+}
+
+int64_t caml_ml_thread_join(int64_t t_val)
+{
+    OcamlccThreadCtx *ctx = (OcamlccThreadCtx *)(uintptr_t)unbox_custom_i64(t_val);
+    int rc = thread_join_ctx(ctx);
+    if (rc != 0) {
+        raise_sys_error_errno(rc);
+        return 0;
+    }
+    /* Stock Thread.join does not propagate the outcome. */
+    if (ctx->result != 0) {
+        arc_release_val(ctx->result);
+        ctx->result = 0;
+    }
+    if (ctx->exn != 0) {
+        arc_release_val(ctx->exn);
+        ctx->exn = 0;
+    }
+    return 1;
+}
+
+int64_t caml_ml_thread_join_value(int64_t t_val)
+{
+    OcamlccThreadCtx *ctx = (OcamlccThreadCtx *)(uintptr_t)unbox_custom_i64(t_val);
+    int rc = thread_join_ctx(ctx);
+    if (rc != 0) {
+        raise_sys_error_errno(rc);
+        return 0;
+    }
+    if (ctx->exn != 0) {
+        int64_t ex = ctx->exn;
+        ctx->exn = 0;
+        ocamlcc_set_exn(ex);
+        return 0;
+    }
+    int64_t r = ctx->result;
+    ctx->result = 0;
+    return r;
+}
+
+int64_t caml_ml_thread_self(int64_t unit)
+{
+    (void)unit;
+    pthread_once(&initial_thread_once, record_initial_thread);
+    int64_t block = tls_thread_block;
+    if (block == 0) {
+        /* A thread that was not created by caml_ml_thread_spawn: give it a
+         * lazily allocated handle. One handle lives for the thread's whole
+         * life so Thread.self stays valid and stable. */
+        OcamlccThreadCtx *ctx = malloc(sizeof *ctx);
+        if (ctx == NULL)
+            pal_abort();
+        ctx->tid = pthread_self();
+        ctx->fn = 0;
+        ctx->result = 0;
+        ctx->exn = 0;
+        ctx->id = pthread_equal(pthread_self(), initial_thread)
+            ? 0
+            : atomic_fetch_add_explicit(&next_thread_id, 1, memory_order_relaxed);
+        block = ocamlcc_alloc_custom(ARC_CUSTOM_THREAD, (uint64_t)(uintptr_t)ctx);
+        arc_retain_val(block); /* permanent for this thread */
+        tls_thread_block = block;
+    }
+    arc_retain_val(block);
+    return block;
+}
+
+int64_t caml_ml_thread_id(int64_t t_val)
+{
+    OcamlccThreadCtx *ctx = (OcamlccThreadCtx *)(uintptr_t)unbox_custom_i64(t_val);
+    return ((int64_t)ctx->id << 1) | 1;
+}
+
+int64_t caml_ml_thread_yield(int64_t unit)
+{
+    (void)unit;
+    sched_yield();
+    return 1;
+}
+
+int64_t caml_ml_thread_delay_us(int64_t us_val)
+{
+    int64_t us = us_val >> 1;
+    if (us < 0)
+        us = 0;
+    struct timespec ts;
+    ts.tv_sec = (time_t)(us / 1000000);
+    ts.tv_nsec = (long)(us % 1000000) * 1000;
+    int entered = tls_os_mutator_active;
+    if (entered)
+        arc_mutator_leave(1);
+    while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+    }
+    if (entered)
+        (void)arc_mutator_enter();
+    return 1;
+}
+
+int64_t caml_ml_thread_set_name(int64_t name_val)
+{
+    const char *name = (const char *)(uintptr_t)name_val;
+#ifdef __APPLE__
+    (void)pthread_setname_np(name);
+#else
+    (void)pthread_setname_np(pthread_self(), name);
+#endif
+    return 1;
+}
+
+int64_t caml_ml_cpu_relax(int64_t unit)
+{
+    (void)unit;
+    cpu_relax();
+    return 1;
+}
+
+int64_t caml_ml_cpu_count(int64_t unit)
+{
+    (void)unit;
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1)
+        n = 1;
+    return (n << 1) | 1;
 }
 
 /* ---- Computed field ops & channel/bigarray helpers ---- */
