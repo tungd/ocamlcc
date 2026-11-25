@@ -694,11 +694,12 @@ rule run_ocpkg_test
 build ocpkg_native_cli: run_ocpkg_test tests/ocpkg/native_cli.sh | $builddir/bin/ocpkg
 build ocpkg_workspace_incremental: run_ocpkg_test tests/ocpkg/workspace_incremental.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
 build ocpkg_wrapped_packages: run_ocpkg_test tests/ocpkg/wrapped_packages.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
+build ocpkg_publish: run_ocpkg_test tests/ocpkg/publish.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
 build ocpkg_native_library: run_ocpkg_test tests/ocpkg/native_library.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
 build ocpkg_arc_unix: run_ocpkg_test tests/ocpkg/arc_unix.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a $builddir/rt-single/libocamlrt_st.a
 build ocpkg_parallel_progress: run_ocpkg_test tests/ocpkg/parallel_progress.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
 build ocpkg_debug_release: run_ocpkg_test tests/ocpkg/debug_release.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a
-build ocpkg_test: phony ocpkg_native_cli ocpkg_workspace_incremental ocpkg_wrapped_packages ocpkg_native_library ocpkg_arc_unix ocpkg_parallel_progress ocpkg_debug_release
+build ocpkg_test: phony ocpkg_native_cli ocpkg_workspace_incremental ocpkg_wrapped_packages ocpkg_publish ocpkg_native_library ocpkg_arc_unix ocpkg_parallel_progress ocpkg_debug_release
 
 build ocpkg_catalog: run_ocpkg_test tests/ocpkg/catalog_daily.sh | $builddir/bin/ocpkg $stdlibdir/libocamlstdlib.a $builddir/rt/libocamlrt.a packages/snapshots/default.snap
 

@@ -607,6 +607,65 @@ let build workspace options =
           let kind = Option.value ~default:workspace.manifest.kind kind in
           build_target workspace options ~target ~kind None))
 
+let rec copy_tree source destination =
+  mkdir_p destination;
+  Sys.readdir source |> Array.iter (fun name ->
+    let src = Filename.concat source name in
+    let dst = Filename.concat destination name in
+    match (Unix.lstat src).st_kind with
+    | Unix.S_DIR -> copy_tree src dst
+    | Unix.S_REG -> write_if_changed dst (read_file src)
+    | _ -> ())
+
+let publish (workspace : Pkg_project.t) (options : options) ~into ~names =
+  protect (fun () ->
+    Pkg_project.with_dependencies workspace (fun workspace ->
+      match options.product with
+      | Product.Xcframework -> Error "publish requires a native target"
+      | Product.Native {target; _} ->
+          let pool = Pkg_parallel.Pool.create options.jobs in
+          let progress =
+            Pkg_progress.create ~enabled:options.progress ~verbose:options.verbose in
+          Fun.protect ~finally:(fun () ->
+            Pkg_progress.finish progress;
+            Pkg_parallel.Pool.close pool) (fun () ->
+          let single_thread = options.single_thread || workspace.manifest.single_thread_rc in
+          let* cache = Pkg_project.cache_dir () in
+          Digest_index.with_index ~cache ~workspace:workspace.root
+              ~verify:options.verify_cache (fun index ->
+          let* lock = Pkg_project.read_lock workspace in
+          let* () =
+            Pkg_vendor.verify ~index ~vendor:(Pkg_project.vendor_dir workspace)
+              lock.packages in
+          let* tools =
+            Pkg_toolchain.prepare ~index ~cache ~target ~single_thread
+              ~cflags:workspace.manifest.cflags ~verbose:options.verbose
+              ~mode:options.mode ?debug_info:options.debug_info ~pool ~progress () in
+          let* packs = prepare_dependencies tools workspace lock in
+          let* selected =
+            if names = [] then Ok packs
+            else
+              let rec find acc requested =
+                match requested with
+                | [] -> Ok (List.rev acc)
+                | name :: rest ->
+                    match
+                      List.find_opt (fun pack -> package_name pack.recipe = name) packs
+                    with
+                    | Some pack -> find (pack :: acc) rest
+                    | None -> Error ("unknown package: " ^ name)
+              in
+              find [] names
+          in
+          let publish_pack pack =
+            let destination = Filename.concat into (package_name pack.recipe) in
+            copy_tree pack.directory destination;
+            write_if_changed (Filename.concat destination "ldflags")
+              (String.concat " " pack.recipe.ldflags);
+            destination
+          in
+          Ok (List.map publish_pack selected)))))
+
 let executable_target command = function
   | Product.Native {target; kind = None | Some Exe} -> Ok target
   | Native {kind = Some (Shared | Static); _} | Xcframework ->

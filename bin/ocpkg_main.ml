@@ -17,6 +17,8 @@ let usage = {|Usage: ocpkg <command>
         [-j N|--jobs N] [--no-progress] [--debug|--release] [-g]
         [--target TARGET] [--shared|--static|--exe|--xcframework]
         [--emit-header FILE] [--verify-cache] [-o PATH]
+  publish [names...]      Publish package artifacts for external consumers
+        [--debug|--release] [--target TARGET] --into DIR
   run [options] [-- args] Build and run the executable
   test [options] [names] [-- args]  Run configured tests
   env                     Show workspace, cache and toolchain paths
@@ -111,6 +113,7 @@ let build_options args =
         {options with product}, List.rev positional
     | "--target" :: name :: rest -> parse options (Some name) mode positional rest
     | "-o" :: path :: rest -> parse {options with output = Some path} target mode positional rest
+    | "--into" :: path :: rest -> parse {options with output = Some path} target mode positional rest
     | ("-j" | "--jobs") :: raw :: rest ->
         let* jobs = parse_jobs raw in
         parse {options with jobs} target mode positional rest
@@ -177,6 +180,14 @@ let run = function
       if positional <> [] then Error "build expects options"
       else with_project (fun workspace ->
         let+ output = Workspace.build workspace options in print_endline output)
+  | "publish" :: flags ->
+      let* options, names = build_options flags in
+      (match options.output with
+       | None -> Error "publish requires --into DIR"
+       | Some into ->
+           with_project (fun workspace ->
+             let+ directories = Workspace.publish workspace options ~into ~names in
+             List.iter print_endline directories))
   | "run" :: flags ->
       let flags, forwarded = split_args flags in
       let* options, args = build_options flags in
