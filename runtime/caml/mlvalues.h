@@ -14,6 +14,7 @@ typedef uint64_t uintnat;
 
 #define CAMLprim
 #define Long_val(v) ((intnat)(v) >> 1)
+#define Unsigned_long_val(v) ((uintnat)(v) >> 1)
 #define Int_val(v) ((int)Long_val(v))
 #define Bool_val(v) ((int)Long_val(v))
 #define Val_long(n) ((value)(((uintnat)(n) << 1) | UINT64_C(1)))
