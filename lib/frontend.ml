@@ -15,12 +15,29 @@ let error_msg exn =
     Format.pp_print_flush ppf ();
     String.trim (Buffer.contents buf)
   in
-  match Location.error_of_exn exn with
-  | Some (`Ok err) -> format_report err
+  let fallback () =
+    let lid l = String.concat "." (Longident.flatten l) in
+    match exn with
+    | Env.Error (Env.Lookup_error (_, _, lookup)) -> (
+        match lookup with
+        | Env.Unbound_value (l, _) -> "Unbound value " ^ lid l
+        | Env.Unbound_type l -> "Unbound type " ^ lid l
+        | Env.Unbound_constructor l -> "Unbound constructor " ^ lid l
+        | Env.Unbound_label l -> "Unbound label " ^ lid l
+        | Env.Unbound_module l -> "Unbound module " ^ lid l
+        | Env.Unbound_class l -> "Unbound class " ^ lid l
+        | Env.Unbound_modtype l -> "Unbound module type " ^ lid l
+        | Env.Unbound_cltype l -> "Unbound class type " ^ lid l
+        | _ -> "Environment lookup error (details unavailable)")
+    | _ -> Printexc.to_string exn
+  in
+  let render err = try format_report err with _ -> fallback () in
+  match (try Location.error_of_exn exn with _ -> None) with
+  | Some (`Ok err) -> render err
   | Some `Already_displayed | None -> (
       match exn with
-      | Location.Error err -> format_report err
-      | exn -> Printexc.to_string exn)
+      | Location.Error err -> render err
+      | _ -> fallback ())
 
 let with_flags ~include_dirs ~emit_cmi ~nopervasives ~nostdlib
     ?(hidden_include_dirs = []) ?(no_alias_deps = false) ?(nolabels = false)
