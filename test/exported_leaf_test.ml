@@ -54,7 +54,7 @@ let () =
     in
     let direct = "let read row index = Leaf_provider.read row index" in
     let consumer = consume direct in
-    if contains consumer.ssa "call extern $ocamlcc_Leaf_provider_read__"
+    if contains consumer.ssa "call extern $ocamlcc_Leaf_provider.read__"
     then failwith "closed imported leaf was not inlined from its sidecar";
     assert (contains consumer.ssa "ocamlcc_raise_invalid_arg_oob");
     assert (contains consumer.ssa "call extern $ocamlcc_init_Leaf_provider__");
@@ -71,10 +71,10 @@ let () =
       let disabled row index = Leaf_provider.read_out_of_line row index
       |}
     in
-    assert (contains explicit_call.ssa "call extern $ocamlcc_Leaf_provider_read__");
-    assert (contains explicit_call.ssa "call extern $ocamlcc_Leaf_provider_read_out_of_line__");
+    assert (contains explicit_call.ssa "call extern $ocamlcc_Leaf_provider.read__");
+    assert (contains explicit_call.ssa "call extern $ocamlcc_Leaf_provider.read_out_of_line__");
     let mark = consume "let mark damage row = Leaf_provider.mark_row_dirty damage row" in
-    if contains mark.ssa "call extern $ocamlcc_Leaf_provider_mark_row_dirty__"
+    if contains mark.ssa "call extern $ocamlcc_Leaf_provider.mark_row_dirty__"
     then failwith "bounded row update was not inlined from its sidecar";
     assert (contains mark.ssa "storel");
     assert (contains mark.ssa "call extern $ocamlcc_init_Leaf_provider__");
@@ -84,4 +84,4 @@ let () =
     Sys_util.write_file unit_summary corrupt;
     Export_summary.write_unit_object unit_summary;
     let fallback = consume ~summaries:(Export_summary.Loader.create ()) direct in
-    assert (contains fallback.ssa "call extern $ocamlcc_Leaf_provider_read__"))
+    assert (contains fallback.ssa "call extern $ocamlcc_Leaf_provider.read__"))

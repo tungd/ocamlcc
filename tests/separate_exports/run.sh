@@ -13,9 +13,9 @@ test -f "$work/units/provider.cmi"
 test -f "$work/units/provider.exports"
 "$compiler" build -c --stdlib-dir "$stdlib" -I "$work/units" --work-dir "$work/consumer" \
     "$src/consumer.ml" -o "$work/units/consumer.o"
-grep -Eq 'call extern \$ocamlcc_Provider_add__' "$work/consumer/consumer.ssa"
+grep -Eq 'call extern \$ocamlcc_Provider\.add__' "$work/consumer/consumer.ssa"
 exception_checks() {
-    awk '/function l \$ocamlcc_Consumer_calculate__/,/^}/' "$1" |
+    awk '/function l \$ocamlcc_Consumer\.calculate__/,/^}/' "$1" |
         awk '/call extern \$ocamlcc_get_exn\(/ { n++ } END { print n + 0 }'
 }
 test "$(exception_checks "$work/consumer/consumer.ssa")" -eq 1
@@ -33,7 +33,7 @@ awk '
     "$work/units/provider.exports" > "$work/legacy/provider.exports"
 "$compiler" build -c --stdlib-dir "$stdlib" -I "$work/legacy" --work-dir "$work/legacy-work" \
     "$src/consumer.ml" -o "$work/legacy/consumer.o"
-grep -Eq 'call extern \$ocamlcc_Provider_add__' "$work/legacy-work/consumer.ssa"
+grep -Eq 'call extern \$ocamlcc_Provider\.add__' "$work/legacy-work/consumer.ssa"
 test "$(exception_checks "$work/legacy-work/consumer.ssa")" -eq 2
 
 sed 's/x + !bias/x + !bias + 1/' "$src/provider.ml" > "$work/replacement/provider.ml"
@@ -42,7 +42,7 @@ cp "$src/provider.mli" "$work/replacement/provider.mli"
     "$work/replacement/provider.ml" -o "$work/replacement/implementation.o"
 "$compiler" build -c --stdlib-dir "$stdlib" -I "$work/units" -I "$work/replacement" \
     --work-dir "$work/shadow" "$src/consumer.ml" -o "$work/shadow.o"
-grep -Eq 'call extern \$ocamlcc_Provider_add__' "$work/shadow/consumer.ssa"
+grep -Eq 'call extern \$ocamlcc_Provider\.add__' "$work/shadow/consumer.ssa"
 sed 's/= 42/= 43/' "$src/entry.ml" > "$work/entry.ml"
 "$compiler" build --stdlib-dir "$stdlib" -I "$work" -I "$work/replacement" "$work/entry.ml" \
     "$work/shadow.o" "$work/replacement/implementation.o" -o "$work/run"
@@ -55,7 +55,7 @@ if "$compiler" build --stdlib-dir "$stdlib" -I "$work/units" "$src/entry.ml" \
     > "$work/relink.log" 2>&1; then
     exit 1
 fi
-grep -q 'ocamlcc_Provider_add__' "$work/relink.log"
+grep -q 'ocamlcc_Provider.add__' "$work/relink.log"
 
 # New compilations can fall back to closure application with the replacement.
 "$compiler" build -c --stdlib-dir "$stdlib" -I "$work/units" --work-dir "$work/fallback" \

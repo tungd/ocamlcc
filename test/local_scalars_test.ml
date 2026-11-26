@@ -32,7 +32,7 @@ let () =
   in
   let count name symbol expected =
     let find value pos = Str.search_forward (Str.regexp_string value) il pos in
-    let start = find ("function l $ocamlcc_Local_scalars_" ^ name ^ "(") 0 in
+    let start = find ("function l $ocamlcc_Local_scalars." ^ name ^ "(") 0 in
     let finish = find "\n}" start in
     let rec loop count pos =
       match find ("call extern $" ^ symbol ^ "(") pos with
@@ -100,7 +100,7 @@ let () =
   in
   let body name =
     let find text pos = Str.search_forward (Str.regexp_string text) il pos in
-    let start = find ("function l $ocamlcc_Numeric_loops_" ^ name ^ "(") 0 in
+    let start = find ("function l $ocamlcc_Numeric_loops." ^ name ^ "(") 0 in
     let finish = find "\n}" start in
     String.sub il start (finish - start)
   in

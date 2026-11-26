@@ -63,7 +63,7 @@ let () =
     let find text start =
       Str.search_forward (Str.regexp_string text) il start
     in
-    let start = find ("function l $ocamlcc_Arc_fields_" ^ name ^ "(") 0 in
+    let start = find ("function l $ocamlcc_Arc_fields." ^ name ^ "(") 0 in
     let stop = find "\n}" start in
     let present =
       match find instruction start with
@@ -118,7 +118,7 @@ let () =
   in
   let body name =
     let find text pos = Str.search_forward (Str.regexp_string text) il pos in
-    let start = find ("function l $ocamlcc_Heap_guards_" ^ name ^ "(") 0 in
+    let start = find ("function l $ocamlcc_Heap_guards." ^ name ^ "(") 0 in
     String.sub il start (find "\n}" start - start)
   in
   let contains text fragment =
@@ -171,7 +171,7 @@ let () =
       | Error error -> failwith error
     in
     let find text pos = Str.search_forward (Str.regexp_string text) il pos in
-    let start = find "function l $ocamlcc_Exn_fast_use(" 0 in
+    let start = find "function l $ocamlcc_Exn_fast.use(" 0 in
     String.sub il start (find "\n}" start - start)
   in
   let contains text pattern =
@@ -213,7 +213,7 @@ let () =
     | exception Not_found -> false
   in
   let check fn first next =
-    let start = find ("function l $ocamlcc_Arc_cold_" ^ fn ^ "(") 0 in
+    let start = find ("function l $ocamlcc_Arc_cold." ^ fn ^ "(") 0 in
     let error = find ("\n@" ^ first ^ ".") start in
     let success = find ("\n@" ^ next ^ ".") error in
     let cleanup = String.sub il error (success - error) in

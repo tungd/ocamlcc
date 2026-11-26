@@ -58,7 +58,7 @@ let () =
   in
   let check name allocates =
     let find value pos = Str.search_forward (Str.regexp_string value) il pos in
-    let start = find ("function l $ocamlcc_Aggregates_" ^ name ^ "(") 0 in
+    let start = find ("function l $ocamlcc_Aggregates." ^ name ^ "(") 0 in
     let finish = find "\n}" start in
     let has_alloc =
       match find "call extern $arc_alloc" start with

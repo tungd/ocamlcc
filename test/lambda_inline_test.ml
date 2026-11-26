@@ -1,5 +1,5 @@
 let function_body il name =
-  let start = Str.search_forward (Str.regexp ("function l \\$ocamlcc_Lambda_inline_" ^ name ^ "(")) il 0 in
+  let start = Str.search_forward (Str.regexp ("function l \\$ocamlcc_Lambda_inline." ^ name ^ "(")) il 0 in
   let stop = Str.search_forward (Str.regexp_string "\n}") il start in
   String.sub il start (stop - start)
 
@@ -37,7 +37,7 @@ let () =
   |} in
   let run = function_body il "run" in
   require run "call extern $probe_observe(";
-  forbid run "call extern $ocamlcc_Lambda_inline_step("
+  forbid run "call extern $ocamlcc_Lambda_inline.step("
 
 let () =
   let il = compile ({|
@@ -53,11 +53,11 @@ let () =
     let keep_wide rows row = wide_row rows row
   |} ^ budget_pressure) in
   let read = function_body il "read" in
-  forbid read "$ocamlcc_Lambda_inline_grid_row";
-  forbid read "$ocamlcc_Lambda_inline_physical";
+  forbid read "$ocamlcc_Lambda_inline.grid_row";
+  forbid read "$ocamlcc_Lambda_inline.physical";
   require read "ocamlcc_raise_invalid_arg_oob";
-  require (function_body il "keep_call") "$ocamlcc_Lambda_inline_grid_row";
-  require (function_body il "keep_wide") "$ocamlcc_Lambda_inline_wide_row"
+  require (function_body il "keep_call") "$ocamlcc_Lambda_inline.grid_row";
+  require (function_body il "keep_wide") "$ocamlcc_Lambda_inline.wide_row"
 
 let () =
   let step = String.concat ";\n" (List.init 24 (fun _ -> "observe y")) in
@@ -72,8 +72,8 @@ let () =
   |} step) in
   let run = function_body il "run" in
   require run "call extern $probe_observe(";
-  require run "call extern $ocamlcc_Lambda_inline_opaque(";
-  forbid run "call extern $ocamlcc_Lambda_inline_apply(";
+  require run "call extern $ocamlcc_Lambda_inline.opaque(";
+  forbid run "call extern $ocamlcc_Lambda_inline.apply(";
   forbid run "call extern $ocamlcc_apply";
   forbid run "call extern $arc_alloc("
 
@@ -90,8 +90,8 @@ let () =
       let wide_step n = %s in
       wide_step a + wide_step b
   |} (body 14) (body 18)) in
-  forbid (function_body il "narrow") "$ocamlcc_Lambda_inline_step";
-  require (function_body il "wide") "$ocamlcc_Lambda_inline_wide_step"
+  forbid (function_body il "narrow") "$ocamlcc_Lambda_inline.step";
+  require (function_body il "wide") "$ocamlcc_Lambda_inline.wide_step"
 
 let () =
   let il = compile {|
@@ -109,7 +109,7 @@ let () =
   |} in
   List.iter (fun name ->
     let body = function_body il name in
-    require body "$ocamlcc_Lambda_inline_project";
+    require body "$ocamlcc_Lambda_inline.project";
     forbid body "call extern $ocamlcc_apply") ["asc"; "desc"]
 
 let () =
@@ -133,7 +133,7 @@ let () =
   forbid score "%clos.";
   require score "loadl $ocamlcc_modvar_Lambda_inline_secret";
   let use = function_body il "use" in
-  require use "call $ocamlcc_Lambda_inline_score_borrowed(";
+  require use "call $ocamlcc_Lambda_inline.score_borrowed(";
   forbid use "call extern $ocamlcc_apply";
   require (function_body il "add_local") "%clos."
 
@@ -165,10 +165,10 @@ let () =
   |}) in
   let il = il.ssa in
   let first = function_body il "first" in
-  forbid first "ocamlcc_Inline_provider_pair";
+  forbid first "ocamlcc_Inline_provider.pair";
   forbid first "call extern $arc_alloc(";
   require il "call extern $ocamlcc_init_Inline_provider(";
-  require (function_body il "opaque") "ocamlcc_Inline_provider_pair";
+  require (function_body il "opaque") "ocamlcc_Inline_provider.pair";
   let forwarded = compile (Pipeline.compile_source
     { (Pipeline.Request.create ~filename:"lambda_inline.ml" ~modname:"Lambda_inline") with
       nopervasives = true; nostdlib = true; include_dirs = [dir];
@@ -179,6 +179,6 @@ let () =
       forward row i v
   |} ^ budget_pressure)) in
   let write = function_body forwarded.ssa "write" in
-  forbid write "$ocamlcc_Lambda_inline_forward";
-  require write "ocamlcc_Inline_provider_write";
+  forbid write "$ocamlcc_Lambda_inline.forward";
+  require write "ocamlcc_Inline_provider.write";
   require write "ocamlcc_exn_active"

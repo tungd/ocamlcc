@@ -20,8 +20,8 @@ let load_pointer b addr =
    cached environment and the ordinary owned arguments. *)
 let export_captured b mod_value path target arity =
   let name =
-    "ocamlcc_direct_" ^ (module_prefix b) ^ "_"
-    ^ String.concat "_" (List.map string_of_int path)
+    "ocamlcc_direct_" ^ (module_prefix b) ^ "."
+    ^ String.concat "." (List.map string_of_int path)
   in
   let slot = name ^ "_env" in
   add_data b { name = slot; export = false; align = Some 8;

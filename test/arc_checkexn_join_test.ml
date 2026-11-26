@@ -62,15 +62,15 @@ let () =
   with
   | Error msg -> failwith ("Pipeline failed: " ^ msg)
   | Ok { Pipeline.Output.ssa = ssa; _ } ->
-      let fn_ssa = extract_func ~name:"ocamlcc_Checkexn_join_join_else" ssa in
-      assert (count_substring ~sub:"$ocamlcc_Checkexn_join_may_raise" fn_ssa = 1);
+      let fn_ssa = extract_func ~name:"ocamlcc_Checkexn_join.join_else" ssa in
+      assert (count_substring ~sub:"$ocamlcc_Checkexn_join.may_raise" fn_ssa = 1);
       (* One get_exn from entry finalizer poll + one from CheckExn on may_raise. *)
       assert (count_substring ~sub:"$ocamlcc_get_exn()" fn_ssa = 2);
-      let tail_ssa = extract_func ~name:"ocamlcc_Checkexn_join_true_tail" ssa in
+      let tail_ssa = extract_func ~name:"ocamlcc_Checkexn_join.true_tail" ssa in
       (* True tail call elides post-call CheckExn (only entry poll remains). *)
       assert (count_substring ~sub:"$ocamlcc_get_exn()" tail_ssa = 1);
       List.iter (fun name ->
-        let body = extract_func ~name:("ocamlcc_Checkexn_join_" ^ name) ssa in
+        let body = extract_func ~name:("ocamlcc_Checkexn_join." ^ name) ssa in
         let checks = count_substring ~sub:"$ocamlcc_get_exn()" body in
         if checks <> 1 then failwith (Printf.sprintf "%s: expected only the poll check, got %d" name checks);
         if name <> "known_pure" then

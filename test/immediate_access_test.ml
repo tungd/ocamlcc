@@ -164,7 +164,7 @@ let () =
   | Error message -> failwith message
   | Ok { Pipeline.Output.ssa = il; _ } ->
       let has_slot_guard fn =
-        let start = Str.search_forward (Str.regexp_string ("$ocamlcc_Heap_slots_" ^ fn ^ "(")) il 0 in
+        let start = Str.search_forward (Str.regexp_string ("$ocamlcc_Heap_slots." ^ fn ^ "(")) il 0 in
         let stop = Str.search_forward (Str.regexp_string "\n}") il start in
         match Str.search_forward (Str.regexp "neg %mut\\.") il start with
         | index -> index < stop

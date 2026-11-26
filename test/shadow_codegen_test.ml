@@ -42,7 +42,7 @@ let () =
 
 let function_body ssa name =
   let find text offset = Str.search_forward (Str.regexp_string text) ssa offset in
-  let start = find ("function l $ocamlcc_Shadow_codegen_" ^ name ^ "(") 0 in
+  let start = find ("function l $ocamlcc_Shadow_codegen." ^ name ^ "(") 0 in
   let finish = find "\n}" start in
   String.sub ssa start (finish - start)
 
@@ -80,7 +80,7 @@ let () =
   |} in
   let split name callee =
     let body = function_body ssa name in
-    let call = Str.regexp_string ("call extern $ocamlcc_Shadow_codegen_" ^ callee ^ "(") in
+    let call = Str.regexp_string ("call extern $ocamlcc_Shadow_codegen." ^ callee ^ "(") in
     let index = Str.search_forward call body 0 in
     String.sub body 0 index, String.sub body index (String.length body - index)
   in

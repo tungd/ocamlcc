@@ -84,7 +84,7 @@ let () =
   with
   | Error msg -> failwith ("Pipeline failed: " ^ msg)
   | Ok { Pipeline.Output.ssa = ssa; _ } ->
-      let prefix = "function l $ocamlcc_Mutrec_clos_mutrec_dispatch(" in
+      let prefix = "function l $ocamlcc_Mutrec_clos.mutrec_dispatch(" in
       let header =
         match List.find_opt (String.starts_with ~prefix) (String.split_on_char '\n' ssa) with
         | Some header -> header

@@ -20,5 +20,5 @@ let () =
       match output.exports with
       | [([0], fn)] ->
           assert (fn.arity = 1);
-          assert (String.starts_with ~prefix:"ocamlcc_Provider_answer__" fn.symbol)
+          assert (String.starts_with ~prefix:"ocamlcc_Provider.answer__" fn.symbol)
       | _ -> failwith "expected one sealed export for Provider.answer")

@@ -257,7 +257,7 @@ let () =
        | Ok exe ->
            let il = read_file (Filename.concat direct_work "consumer.ssa") in
            let body name =
-             let start = "function l $ocamlcc_Consumer_" ^ name ^ "(" in
+             let start = "function l $ocamlcc_Consumer." ^ name ^ "(" in
              let rec find = function
                | [] -> failwith ("missing caller " ^ name)
                | line :: rest -> if has_substr ~sub:start line then rest else find rest
@@ -271,11 +271,11 @@ let () =
            in
            let has name sub = has_substr ~sub (body name) in
            let checks =
-             [ "scalar inlining", not (has "printable" "ocamlcc_Provider_printable")
+             [ "scalar inlining", not (has "printable" "ocamlcc_Provider.printable")
                                     && has "printable" "csgel";
-               "static call", has "classify" "call extern $ocamlcc_Provider_classify"
+               "static call", has "classify" "call extern $ocamlcc_Provider.classify"
                                 && not (has "classify" "arc_fiber_push");
-               "suspending call", has "paused" "call extern $ocamlcc_Provider_pause("
+               "suspending call", has "paused" "call extern $ocamlcc_Provider.pause("
                                   && has "paused" "arc_fiber_push";
                "partial call", has "partial" "ocamlcc_apply1_raw";
                "native result", run_capture exe [] = (0, "cross-unit=ok\n") ]

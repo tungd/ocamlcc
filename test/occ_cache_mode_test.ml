@@ -103,7 +103,7 @@ let () = Printf.printf "%d\n" (f [| 10; 20 |] 1)
     let rel_text = read_file ssa_rel in
     assert (not (has_substr ~sub:"dbgfile" rel_text));
     assert (not (has_substr ~sub:"dbgloc" rel_text));
-    assert (count_substr ~sub:"call extern $ocamlcc_Dbg_sample_helper(" rel_text = 1);
+    assert (count_substr ~sub:"call extern $ocamlcc_Dbg_sample.helper(" rel_text = 1);
     assert (not (has_substr ~sub:"ocamlcc_raise_invalid_arg_oob" rel_text));
 
     let ssa_dbg = Filename.concat tmp "dbg.ssa" in
@@ -113,7 +113,7 @@ let () = Printf.printf "%d\n" (f [| 10; 20 |] 1)
     assert (has_substr ~sub:("dbgfile \"" ^ String.escaped dbg_ml ^ "\"") dbg_text);
     assert (has_substr ~sub:"dbgloc " dbg_text);
     (* Debug skips inlining helper and bounds elimination *)
-    assert (count_substr ~sub:"call extern $ocamlcc_Dbg_sample_helper(" dbg_text = 2);
+    assert (count_substr ~sub:"call extern $ocamlcc_Dbg_sample.helper(" dbg_text = 2);
     assert (has_substr ~sub:"ocamlcc_raise_invalid_arg_oob" dbg_text);
 
     let ssa_rel_g = Filename.concat tmp "rel_g.ssa" in

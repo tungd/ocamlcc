@@ -65,7 +65,7 @@ let il =
 
 let has_instruction name pattern =
   let find text start = Str.search_forward (Str.regexp_string text) il start in
-  let start = find ("function l $ocamlcc_Finalizer_poll_" ^ name ^ "(") 0 in
+  let start = find ("function l $ocamlcc_Finalizer_poll." ^ name ^ "(") 0 in
   let finish = find "\n}" start in
   match Str.search_forward pattern il start with
   | index -> index < finish

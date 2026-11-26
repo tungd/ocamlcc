@@ -25,7 +25,7 @@ let il =
 
 let function_body name =
   let start = Str.search_forward
-    (Str.regexp_string ("function l $ocamlcc_Integer_codegen_" ^ name ^ "(")) il 0 in
+    (Str.regexp_string ("function l $ocamlcc_Integer_codegen." ^ name ^ "(")) il 0 in
   let finish = Str.search_forward (Str.regexp_string "\n}") il start in
   String.sub il start (finish - start)
 

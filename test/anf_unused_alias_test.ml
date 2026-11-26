@@ -152,7 +152,7 @@ let () =
   with
   | Error msg -> failwith ("Pipeline failed: " ^ msg)
   | Ok { Pipeline.Output.ssa = ssa; _ } ->
-      let fn_ssa = extract_func ~name:"ocamlcc_Shared_arm_f" ssa in
+      let fn_ssa = extract_func ~name:"ocamlcc_Shared_arm.f" ssa in
       assert (not (contains_substring ~sub:", 32\n" fn_ssa));
       assert (not (contains_substring ~sub:", 24\n" fn_ssa));
       assert (not (contains_substring ~sub:", 16\n" fn_ssa));

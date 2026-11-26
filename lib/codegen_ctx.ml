@@ -240,7 +240,10 @@ let sanitize name =
 
 let alloc_global_name b id =
   let base =
-    Printf.sprintf "ocamlcc_%s_%s" b.prefix (sanitize (Ident.name id))
+    (* '.' joins are unambiguous: Ident names never contain dots, so unit
+       prefix and entry name cannot blur across the boundary (unlike '_',
+       where unit Cmarkit_html's block collided with Cmarkit's html_block). *)
+    Printf.sprintf "ocamlcc_%s.%s" b.prefix (sanitize (Ident.name id))
   in
   let rec pick n =
     let cand = if n = 0 then base else Printf.sprintf "%s_%d" base n in

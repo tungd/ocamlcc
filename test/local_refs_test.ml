@@ -28,7 +28,7 @@ let source = {|
 |}
 
 let function_body il name =
-  let start = Str.search_forward (Str.regexp ("function l \\$ocamlcc_Local_refs_" ^ name ^ "(")) il 0 in
+  let start = Str.search_forward (Str.regexp ("function l \\$ocamlcc_Local_refs." ^ name ^ "(")) il 0 in
   let stop = Str.search_forward (Str.regexp_string "\n}") il start in
   String.sub il start (stop - start)
 

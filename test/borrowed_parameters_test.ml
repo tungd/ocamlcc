@@ -18,7 +18,7 @@ let forbid il sub =
   if contains ~sub il then failwith ("unexpected in generated QBE: " ^ sub)
 
 let function_body il name =
-  let header = Str.regexp_string ("function l $ocamlcc_Borrow_params_" ^ name ^ "(") in
+  let header = Str.regexp_string ("function l $ocamlcc_Borrow_params." ^ name ^ "(") in
   let first = Str.search_forward header il 0 in
   let last = Str.search_forward (Str.regexp_string "\n}") il first in
   String.sub il first (last - first)
@@ -33,11 +33,11 @@ let () =
       let second = width text in
       first + second
   |} in
-  require (function_body il "twice") "call $ocamlcc_Borrow_params_width_borrowed(";
-  require (function_body il "twice") "call extern $ocamlcc_Borrow_params_width(";
+  require (function_body il "twice") "call $ocamlcc_Borrow_params.width_borrowed(";
+  require (function_body il "twice") "call extern $ocamlcc_Borrow_params.width(";
   forbid (function_body il "twice") "arc_retain";
   forbid (function_body il "width_borrowed") "arc_release";
-  forbid il "export function l $ocamlcc_Borrow_params_width_borrowed";
+  forbid il "export function l $ocamlcc_Borrow_params.width_borrowed";
   require (function_body il "width") "call extern $arc_release(";
   let unsafe = compile {|
     external opaque : string -> int = "opaque_observer"
@@ -45,7 +45,7 @@ let () =
     let use x = opaque x
     let twice x = use x + use x
   |} in
-  forbid unsafe "$ocamlcc_Borrow_params_use_borrowed(";
+  forbid unsafe "$ocamlcc_Borrow_params.use_borrowed(";
   require (function_body unsafe "twice") "call extern $arc_fiber_push"
 
 let () =
@@ -63,10 +63,10 @@ let () =
       let[@inline never] inner n = length text + n in inner n
     let keep_captured text n = read_captured text n + length text
   |} in
-  require (function_body il "keep") "$ocamlcc_Borrow_params_read_borrowed(";
+  require (function_body il "keep") "$ocamlcc_Borrow_params.read_borrowed(";
   forbid (function_body il "read_borrowed") "arc_release";
-  forbid il "$ocamlcc_Borrow_params_read_captured_borrowed(";
-  let helper = Str.regexp "function l \\$ocamlcc_Borrow_params_\\(bump\\|count\\)(" in
+  forbid il "$ocamlcc_Borrow_params.read_captured_borrowed(";
+  let helper = Str.regexp "function l \\$ocamlcc_Borrow_params.\\(bump\\|count\\)(" in
   let rec count pos n =
     match Str.search_forward helper il pos with
     | index -> count (index + 1) (n + 1)
@@ -135,7 +135,7 @@ let () =
       if n = 0 then width text else scan text (n - 1)
     let use_scan text n = scan text n + length text
   |} in
-  let borrowed name = "call $ocamlcc_Borrow_params_" ^ name ^ "_borrowed(" in
+  let borrowed name = "call $ocamlcc_Borrow_params." ^ name ^ "_borrowed(" in
   require (function_body il "use_forward") (borrowed "forward");
   require (function_body il "forward_borrowed") (borrowed "width");
   require (function_body il "use_scan") (borrowed "scan");
@@ -143,7 +143,7 @@ let () =
   require worker (borrowed "width");
   forbid worker "call extern $arc_retain(";
   forbid worker "call extern $arc_release(";
-  forbid il "export function l $ocamlcc_Borrow_params_scan_borrowed"
+  forbid il "export function l $ocamlcc_Borrow_params.scan_borrowed"
 
 let () =
   let il = compile {|
@@ -176,9 +176,9 @@ let () =
       length keep
     let call keep x = route keep x + length keep
   |} in
-  require (function_body il "call") "call $ocamlcc_Borrow_params_route_borrowed(";
+  require (function_body il "call") "call $ocamlcc_Borrow_params.route_borrowed(";
   let worker = function_body il "route_borrowed" in
-  require worker "call extern $ocamlcc_Borrow_params_consume("
+  require worker "call extern $ocamlcc_Borrow_params.consume("
 
 let () =
   let il = compile {|
@@ -225,14 +225,14 @@ let () =
       n
   |} in
   require (function_body il "write_then_length")
-    "call $ocamlcc_Borrow_params_write_borrowed(";
+    "call $ocamlcc_Borrow_params.write_borrowed(";
   forbid (function_body il "write_borrowed") "arc_release";
   require (function_body il "replace_then_read")
-    "call $ocamlcc_Borrow_params_replace_borrowed(";
+    "call $ocamlcc_Borrow_params.replace_borrowed(";
   forbid (function_body il "replace_borrowed") "arc_retain";
   require (function_body il "replace_child_then_length")
-    "call $ocamlcc_Borrow_params_replace_in_child_borrowed(";
-  forbid il "$ocamlcc_Borrow_params_replace_with_sibling_borrowed"
+    "call $ocamlcc_Borrow_params.replace_in_child_borrowed(";
+  forbid il "$ocamlcc_Borrow_params.replace_with_sibling_borrowed"
 
 let () =
   let dir = Filename.temp_dir "ocamlcc_borrow_import" "" in
@@ -274,24 +274,24 @@ let () =
       let mutable_projected row index = Provider.write row.current index
   |}) in
   let consumer = consumer.ssa in
-  require provider.ssa "export function l $ocamlcc_Provider_write_borrowed__";
+  require provider.ssa "export function l $ocamlcc_Provider.write_borrowed__";
   let use = function_body consumer "use" in
-  require use "call extern $ocamlcc_Provider_write_borrowed__";
+  require use "call extern $ocamlcc_Provider.write_borrowed__";
   forbid use "arc_retain";
   let dying = function_body consumer "dying" in
-  require dying "call extern $ocamlcc_Provider_write__";
-  forbid dying "call extern $ocamlcc_Provider_write_borrowed__";
+  require dying "call extern $ocamlcc_Provider.write__";
+  forbid dying "call extern $ocamlcc_Provider.write_borrowed__";
   List.iter (fun name ->
     let body = function_body consumer name in
-    require body "call extern $ocamlcc_Provider_write_borrowed__";
+    require body "call extern $ocamlcc_Provider.write_borrowed__";
     if name = "projected" then forbid body "arc_retain")
     ["projected"; "local_slot"];
   let local = function_body consumer "local_projected" in
-  require local "call $ocamlcc_Borrow_params_write_borrowed(";
+  require local "call $ocamlcc_Borrow_params.write_borrowed(";
   forbid local "arc_retain";
   let mutable_projection = function_body consumer "mutable_projected" in
   require mutable_projection "arc_retain";
-  forbid mutable_projection "call extern $ocamlcc_Provider_write_borrowed__"
+  forbid mutable_projection "call extern $ocamlcc_Provider.write_borrowed__"
 
 let () =
   let il = compile {|
