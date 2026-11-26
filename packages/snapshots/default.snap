@@ -287,6 +287,107 @@ pkg re 1.12.0
   file view.ml <= lib/view.ml
   file view.mli <= lib/view.mli
 
+pkg angstrom 0.16.1
+  url https://github.com/inhabitedtype/angstrom/archive/0.16.1.tar.gz
+  sha256 143536fb4d049574c539b9990840615e078ed3dd94e1d24888293f68349a100b
+  root angstrom-0.16.1
+  tree b651be857a0cada90d93afd1ff12b51c109c7a2bbbaff71e4b083f28aba3c35d
+  dep bigstringaf
+  wrapped false
+  export Angstrom
+  file angstrom.ml <= lib/angstrom.ml
+  file angstrom.mli <= lib/angstrom.mli
+  file buffering.ml <= lib/buffering.ml
+  file buffering.mli <= lib/buffering.mli
+  file exported_state.ml <= lib/exported_state.ml
+  file input.ml <= lib/input.ml
+  file input.mli <= lib/input.mli
+  file more.ml <= lib/more.ml
+  file more.mli <= lib/more.mli
+  file parser.ml <= lib/parser.ml
+
+pkg bigstringaf 0.10.0
+  url https://github.com/inhabitedtype/bigstringaf/archive/0.10.0.tar.gz
+  sha256 ed92f5b05fbc11b9defcec734d59b1068f3717a9ae4f9705c16c7f7ac3729f28
+  root bigstringaf-0.10.0
+  tree 47163162b29efe3a2f1e42d7d70f416a307eb7291d49d20723881fd9ae4c00cc
+  wrapped false
+  export Bigstringaf
+  file bigstringaf.ml <= lib/bigstringaf.ml
+  file bigstringaf.mli <= lib/bigstringaf.mli
+  file bigstringaf_stubs.c <= lib/bigstringaf_stubs.c
+  cflag -DOCAMLCC_CAML_LEAF
+
+pkg cmarkit 0.4.0
+  url https://erratique.ch/software/cmarkit/releases/cmarkit-0.4.0.tbz
+  sha256 d790b56985e9e4905751e6f529ab4f5e986cfe20475d2899dad80ef0555ffe37
+  root cmarkit-0.4.0
+  tree 5e7f1872a1099a61fec2d4d01959d27ce25d20623e9b53b0a2b138129619a668
+  wrapped false
+  export Cmarkit
+  export Cmarkit_commonmark
+  export Cmarkit_html
+  export Cmarkit_latex
+  file cmarkit.ml <= src/cmarkit.ml
+  file cmarkit.mli <= src/cmarkit.mli
+  file cmarkit_base.ml <= src/cmarkit_base.ml
+  file cmarkit_base.mli <= src/cmarkit_base.mli
+  file cmarkit_commonmark.ml <= src/cmarkit_commonmark.ml
+  file cmarkit_commonmark.mli <= src/cmarkit_commonmark.mli
+  file cmarkit_data.ml <= src/cmarkit_data.ml
+  file cmarkit_data.mli <= src/cmarkit_data.mli
+  file cmarkit_data_html.ml <= src/cmarkit_data_html.ml
+  file cmarkit_data_uchar.ml <= src/cmarkit_data_uchar.ml
+  file cmarkit_html.ml <= src/cmarkit_html.ml
+  file cmarkit_html.mli <= src/cmarkit_html.mli
+  file cmarkit_latex.ml <= src/cmarkit_latex.ml
+  file cmarkit_latex.mli <= src/cmarkit_latex.mli
+  file cmarkit_renderer.ml <= src/cmarkit_renderer.ml
+  file cmarkit_renderer.mli <= src/cmarkit_renderer.mli
+
+pkg fpath 0.7.3
+  url https://erratique.ch/software/fpath/releases/fpath-0.7.3.tbz
+  sha256 12b08ff192d037d9b6d69e9ca19d1d385184f20b3237c27231e437ac81ace70f
+  root fpath-0.7.3
+  tree 794a18cd91f33f033c465bc272d3fc0115a2b2a32f35fb6af3db1dc9986bd0e3
+  dep astring
+  wrapped false
+  export Fpath
+  file fpath.ml <= src/fpath.ml
+  file fpath.mli <= src/fpath.mli
+
+pkg rresult 0.7.0
+  url https://erratique.ch/software/rresult/releases/rresult-0.7.0.tbz
+  sha256 11aa7f5b83460e60431e3154e3e32c071d46e151ea5760cf24377805bf975540
+  root rresult-0.7.0
+  tree a988a83304a8a05111866105cf5ab8e186e4fb0d9e08281a2174a27272a6d03c
+  wrapped false
+  export Rresult
+  file rresult.ml <= src/rresult.ml
+  file rresult.mli <= src/rresult.mli
+
+pkg stringext 1.6.0
+  url https://github.com/rgrinberg/stringext/releases/download/1.6.0/stringext-1.6.0.tbz
+  sha256 db41f5d52e9eab17615f110b899dfeb27dd7e7f89cd35ae43827c5119db206ea
+  root stringext-1.6.0
+  tree 6c8504e42f2a666d2ee2b094206ce3e0020e3f5fef615e2ea358a48e95740a72
+  wrapped false
+  export Stringext
+  file stringext.ml <= lib/stringext.ml
+  file stringext.mli <= lib/stringext.mli
+
+pkg uri 4.4.0
+  url https://github.com/mirage/ocaml-uri/releases/download/v4.4.0/uri-4.4.0.tbz
+  sha256 cdabaf6ef5cd2161e59cc7b74c6e4a68ecb80a9f4e96002e338e1b6bf17adec4
+  root uri-4.4.0
+  tree cdf54d4789261b065ad300f6cbd6da73414ea3e1531a315a5dc5ac0ea74ee9fa
+  dep angstrom
+  dep stringext
+  wrapped false
+  export Uri
+  file uri.ml <= lib/uri.ml
+  file uri.mli <= lib/uri.mli
+
 pkg uutf 1.0.4
   url https://erratique.ch/software/uutf/releases/uutf-1.0.4.tbz
   sha256 a7a578e6af9149a8894e18e3b4759c8565937a69c6c9ace7a30bbf0484619ca8
